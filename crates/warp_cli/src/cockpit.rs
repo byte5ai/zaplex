@@ -254,6 +254,12 @@ impl ipc::Service for CockpitSnapshotService {
 
 #[cfg(not(target_family = "wasm"))]
 impl CockpitSnapshotDocument {
+    /// Offline fallback when no running Zaplex surface answers. Without the
+    /// app there is no seen ledger, no terminal hook state and no pane
+    /// registry, so `attention` here lists every live session whose discovery
+    /// state is waiting (finished turn or open prompt), and the document is
+    /// marked degraded. The runtime export ([`Self::from_runtime`]) carries the
+    /// UI's needs-you verdicts instead.
     pub fn from_local(snapshot: CockpitSnapshot) -> Self {
         let (local_status, local_detail) = local_source(&snapshot.health);
         let usage_available = matches!(&snapshot.health, ScanHealth::Loaded);
@@ -413,6 +419,11 @@ impl CockpitSnapshotDocument {
                         &mut accounts,
                     )
                 });
+                // Attention is the UI's verdict (an open prompt or an unseen
+                // finished turn on a session Zaplex can open), not the
+                // discovery state: `state: "waiting"` alone only says a turn
+                // ended.
+                let needs_you = session.needs_you();
                 let session = session_document(&account_id, &host_id, session, "live");
                 if host_session_ids.iter().any(|id| id == &session.id) {
                     continue;
@@ -422,7 +433,7 @@ impl CockpitSnapshotDocument {
                 {
                     account.sessions.push(session.clone());
                 }
-                if session.state == "waiting" {
+                if needs_you {
                     attention.push(AttentionDocument {
                         host_id: host_id.clone(),
                         account_id,

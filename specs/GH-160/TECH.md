@@ -262,7 +262,7 @@ localized label.
 - snapshots without PTY metadata each receive a stable fallback key derived from the full agent
   session identity;
 - a foreground agent is the representative, otherwise the most recently active child is;
-- children sort waiting-first, then by recent activity.
+- children sort attention-first (rows that need the user, see §2A), then by recent activity.
 
 No label, project name, account email, or truncated id may be used as the grouping identity.
 Selection still routes the exact child `SessionKey` through the existing local/remote resume path.
@@ -280,6 +280,53 @@ depend on pixels:
 - agent leaves render state glyph, provider, and optional model only;
 - no tree leaf renders state words, context percentage, cost, email, effort, or activity age;
 - the section header renders only an amber glyph and numeric count when attention exists.
+
+## 2A. Attention projection: what needs the user
+
+`SessionState::Waiting` is a discovery fact (a turn ended, or a prompt is open), not the attention
+signal. `CockpitModel` keeps the folded discovery tree (`raw_inventory`) and publishes a projection
+(`inventory`) that every surface reads — tree, section header, title-bar pulse, Dock badge
+(`AttentionDriver`), inbox, palette, and the `w`-jump:
+
+- **Visibility.** `capabilities::session_reach` mirrors the click path (`plan_session_open` plus
+  the remote daemon reattach through `daemon_reattach_route`): `Terminal` (an exact,
+  account-checked Zaplex terminal), `DaemonReattach` (foreground PTY binding on a connected daemon
+  with a resolvable registry route), `Resume` (dormant), or `Unreachable`. A row is kept when it is
+  openable or Zaplex-owned (daemon PTY binding, exact launch-registry binding, a Zaplex terminal
+  hook reporting that session id, or a local process link, below), or when its local process
+  origin cannot be inspected. `zaplex_cockpit::apply_session_verdicts` drops the rest and the
+  projects they leave empty; the published account snapshot drops the same local live rows (usage
+  totals unchanged).
+- **Process link (no hooks needed).** Every local PTY carries a random `ZAPLEX_SURFACE_ID`. The
+  off-thread scan reads that one variable from each local live agent process
+  (`zaplex_cockpit::terminal_link_for_pid`: Claude by registry pid, start identity read before and
+  after and checked against the discovery fingerprint, so a reused pid is never attributed; Codex
+  through the process holding its rollout open, Linux procfs). `Surface` locates the pane (focus
+  target for the click path and the projection), `External` hides the row, `Unknown` (unreadable,
+  unsupported platform, no process) never hides it. macOS reads Claude's environment through
+  `sysinfo`; Codex rollout holders are only discoverable on Linux.
+- **Machine export.** `zaplex cockpit snapshot --json` keeps the complete discovery for scripts
+  (`CockpitModel::machine_snapshot`/`machine_inventory`); its `attention` list carries the UI's
+  verdicts. The offline fallback without a running app has no seen ledger or pane registry, stays
+  `degraded`, and lists discovery-waiting sessions.
+- **Attention.** Only openable rows on available hosts can carry `SessionSnapshot::attention`:
+  `Decision` when Claude's registry reports `status: "waiting"` (`awaiting_input`, written while a
+  permission prompt, question, or dialog is open) or the Zaplex hook reports `Blocked`;
+  `UnseenTurn` when a finished turn is not recorded as seen. Codex rollouts persist no approval
+  events, so Codex prompts are only known through the hook in Zaplex terminals.
+- **Seen ledger.** `zaplex_cockpit::SeenTurns` keys by `session_key` plus the turn identity —
+  Claude's closing assistant-line `uuid`, Codex's closing `turn_id` (transported as
+  `AgentSessionInfo.turn_id`; older daemons fall back to the activity timestamp) — never by wall
+  clock. It is in-memory with a start baseline: a turn whose activity predates app start is
+  recorded as seen on first observation, so startup and restarts never present old turns as
+  unread (a turn finished while Zaplex was closed is not announced). Entries survive temporary
+  disappearance (reconnect) and are bounded.
+- **Marking seen.** Each workspace reports its focused agent terminal; only the active window's
+  report counts. The projection marks that row's current turn seen on every rebuild (focus change,
+  window activation, accepted scan, hook event), and opening a session through the attach path
+  marks it directly.
+- `SessionSnapshot::presented_state` renders amber only for rows with attention; a seen finished
+  turn presents as the idle ring. Routing keeps using the discovery `state`.
 
 ## 3. Waiting animation and accessibility
 
@@ -318,7 +365,10 @@ Keep account aliases, color, ordering, and hidden state in the existing
 - current real conversations with a known `kind` of `interactive` or `bg`.
 
 Status-less unknown entries and shell/helper records remain excluded. Transcript matching and
-stable session identity remain mandatory for a resumable conversation.
+stable session identity remain mandatory for a resumable conversation. A live entry with status
+`waiting` is classified Waiting with `awaiting_input` even when the transcript ends in an
+unanswered `tool_use`; a finished turn carries the `uuid` of its closing assistant line as
+`turn_id` (§2A).
 
 In addition to registry-backed live inventory, scan a bounded recent transcript set for dormant
 history. A transcript-only candidate must be valid and substantial (at least two assistant text
@@ -484,9 +534,9 @@ tree and three-level hierarchy as superseded by GH-160.
 | PRODUCT behavior | Verification seam |
 |---|---|
 | 1–3 Connections/favorites/menu | SSH row projection tests; stable-favorite identity; direct-connect vs `⋯` propagation; parent/flyout mouse, keyboard, focus-return, safe-triangle, and edge-placement tests |
-| 4, 8–10, 14 tree identity and grouping | `conductor_tests.rs`, presentation-descriptor tests, exact route assertions |
+| 4, 8–10, 14 tree identity and grouping | `conductor_tests.rs` (jump targets only counted rows), presentation-descriptor tests, exact route assertions |
 | 5–7 host lifecycle/inventory | `fleet_tests.rs` and `model_tests.rs` for local empty, first/last connection, unsupported/unavailable, stale generation |
-| 11–13 glyphs/pulse | pure state/pulse geometry tests plus static source/UI-spec checks, including reduced motion |
+| 11–13 glyphs/pulse | pure state/pulse geometry tests plus static source/UI-spec checks, including reduced motion; attention verdicts and the seen ledger in `fleet_tests.rs`, the projection (external exclusion, reconnect, viewing, startup baseline) in `model_tests.rs`, reachability in `capabilities_tests.rs`, wire fields in `agent_session_tests.rs` |
 | 15–17 identity/meters/waiting row | pure identity and row-style tests plus HTML visual states |
 | 18–22 discovery/history | Claude/Codex root fixtures and `sessions_tests.rs` legacy/current/dormant cases |
 | 23–24 parity audit | three timestamped SHA ledgers and evidence matrix in `REFERENCE_AUDIT.md` |

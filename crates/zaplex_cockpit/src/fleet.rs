@@ -2,23 +2,34 @@
 //!
 //! Given the CLI sessions discovered on each host, build the data backing a
 //! **Host ▸ Project ▸ Session ▸ Agent** tree — this IS the Agent-Inventory:
-//! the cockpit. The *needs-me* count — sessions in [`SessionState::Waiting`],
-//! i.e. the agent handed control back to you — bubbles up from session to
-//! project to host. This is the "conductor" leit-view over the unified
-//! inventory: at a glance, which host/project is waiting on you.
+//! the cockpit. The *needs-me* count — sessions whose
+//! [`SessionSnapshot::attention`] is set — bubbles up from session to project
+//! to host. This is the "conductor" leit-view over the unified inventory: at a
+//! glance, which host/project needs you.
 //!
 //! Projects are keyed by the **repo** ([`SessionSnapshot::repo_root`]), so
 //! sessions launched in different sub-directories — or in different linked
 //! worktrees — of the same repo collapse into one project node. Each session
 //! keeps its own tree in `project_root`; the worktree is an attribute of the
-//! session, not a project of its own. Idle/Monitor/Active never count as needs-me.
+//! session, not a project of its own.
+//!
+//! **Needs-me is an app verdict, not a discovery state.** A folded tree counts
+//! nothing: [`SessionState::Waiting`] only says a turn ended (or a prompt is
+//! open). The app applies [`apply_session_verdicts`], which removes rows Zaplex
+//! can neither open nor claims as its own launch, and stamps
+//! [`crate::types::Attention`] on the openable rows that have an open
+//! question/permission prompt or a finished turn the user has not seen yet
+//! ([`SeenTurns`]). Every count, the attention-first order and the jump order
+//! read that stamp, so the title-bar pulse, Dock badge, sidebar header and
+//! inbox show one number.
 //!
 //! Pure aggregation (no IO, no remote calls): given per-host session lists it
 //! yields the sorted tree. Fetching sessions cross-host (`list_sessions` over
 //! the daemon) and rendering the tree build on top.
 
-use crate::types::{SessionSnapshot, SessionState};
-use std::collections::BTreeMap;
+use crate::types::{Attention, SessionSnapshot, SessionState};
+use chrono::{DateTime, Utc};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// An agent-session in the inventory. Alias for the snapshot the spine already
 /// produces — the leaf of the Host ▸ Project ▸ Session ▸ Agent tree.
@@ -129,7 +140,8 @@ pub struct ProjectNode {
     pub root: String,
     /// Human repo label (from [`SessionSnapshot::project_name`]).
     pub name: String,
-    /// Count of [`SessionState::Waiting`] sessions in this project.
+    /// Count of sessions in this project that need the user
+    /// ([`SessionSnapshot::needs_you`]).
     pub needs_me: usize,
     pub sessions: Vec<SessionSnapshot>,
 }
@@ -180,8 +192,181 @@ pub struct FleetTree {
     pub needs_me: usize,
 }
 
-fn is_waiting(s: &SessionSnapshot) -> bool {
-    matches!(s.state, SessionState::Waiting)
+/// Sessions that need the user first, then most-recent activity.
+fn sort_project_sessions(sessions: &mut [SessionSnapshot]) {
+    sessions.sort_by(|a, b| {
+        b.needs_you()
+            .cmp(&a.needs_you())
+            .then_with(|| b.last_activity.cmp(&a.last_activity))
+    });
+}
+
+/// Recount every project and the host from the sessions' attention stamps and
+/// restore the attention-first order inside the host.
+fn recount_host(host: &mut HostNode) {
+    for project in &mut host.projects {
+        sort_project_sessions(&mut project.sessions);
+        project.needs_me = project.sessions.iter().filter(|s| s.needs_you()).count();
+    }
+    host.projects.sort_by(|a, b| {
+        b.needs_me
+            .cmp(&a.needs_me)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    host.needs_me = host.projects.iter().map(|p| p.needs_me).sum();
+}
+
+/// Recount the whole tree after attention stamps changed: per-project and
+/// per-host tallies, attention-first ordering, and the fleet total — which,
+/// like every other route, only includes available hosts.
+pub fn recount_attention(tree: &mut FleetTree) {
+    for host in &mut tree.hosts {
+        recount_host(host);
+    }
+    sort_hosts(&mut tree.hosts);
+    tree.needs_me = tree
+        .hosts
+        .iter()
+        .filter(|host| host.is_available())
+        .map(|host| host.needs_me)
+        .sum();
+}
+
+/// What the app decided about one folded inventory row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SessionVerdict {
+    /// Keep the row. `false` for an agent running outside Zaplex that Zaplex
+    /// can neither focus, reattach nor resume — it is not shown anywhere.
+    pub visible: bool,
+    /// Why the row needs the user, if it does. Only meaningful for a row
+    /// Zaplex can open right now; ignored for invisible rows and for hosts
+    /// whose routes fail closed.
+    pub attention: Option<Attention>,
+}
+
+/// Apply the app's per-row verdicts to a folded tree: drop invisible rows (and
+/// projects they leave empty), stamp attention on the rest, then recount and
+/// re-sort. A host that is not [available](HostNode::is_available) keeps its
+/// observed rows but never carries attention, because no route through it may
+/// be taken. The verdict callback receives `(is_local, host_id, session)`.
+pub fn apply_session_verdicts(
+    tree: &mut FleetTree,
+    mut verdict: impl FnMut(bool, Option<&str>, &SessionSnapshot) -> SessionVerdict,
+) {
+    for host in &mut tree.hosts {
+        let is_local = host.is_local;
+        let actionable = host.is_available();
+        let host_id = host.host_id.clone();
+        for project in &mut host.projects {
+            project.sessions.retain_mut(|session| {
+                let decided = verdict(is_local, host_id.as_deref(), session);
+                session.attention = if decided.visible && actionable {
+                    decided.attention
+                } else {
+                    None
+                };
+                decided.visible
+            });
+        }
+        host.projects.retain(|project| !project.sessions.is_empty());
+    }
+    recount_attention(tree);
+}
+
+/// Upper bound of remembered seen turns before entries for sessions that are
+/// no longer in the inventory are dropped.
+const SEEN_TURNS_LIMIT: usize = 4_096;
+
+/// The "unread mail" ledger behind [`Attention::UnseenTurn`].
+///
+/// Keyed by the complete session identity ([`crate::session_key`]) and the
+/// identity of the finished turn ([`SessionSnapshot::turn_id`], falling back to
+/// the turn's activity timestamp for producers that predate it) — never by wall
+/// clock. Viewing a session records its current turn as seen; the next finished
+/// turn has a different identity and counts again.
+///
+/// **In-memory, with a start baseline instead of persistence.** A finished turn
+/// whose activity predates `started_at` (the app start) is historical: the
+/// first time such a row is observed its turn is recorded as seen, so startup
+/// never presents old conversations as unread and a restart can never
+/// resurrect a turn that was read before it. The price is that a turn which
+/// finished while Zaplex was closed is not announced after launch. Entries for
+/// sessions that temporarily vanish (a reconnect) are kept, bounded by
+/// [`SEEN_TURNS_LIMIT`], so a turn seen before a disconnect stays seen.
+#[derive(Clone, Debug)]
+pub struct SeenTurns {
+    started_at: DateTime<Utc>,
+    seen: HashMap<String, String>,
+}
+
+impl SeenTurns {
+    pub fn new(started_at: DateTime<Utc>) -> Self {
+        Self {
+            started_at,
+            seen: HashMap::new(),
+        }
+    }
+
+    /// The identity of the finished turn a row currently shows, or `None`
+    /// while no finished turn is on display.
+    pub fn turn_identity(session: &SessionSnapshot) -> Option<String> {
+        if session.state != SessionState::Waiting {
+            return None;
+        }
+        Some(match session.turn_id.as_deref() {
+            Some(turn_id) if !turn_id.is_empty() => format!("turn:{turn_id}"),
+            _ => format!("at:{}", session.last_activity.timestamp_millis()),
+        })
+    }
+
+    /// Attention for one row Zaplex can open. `hook_blocked` is the Zaplex
+    /// terminal hook reporting an open permission prompt or question.
+    ///
+    /// An open prompt needs the user regardless of age or of having been
+    /// seen. Otherwise only a finished turn that is not recorded as seen
+    /// counts; the first observation of a historical turn records it as seen.
+    pub fn attention(
+        &mut self,
+        key: &str,
+        session: &SessionSnapshot,
+        hook_blocked: bool,
+    ) -> Option<Attention> {
+        if session.awaiting_input || hook_blocked {
+            return Some(Attention::Decision);
+        }
+        let turn = Self::turn_identity(session)?;
+        match self.seen.get(key) {
+            Some(seen) if *seen == turn => None,
+            Some(_) => Some(Attention::UnseenTurn),
+            None if session.last_activity < self.started_at => {
+                self.seen.insert(key.to_string(), turn);
+                None
+            }
+            None => Some(Attention::UnseenTurn),
+        }
+    }
+
+    /// Record the row's current finished turn as seen. Returns whether that
+    /// changed anything (a running turn has nothing to mark yet; marking it
+    /// again is a no-op), so callers can avoid redundant republishing.
+    pub fn mark_seen(&mut self, key: &str, session: &SessionSnapshot) -> bool {
+        let Some(turn) = Self::turn_identity(session) else {
+            return false;
+        };
+        if self.seen.get(key) == Some(&turn) {
+            return false;
+        }
+        self.seen.insert(key.to_string(), turn);
+        true
+    }
+
+    /// Bound the ledger: once it exceeds its limit, forget sessions that are
+    /// not in the current inventory.
+    pub fn prune(&mut self, live_keys: &HashSet<String>) {
+        if self.seen.len() > SEEN_TURNS_LIMIT {
+            self.seen.retain(|key, _| live_keys.contains(key));
+        }
+    }
 }
 
 /// Build the Host ▸ Project ▸ Session ▸ Agent tree with needs-me bubbling.
@@ -189,7 +374,10 @@ fn is_waiting(s: &SessionSnapshot) -> bool {
 /// Ordering makes the things that want you rise to the top:
 /// - hosts by needs-me **descending**, then host name;
 /// - projects within a host by needs-me descending, then name;
-/// - sessions within a project: **waiting first**, then most-recent activity.
+/// - sessions within a project: **needs you first**, then most-recent activity.
+///
+/// A freshly folded tree carries no attention stamps, so every tally is zero
+/// until the app applies [`apply_session_verdicts`].
 ///
 /// Every supplied contribution is retained. The local host is always supplied;
 /// remote inputs represent actually connected hosts, so dropping an empty one
@@ -215,16 +403,10 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
                 };
                 by_root.entry(key).or_default().push(s);
             }
-            let mut projects: Vec<ProjectNode> = by_root
+            let projects: Vec<ProjectNode> = by_root
                 .into_iter()
                 .map(|(root, mut sessions)| {
-                    // Waiting first, then most-recent activity.
-                    sessions.sort_by(|a, b| {
-                        is_waiting(b)
-                            .cmp(&is_waiting(a))
-                            .then_with(|| b.last_activity.cmp(&a.last_activity))
-                    });
-                    let needs_me = sessions.iter().filter(|s| is_waiting(s)).count();
+                    sort_project_sessions(&mut sessions);
                     // All sessions in the group share a repo → share its label.
                     let name = sessions
                         .first()
@@ -233,18 +415,12 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
                     ProjectNode {
                         root,
                         name,
-                        needs_me,
+                        needs_me: 0,
                         sessions,
                     }
                 })
                 .collect();
-            projects.sort_by(|a, b| {
-                b.needs_me
-                    .cmp(&a.needs_me)
-                    .then_with(|| a.name.cmp(&b.name))
-            });
-            let needs_me = projects.iter().map(|p| p.needs_me).sum();
-            HostNode {
+            let mut host = HostNode {
                 host: h.host,
                 is_local: h.is_local,
                 host_id: h.host_id,
@@ -254,9 +430,11 @@ pub fn build_fleet_tree(inputs: Vec<HostSessions>) -> FleetTree {
                 // established the connection. Reconciliation validates it
                 // against the current registry before leaving the host usable.
                 registry_node_id: h.registry_node_id,
-                needs_me,
+                needs_me: 0,
                 projects,
-            }
+            };
+            recount_host(&mut host);
+            host
         })
         .collect();
     sort_hosts(&mut hosts);

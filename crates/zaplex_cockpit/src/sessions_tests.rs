@@ -593,6 +593,96 @@ fn tool_result_after_end_is_monitor() {
     assert_eq!(sessions[0].state, SessionState::Monitor);
 }
 
+fn assistant_line_with_uuid(stop_reason: &str, uuid: &str) -> serde_json::Value {
+    let mut line = assistant_line(stop_reason);
+    line["uuid"] = json!(uuid);
+    line
+}
+
+/// Claude Code writes `status: "waiting"` while a permission prompt or question
+/// is open. The pending `tool_use` must not read as "mid tool-run": the session
+/// is blocked on the user, independent of any finished turn.
+#[test]
+fn registry_waiting_status_is_an_open_prompt_even_mid_tool_use() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "prompt",
+        "waiting",
+        "interactive",
+        &[assistant_line_with_uuid("tool_use", "pending-tool")],
+    );
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].state, SessionState::Waiting);
+    assert!(sessions[0].awaiting_input);
+    assert_eq!(
+        sessions[0].turn_id, None,
+        "an open prompt is not a finished turn"
+    );
+}
+
+/// The finished turn's identity is the uuid of the assistant line that ended
+/// it, so a later turn is distinguishable from an idle one without a clock.
+#[test]
+fn ended_turn_is_identified_by_its_closing_assistant_uuid() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "done",
+        "idle",
+        "",
+        &[
+            assistant_line_with_uuid("end_turn", "first-turn"),
+            json!({"type": "user", "message": {"content": "next prompt"}}),
+            assistant_line_with_uuid("tool_use", "second-turn-tool"),
+            json!({"type": "user", "message": {"content": [{"type": "tool_result"}]}}),
+            assistant_line_with_uuid("end_turn", "second-turn"),
+        ],
+    );
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions[0].state, SessionState::Waiting);
+    assert!(!sessions[0].awaiting_input);
+    assert_eq!(sessions[0].turn_id.as_deref(), Some("second-turn"));
+}
+
+#[test]
+fn running_turn_has_no_turn_identity() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account(
+        tmp.path(),
+        "running",
+        "idle",
+        "",
+        &[assistant_line_with_uuid("tool_use", "mid-run")],
+    );
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    assert_eq!(sessions[0].state, SessionState::Monitor);
+    assert_eq!(sessions[0].turn_id, None);
+    assert!(!sessions[0].awaiting_input);
+}
+
+/// A dead process cannot hold a prompt open: a stale `waiting` status left in
+/// the registry of a dormant session claims nothing.
+#[test]
+fn dormant_session_with_stale_waiting_status_claims_no_open_prompt() {
+    let tmp = tempfile::tempdir().unwrap();
+    fake_account_at(
+        tmp.path(),
+        "gone",
+        "waiting",
+        "interactive",
+        &[assistant_line_with_uuid("tool_use", "abandoned")],
+        dead_pid(),
+        Utc::now(),
+    );
+    let idle = idle_sessions(tmp.path(), Utc::now(), MAX_AGE, 50);
+    assert_eq!(idle.len(), 1);
+    assert_eq!(idle[0].state, SessionState::Idle);
+    assert!(!idle[0].awaiting_input);
+    assert_eq!(idle[0].turn_id, None);
+}
+
 #[test]
 fn shell_and_infra_entries_are_filtered() {
     let tmp = tempfile::tempdir().unwrap();

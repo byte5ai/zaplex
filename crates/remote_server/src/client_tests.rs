@@ -1357,6 +1357,8 @@ async fn list_agent_sessions_round_trip() {
                             status: "in_progress".to_string(),
                         },
                     ],
+                    awaiting_input: true,
+                    turn_id: "turn-a1".to_string(),
                 },
                 AgentSessionInfo {
                     session_id: "a2".to_string(),
@@ -1389,6 +1391,8 @@ async fn list_agent_sessions_round_trip() {
                     pty_foreground: false,
                     has_task_state: false,
                     task_items: Vec::new(),
+                    awaiting_input: false,
+                    turn_id: String::new(),
                 },
             ],
         })
@@ -1408,7 +1412,11 @@ async fn list_agent_sessions_round_trip() {
     assert_eq!(resp.sessions[0].task_items.len(), 2);
     assert_eq!(resp.sessions[0].task_items[0].id, "2");
     assert_eq!(resp.sessions[0].task_items[1].status, "in_progress");
+    assert!(resp.sessions[0].awaiting_input);
+    assert_eq!(resp.sessions[0].turn_id, "turn-a1");
     assert_eq!(resp.sessions[1].state, "idle");
+    assert!(!resp.sessions[1].awaiting_input);
+    assert!(resp.sessions[1].turn_id.is_empty());
     assert_eq!(resp.sessions[1].provider, "codex");
     assert!(resp.sessions[1].effort.is_empty());
     assert!(!resp.sessions[1].has_task_state);

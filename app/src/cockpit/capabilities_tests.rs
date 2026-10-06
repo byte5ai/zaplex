@@ -28,6 +28,9 @@ fn session(provider: Provider, state: SessionState, pid: u32) -> SessionSnapshot
         task_state: None,
         last_activity: Utc::now(),
         pid,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
     }
 }
 
@@ -357,4 +360,86 @@ fn session_without_process_identity_never_advertises_signal() {
             }
         }
     }
+}
+
+/// The attention projection shows and counts a row on the same evidence the
+/// click path acts on: a known terminal, a dormant resume, or a reattachable
+/// remote daemon PTY.
+#[test]
+fn reachability_mirrors_the_click_path() {
+    let terminal = warpui::EntityId::new();
+    let live = session(Provider::Claude, SessionState::Waiting, 4242);
+    assert_eq!(
+        session_reach(&live, true, Some(terminal), false),
+        SessionReach::Terminal(terminal)
+    );
+    assert_eq!(
+        session_reach(&live, true, None, true),
+        SessionReach::Unreachable,
+        "a local live session without a pane cannot be opened"
+    );
+
+    let dormant = session(Provider::Claude, SessionState::Idle, 0);
+    assert_eq!(
+        session_reach(&dormant, true, None, false),
+        SessionReach::Resume
+    );
+
+    let mut remote = session(Provider::Codex, SessionState::Waiting, 0);
+    remote.pty_session_id = Some("pty-9".to_string());
+    remote.pty_session_generation = Some(2);
+    remote.pty_foreground = true;
+    assert_eq!(
+        session_reach(&remote, false, None, true),
+        SessionReach::DaemonReattach
+    );
+    assert_eq!(
+        session_reach(&remote, false, None, false),
+        SessionReach::Unreachable,
+        "without a registry route the reattach cannot happen"
+    );
+    remote.pty_foreground = false;
+    assert_eq!(
+        session_reach(&remote, false, None, true),
+        SessionReach::Unreachable,
+        "a historical PTY binding is not attachable"
+    );
+}
+
+/// External agents are hidden; Zaplex-launched ones stay visible while they
+/// are momentarily unreachable. A daemon PTY binding proves Zaplex ownership
+/// even when it is not the foreground one.
+#[test]
+fn only_openable_or_zaplex_owned_rows_are_visible() {
+    let external = session(Provider::Claude, SessionState::Waiting, 4242);
+    assert!(!zaplex_owned(&external, false));
+    assert!(!session_visible(SessionReach::Unreachable, false, false));
+    assert!(session_visible(SessionReach::Resume, false, false));
+    assert!(session_visible(
+        SessionReach::Terminal(warpui::EntityId::new()),
+        false,
+        false
+    ));
+
+    let mut detached = session(Provider::Codex, SessionState::Waiting, 0);
+    detached.pty_session_id = Some("pty-9".to_string());
+    assert!(zaplex_owned(&detached, false));
+    assert!(
+        zaplex_owned(&external, true),
+        "launch, hook or surface evidence"
+    );
+    assert!(session_visible(SessionReach::Unreachable, true, false));
+    assert!(
+        session_visible(SessionReach::Unreachable, false, true),
+        "an origin that cannot be inspected is never hidden"
+    );
+}
+
+/// The process environment link and the pane registry use the same variable.
+#[test]
+fn process_link_reads_the_variable_zaplex_injects_into_panes() {
+    assert_eq!(
+        zaplex_cockpit::ZAPLEX_SURFACE_ENV,
+        warp_cli::control::SURFACE_ID_ENV
+    );
 }

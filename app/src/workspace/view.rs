@@ -1418,13 +1418,7 @@ fn forget_daemon_node_session(
 }
 
 #[cfg(unix)]
-fn resolved_daemon_connection(node_id: &str) -> Option<warp_ssh_manager::ResolvedSshConnection> {
-    warp_ssh_manager::with_conn(|database| {
-        Ok(warp_ssh_manager::SshRepository::get_server_with_resolved_auth(database, node_id)?)
-    })
-    .ok()
-    .flatten()
-}
+use crate::cockpit::capabilities::resolved_daemon_connection;
 
 fn collect_remote_terminal_identities(
     node: &PaneNodeSnapshot,
@@ -7080,15 +7074,7 @@ impl Workspace {
         terminal_view_id: EntityId,
         ctx: &AppContext,
     ) -> Option<ViewHandle<TerminalView>> {
-        ctx.window_ids().find_map(|window_id| {
-            ctx.views_of_type::<TerminalView>(window_id)
-                .and_then(|terminal_views| {
-                    terminal_views.iter().find_map(|terminal_view| {
-                        (terminal_view.as_ref(ctx).view_id() == terminal_view_id)
-                            .then(|| terminal_view.clone())
-                    })
-                })
-        })
+        crate::cockpit::capabilities::terminal_view_handle(terminal_view_id, ctx)
     }
 
     /// Resolves a CLI conversation to the terminal on the exact fleet host.
@@ -7105,31 +7091,15 @@ impl Workspace {
         is_local: bool,
         ctx: &AppContext,
     ) -> Option<EntityId> {
-        use crate::cockpit::capabilities::session_host_matches;
-
-        CLIAgentSessionsModel::as_ref(ctx).terminal_view_id_for_agent_session_matching_with_id(
+        crate::cockpit::capabilities::terminal_view_id_for_agent_session(
             agent,
             session_id,
             config_dir,
             account_email,
             account_id,
-            |terminal_view_id, session| {
-                if (is_local && session.is_remote()) || (!is_local && !session.is_remote()) {
-                    return false;
-                }
-                let Some(terminal_view) = Self::terminal_view_handle(terminal_view_id, ctx) else {
-                    return false;
-                };
-                #[cfg(feature = "local_tty")]
-                let remote_host_id = terminal_view.as_ref(ctx).active_session_remote_host_id(ctx);
-                #[cfg(not(feature = "local_tty"))]
-                let remote_host_id: Option<warp_core::HostId> = None;
-                session_host_matches(
-                    is_local,
-                    host_id,
-                    remote_host_id.as_ref().map(warp_core::HostId::as_str),
-                )
-            },
+            host_id,
+            is_local,
+            ctx,
         )
     }
 
@@ -7200,6 +7170,35 @@ impl Workspace {
         });
     }
 
+    /// Record that the user opened this exact inventory session, so its
+    /// finished turn stops counting as unseen.
+    fn mark_cockpit_session_seen(
+        is_local: bool,
+        host_id: Option<&str>,
+        session: &zaplex_cockpit::SessionSnapshot,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let key = zaplex_cockpit::session_key(is_local, host_id, session);
+        crate::cockpit::CockpitModel::handle(ctx).update(ctx, |model, ctx| {
+            model.mark_session_seen(&key, ctx);
+        });
+    }
+
+    /// Report the agent terminal this window shows focused to the Cockpit, so
+    /// looking at a session marks its finished turn as seen. Only the active
+    /// window's report counts; the model checks that itself.
+    fn report_focused_agent_terminal(&self, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        let terminal_view_id = self
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .active_session_view(ctx)
+            .map(|terminal_view| terminal_view.id());
+        crate::cockpit::CockpitModel::handle(ctx).update(ctx, |model, ctx| {
+            model.report_focused_terminal(window_id, terminal_view_id, ctx);
+        });
+    }
+
     /// A row can outlive one inventory refresh. Report that calm, expected race
     /// instead of making a click appear broken or falling back to a new process.
     fn session_not_found_toast(&mut self, host: &str, ctx: &mut ViewContext<Self>) {
@@ -7256,7 +7255,7 @@ impl Workspace {
             return;
         };
         let agent = crate::cockpit::agent_of(session.provider);
-        let terminal_view_id = Self::terminal_view_id_for_agent_session(
+        let hook_terminal_view_id = Self::terminal_view_id_for_agent_session(
             agent,
             session_id,
             config_dir,
@@ -7266,11 +7265,27 @@ impl Workspace {
             is_local,
             &*ctx,
         );
+        // Without a hook bridge the terminal knows no session id; the agent
+        // process still names the Zaplex pane it was started in, which is the
+        // same evidence the Cockpit used to show and count this row.
+        let terminal_view_id = match hook_terminal_view_id {
+            Some(terminal_view_id) => Some(terminal_view_id),
+            None if is_local => {
+                let key = zaplex_cockpit::session_key(is_local, host_id, &session);
+                let app: &AppContext = ctx;
+                crate::cockpit::CockpitModel::as_ref(app).linked_terminal(&key, app)
+            }
+            None => None,
+        };
         match plan_session_open(&session, terminal_view_id.is_some()) {
             SessionOpenPlan::FocusExistingTerminal => {
                 let terminal_view_id = terminal_view_id
                     .expect("the open plan only focuses when a terminal id is present");
-                if !self.focus_terminal_view_anywhere(terminal_view_id, ctx) {
+                if self.focus_terminal_view_anywhere(terminal_view_id, ctx) {
+                    // Opening the session is looking at it: its finished turn
+                    // no longer needs the user.
+                    Self::mark_cockpit_session_seen(is_local, host_id, &session, ctx);
+                } else {
                     // The model can briefly retain a terminal that closed between
                     // lookup and focus. Never turn that race into a duplicate.
                     self.live_session_unavailable_toast(&session, host, host_id, is_local, ctx);
@@ -7284,24 +7299,16 @@ impl Workspace {
                     if let Some((pty_session_id, generation)) =
                         crate::cockpit::capabilities::daemon_reattach_target(&session)
                     {
-                        let daemon = host_id.and_then(|host_id| {
-                            RemoteServerManager::as_ref(ctx)
-                                .connected_daemons()
-                                .into_iter()
-                                .find(|daemon| daemon.host_id == host_id)
-                        });
-                        let target = daemon.and_then(|daemon| {
-                            let connection = daemon
-                                .registry_node_id
-                                .as_deref()
-                                .and_then(resolved_daemon_connection)?;
-                            Some((connection, daemon.daemon_runtime))
-                        });
+                        // The same route check the Cockpit attention projection
+                        // uses to decide that this row is openable.
+                        let target =
+                            crate::cockpit::capabilities::daemon_reattach_route(host_id, ctx);
                         if let Some((connection, daemon_route)) = target {
                             let expected_agent_binding =
                                 crate::remote_server::agent_session::snapshot_agent_identity(
                                     &session,
                                 );
+                            Self::mark_cockpit_session_seen(is_local, host_id, &session, ctx);
                             self.adopt_daemon_session(
                                 connection,
                                 pty_session_id.to_string(),
@@ -7521,10 +7528,11 @@ impl Workspace {
         }
     }
 
-    /// The `w`-jump (`JumpToNextWaiting`): advance to the next Waiting agent
-    /// across the whole fleet in the Conductor's waiting-first order (cycling)
-    /// and attach it. A stale/absent cursor restarts at the first waiting agent;
-    /// when nothing is waiting, say so quietly.
+    /// The `w`-jump and title-bar pulse (`JumpToNextWaiting`): advance to the
+    /// next agent that needs the user — exactly the rows the pulse counts, which
+    /// are only ever sessions Zaplex can open — in the Conductor's
+    /// attention-first order (cycling) and attach it. A stale/absent cursor
+    /// restarts at the first one; when nothing needs the user, say so quietly.
     fn jump_to_next_waiting(&mut self, ctx: &mut ViewContext<Self>) {
         use crate::cockpit::CockpitModel;
 
@@ -7550,11 +7558,9 @@ impl Workspace {
                 );
             }
             None => {
+                let message = crate::t!("cockpit-attention-nothing-waiting").to_string();
                 self.toast_stack.update(ctx, |toast_stack, ctx| {
-                    toast_stack.add_ephemeral_toast(
-                        DismissibleToast::default("Nothing is waiting on you.".to_string()),
-                        ctx,
-                    );
+                    toast_stack.add_ephemeral_toast(DismissibleToast::default(message), ctx);
                 });
             }
         }
@@ -9323,6 +9329,7 @@ impl Workspace {
             self.set_active_tab_index(index, ctx);
             self.focus_active_tab(ctx);
             self.update_window_title(ctx);
+            self.report_focused_agent_terminal(ctx);
         }
     }
 
@@ -22098,6 +22105,9 @@ impl Workspace {
                 // Re-evaluate which region is focused and update pane dimming accordingly.
                 self.update_pane_dimming_for_current_focus_region(ctx);
 
+                // Looking at an agent's pane marks its finished turn as seen.
+                self.report_focused_agent_terminal(ctx);
+
                 let mut active_object_open_in_pane = false;
                 // Case 1: if workflow, get workflow ID via TerminalView input
                 if let Some(terminal_view) = self
@@ -24531,6 +24541,11 @@ impl Workspace {
                 {
                     // Re-render if this window's focus state has changed.
                     ctx.notify();
+                    // Returning to this window shows its focused agent pane
+                    // again, which counts as looking at it.
+                    if current.active_window == Some(self.window_id) {
+                        self.report_focused_agent_terminal(ctx);
+                    }
                 } else if current.stage != previous.stage {
                     // Re-render if the app's focus state has changed (Active/Inactive)
                     // This ensures dimming updates properly when the app gains/loses focus
@@ -27055,12 +27070,14 @@ impl Workspace {
         )
     }
 
-    /// The calm titlebar **attention pulse** `✋ N` — N = fleet-wide agents
-    /// waiting on the human ([`CockpitModel::needs_me`]). Clicking it jumps to the
-    /// next waiting agent ([`WorkspaceAction::JumpToNextWaiting`], the `w`-jump),
-    /// so one glance + one click clears the next thing needing you. Not a row of
-    /// per-agent launch buttons — a single ambient signal, hidden entirely when
-    /// nothing waits. `None` when the cockpit is off or nothing is waiting.
+    /// The calm titlebar **attention pulse** `◉ N` — N = fleet-wide agents that
+    /// need the human ([`CockpitModel::needs_me`]: an open question/permission
+    /// prompt or a finished turn not yet seen, on sessions Zaplex can open).
+    /// Clicking it opens the next one ([`WorkspaceAction::JumpToNextWaiting`],
+    /// the `w`-jump), so one glance + one click clears the next thing needing
+    /// you; a localized hover tooltip says exactly that. Not a row of per-agent
+    /// launch buttons — a single ambient signal, hidden entirely when nothing
+    /// needs you. `None` when the cockpit is off or nothing needs the user.
     fn render_attention_pulse(
         &self,
         appearance: &Appearance,
@@ -27079,12 +27096,16 @@ impl Workspace {
         // as every Conductor badge and inbox row — kept small/quiet.
         let critical = crate::cockpit::style::attention_coloru(appearance);
         let label = format!("{} {}", zaplex_cockpit::GLYPH_WAITING, n);
+        // The glyph alone does not say what a click does; the tooltip names
+        // the count and the action (spec S1 / PRODUCT #11).
+        let tooltip = crate::t!("cockpit-attention-pulse-tooltip", count = (n as i64)).to_string();
+        let ui_builder = appearance.ui_builder().clone();
         let handle = self.mouse_states.attention_pulse.clone();
         Some(
             Container::new(
                 Hoverable::new(handle, move |mouse| {
                     // Quiet at rest; a soft pill fill on hover signals the
-                    // click affordance (jump to the next waiting agent).
+                    // click affordance (open the next agent that needs you).
                     let mut c = Container::new(
                         Text::new_inline(label.clone(), family, 13.)
                             .with_color(critical)
@@ -27093,10 +27114,22 @@ impl Workspace {
                     .with_horizontal_padding(6.)
                     .with_vertical_padding(2.)
                     .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
-                    if mouse.is_hovered() {
-                        c = c.with_background(internal_colors::fg_overlay_2(theme));
+                    if !mouse.is_hovered() {
+                        return c.finish();
                     }
-                    c.finish()
+                    c = c.with_background(internal_colors::fg_overlay_2(theme));
+                    let mut stack = Stack::new();
+                    stack.add_child(c.finish());
+                    stack.add_positioned_overlay_child(
+                        ui_builder.tool_tip(tooltip.clone()).build().finish(),
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(0., 4.),
+                            ParentOffsetBounds::WindowByPosition,
+                            ParentAnchor::BottomMiddle,
+                            ChildAnchor::TopMiddle,
+                        ),
+                    );
+                    stack.finish()
                 })
                 .with_cursor(Cursor::PointingHand)
                 .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::JumpToNextWaiting))
@@ -29245,12 +29278,22 @@ impl TypedActionView for Workspace {
     fn action_accessibility_contents(
         &mut self,
         action: &WorkspaceAction,
-        _: &mut ViewContext<Self>,
+        ctx: &mut ViewContext<Self>,
     ) -> ActionAccessibilityContent {
         match action {
             WorkspaceAction::SetA11yVerbosityLevel(verbosity) => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
                     format!("{verbosity:?} accessibility announcements set"),
+                    WarpA11yRole::UserAction,
+                ))
+            }
+            // The title-bar pulse is a bare glyph; announce what it stands for
+            // with the same localized text as its tooltip.
+            WorkspaceAction::JumpToNextWaiting => {
+                let count = crate::cockpit::CockpitModel::as_ref(ctx).needs_me();
+                ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
+                    crate::t!("cockpit-attention-pulse-tooltip", count = (count as i64))
+                        .to_string(),
                     WarpA11yRole::UserAction,
                 ))
             }

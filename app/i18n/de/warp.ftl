@@ -36,6 +36,11 @@ cockpit-attention-inbox-count = { $count ->
    *[other] { $count } Agents warten auf dich
 }
 cockpit-attention-inbox-empty = Alles erledigt — nichts wartet auf dich.
+cockpit-attention-pulse-tooltip = { $count ->
+    [one] { $count } Agent wartet auf Dich – Klick öffnet ihn
+   *[other] { $count } Agents warten auf Dich – Klick öffnet den nächsten
+}
+cockpit-attention-nothing-waiting = Gerade wartet nichts auf Dich.
 cockpit-conductor-title = Hosts
 # Zonen-Header der Sidebar (spec v3 §S1) — Label wird großgeschrieben gerendert
 cockpit-zone-connections = Verbindungen

@@ -482,6 +482,147 @@ pub(crate) fn registry_start_for_process(pid: u32) -> Option<String> {
     }
 }
 
+/// Environment variable Zaplex injects into every local terminal PTY: one
+/// random, non-secret id per pane (the control surface id). An agent process
+/// started in that pane inherits it, which links the process to the pane even
+/// when no hook bridge is installed.
+pub const ZAPLEX_SURFACE_ENV: &str = "ZAPLEX_SURFACE_ID";
+const MAX_SURFACE_ID_BYTES: usize = 128;
+/// Upper bound for one process environment read.
+const MAX_ENVIRON_BYTES: u64 = 1024 * 1024;
+
+/// What the operating system says about the Zaplex terminal a live local agent
+/// process runs in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TerminalLink {
+    /// The process inherited this Zaplex terminal surface id.
+    Surface(String),
+    /// The process environment was readable and carries no Zaplex surface: the
+    /// agent was started outside Zaplex.
+    External,
+    /// No usable evidence: unsupported platform, unreadable environment, a
+    /// process that changed or vanished while being read, or no process at all.
+    /// Callers must not treat this as "external".
+    Unknown,
+}
+
+impl TerminalLink {
+    pub fn surface_id(&self) -> Option<&str> {
+        match self {
+            TerminalLink::Surface(surface_id) => Some(surface_id),
+            TerminalLink::External | TerminalLink::Unknown => None,
+        }
+    }
+
+    /// Combine the links of several processes holding the same session: a
+    /// Zaplex surface wins, then positive external evidence.
+    pub fn merge(self, other: TerminalLink) -> TerminalLink {
+        match (self, other) {
+            (TerminalLink::Surface(surface_id), _) | (_, TerminalLink::Surface(surface_id)) => {
+                TerminalLink::Surface(surface_id)
+            }
+            (TerminalLink::External, _) | (_, TerminalLink::External) => TerminalLink::External,
+            (TerminalLink::Unknown, TerminalLink::Unknown) => TerminalLink::Unknown,
+        }
+    }
+}
+
+/// The Zaplex surface id carried by a NUL-separated environment block, if it
+/// is present and well formed. Only this one variable is ever extracted; the
+/// rest of the environment (which may hold credentials) is neither parsed
+/// further nor retained.
+pub fn surface_id_from_environ(environ: &[u8]) -> Option<String> {
+    let prefix = format!("{ZAPLEX_SURFACE_ENV}=");
+    environ
+        .split(|byte| *byte == 0)
+        .find_map(|entry| entry.strip_prefix(prefix.as_bytes()))
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= MAX_SURFACE_ID_BYTES
+                && value
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+        })
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .map(str::to_string)
+}
+
+/// Decide the link from an environment read. An empty block is no evidence:
+/// every real process has some environment, so it means the read failed.
+pub fn terminal_link_from_environ(environ: Option<&[u8]>) -> TerminalLink {
+    match environ {
+        Some(environ) if !environ.is_empty() => surface_id_from_environ(environ)
+            .map(TerminalLink::Surface)
+            .unwrap_or(TerminalLink::External),
+        Some(_) | None => TerminalLink::Unknown,
+    }
+}
+
+/// Which Zaplex terminal, if any, the live local process `pid` runs in.
+///
+/// PID reuse can never misattribute a session: the process start identity is
+/// read before and after the environment and must not change, and when
+/// discovery bound the session to an exact fingerprint (`expected_fingerprint`,
+/// Linux) the current process must still carry it. Anything else is
+/// [`TerminalLink::Unknown`].
+pub fn terminal_link_for_pid(pid: u32, expected_fingerprint: Option<&str>) -> TerminalLink {
+    if !pid_signalable(pid) {
+        return TerminalLink::Unknown;
+    }
+    let before = precise_process_start(pid);
+    let environ = read_process_environ(pid);
+    let after = precise_process_start(pid);
+    if before.is_none() || before != after {
+        return TerminalLink::Unknown;
+    }
+    if let Some(expected) = expected_fingerprint {
+        if current_process_fingerprint(pid).as_deref() != Some(expected) {
+            return TerminalLink::Unknown;
+        }
+    }
+    terminal_link_from_environ(environ.as_deref())
+}
+
+#[cfg(target_os = "linux")]
+fn read_process_environ(pid: u32) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+
+    let mut environ = Vec::new();
+    std::fs::File::open(format!("/proc/{pid}/environ"))
+        .ok()?
+        .take(MAX_ENVIRON_BYTES)
+        .read_to_end(&mut environ)
+        .ok()?;
+    Some(environ)
+}
+
+#[cfg(target_os = "macos")]
+fn read_process_environ(pid: u32) -> Option<Vec<u8>> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    let pid = Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_environ(UpdateKind::Always),
+    );
+    let mut environ = Vec::new();
+    for entry in system.process(pid)?.environ() {
+        environ.extend_from_slice(entry.as_encoded_bytes());
+        environ.push(0);
+        if environ.len() as u64 > MAX_ENVIRON_BYTES {
+            return None;
+        }
+    }
+    Some(environ)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn read_process_environ(_pid: u32) -> Option<Vec<u8>> {
+    None
+}
+
 #[cfg(test)]
 #[path = "process_identity_tests.rs"]
 mod tests;

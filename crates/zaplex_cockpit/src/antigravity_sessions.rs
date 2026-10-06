@@ -93,6 +93,9 @@ pub fn idle_sessions(
             task_state: None,
             last_activity,
             pid: 0,
+            awaiting_input: false,
+            turn_id: None,
+            attention: None,
         });
     }
     sessions.sort_by_key(|session| Reverse(session.last_activity));

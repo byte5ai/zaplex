@@ -1305,6 +1305,14 @@ message AgentSessionInfo {
   // Opaque daemon-local account identity. Present only when both peers
   // negotiated "agent-account-routing-v1"; config_dir is then empty.
   string account_id = 24;
+  // The agent is blocked on an open question, permission prompt or dialog.
+  // Additive: an older daemon sends false, which only loses the
+  // "regardless of seen" urgency; the finished-turn rule still applies.
+  bool awaiting_input = 25;
+  // Identity of the most recently completed turn (Claude assistant-line
+  // uuid, Codex turn id). Empty = running turn or older daemon; the client
+  // then keys the seen ledger by last_activity_epoch_millis.
+  string turn_id = 26;
 }
 
 message AgentTaskItem {
