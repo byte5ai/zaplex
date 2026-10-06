@@ -1616,7 +1616,7 @@ fn favorite_host_label_is_the_direct_terminal_action() {
     ));
     assert!(fields.has_split_submenu_trigger());
     assert!(fields.ellipsizes_label());
-    assert_eq!(fields.tooltip(), Some("example-host"));
+    assert_eq!(fields.tooltip(), None);
     assert_eq!(fields.get_a11y_text(), "example-host");
     assert_eq!(menu.items().len(), 3);
     assert!(menu.items().iter().all(|item| !matches!(
@@ -1681,7 +1681,7 @@ fn missing_host_in_readable_registry_keeps_favorite_remove_available() {
     assert!(fields.on_select_action().is_none());
     assert!(fields.has_split_submenu_trigger());
     assert!(fields.ellipsizes_label());
-    assert_eq!(fields.tooltip(), Some(fields.label()));
+    assert_eq!(fields.tooltip(), None);
     assert!(items.is_empty());
     assert_eq!(menu.items().len(), 2);
     let MenuItem::Item(unavailable) = &menu.items()[0] else {

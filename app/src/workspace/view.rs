@@ -2264,9 +2264,10 @@ fn favorite_host_menu_item(
         .iter()
         .find(|(node_id, _)| node_id == &favorite.target)
     {
-        let label = name.clone();
+        // No full-text tooltip: anchored at the label's right edge it covered the
+        // `⋯` trigger and kept the label hovered while the submenu was open.
         return MenuItem::Submenu {
-            fields: MenuItemFields::new_submenu(label.clone())
+            fields: MenuItemFields::new_submenu(name.clone())
                 .with_on_select_action(WorkspaceAction::OpenSshTerminalByNode {
                     node_id: node_id.clone(),
                 })
@@ -2274,7 +2275,6 @@ fn favorite_host_menu_item(
                     "workspace-favorite-more-actions",
                     host = name.clone()
                 ))
-                .with_tooltip(label)
                 .with_icon(icons::Icon::StarFilled),
             menu: SubMenu::new(vec![
                 MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
@@ -2312,13 +2312,12 @@ fn favorite_host_menu_item(
         )
     };
     MenuItem::Submenu {
-        fields: MenuItemFields::new_submenu(label.clone())
+        fields: MenuItemFields::new_submenu(label)
             .with_split_submenu_primary_disabled(true)
             .with_split_submenu_trigger(crate::t!(
                 "workspace-favorite-more-actions",
                 host = favorite.display_label()
             ))
-            .with_tooltip(label)
             .with_icon(icons::Icon::StarFilled),
         menu: SubMenu::new(vec![
             MenuItemFields::new(unavailable_message)
