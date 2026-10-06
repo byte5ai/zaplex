@@ -432,11 +432,13 @@ shell uses the same filesystem. Local subshells (including containers), nested r
 legacy SSH sessions remain unbound: their shell directory is left unchanged rather than receiving
 a foreign path.
 
-`app/src/sftp_manager/browser.rs::render_responsive_function_bar` renders a single non-wrapping
-function row with stable F3/F4/F5/F6 slots in every File Manager pane. Enabled state comes only from
-the currently focused compatible pane. A terminal, account pane, or overlay focus disables File
-Manager actions elsewhere without changing their geometry. Long localized labels use the existing
-compact/responsive treatment; they do not create a second row or remove existing commands.
+`app/src/sftp_manager/browser.rs::render_responsive_function_bar` renders every function key
+(F2–F8, F10) with its short localized caption in every File Manager pane. A `SizeConstraintSwitch`
+chooses one row of eight equal cells, two rows of four, or four rows of two; the thresholds come from
+the measured UI-font width of the widest keycap and caption, so captions are never hidden and the bar
+never scrolls. Enabled state comes only from the currently focused compatible pane. A terminal,
+account pane, or overlay focus disables File Manager actions elsewhere without changing their
+geometry.
 
 `fm_registry.rs` remains the inventory for eligible pane destinations. Copy/Move captures and shows
 the source identity and either the sole valid counterpart or an explicit selected target. A target
@@ -498,7 +500,7 @@ tree and three-level hierarchy as superseded by GH-160.
 | 33 identity/title | host/CWD/collision fixtures; custom-title precedence/removal; per-tab focus and account-pane cases |
 | 34–35 geometry/drag/restore | pane-tree full-area and nested split tests; move-not-clone identity assertions; invalid drop; close/focus callback; pending cross-window tab gate through Ready/failure and final managed acknowledgement, including temporary replacement/Undo Close; persistence round trip with mixed modes/hosts |
 | 36 account-pane placement | add-or-focus per-tab tests; no replacement; same account in separate tabs; labelled aggregate action |
-| 37–39 File Manager/transfers | mode round trip; one-line focus-gated function bar; exact cross-host target and stale-target tests; local↔local, local↔remote, remote A↔remote B, N=2/N=3, other-tab target |
+| 37–39 File Manager/transfers | mode round trip; always-captioned, wrapping, focus-gated function bar; exact cross-host target and stale-target tests; local↔local, local↔remote, remote A↔remote B, N=2/N=3, other-tab target |
 | 40 parent navigation | identity-based local/remote sorted/filtered/delayed fixtures; root, removed/hidden child, cancel/failure |
 | 41 readiness/reconnect | transport/attach/replay/ready/corrupt transitions; cross-platform corrupt and retry/cancel fail-closed restore with sibling retention, daemon-backed replacement, and no inert actions; route/PTY/generation match; input gating/no hidden queue; missing-claim rejection before open/attach success; bounded logical-open waiters and Abort/disconnect cleanup; managed capability rejection before Accepted/InFlight lookup while capable retry classification remains idempotent; delayed-preflight cancellation after both ACK windows; accepted-hit/conflict ordering under project mutation; first-ACK existing-managed attach; same-host multi-account bulk launch attempts; late-claim owner-preservation/focus/no-second-identity; localized terminal and managed-open failure; real Same-SHA client/daemon smoke |
 | 42 shared visual language | source checks for theme/component reuse; normal/narrow HTML states; native light/dark/contrast screenshots with long identities and mixed panes |
