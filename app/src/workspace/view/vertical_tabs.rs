@@ -65,13 +65,12 @@ use warp_core::ui::Icon as WarpIcon;
 use warpui::elements::DispatchEventResult;
 use warpui::elements::{
     resizable_state_handle, Border, ChildAnchor, Clipped, ClippedScrollStateHandle,
-    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragAxis,
-    DragBarSide, Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded,
-    Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
-    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Resizable,
-    ResizableStateHandle, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
-    Shrinkable, Stack, Text,
+    ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DragBarSide,
+    Draggable, DropShadow, DropTarget, Element, Empty, EventHandler, Expanded, Fill as ElementFill,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
+    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Resizable, ResizableStateHandle, SavePosition,
+    ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -2106,13 +2105,15 @@ fn render_tab_group_internal(
         .on_drop(|ctx, _, _, _| {
             ctx.dispatch_typed_action(WorkspaceAction::DropTab);
         });
-    // Only lock the drag to the vertical axis when cross-window tab drag is
-    // disabled. When it is enabled, the user needs to be able to drag
-    // horizontally out of the panel to detach the tab into a new window.
+    // A tab may always leave the panel: with cross-window tab drag it detaches
+    // into a new window, otherwise it stays inside this window and, over the
+    // content, joins the visible tab as a split pane.
     let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() {
         draggable
     } else {
-        draggable.with_drag_axis(DragAxis::VerticalOnly)
+        draggable.with_drag_bounds_callback(|_, window_size| {
+            Some(RectF::new(Vector2F::zero(), window_size))
+        })
     };
     let draggable = draggable.finish();
 

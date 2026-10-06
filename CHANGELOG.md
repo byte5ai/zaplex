@@ -4,7 +4,7 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.2.0] — 2026-10-06
 
-- Ein Tab lässt sich mit der Maus als Pane in den sichtbaren Tab ziehen: Über dem Inhalt markiert eine Fläche die Hälfte des Panes, an der er eingefügt wird; Loslassen übernimmt alle seine Panes samt Anordnung, ohne Verbindung, PTY oder Agent neu zu starten. Tabs werden dafür beim Loslassen statt beim Drücken aktiviert, damit der sichtbare Tab beim Ziehen eines anderen Tabs stehen bleibt.
+- Ein Tab lässt sich mit der Maus aus der Tab-Leiste oder dem vertikalen Tab-Panel als Pane in den sichtbaren Tab ziehen: Über dem Inhalt markiert eine Fläche die Hälfte des Panes, an der er eingefügt wird; Loslassen übernimmt alle seine Panes samt Anordnung, ohne Verbindung, PTY oder Agent neu zu starten. Tabs werden dafür beim Loslassen statt beim Drücken aktiviert, damit der sichtbare Tab beim Ziehen eines anderen Tabs stehen bleibt.
 
 - Tabs und Panes haben ein gemeinsames Startmenü: „+“ und alle vier Split-Richtungen zeigen Terminal, „Neuer Agent…“, die Favoriten und neu „Weitere Hosts“ mit allen übrigen registrierten Hosts. Aus einem Split heraus startet jeder Eintrag im neuen Pane, auch der Agent; Konto, Startabsicht und Prompt hängen an genau diesem Pane. Tab-spezifische Einträge (Tab-Konfigurationen, Docker-Sandbox, Worktree-Konfiguration, geschlossene Session) bleiben im „+“-Menü.
 
