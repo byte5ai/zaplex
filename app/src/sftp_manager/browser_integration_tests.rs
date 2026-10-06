@@ -17,7 +17,7 @@ use warpui::elements::{
     ChildView, CrossAxisAlignment, Expanded, Flex, MainAxisSize, MouseStateHandle, ParentElement,
     Stack,
 };
-use warpui::event::KeyEventDetails;
+use warpui::event::{KeyEventDetails, ModifiersState};
 use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::{
@@ -2073,12 +2073,18 @@ fn rescan_click_survives_rerender() {
 fn row_action_does_not_fire_twice_after_rerender() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (window_id, view, _root) = create_connected_view(&mut app, &[("clickable.txt", b"x")]);
+        // "another.txt" sorts first, so the cursor starts away from the
+        // clicked row and the click is observable as a cursor move.
+        let (window_id, view, _root) =
+            create_connected_view(&mut app, &[("another.txt", b"a"), ("clickable.txt", b"x")]);
         let entry_index = view.read(&app, |view, _| {
             view.entries
                 .iter()
                 .position(|entry| entry.name == "clickable.txt")
                 .unwrap()
+        });
+        view.read(&app, |view, _| {
+            assert_ne!(view.cursor_entry_index(), Some(entry_index));
         });
         let position_id = layout_id(&view, &app, &format!("row:{entry_index}"));
         let (presenter, invalidation) = presenter_for_window(&app, window_id);
@@ -2094,12 +2100,12 @@ fn row_action_does_not_fire_twice_after_rerender() {
         mouse_up(&mut app, window_id, presenter, position);
 
         view.read(&app, |view, _| {
-            assert!(view.is_index_marked(entry_index));
             assert_eq!(
-                view.selected.len(),
-                1,
-                "the row click must fire exactly once"
+                view.cursor_entry_index(),
+                Some(entry_index),
+                "the row click must land after the rerender"
             );
+            assert!(view.selected.is_empty(), "a plain click marks nothing");
         });
     });
 }
@@ -2406,7 +2412,8 @@ fn test_navigate_normalizes_backslashes() {
     });
 }
 
-/// Verifies that SelectEntry selects a single entry
+/// Verifies that SelectEntry (a plain click) puts the cursor on the entry
+/// without marking it, and that the next click only moves the cursor on.
 #[test]
 fn test_select_entry_highlights_item() {
     warpui::App::test((), |mut app| async move {
@@ -2420,30 +2427,32 @@ fn test_select_entry_highlights_item() {
             ],
         );
 
-        // Select the second entry
+        // Click the second entry
         view.update(&mut app, |v, ctx| {
             let action = entry_action(v, 1, SftpBrowserAction::SelectEntry);
             v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
-            assert!(
-                v.is_index_marked(1),
-                "SelectEntry(1) should select the second entry"
+            assert_eq!(
+                v.cursor_entry_index(),
+                Some(1),
+                "SelectEntry(1) should put the cursor on the second entry"
             );
-            assert_eq!(v.selected.len(), 1, "should have exactly 1 selection");
+            assert!(v.selected.is_empty(), "a click is not a mark");
         });
 
-        // Switch the selection to the third entry
+        // Click the third entry
         view.update(&mut app, |v, ctx| {
             let action = entry_action(v, 2, SftpBrowserAction::SelectEntry);
             v.handle_action(&action, ctx);
         });
 
         view.read(&app, |v, _| {
-            assert!(
-                v.is_index_marked(2),
-                "SelectEntry(2) should select the third entry"
+            assert_eq!(
+                v.cursor_entry_index(),
+                Some(2),
+                "SelectEntry(2) should move the cursor to the third entry"
             );
         });
     });
@@ -2850,7 +2859,8 @@ fn test_delete_cancel_preserves_entry() {
 // D. Context menu tests (5)
 // ============================================================
 
-/// Verifies that the context menu opens and selects the entry
+/// Verifies that the context menu opens on the entry and puts the cursor on
+/// it without marking it
 #[test]
 fn test_right_click_opens_menu_and_selects_entry() {
     warpui::App::test((), |mut app| async move {
@@ -2870,7 +2880,8 @@ fn test_right_click_opens_menu_and_selects_entry() {
 
         view.read(&app, |v, _| {
             assert!(v.context_menu.is_some(), "context menu should open");
-            assert!(v.is_index_marked(0), "should select the first entry");
+            assert_eq!(v.cursor_entry_index(), Some(0), "cursor on the entry");
+            assert!(v.selected.is_empty(), "a right-click is not a mark");
         });
     });
 }
@@ -4205,7 +4216,8 @@ fn active_pane_style_differs_from_selection_and_hover() {
             let theme = Appearance::as_ref(ctx).theme();
             (
                 theme.accent().into(),
-                warp_core::ui::theme::color::internal_colors::fg_overlay_2(theme).into(),
+                // The right pane is inactive: its marks keep the lighter tint.
+                warp_core::ui::theme::color::internal_colors::accent_overlay_1(theme).into(),
                 warp_core::ui::theme::color::internal_colors::fg_overlay_1(theme).into(),
             )
         });
@@ -7188,5 +7200,366 @@ fn same_fs_target_appearing_after_probe_is_skipped_without_overwrite_consent() {
             assert_eq!(activities[0].conflict, ConflictDecision::Skip);
             assert_eq!(activities[0].state, QueuedTransferState::Skipped);
         });
+    });
+}
+
+// ============================================================
+// Multi-marking: folders and files, keyboard and mouse
+// ============================================================
+
+/// Names of the marked entries, sorted, for order-independent assertions.
+fn marked_entry_names(view: &SftpBrowserView) -> Vec<String> {
+    let mut names: Vec<String> = view
+        .entries
+        .iter()
+        .filter(|entry| view.selected.contains(&entry.entry_identity()))
+        .map(|entry| entry.name.clone())
+        .collect();
+    names.sort();
+    names
+}
+
+/// A left press and release at `position` with the given modifiers held.
+fn click_with_modifiers(
+    app: &mut App,
+    window_id: WindowId,
+    presenter: Rc<RefCell<Presenter>>,
+    position: Vector2F,
+    modifiers: ModifiersState,
+) {
+    let up_presenter = presenter.clone();
+    app.update(move |ctx| {
+        ctx.simulate_window_event(
+            Event::LeftMouseDown {
+                position,
+                modifiers,
+                click_count: 1,
+                is_first_mouse: false,
+            },
+            window_id,
+            presenter,
+        );
+    });
+    app.update(move |ctx| {
+        ctx.simulate_window_event(
+            Event::LeftMouseUp {
+                position,
+                modifiers,
+            },
+            window_id,
+            up_presenter,
+        );
+    });
+}
+
+/// Marked folders and files go through one delete confirmation that counts
+/// them apart and announces the folder contents; confirming removes the
+/// folders recursively together with the files.
+#[test]
+fn marked_folders_and_files_delete_together_with_counted_confirmation() {
+    crate::i18n::init(Some("en"));
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(
+            &mut app,
+            &[
+                ("build/out/app.bin", b"bin"),
+                ("docs/readme.md", b"doc"),
+                ("a.txt", b"a"),
+                ("b.txt", b"b"),
+                ("c.txt", b"c"),
+            ],
+        );
+
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::MarkAll, ctx);
+            v.handle_action(&SftpBrowserAction::DeleteSelected, ctx);
+        });
+        view.read(&app, |v, _| match &v.dialog {
+            Some(Dialog::DeleteConfirm { paths, is_dirs, .. }) => {
+                assert_eq!(paths.len(), 5, "every marked folder and file");
+                assert_eq!(is_dirs.iter().filter(|is_dir| **is_dir).count(), 2);
+                let body: String = super::dialogs::delete_confirm_body(paths, is_dirs)
+                    .chars()
+                    .filter(|character| !matches!(character, '\u{2068}' | '\u{2069}'))
+                    .collect();
+                assert!(
+                    body.contains("2 folders (including contents) and 3 files"),
+                    "{body}"
+                );
+            }
+            other => panic!("expected the delete confirmation, got {other:?}"),
+        });
+
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::ConfirmDelete, ctx);
+        });
+        view.read(&app, |v, _| {
+            assert!(v.entries.is_empty(), "every marked entry is gone");
+            assert!(v.selected.is_empty());
+        });
+        assert!(
+            !temp.path().join("build").exists(),
+            "folders are deleted together with their contents"
+        );
+        assert!(!temp.path().join("docs").exists());
+    });
+}
+
+/// F5 copies every marked folder (recursively) and file into the other pane
+/// and leaves unmarked entries alone; F6 moves the same selection and removes
+/// the sources.
+#[test]
+fn f5_and_f6_transfer_marked_folders_and_files() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
+            &mut app,
+            &[
+                ("left/assets/logo.svg", b"svg"),
+                ("left/assets/icons/x.png", b"png"),
+                ("left/notes.txt", b"notes"),
+                ("left/skip.txt", b"skip"),
+                ("right/.keep", b""),
+            ],
+        );
+        let root = temp.path().to_path_buf();
+        let mark_folder_and_file =
+            |v: &mut SftpBrowserView, ctx: &mut ViewContext<SftpBrowserView>| {
+                for name in ["assets", "notes.txt"] {
+                    let index = v
+                        .entries
+                        .iter()
+                        .position(|entry| entry.name == name)
+                        .unwrap();
+                    let reference = v.entry_reference(index).unwrap();
+                    v.handle_action(&SftpBrowserAction::ToggleMark(reference), ctx);
+                }
+                assert_eq!(v.marked_counts(), (1, 1));
+            };
+
+        view_a.update(&mut app, |v, ctx| {
+            mark_folder_and_file(v, ctx);
+            v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        assert_eq!(
+            std::fs::read(root.join("right/assets/logo.svg")).unwrap(),
+            b"svg"
+        );
+        assert_eq!(
+            std::fs::read(root.join("right/assets/icons/x.png")).unwrap(),
+            b"png",
+            "the folder is copied recursively"
+        );
+        assert_eq!(
+            std::fs::read(root.join("right/notes.txt")).unwrap(),
+            b"notes"
+        );
+        assert!(!root.join("right/skip.txt").exists(), "unmarked stays put");
+        assert!(
+            root.join("left/assets/icons/x.png").exists(),
+            "copy keeps sources"
+        );
+
+        std::fs::remove_dir_all(root.join("right/assets")).unwrap();
+        std::fs::remove_file(root.join("right/notes.txt")).unwrap();
+        view_a.update(&mut app, |v, ctx| {
+            mark_folder_and_file(v, ctx);
+            v.handle_action(&SftpBrowserAction::MoveToOtherPane, ctx);
+        });
+        assert_eq!(
+            std::fs::read(root.join("right/assets/icons/x.png")).unwrap(),
+            b"png",
+            "the folder is moved with its contents"
+        );
+        assert!(root.join("right/notes.txt").exists());
+        assert!(
+            !root.join("left/assets").exists(),
+            "a move removes the folder"
+        );
+        assert!(!root.join("left/notes.txt").exists());
+        assert!(root.join("left/skip.txt").exists());
+    });
+}
+
+/// Marks belong to the directory they were made in: entering a folder starts
+/// with none, and marks made there are dropped again on the way back up.
+#[test]
+fn marks_clear_when_the_directory_changes() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, _temp) = create_connected_view(
+            &mut app,
+            &[
+                ("sub/inner.txt", b"i"),
+                ("sub/deeper/x.txt", b"x"),
+                ("top.txt", b"t"),
+            ],
+        );
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::MarkAll, ctx);
+        });
+        view.read(&app, |v, _| assert_eq!(v.marked_counts(), (1, 1)));
+
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::NavigateTo(PathBuf::from("/sub")), ctx);
+        });
+        view.read(&app, |v, _| {
+            assert_eq!(v.current_path, PathBuf::from("/sub"));
+            assert!(v.selected.is_empty(), "no mark follows into another folder");
+        });
+
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::MarkAll, ctx);
+        });
+        view.read(&app, |v, _| assert_eq!(v.marked_counts(), (1, 1)));
+        view.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::GoUp, ctx);
+        });
+        view.read(&app, |v, _| {
+            assert_eq!(v.current_path, PathBuf::from("/"));
+            assert!(v.selected.is_empty(), "marks made in /sub stay behind");
+        });
+    });
+}
+
+/// The real key path: Space marks the folder under the cursor (the platform
+/// reports the space bar as " ", which the list used to ignore), Shift+Down
+/// marks a run, Cmd+A marks everything, Escape clears again — and the status
+/// line under the list appears once something is marked.
+#[test]
+fn keyboard_marks_folders_through_real_key_routing() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _temp) = create_connected_view(
+            &mut app,
+            &[
+                ("alpha/a.txt", b"a"),
+                ("beta/b.txt", b"b"),
+                ("notes.txt", b"n"),
+                ("todo.txt", b"t"),
+            ],
+        );
+        let pane_id = PaneId::dummy_pane_id();
+        let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, true));
+        view.update(&mut app, |view, ctx| {
+            view.set_focus_handle(PaneFocusHandle::new(pane_id, focus_state), ctx);
+            view.focus_contents(ctx);
+        });
+        let status_id = layout_id(&view, &app, "marked-status");
+
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+        assert!(
+            maybe_position(&presenter, &status_id).is_none(),
+            "no status line while nothing is marked"
+        );
+        assert!(key_down(&mut app, window_id, presenter, "space"));
+        view.read(&app, |view, _| {
+            assert_eq!(marked_entry_names(view), vec!["alpha"]);
+        });
+
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+        assert!(
+            maybe_position(&presenter, &status_id).is_some(),
+            "the status line shows what is marked"
+        );
+        assert!(key_down(&mut app, window_id, presenter, "shift-down"));
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+        assert!(key_down(&mut app, window_id, presenter, "shift-down"));
+        view.read(&app, |view, _| {
+            assert_eq!(marked_entry_names(view), vec!["alpha", "beta"]);
+            assert_eq!(view.cursor_entry_index(), Some(2), "on notes.txt");
+        });
+
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+        assert!(key_down(&mut app, window_id, presenter, "cmd-a"));
+        view.read(&app, |view, _| assert_eq!(view.marked_counts(), (2, 2)));
+
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+        assert!(key_down(&mut app, window_id, presenter, "escape"));
+        view.read(&app, |view, _| assert!(view.selected.is_empty()));
+    });
+}
+
+/// The real mouse path: Cmd-click toggles a folder's mark without opening it,
+/// Shift-click marks the range from the cursor, a plain click only moves the
+/// cursor, and a modified click on `..` neither marks nor navigates.
+#[test]
+fn modifier_clicks_mark_folders_and_ranges() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, view, _temp) = create_connected_view(
+            &mut app,
+            &[
+                ("alpha/a.txt", b"a"),
+                ("beta/b.txt", b"b"),
+                ("gamma/c.txt", b"c"),
+                ("notes.txt", b"n"),
+            ],
+        );
+        let cmd = ModifiersState {
+            cmd: true,
+            ..Default::default()
+        };
+        let shift = ModifiersState {
+            shift: true,
+            ..Default::default()
+        };
+        let row_center = |app: &mut App, row: &str| {
+            let (presenter, _scene) = render_scene_at(app, window_id, vec2f(1200.0, 800.0));
+            let center = position(&presenter, &layout_id(&view, app, row)).center();
+            (presenter, center)
+        };
+
+        let (presenter, beta) = row_center(&mut app, "row:1");
+        click_with_modifiers(&mut app, window_id, presenter, beta, cmd);
+        view.read(&app, |view, _| {
+            assert_eq!(marked_entry_names(view), vec!["beta"]);
+            assert_eq!(view.current_path, PathBuf::from("/"), "not opened");
+            assert_eq!(view.cursor_entry_index(), Some(1));
+        });
+
+        let (presenter, notes) = row_center(&mut app, "row:3");
+        click_with_modifiers(&mut app, window_id, presenter, notes, shift);
+        view.read(&app, |view, _| {
+            assert_eq!(marked_entry_names(view), vec!["beta", "gamma", "notes.txt"]);
+            assert_eq!(view.cursor_entry_index(), Some(3));
+        });
+
+        let (presenter, alpha) = row_center(&mut app, "row:0");
+        click_with_modifiers(
+            &mut app,
+            window_id,
+            presenter,
+            alpha,
+            ModifiersState::default(),
+        );
+        view.read(&app, |view, _| {
+            assert_eq!(view.cursor_entry_index(), Some(0), "a plain click moves");
+            assert_eq!(view.selected.len(), 3, "and keeps every mark");
+        });
+
+        let (presenter, beta) = row_center(&mut app, "row:1");
+        click_with_modifiers(&mut app, window_id, presenter, beta, cmd);
+        view.read(&app, |view, _| {
+            assert_eq!(marked_entry_names(view), vec!["gamma", "notes.txt"]);
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::NavigateTo(PathBuf::from("/alpha")), ctx);
+            view.handle_action(&SftpBrowserAction::MarkAll, ctx);
+        });
+        for modifiers in [cmd, shift] {
+            let (presenter, parent) = row_center(&mut app, "row:parent");
+            click_with_modifiers(&mut app, window_id, presenter, parent, modifiers);
+            view.read(&app, |view, _| {
+                assert_eq!(view.current_path, PathBuf::from("/alpha"), "`..` stays put");
+                assert_eq!(
+                    marked_entry_names(view),
+                    vec!["a.txt"],
+                    "a modified click on `..` changes no mark"
+                );
+            });
+        }
     });
 }

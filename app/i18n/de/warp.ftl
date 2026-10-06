@@ -930,7 +930,18 @@ fm-key-mkdir = Ordner
 fm-key-delete = Löschen
 fm-key-terminal = Terminal
 fm-empty-folder = Dieser Ordner ist leer
-fm-selection-status = { $count } markiert · { $size }
+fm-selection-status = { $items } markiert · { $size }
+fm-selection-status-with-folders = { $items } markiert · { $size } ohne Ordner
+fm-selection-status-folders-only = { $items } markiert · Ordnergröße nicht berechnet
+fm-count-folders = { $count ->
+    [one] { $count } Ordner
+   *[other] { $count } Ordner
+}
+fm-count-files = { $count ->
+    [one] { $count } Datei
+   *[other] { $count } Dateien
+}
+fm-count-folders-and-files = { $folders } · { $files }
 fm-tt-hidden = Versteckte Dateien anzeigen
 
 # ── T2.4: Dateimanager-Dialoge, Transfer, Status/Toasts, SSH-Manager, Verbinden ──
@@ -954,7 +965,10 @@ fm-dlg-newer-only-all = Alle nur ersetzen, wenn neuer
 fm-dlg-picker-title = { $verb } — in welches Panel?
 fm-dlg-picker-body = Mehr als ein anderes Datei-Panel ist offen. Bitte Ziel wählen:
 fm-dlg-delete-body-one = Willst du „{ $name }“ wirklich löschen? Das kann nicht rückgängig gemacht werden.
-fm-dlg-delete-body-many = Willst du { $count } Objekte wirklich löschen? Das kann nicht rückgängig gemacht werden.
+fm-dlg-delete-body-one-folder = Willst du den Ordner „{ $name }“ samt Inhalt wirklich löschen? Das kann nicht rückgängig gemacht werden.
+fm-dlg-delete-body-files = Willst du { $files } wirklich löschen? Das kann nicht rückgängig gemacht werden.
+fm-dlg-delete-body-folders = Willst du { $folders } samt Inhalt wirklich löschen? Das kann nicht rückgängig gemacht werden.
+fm-dlg-delete-body-mixed = Willst du { $folders } (inkl. Inhalt) und { $files } wirklich löschen? Das kann nicht rückgängig gemacht werden.
 fm-dlg-delete-title = Löschen bestätigen
 fm-dlg-delete = Löschen
 fm-dlg-rename-title = Umbenennen
