@@ -37,6 +37,34 @@ const MAX_RECONNECT_ATTEMPTS: u32 = 2;
 /// Delay between reconnection attempts.
 #[cfg(not(target_family = "wasm"))]
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+/// Backoff for reconnecting a persistent daemon session. Its PTY keeps running
+/// on the host, so a network that needs a while to come back (wake from sleep,
+/// Wi-Fi change, VPN re-auth) should not strand the pane after a few seconds.
+/// One entry per attempt; the budget is bounded (about two and a half minutes).
+#[cfg(not(target_family = "wasm"))]
+const PERSISTENT_RECONNECT_DELAYS_SECS: [u64; 8] = [2, 4, 8, 16, 30, 30, 30, 30];
+
+/// Number of reconnection attempts for a session before it is reported
+/// disconnected.
+#[cfg(not(target_family = "wasm"))]
+fn reconnect_attempt_limit(persistent: bool) -> u32 {
+    if persistent {
+        PERSISTENT_RECONNECT_DELAYS_SECS.len() as u32
+    } else {
+        MAX_RECONNECT_ATTEMPTS
+    }
+}
+
+/// Delay before reconnection attempt `attempt` (1-based).
+#[cfg(not(target_family = "wasm"))]
+fn reconnect_delay(attempt: u32, persistent: bool) -> Duration {
+    if !persistent {
+        return RECONNECT_DELAY;
+    }
+    let index = (attempt.max(1) - 1) as usize;
+    let last = PERSISTENT_RECONNECT_DELAYS_SECS.len() - 1;
+    Duration::from_secs(PERSISTENT_RECONNECT_DELAYS_SECS[index.min(last)])
+}
 
 /// Parameters that travel together through the reconnection flow.
 #[cfg(not(target_family = "wasm"))]
@@ -2081,9 +2109,12 @@ impl RemoteServerManager {
             identity_key,
         } = params;
 
+        let persistent = self.persistent_session_ids.contains(&session_id);
+        let attempt_limit = reconnect_attempt_limit(persistent);
+        let delay = reconnect_delay(attempt, persistent);
         log::info!(
             "Attempting reconnect for session {session_id:?} \
-             (attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})"
+             (attempt {attempt}/{attempt_limit}, in {delay:?})"
         );
 
         self.sessions.insert(
@@ -2106,7 +2137,7 @@ impl RemoteServerManager {
 
         ctx.background_executor()
             .spawn(async move {
-                async_io::Timer::after(RECONNECT_DELAY).await;
+                async_io::Timer::after(delay).await;
 
                 // Check if the session was deregistered during the delay.
                 // (Checked via spawner since sessions lives on the main thread.)
@@ -2204,7 +2235,8 @@ impl RemoteServerManager {
         params: ReconnectParams,
         ctx: &mut ModelContext<Self>,
     ) {
-        if params.attempt < MAX_RECONNECT_ATTEMPTS {
+        let persistent = self.persistent_session_ids.contains(&session_id);
+        if params.attempt < reconnect_attempt_limit(persistent) {
             self.attempt_reconnect(
                 session_id,
                 ReconnectParams {

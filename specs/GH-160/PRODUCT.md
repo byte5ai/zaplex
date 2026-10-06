@@ -283,11 +283,12 @@ The previous static illustrations are superseded, not alternative approved layou
     retained. A newer shell command or reopening the File Manager supersedes a deferred change.
     A changed session/host or failed connection must never redirect a foreign path into another shell.
 
-38. **The File Manager function bar is one stable row per pane.** F3/F4/F5/F6 and their actions are
-    visible in every File Manager pane; only the focused pane enables them. Unfocused panes keep the
-    same disabled geometry. Focus in a terminal, account pane, or overlay prevents file actions from
-    firing elsewhere. Narrow widths and long translations do not wrap or overlap the command bar,
-    and existing commands/shortcuts remain available.
+38. **The File Manager function bar always shows every key with its caption.** F2–F8 and F10 and
+    their actions are visible with a short one-word caption in every File Manager pane; only the
+    focused pane enables them. Unfocused panes keep the same disabled geometry. Focus in a terminal,
+    account pane, or overlay prevents file actions from firing elsewhere. A pane too narrow for one
+    row wraps the bar into two rows of equal cells (four in very narrow panes); the bar never
+    scrolls, hides captions, or overlaps, and existing commands/shortcuts remain available.
 
 39. **Transfers bind exact source and destination identity.** Copy and Move show source and target.
     A single valid visible counterpart may be the default; ambiguity requires selection, including

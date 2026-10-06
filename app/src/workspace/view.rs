@@ -1651,6 +1651,19 @@ fn failed_restored_daemon_request(
     }
 }
 
+/// Whether the pane's remote shell ended on its own, so its notice actions
+/// mean "new session" and "close" rather than reconnect and cancel.
+fn remote_pane_session_has_ended(
+    pane_group: &ViewHandle<PaneGroup>,
+    pane_id: PaneId,
+    ctx: &AppContext,
+) -> bool {
+    pane_group
+        .as_ref(ctx)
+        .terminal_view_from_pane_id(pane_id, ctx)
+        .is_some_and(|view| view.as_ref(ctx).remote_session_has_ended())
+}
+
 fn fail_closed_remote_restore_request(
     identity: &RemoteTerminalIdentity,
 ) -> Option<crate::terminal::daemon_tty::DaemonSessionRequest> {
@@ -2258,9 +2271,10 @@ fn favorite_host_menu_item(
         .iter()
         .find(|(node_id, _)| node_id == &favorite.target)
     {
-        let label = name.clone();
+        // No full-text tooltip: anchored at the label's right edge it covered the
+        // `⋯` trigger and kept the label hovered while the submenu was open.
         return MenuItem::Submenu {
-            fields: MenuItemFields::new_submenu(label.clone())
+            fields: MenuItemFields::new_submenu(name.clone())
                 .with_on_select_action(WorkspaceAction::OpenSshTerminalByNode {
                     node_id: node_id.clone(),
                 })
@@ -2268,7 +2282,6 @@ fn favorite_host_menu_item(
                     "workspace-favorite-more-actions",
                     host = name.clone()
                 ))
-                .with_tooltip(label)
                 .with_icon(icons::Icon::StarFilled),
             menu: SubMenu::new(vec![
                 MenuItemFields::new(crate::t!("cockpit-spawn-card-new-agent"))
@@ -2306,13 +2319,12 @@ fn favorite_host_menu_item(
         )
     };
     MenuItem::Submenu {
-        fields: MenuItemFields::new_submenu(label.clone())
+        fields: MenuItemFields::new_submenu(label)
             .with_split_submenu_primary_disabled(true)
             .with_split_submenu_trigger(crate::t!(
                 "workspace-favorite-more-actions",
                 host = favorite.display_label()
             ))
-            .with_tooltip(label)
             .with_icon(icons::Icon::StarFilled),
         menu: SubMenu::new(vec![
             MenuItemFields::new(unavailable_message)
@@ -11752,6 +11764,10 @@ impl Workspace {
         pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
     ) {
+        if remote_pane_session_has_ended(pane_group, pane_id, ctx) {
+            self.start_new_session_for_ended_remote_pane(pane_group, pane_id, ctx);
+            return;
+        }
         let Some((pane_uuid, mut identity, draft)) = pane_group
             .as_ref(ctx)
             .remote_terminal_restore_state(pane_id, ctx)
@@ -11909,58 +11925,123 @@ impl Workspace {
         ctx.dispatch_global_action("workspace:save_app", ());
     }
 
+    /// "New session" on a pane whose remote shell ended: there is nothing left
+    /// to reattach, so open a fresh shell on the same host and close the ended
+    /// pane, like closing an exited local shell and opening a new one.
+    fn start_new_session_for_ended_remote_pane(
+        &mut self,
+        pane_group: &ViewHandle<PaneGroup>,
+        pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((_, identity, _)) = pane_group
+            .as_ref(ctx)
+            .remote_terminal_restore_state(pane_id, ctx)
+        else {
+            return;
+        };
+        let node_id = identity.registry_node_id;
+        let server = warp_ssh_manager::with_conn(|conn| {
+            Ok(warp_ssh_manager::SshRepository::get_server(conn, &node_id)?)
+        });
+        let server = match server {
+            Ok(Some(server)) => server,
+            Ok(None) => {
+                log::warn!("New session for an ended remote pane: host {node_id} was removed");
+                return;
+            }
+            Err(error) => {
+                log::warn!("New session for an ended remote pane: host lookup failed: {error:#}");
+                return;
+            }
+        };
+        if self.open_ssh_terminal(node_id, server, false, ctx) {
+            pane_group.update(ctx, |group, ctx| group.close_pane(pane_id, ctx));
+        }
+    }
+
+    /// Cancel on a remote readiness notice. An ended remote shell closes its
+    /// pane. Any other daemon pane is cancelled in place: the surface is never
+    /// replaced, so no fresh terminal model can fail into the shell-start
+    /// banner, no local shell starts (spec R1), and the pane keeps its title.
+    /// The restore identity stays registered so Retry can reattach later.
     fn cancel_remote_restore(
         &mut self,
         pane_group: &ViewHandle<PaneGroup>,
         pane_id: PaneId,
         ctx: &mut ViewContext<Self>,
     ) {
-        let Some((pane_uuid, mut identity, draft)) = pane_group
+        if remote_pane_session_has_ended(pane_group, pane_id, ctx) {
+            pane_group.update(ctx, |group, ctx| group.close_pane(pane_id, ctx));
+            return;
+        }
+        let Some(view) = pane_group
             .as_ref(ctx)
-            .remote_terminal_restore_state(pane_id, ctx)
+            .terminal_view_from_pane_id(pane_id, ctx)
         else {
-            // A fresh daemon open can be cancelled before it returns a PTY ID.
-            // Keep the draft and retire only this local connection attempt.
-            #[cfg(unix)]
-            if let Some(view) = pane_group
-                .as_ref(ctx)
-                .terminal_view_from_pane_id(pane_id, ctx)
-            {
-                let session_id = view.as_ref(ctx).remote_input_session_id();
-                if let Some(session_id) = session_id.filter(|session_id| {
-                    pane_group
-                        .as_ref(ctx)
-                        .daemon_pane_matches_connection(pane_id, *session_id, ctx)
-                        && !view.as_ref(ctx).remote_input_is_ready()
-                }) {
-                    view.update(ctx, |view, ctx| view.cancel_remote_input_readiness(ctx));
-                    self.pending_daemon_split_focus.remove(&session_id);
-                    self.pending_routed_daemon_starts.remove(&session_id);
-                    self.daemon_session_servers.remove(&session_id);
-                    self.daemon_session_hosts.remove(&session_id);
-                    #[cfg(feature = "local_tty")]
-                    {
-                        self.sftp_file_service_sessions
-                            .retain(|_, candidate| *candidate != session_id);
-                        forget_daemon_node_session(&mut self.daemon_node_sessions, session_id);
-                    }
-                    release_daemon_pty_claim_for_connection(session_id);
-                    RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
-                        manager.deregister_session(session_id, false, ctx);
-                    });
-                    ctx.dispatch_global_action("workspace:save_app", ());
-                }
-            }
             return;
         };
-        identity.input_draft = draft.clone();
-        let daemon_request = fail_closed_remote_restore_request(&identity);
-        crate::app_state::register_remote_terminal_identity(&pane_uuid, identity);
-        let replaced = pane_group.update(ctx, |group, ctx| {
-            group.replace_remote_terminal_surface(pane_id, daemon_request, draft, true, ctx)
-        });
-        if let Some(replaced) = replaced {
-            Self::retire_replaced_remote_surface(&replaced, ctx);
+        if view.as_ref(ctx).remote_input_is_ready() {
+            return;
+        }
+        let restore_state = pane_group
+            .as_ref(ctx)
+            .remote_terminal_restore_state(pane_id, ctx);
+        let mut daemon_restore = false;
+        if let Some((pane_uuid, mut identity, draft)) = restore_state {
+            identity.input_draft = draft.clone();
+            if !matches!(&identity.transport, RemoteTerminalTransport::Daemon { .. }) {
+                // Classic SSH runs in a local PTY; its cancel keeps replacing
+                // the surface with a cancelled one.
+                crate::app_state::register_remote_terminal_identity(&pane_uuid, identity);
+                let replaced = pane_group.update(ctx, |group, ctx| {
+                    group.replace_remote_terminal_surface(pane_id, None, draft, true, ctx)
+                });
+                if let Some(replaced) = replaced {
+                    Self::retire_replaced_remote_surface(&replaced, ctx);
+                }
+                ctx.dispatch_global_action("workspace:save_app", ());
+                return;
+            }
+            crate::app_state::register_remote_terminal_identity(&pane_uuid, identity);
+            daemon_restore = true;
+        }
+        // A fresh daemon open can also be cancelled before it returns a PTY id.
+        #[cfg(unix)]
+        let session_id = view
+            .as_ref(ctx)
+            .remote_input_session_id()
+            .filter(|session_id| {
+                pane_group
+                    .as_ref(ctx)
+                    .daemon_pane_matches_connection(pane_id, *session_id, ctx)
+            });
+        #[cfg(not(unix))]
+        let session_id: Option<warp_core::SessionId> = None;
+        if !daemon_restore && session_id.is_none() {
+            return;
+        }
+        // Mark the pane cancelled before its connection is torn down, so the
+        // event loop's teardown cannot surface as a failure on this pane.
+        view.update(ctx, |view, ctx| view.cancel_remote_input_readiness(ctx));
+        // A later Retry must be able to claim this PTY again.
+        release_daemon_pty_claim_for_terminal_view(view.id());
+        #[cfg(unix)]
+        if let Some(session_id) = session_id {
+            self.pending_daemon_split_focus.remove(&session_id);
+            self.pending_routed_daemon_starts.remove(&session_id);
+            self.daemon_session_servers.remove(&session_id);
+            self.daemon_session_hosts.remove(&session_id);
+            #[cfg(feature = "local_tty")]
+            {
+                self.sftp_file_service_sessions
+                    .retain(|_, candidate| *candidate != session_id);
+                forget_daemon_node_session(&mut self.daemon_node_sessions, session_id);
+            }
+            release_daemon_pty_claim_for_connection(session_id);
+            RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.deregister_session(session_id, false, ctx);
+            });
         }
         ctx.dispatch_global_action("workspace:save_app", ());
     }
