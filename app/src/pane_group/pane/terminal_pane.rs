@@ -560,6 +560,20 @@ fn handle_pane_stack_event(
     }
 }
 
+/// Whether a terminal pane closes when its shell exits.
+///
+/// A shell that exited before it successfully bootstrapped keeps its pane
+/// open: there might be useful information visible in the output, and if this
+/// was the first shell spawned when the user started the app, it prevents the
+/// app from suddenly quitting. A remote shell the user exited cleanly closes
+/// regardless, even in plain-terminal mode without shell integration.
+fn pane_closes_on_shell_exit(
+    login_shell_bootstrapped: bool,
+    remote_session_closed_cleanly: bool,
+) -> bool {
+    login_shell_bootstrapped || remote_session_closed_cleanly
+}
+
 fn handle_terminal_view_event(
     group: &mut PaneGroup,
     terminal_pane_id: TerminalPaneId,
@@ -575,14 +589,14 @@ fn handle_terminal_view_event(
                 ctx.emit(pane_group::Event::ExecuteCommand(event.clone()));
             }
             Event::Exited => {
-                // If the shell process exited before it successfully bootstrapped,
-                // keep the pane open.  There might be useful information visible
-                // in the output, and if this was the first shell spawned when the
-                // user started the app, it will prevent it from suddenly quitting.
                 if group
                     .terminal_view_from_pane_id(terminal_pane_id, ctx)
                     .is_some_and(|terminal_view| {
-                        !terminal_view.as_ref(ctx).is_login_shell_bootstrapped()
+                        let terminal_view = terminal_view.as_ref(ctx);
+                        !pane_closes_on_shell_exit(
+                            terminal_view.is_login_shell_bootstrapped(),
+                            terminal_view.remote_session_closed_cleanly(),
+                        )
                     })
                 {
                     return;
