@@ -1945,6 +1945,8 @@ fn remote_readiness_message(
     })
 }
 
+/// Remote panes persist their unsent draft for restore, so a draft edit there
+/// requests an app snapshot.
 fn remote_input_draft_change_needs_snapshot(phase: Option<RemoteInputPhase>) -> bool {
     phase.is_some()
 }
@@ -20265,7 +20267,10 @@ impl TerminalView {
                 operations,
             } => {
                 if remote_input_draft_change_needs_snapshot(self.remote_input_phase) {
-                    ctx.emit(Event::AppStateChanged);
+                    // Only schedule the coalesced snapshot that persists the draft.
+                    // `AppStateChanged` would also run the workspace's pane/session
+                    // refresh synchronously on every keystroke.
+                    ctx.dispatch_global_action("workspace:save_app", ());
                 }
                 ctx.emit(Event::InputEditorUpdated {
                     block_id: block_id.clone(),

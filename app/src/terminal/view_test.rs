@@ -184,6 +184,101 @@ fn only_remote_terminal_draft_changes_request_a_snapshot() {
 }
 
 #[test]
+fn remote_draft_edits_request_a_save_without_workspace_refresh() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let save_requests = Rc::new(RefCell::new(0usize));
+        let workspace_refreshes = Rc::new(RefCell::new(0usize));
+        let observed_saves = save_requests.clone();
+        app.add_global_action("workspace:save_app", move |_: &(), _: &mut AppContext| {
+            *observed_saves.borrow_mut() += 1;
+        });
+        let observed_refreshes = workspace_refreshes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if matches!(event, Event::AppStateChanged) {
+                    *observed_refreshes.borrow_mut() += 1;
+                }
+            });
+        });
+        let session = warp_core::SessionId::from(81u64);
+        let editor = terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(session), ctx);
+            view.input.as_ref(ctx).editor().clone()
+        });
+        let refreshes_before_typing = *workspace_refreshes.borrow();
+
+        for text in ["c", "d", " ", "x"] {
+            let saves_before = *save_requests.borrow();
+            editor.update(&mut app, |editor, ctx| editor.user_insert(text, ctx));
+            assert!(
+                *save_requests.borrow() > saves_before,
+                "typing {text:?} must schedule the remote draft snapshot"
+            );
+        }
+
+        // `AppStateChanged` drives the workspace's pane/session refresh; a
+        // draft edit must not run it once per keystroke.
+        assert_eq!(*workspace_refreshes.borrow(), refreshes_before_typing);
+        terminal.read(&app, |view, ctx| {
+            // `TerminalPane::snapshot` persists exactly this buffer as the draft.
+            assert_eq!(view.input_draft(ctx), "cd x");
+        });
+    });
+}
+
+#[test]
+fn ready_remote_input_keeps_accepting_keys_after_space_with_ghost_text() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let session = warp_core::SessionId::from(82u64);
+        let editor = terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Transport, Some(session), ctx);
+            view.input.as_ref(ctx).editor().clone()
+        });
+        // Keys are refused until the attach is confirmed.
+        editor.update(&mut app, |editor, ctx| editor.user_insert("z", ctx));
+        terminal.update(&mut app, |view, ctx| {
+            assert_eq!(view.input_draft(ctx), "");
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(session), ctx);
+            view.focus_input_box(ctx);
+        });
+
+        for text in ["c", "d", " "] {
+            editor.update(&mut app, |editor, ctx| editor.user_insert(text, ctx));
+        }
+        // A history suggestion is showing as ghost text behind `cd `.
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_autosuggestion(
+                "/home/dev/projects/app && codex resume 019f",
+                AutosuggestionLocation::EndOfBuffer,
+                AutosuggestionType::Command {
+                    was_intelligent_autosuggestion: false,
+                },
+                ctx,
+            );
+        });
+        for text in ["x", "y"] {
+            editor.update(&mut app, |editor, ctx| editor.user_insert(text, ctx));
+        }
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.input_draft(ctx), "cd xy");
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Ready));
+            let input = view.input.as_ref(ctx);
+            assert!(input.ordinary_command_input_is_ready());
+            assert_eq!(
+                input.editor().as_ref(ctx).interaction_state(ctx),
+                InteractionState::Editable
+            );
+            assert!(input.editor().is_focused(ctx));
+        });
+    });
+}
+
+#[test]
 fn failed_and_cancelled_remote_readiness_expose_retry_actions() {
     assert!(remote_readiness_retry_visible(
         RemoteInputPhase::Failed,
