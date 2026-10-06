@@ -590,6 +590,93 @@ fn rects_approximately_equal(
         && (left.height() - right.height()).abs() < 0.5
 }
 
+/// Function-legend layout ids with the number of rows each one uses.
+const FUNCTION_LEGEND_LAYOUTS: [(&str, usize); 3] = [
+    ("legend-rows-1", 1),
+    ("legend-rows-2", 2),
+    ("legend-rows-4", 4),
+];
+const FUNCTION_KEYS: [&str; 8] = ["F2", "F3", "F4", "F5", "F6", "F7", "F8", "F10"];
+
+/// The single function legend `view` rendered, as `(bounds, layout id, rows)`.
+fn function_legend(
+    presenter: &Rc<RefCell<Presenter>>,
+    view: &ViewHandle<SftpBrowserView>,
+    app: &App,
+) -> (pathfinder_geometry::rect::RectF, &'static str, usize) {
+    let rendered = FUNCTION_LEGEND_LAYOUTS
+        .iter()
+        .filter_map(|&(part, rows)| {
+            maybe_position(presenter, &layout_id(view, app, part))
+                .map(|bounds| (bounds, part, rows))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rendered.len(),
+        1,
+        "exactly one function legend layout should render: {rendered:?}"
+    );
+    rendered[0]
+}
+
+/// Every function key renders inside the legend in F-key reading order, cells
+/// of a row share one width, no two cells overlap, and the cells form as many
+/// rows as the rendered layout promises. Returns that row count.
+fn assert_function_legend_shows_every_key(
+    presenter: &Rc<RefCell<Presenter>>,
+    view: &ViewHandle<SftpBrowserView>,
+    app: &App,
+) -> usize {
+    let (legend, part, rows) = function_legend(presenter, view, app);
+    let cells = FUNCTION_KEYS
+        .iter()
+        .map(|key| position(presenter, &layout_id(view, app, &format!("function-{key}"))))
+        .collect::<Vec<_>>();
+    let mut row_tops: Vec<f32> = Vec::new();
+    for (index, cell) in cells.iter().enumerate() {
+        assert!(
+            cell.width() > 0.0 && cell.height() > 0.0,
+            "{part}: empty cell {cell:?}"
+        );
+        assert!(
+            cell.min_x() >= legend.min_x() - 0.5
+                && cell.max_x() <= legend.max_x() + 0.5
+                && cell.min_y() >= legend.min_y() - 0.5
+                && cell.max_y() <= legend.max_y() + 0.5,
+            "{part}: cell {cell:?} escapes legend {legend:?}"
+        );
+        if !row_tops.iter().any(|top| (top - cell.min_y()).abs() < 0.5) {
+            row_tops.push(cell.min_y());
+        }
+        if let Some(next) = cells.get(index + 1) {
+            let same_row = (next.min_y() - cell.min_y()).abs() < 0.5;
+            assert!(
+                if same_row {
+                    next.min_x() > cell.min_x()
+                } else {
+                    next.min_y() > cell.min_y()
+                },
+                "{part}: keys out of order: {cell:?} then {next:?}"
+            );
+        }
+        for other in &cells[index + 1..] {
+            if (other.min_y() - cell.min_y()).abs() < 0.5 {
+                assert_approximately_equal(other.width(), cell.width());
+            }
+            let overlaps_x =
+                cell.min_x() < other.max_x() - 0.5 && other.min_x() < cell.max_x() - 0.5;
+            let overlaps_y =
+                cell.min_y() < other.max_y() - 0.5 && other.min_y() < cell.max_y() - 0.5;
+            assert!(
+                !(overlaps_x && overlaps_y),
+                "{part}: cells overlap: {cell:?} and {other:?}"
+            );
+        }
+    }
+    assert_eq!(row_tops.len(), rows, "{part}: cells form {row_tops:?}");
+    rows
+}
+
 /// Test backend that records metadata and listing calls while delegating all
 /// filesystem behavior to the local test backend.
 struct TracingBackend {
@@ -3722,7 +3809,7 @@ fn global_tab_binding_does_not_steal_file_manager_focus() {
 }
 
 #[test]
-fn function_bar_keeps_required_actions_visible_without_overlap() {
+fn function_bar_shows_every_key_without_overlap_at_any_width() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, _, left, right, _left_temp, _right_temp) =
@@ -3730,46 +3817,46 @@ fn function_bar_keeps_required_actions_visible_without_overlap() {
 
         let (wide_presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(2400.0, 800.0));
         for view in [&left, &right] {
-            assert!(
-                maybe_position(&wide_presenter, &layout_id(view, &app, "legend-full")).is_some()
+            assert_eq!(
+                function_legend(&wide_presenter, view, &app).1,
+                "legend-rows-1"
             );
-            assert!(
-                maybe_position(&wide_presenter, &layout_id(view, &app, "legend-compact")).is_none()
-            );
+            assert_function_legend_shows_every_key(&wide_presenter, view, &app);
         }
 
-        let (compact_presenter, _scene) =
-            render_scene_at(&mut app, window_id, vec2f(1200.0, 800.0));
-        for view in [&left, &right] {
-            assert!(
-                maybe_position(&compact_presenter, &layout_id(view, &app, "legend-full")).is_none()
-            );
-            assert!(
-                maybe_position(&compact_presenter, &layout_id(view, &app, "legend-compact"))
-                    .is_some()
-            );
-        }
-
-        let (narrow_presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(600.0, 800.0));
-        for view in [&left, &right] {
-            assert!(
-                maybe_position(&narrow_presenter, &layout_id(view, &app, "legend-compact"))
-                    .is_some()
-            );
-            for key in ["F3", "F4", "F5", "F6"] {
-                let action = position(
-                    &narrow_presenter,
-                    &layout_id(view, &app, &format!("function-{key}")),
-                );
-                assert!(action.width() > 0.0);
-                assert!(action.height() > 0.0);
+        for window_width in [1200.0, 600.0] {
+            let (presenter, _scene) =
+                render_scene_at(&mut app, window_id, vec2f(window_width, 800.0));
+            for view in [&left, &right] {
+                assert_function_legend_shows_every_key(&presenter, view, &app);
             }
         }
     });
 }
 
 #[test]
-fn each_pane_owns_optional_compact_function_legend_in_real_layout() {
+fn narrow_function_bar_wraps_into_rows_instead_of_hiding_keys() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (window_id, _, left, right, _left_temp, _right_temp) =
+            create_dual_connected_view(&mut app);
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(400.0, 800.0));
+
+        for view in [&left, &right] {
+            // Whatever the font, a cell needs at least its chrome: 2x6 cell
+            // padding, 2x(4 + 1) keycap padding and border, a 4 px gap and
+            // 2 px slack = 28 px. One row of eight such cells needs
+            // 8x28 + 7x4 + 16 = 268 px, so a narrower legend must wrap.
+            let (legend, _, _) = function_legend(&presenter, view, &app);
+            assert!(legend.width() < 268.0, "legend {legend:?}");
+            let rows = assert_function_legend_shows_every_key(&presenter, view, &app);
+            assert!(rows > 1, "a {} px legend must wrap", legend.width());
+        }
+    });
+}
+
+#[test]
+fn each_pane_owns_its_function_legend_in_real_layout() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, _, left, right, _left_temp, _right_temp) =
@@ -3778,8 +3865,8 @@ fn each_pane_owns_optional_compact_function_legend_in_real_layout() {
 
         let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
         let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
-        let left_legend = position(&presenter, &layout_id(&left, &app, "legend-compact"));
-        let right_legend = position(&presenter, &layout_id(&right, &app, "legend-compact"));
+        let (left_legend, _, _) = function_legend(&presenter, &left, &app);
+        let (right_legend, _, _) = function_legend(&presenter, &right, &app);
 
         assert!(left_legend.min_x() >= left_root.min_x());
         assert!(left_legend.max_x() <= left_root.max_x());
@@ -3801,17 +3888,10 @@ fn function_bar_fits_minimum_supported_pane_width() {
         let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
         assert!(left_root.max_x() <= right_root.min_x());
         for (view, root) in [(&left, left_root), (&right, right_root)] {
-            let compact = position(&presenter, &layout_id(view, &app, "legend-compact"));
-            assert!(compact.height() > 0.0);
-            assert!(compact.width() <= root.width());
-            for key in ["F3", "F4", "F5", "F6"] {
-                let action = position(
-                    &presenter,
-                    &layout_id(view, &app, &format!("function-{key}")),
-                );
-                assert!(action.min_x() >= compact.min_x());
-                assert!(action.max_x() <= compact.max_x());
-            }
+            let (legend, _, _) = function_legend(&presenter, view, &app);
+            assert!(legend.height() > 0.0);
+            assert!(legend.width() <= root.width());
+            assert_function_legend_shows_every_key(&presenter, view, &app);
         }
     });
 }
@@ -3987,8 +4067,8 @@ fn dual_pane_never_renders_global_function_bar() {
 
         let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
         let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
-        let left_legend = position(&presenter, &layout_id(&left, &app, "legend-compact"));
-        let right_legend = position(&presenter, &layout_id(&right, &app, "legend-compact"));
+        let (left_legend, _, _) = function_legend(&presenter, &left, &app);
+        let (right_legend, _, _) = function_legend(&presenter, &right, &app);
         let combined_width = right_root.max_x() - left_root.min_x();
 
         assert!(left_legend.width() < combined_width);
@@ -4078,7 +4158,7 @@ fn file_pane_body_consumes_remaining_height_above_footer() {
 
         let root = position(&presenter, &layout_id(&view, &app, "pane-root"));
         let body = position(&presenter, &layout_id(&view, &app, "body"));
-        let footer = position(&presenter, &layout_id(&view, &app, "legend-full"));
+        let (footer, _, _) = function_legend(&presenter, &view, &app);
 
         assert!(body.height() > 0.0);
         assert_approximately_equal(body.max_y(), footer.min_y());
