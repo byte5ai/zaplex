@@ -18,38 +18,40 @@ use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, Element, Fill as ElementFill, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Point, Radius, ScrollbarWidth, Shrinkable, Stack, Text,
+    CornerRadius, CrossAxisAlignment, Element, Empty, Fill as ElementFill, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, Padding, ParentAnchor, ParentElement, Point,
+    Radius, ScrollbarWidth, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
 use warpui::windowing::{StateEvent, WindowManager};
 use warpui::{
-    AfterLayoutContext, AppContext, Entity, EventContext, LayoutContext, PaintContext,
+    AfterLayoutContext, AppContext, Entity, EntityId, EventContext, LayoutContext, PaintContext,
     SingletonEntity, SizeConstraint, TypedActionView, View, ViewContext, WindowId,
 };
 use zaplex_cockpit::{
-    fleet_conductor_session_count, format_relative, group_project_sessions,
-    host_conductor_session_count, host_ident, session_glyph, session_key, AgentInventoryStatus,
-    ConductorSession, FleetTree, HostAvailability, HostNode, Provider, SessionSnapshot,
-    SessionState, TaskState, TaskStatus,
+    fleet_conductor_session_count, group_project_sessions, host_conductor_session_count,
+    host_ident, session_glyph, session_key, AgentInventoryStatus, ConductorSession, FleetTree,
+    HostAvailability, HostNode, Provider, SessionSnapshot, SessionState, TaskState, TaskStatus,
 };
 
+use crate::cockpit::capabilities::terminal_for_inventory_session;
 use crate::cockpit::fleet_details::ManagedFleetInventory;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::style::{
-    attention_coloru, glyph_cell, hover_row, provider_label, status_dot_coloru, zone_card,
-    GLYPH_COL_WIDTH,
+    attention_coloru, glyph_cell, hover_row, provider_icon, provider_label, status_dot_coloru,
+    tree_row, zone_card, GLYPH_COL_WIDTH,
 };
 use crate::settings::AccessibilitySettings;
 use crate::ui_components::icons;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
+use crate::workspace::ActiveSession;
 use crate::WorkspaceAction;
 
 pub(super) const CARD_PADDING: f32 = 8.0;
 pub(super) const CARD_SPACING: f32 = 4.0;
 const TREE_DEPTH_INDENT: f32 = 16.0;
+const PROVIDER_ICON_SIZE: f32 = 11.0;
 const TASK_PEEK_WIDTH: f32 = 390.0;
 pub(super) const TASK_PEEK_DELAY: Duration = Duration::from_millis(350);
 const WAITING_PULSE_PERIOD: Duration = Duration::from_millis(1600);
@@ -230,7 +232,6 @@ pub struct CockpitPanel {
     /// account + conversation identity), synced against the unified inventory.
     /// Clicking a row attaches the agent.
     conductor_row_states: HashMap<String, MouseStateHandle>,
-    conductor_peek_states: HashMap<String, MouseStateHandle>,
     /// Tooltip hover state for each agent status glyph. Kept separate from the
     /// clickable row and task-peek handles so only the glyph owns this tooltip.
     conductor_row_glyph_states: HashMap<String, MouseStateHandle>,
@@ -254,6 +255,9 @@ pub struct CockpitPanel {
     /// Hover/click state and expansion overrides for the PTY Session level.
     conductor_session_states: HashMap<String, MouseStateHandle>,
     expanded_sessions: HashMap<String, bool>,
+    /// Tooltip hover state for a title whose shared prefix is shortened; keyed
+    /// by agent key (leaf rows) or session key (multi-agent rows).
+    conductor_title_states: HashMap<String, MouseStateHandle>,
 }
 
 /// Stable identity of a project group within the tree: the host identity plus
@@ -332,6 +336,275 @@ pub(super) fn task_activity_label(task_state: Option<&TaskState>, relative: &str
     )
 }
 
+/// Below this many characters the distinguishing rest of a shortened sibling
+/// title stops being recognisable, so the dimmed shared prefix gets shorter.
+const MIN_DISTINCT_TAIL_CHARS: usize = 8;
+/// A shared prefix shorter than this is not worth dimming.
+const MIN_SHARED_PREFIX_BYTES: usize = 6;
+/// The dimmed rendition of a long shared prefix keeps at most this many
+/// characters before its ellipsis (`vault-curator-…`).
+const MAX_DIMMED_PREFIX_CHARS: usize = 14;
+/// Extra air above each further host group; groups read by spacing, not lines.
+const HOST_GROUP_GAP: f32 = 6.0;
+/// Extra air above each project group inside a host.
+const PROJECT_GROUP_GAP: f32 = 3.0;
+
+/// How loudly a session title reads (#505): an idle session is quieter, so
+/// running and waiting work stands out; amber remains the glyph's job alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitleTone {
+    Active,
+    Quiet,
+}
+
+fn title_tone(state: SessionState) -> TitleTone {
+    if state == SessionState::Idle {
+        TitleTone::Quiet
+    } else {
+        TitleTone::Active
+    }
+}
+
+/// A row title, optionally split into a dimmed prefix shared with its
+/// siblings and the distinguishing rest. `full` is the unshortened title.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TreeLabel {
+    dim_prefix: Option<String>,
+    text: String,
+    full: String,
+}
+
+impl TreeLabel {
+    fn plain(text: &str) -> Self {
+        Self {
+            dim_prefix: None,
+            text: text.to_string(),
+            full: text.to_string(),
+        }
+    }
+}
+
+/// One displayed row of a project's part of the live tree.
+#[derive(Debug)]
+enum TreeRowKind<'a> {
+    /// Collapsible project group header; `count` is what it hides.
+    Project {
+        key: String,
+        name: String,
+        expanded: bool,
+        count: usize,
+        has_waiting: bool,
+    },
+    /// A PTY session shown as one row with its single agent on it. Without a
+    /// title the agent identity is the row's headline.
+    SessionLeaf {
+        label: Option<TreeLabel>,
+        agent: &'a SessionSnapshot,
+        focused: bool,
+    },
+    /// A PTY session hosting several agents; they follow as `Agent` rows.
+    SessionContainer {
+        key: String,
+        label: Option<TreeLabel>,
+        state: SessionState,
+        expanded: bool,
+        count: usize,
+        needs_me: usize,
+    },
+    /// One agent of a multi-agent session.
+    Agent {
+        agent: &'a SessionSnapshot,
+        focused: bool,
+    },
+}
+
+#[derive(Debug)]
+struct TreeRow<'a> {
+    /// Indentation level below the host row.
+    depth: usize,
+    kind: TreeRowKind<'a>,
+}
+
+fn is_title_separator(c: char) -> bool {
+    matches!(c, '-' | '_' | '/' | '.' | ' ')
+}
+
+/// The title a session shows below its project (#505): its own identity, or
+/// `None` when that identity would only repeat the project's name.
+fn session_title(session: &SessionSnapshot, project_name: &str) -> Option<String> {
+    let label = session_identity_label(session, project_name);
+    (!label.trim().is_empty() && label != project_name).then_some(label)
+}
+
+/// Where a separator-bounded prefix shared by all sibling titles ends. The cut
+/// backs off to an earlier separator until every title keeps at least
+/// [`MIN_DISTINCT_TAIL_CHARS`] distinguishing characters; `None` when nothing
+/// worth dimming is shared.
+fn shared_prefix_cut(titles: &[&str]) -> Option<usize> {
+    let (first, rest) = titles.split_first()?;
+    if rest.is_empty() {
+        return None;
+    }
+    let mut common = first.len();
+    for title in rest {
+        let shared = first
+            .bytes()
+            .zip(title.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        common = common.min(shared);
+    }
+    while !first.is_char_boundary(common) {
+        common -= 1;
+    }
+    let mut cut = first[..common].rfind(is_title_separator)? + 1;
+    while titles
+        .iter()
+        .any(|title| title[cut..].chars().count() < MIN_DISTINCT_TAIL_CHARS)
+    {
+        cut = first[..cut - 1].rfind(is_title_separator)? + 1;
+    }
+    (cut >= MIN_SHARED_PREFIX_BYTES).then_some(cut)
+}
+
+/// The dimmed form of a shared prefix: a short one stays whole, a long one
+/// keeps its leading segments up to [`MAX_DIMMED_PREFIX_CHARS`] plus `…`.
+fn abbreviate_shared_prefix(prefix: &str) -> String {
+    if prefix.chars().count() <= MAX_DIMMED_PREFIX_CHARS {
+        return prefix.to_string();
+    }
+    let head: String = prefix.chars().take(MAX_DIMMED_PREFIX_CHARS).collect();
+    let kept = head
+        .rfind(is_title_separator)
+        .map_or(head.as_str(), |index| &head[..=index]);
+    format!("{kept}…")
+}
+
+fn split_title(title: &str, cut: Option<usize>) -> TreeLabel {
+    match cut {
+        Some(cut) => TreeLabel {
+            dim_prefix: Some(abbreviate_shared_prefix(&title[..cut])),
+            text: title[cut..].to_string(),
+            full: title.to_string(),
+        },
+        None => TreeLabel::plain(title),
+    }
+}
+
+/// The B+ display rule (#505) for one project of the live tree. The data
+/// model stays `Host → Project → PTY session → Agent`; only the rows differ:
+/// - a project with exactly one untitled session is that session: with one
+///   agent it is a single leaf row, with several the session level is skipped
+///   and the agents follow the project row;
+/// - a PTY session with one agent is one leaf row carrying that agent;
+/// - only a PTY session with several agents keeps child agent rows;
+/// - sibling titles sharing a long prefix dim it and keep the distinct rest.
+fn project_tree_rows<'a>(
+    project_name: &str,
+    sessions: Vec<ConductorSession<'a>>,
+    project_key: String,
+    project_expanded: bool,
+    session_expanded: impl Fn(&str) -> bool,
+    is_focused: impl Fn(&SessionSnapshot) -> bool,
+) -> Vec<TreeRow<'a>> {
+    let titles: Vec<Option<String>> = sessions
+        .iter()
+        .map(|session| session_title(session.representative, project_name))
+        .collect();
+    let mut rows = Vec::new();
+    if let ([only], [None]) = (sessions.as_slice(), titles.as_slice()) {
+        if let [agent] = only.agents.as_slice() {
+            let agent: &'a SessionSnapshot = *agent;
+            rows.push(TreeRow {
+                depth: 1,
+                kind: TreeRowKind::SessionLeaf {
+                    label: Some(TreeLabel::plain(project_name)),
+                    agent,
+                    focused: is_focused(agent),
+                },
+            });
+            return rows;
+        }
+        rows.push(TreeRow {
+            depth: 1,
+            kind: TreeRowKind::Project {
+                key: project_key,
+                name: project_name.to_string(),
+                expanded: project_expanded,
+                count: only.agents.len(),
+                has_waiting: only.needs_me > 0,
+            },
+        });
+        if project_expanded {
+            for agent in only.agents.iter().copied() {
+                rows.push(TreeRow {
+                    depth: 2,
+                    kind: TreeRowKind::Agent {
+                        agent,
+                        focused: is_focused(agent),
+                    },
+                });
+            }
+        }
+        return rows;
+    }
+
+    rows.push(TreeRow {
+        depth: 1,
+        kind: TreeRowKind::Project {
+            key: project_key,
+            name: project_name.to_string(),
+            expanded: project_expanded,
+            count: sessions.len(),
+            has_waiting: sessions.iter().any(|session| session.needs_me > 0),
+        },
+    });
+    if !project_expanded {
+        return rows;
+    }
+    let titled: Vec<&str> = titles.iter().flatten().map(String::as_str).collect();
+    let cut = shared_prefix_cut(&titled);
+    for (session, title) in sessions.iter().zip(&titles) {
+        let label = title.as_deref().map(|title| split_title(title, cut));
+        if let [agent] = session.agents.as_slice() {
+            let agent: &'a SessionSnapshot = *agent;
+            rows.push(TreeRow {
+                depth: 2,
+                kind: TreeRowKind::SessionLeaf {
+                    label,
+                    agent,
+                    focused: is_focused(agent),
+                },
+            });
+            continue;
+        }
+        let expanded = session_expanded(&session.key);
+        rows.push(TreeRow {
+            depth: 2,
+            kind: TreeRowKind::SessionContainer {
+                key: session.key.clone(),
+                label,
+                state: session.state,
+                expanded,
+                count: session.agents.len(),
+                needs_me: session.needs_me,
+            },
+        });
+        if expanded {
+            for agent in session.agents.iter().copied() {
+                rows.push(TreeRow {
+                    depth: 3,
+                    kind: TreeRowKind::Agent {
+                        agent,
+                        focused: is_focused(agent),
+                    },
+                });
+            }
+        }
+    }
+    rows
+}
+
 impl CockpitPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         // Re-render on theme change and whenever the snapshot updates.
@@ -345,6 +618,8 @@ impl CockpitPanel {
                 ctx.notify();
             }
         });
+        // The focused pane's session carries a stable highlight in the tree.
+        ctx.observe(&ActiveSession::handle(ctx), |_, _, ctx| ctx.notify());
         let window_manager = WindowManager::handle(ctx);
         ctx.subscribe_to_model(&window_manager, |_, _, event, ctx| match event {
             StateEvent::ValueChanged { current, previous } => {
@@ -357,7 +632,6 @@ impl CockpitPanel {
             window_id: ctx.window_id(),
             session_scroll_state: ClippedScrollStateHandle::default(),
             conductor_row_states: HashMap::new(),
-            conductor_peek_states: HashMap::new(),
             conductor_row_glyph_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
             conductor_host_glyph_states: HashMap::new(),
@@ -367,6 +641,7 @@ impl CockpitPanel {
             expanded_projects: HashMap::new(),
             conductor_session_states: HashMap::new(),
             expanded_sessions: HashMap::new(),
+            conductor_title_states: HashMap::new(),
         };
         me.sync_conductor_states(ctx);
         me
@@ -432,15 +707,15 @@ impl CockpitPanel {
         };
         self.conductor_row_states
             .retain(|k, _| routable.contains(k));
-        self.conductor_peek_states
-            .retain(|k, _| visible.contains(k));
         self.conductor_row_glyph_states
             .retain(|k, _| visible.contains(k));
+        self.conductor_title_states
+            .retain(|k, _| visible.contains(k) || session_keys.contains(k));
         for key in routable {
             self.conductor_row_states.entry(key).or_default();
         }
         for key in visible {
-            self.conductor_peek_states.entry(key.clone()).or_default();
+            self.conductor_title_states.entry(key.clone()).or_default();
             self.conductor_row_glyph_states.entry(key).or_default();
         }
         // Connected host handles and explicit expansion overrides.
@@ -469,7 +744,10 @@ impl CockpitPanel {
         self.expanded_sessions
             .retain(|key, _| session_keys.contains(key));
         for key in session_keys {
-            self.conductor_session_states.entry(key).or_default();
+            self.conductor_session_states
+                .entry(key.clone())
+                .or_default();
+            self.conductor_title_states.entry(key).or_default();
         }
     }
 
@@ -521,13 +799,6 @@ impl CockpitPanel {
         )
     }
 
-    /// The glanceable **Conductor** for the sidebar: the unified cross-host
-    /// inventory as `Host → Project → Session → Agent`. Local is always present;
-    /// remote roots are supplied only by live daemon connections. Every level
-    /// starts expanded and uses explicit, stable expansion state rather than
-    /// scale-dependent auto-collapse. Agent leaves attach through
-    /// [`WorkspaceAction::AttachFleetSession`], the same route as the roomy pane
-    /// and the `w`-jump.
     /// Shared quiet zone header: uppercase label, muted total, and at most one
     /// trailing aggregate or affordance. The Sessions header uses that slot for
     /// glyph + needs-attention count, never a repeated status word.
@@ -648,54 +919,267 @@ impl CockpitPanel {
         .finish()
     }
 
-    fn render_session_header(
-        &self,
-        session: &ConductorSession<'_>,
-        project_name: &str,
-        expanded: bool,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
+    /// An empty cell as wide as a chevron or status glyph, so every row keeps
+    /// its text on the shared axis of its depth (#505).
+    fn empty_slot() -> Box<dyn Element> {
+        ConstrainedBox::new(Empty::new().finish())
+            .with_width(GLYPH_COL_WIDTH)
+            .with_height(GLYPH_COL_WIDTH)
+            .finish()
+    }
+
+    fn chevron_slot(expanded: bool, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let main = theme.main_text_color(theme.surface_1()).into_solid();
-        let faint = theme
-            .sub_text_color(theme.surface_1())
-            .with_opacity(55)
-            .into_solid();
         let chevron = if expanded {
             icons::Icon::ChevronDown
         } else {
             icons::Icon::ChevronRight
         };
-        let mut row = Flex::row()
+        ConstrainedBox::new(
+            chevron
+                .to_warpui_icon(theme.sub_text_color(theme.surface_1()))
+                .finish(),
+        )
+        .with_width(GLYPH_COL_WIDTH)
+        .with_height(GLYPH_COL_WIDTH)
+        .finish()
+    }
+
+    /// A row title. A dimmed shared prefix may shrink to an ellipsis; the
+    /// distinguishing rest never clips. The full title is the tooltip then.
+    fn tree_label(
+        &self,
+        label: &TreeLabel,
+        tooltip_key: &str,
+        size: f32,
+        color: ColorU,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let family = appearance.ui_font_family();
+        let Some(prefix) = &label.dim_prefix else {
+            return Self::identity_text(label.text.clone(), family, size, color);
+        };
+        let theme = appearance.theme();
+        let dim = theme
+            .sub_text_color(theme.surface_1())
+            .with_opacity(55)
+            .into_solid();
+        let line = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.0)
+            .with_main_axis_size(MainAxisSize::Max)
             .with_child(
-                ConstrainedBox::new(
-                    chevron
-                        .to_warpui_icon(theme.sub_text_color(theme.surface_1()))
+                Shrinkable::new(1.0, Self::identity_text(prefix.clone(), family, size, dim))
+                    .finish(),
+            )
+            .with_child(Self::text(label.text.clone(), family, size, color))
+            .finish();
+        appearance.ui_builder().overlay_tool_tip_on_element(
+            label.full.clone(),
+            self.conductor_title_states
+                .get(tooltip_key)
+                .cloned()
+                .unwrap_or_default(),
+            line,
+            ParentAnchor::TopMiddle,
+            ChildAnchor::BottomMiddle,
+            vec2f(0.0, -4.0),
+        )
+    }
+
+    /// Provider icon, provider and model of one agent. As a row's headline
+    /// (`headline = Some(color)`) the provider takes the title tone; as the
+    /// second line under a session title the whole line stays muted.
+    fn agent_identity_line(
+        agent: &SessionSnapshot,
+        is_managed: bool,
+        headline: Option<ColorU>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let footnote = appearance.ui_font_footnote();
+        let muted = theme.sub_text_color(theme.surface_1()).into_solid();
+        let presentation = agent_leaf_presentation(agent.provider, &agent.model);
+        let icon = ConstrainedBox::new(
+            provider_icon(agent.provider)
+                .to_warpui_icon(theme.sub_text_color(theme.surface_1()))
+                .finish(),
+        )
+        .with_width(PROVIDER_ICON_SIZE)
+        .with_height(PROVIDER_ICON_SIZE)
+        .finish();
+        let line = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(5.0)
+            .with_child(icon);
+        let line = match headline {
+            Some(color) => {
+                let line = line.with_child(Self::text(
+                    presentation.provider.to_string(),
+                    family,
+                    appearance.ui_font_body(),
+                    color,
+                ));
+                match presentation.model {
+                    Some(model) => line.with_child(
+                        Shrinkable::new(
+                            1.0,
+                            Self::identity_text(model.to_string(), family, footnote, muted),
+                        )
+                        .finish(),
+                    ),
+                    None => line,
+                }
+            }
+            None => {
+                let identity = match presentation.model {
+                    Some(model) => format!("{} · {model}", presentation.provider),
+                    None => presentation.provider.to_string(),
+                };
+                line.with_child(
+                    Shrinkable::new(1.0, Self::identity_text(identity, family, footnote, muted))
                         .finish(),
                 )
-                .with_width(GLYPH_COL_WIDTH)
-                .with_height(GLYPH_COL_WIDTH)
+            }
+        };
+        let line = if is_managed {
+            line.with_child(Self::text("◆".to_string(), family, footnote, muted))
+        } else {
+            line
+        };
+        line.finish()
+    }
+
+    /// One agent-carrying row: a PTY session with a single agent (titled or
+    /// not) or one agent of a multi-agent session. Clicking attaches the agent
+    /// through [`WorkspaceAction::AttachFleetSession`].
+    #[allow(clippy::too_many_arguments)]
+    fn render_agent_leaf(
+        &self,
+        host: &HostNode,
+        agent: &SessionSnapshot,
+        label: Option<&TreeLabel>,
+        focused: bool,
+        managed_fleet: &ManagedFleetInventory,
+        animate_waiting: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let body = appearance.ui_font_body();
+        let host_id = host.host_id.as_deref();
+        let key = session_key(host.is_local, host_id, agent);
+        let state = agent.presented_state();
+        let tone_color = match title_tone(state) {
+            TitleTone::Active => theme.main_text_color(theme.surface_1()).into_solid(),
+            TitleTone::Quiet => theme.sub_text_color(theme.surface_1()).into_solid(),
+        };
+        let is_managed = managed_fleet
+            .matching_agent_session(host_id, agent)
+            .is_some();
+        let text = match label {
+            Some(label) => Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_spacing(1.0)
+                .with_child(self.tree_label(label, &key, body, tone_color, appearance))
+                .with_child(Self::agent_identity_line(
+                    agent, is_managed, None, appearance,
+                ))
                 .finish(),
-            )
-            .with_child(
-                Shrinkable::new(
-                    1.0,
-                    Self::identity_text(
-                        session_identity_label(session.representative, project_name),
-                        family,
-                        body,
-                        main,
-                    ),
-                )
-                .finish(),
-            );
-        if let Some(count) =
-            container_count_presentation(expanded, session.agents.len(), session.needs_me)
-        {
+            None => Self::agent_identity_line(agent, is_managed, Some(tone_color), appearance),
+        };
+        let line = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(6.0)
+            .with_child(Self::empty_slot())
+            .with_child(Self::state_glyph(
+                state,
+                true,
+                animate_waiting,
+                self.conductor_row_glyph_states
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_default(),
+                appearance,
+            ))
+            .with_child(Shrinkable::new(1.0, text).finish())
+            .finish();
+
+        // The whole row attaches on click — BOTH local and remote (remote
+        // in-place adopt is wired via `attach_fleet_session`).
+        let row_state = host
+            .is_available()
+            .then(|| self.conductor_row_states.get(&key).cloned())
+            .flatten();
+        match row_state {
+            Some(state) => {
+                let action = WorkspaceAction::AttachFleetSession {
+                    host: host.host.clone(),
+                    host_id: host_id.map(str::to_string),
+                    session_id: agent.session_id.clone(),
+                    provider: agent.provider,
+                    config_dir: agent.config_dir.clone(),
+                    account_email: agent.account_email.clone(),
+                    account_id: agent.account_id.clone(),
+                    is_local: host.is_local,
+                };
+                Hoverable::new(state, move |mouse| {
+                    tree_row(line, mouse.is_hovered(), focused, appearance)
+                })
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                .finish()
+            }
+            None => tree_row(line, false, focused, appearance),
+        }
+    }
+
+    /// A PTY session that hosts several agents: chevron, aggregate glyph and
+    /// title; the count of hidden agents appears only while collapsed.
+    #[allow(clippy::too_many_arguments)]
+    fn render_session_container(
+        &self,
+        key: &str,
+        label: Option<&TreeLabel>,
+        state: SessionState,
+        expanded: bool,
+        count: usize,
+        needs_me: usize,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let body = appearance.ui_font_body();
+        let tone_color = match title_tone(state) {
+            TitleTone::Active => theme.main_text_color(theme.surface_1()).into_solid(),
+            TitleTone::Quiet => theme.sub_text_color(theme.surface_1()).into_solid(),
+        };
+        let faint = theme
+            .sub_text_color(theme.surface_1())
+            .with_opacity(55)
+            .into_solid();
+        let title = match label {
+            Some(label) => self.tree_label(label, key, body, tone_color, appearance),
+            None => Self::identity_text(
+                crate::t!("cockpit-tree-session-untitled"),
+                family,
+                body,
+                tone_color,
+            ),
+        };
+        let mut row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_spacing(6.0)
+            .with_child(Self::chevron_slot(expanded, appearance))
+            // No aggregate glyph: each agent row below carries its own state,
+            // and one fact has one mark (TECH §2); a collapsed count turns
+            // amber instead when it hides a waiting agent.
+            .with_child(Self::empty_slot())
+            .with_child(Shrinkable::new(1.0, title).finish());
+        if let Some(count) = container_count_presentation(expanded, count, needs_me) {
             let color = if count.attention {
                 attention_coloru(appearance)
             } else {
@@ -703,13 +1187,13 @@ impl CockpitPanel {
             };
             row = row.with_child(Self::text(count.count.to_string(), family, body, color));
         }
-        let row = row.with_main_axis_size(MainAxisSize::Max).finish();
+        let row = row.finish();
         let handle = self
             .conductor_session_states
-            .get(&session.key)
+            .get(key)
             .cloned()
             .unwrap_or_default();
-        let key = session.key.clone();
+        let key = key.to_string();
         Hoverable::new(handle, move |mouse| {
             hover_row(row, mouse.is_hovered(), appearance)
         })
@@ -720,11 +1204,86 @@ impl CockpitPanel {
         .finish()
     }
 
+    fn render_tree_row(
+        &self,
+        row: &TreeRow<'_>,
+        host: &HostNode,
+        managed_fleet: &ManagedFleetInventory,
+        animate_waiting: bool,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let element = match &row.kind {
+            TreeRowKind::Project {
+                key,
+                name,
+                expanded,
+                count,
+                has_waiting,
+            } => self.render_project_header(key, name, *count, *has_waiting, *expanded, appearance),
+            TreeRowKind::SessionLeaf {
+                label,
+                agent,
+                focused,
+            } => self.render_agent_leaf(
+                host,
+                agent,
+                label.as_ref(),
+                *focused,
+                managed_fleet,
+                animate_waiting,
+                appearance,
+            ),
+            TreeRowKind::SessionContainer {
+                key,
+                label,
+                state,
+                expanded,
+                count,
+                needs_me,
+            } => self.render_session_container(
+                key,
+                label.as_ref(),
+                *state,
+                *expanded,
+                *count,
+                *needs_me,
+                appearance,
+            ),
+            TreeRowKind::Agent { agent, focused } => self.render_agent_leaf(
+                host,
+                agent,
+                None,
+                *focused,
+                managed_fleet,
+                animate_waiting,
+                appearance,
+            ),
+        };
+        let mut container =
+            Container::new(element).with_padding_left(TREE_DEPTH_INDENT * row.depth as f32);
+        if matches!(row.kind, TreeRowKind::Project { .. }) {
+            container = container.with_margin_top(PROJECT_GROUP_GAP);
+        }
+        container.finish()
+    }
+
+    /// The glanceable **Conductor** for the sidebar: the unified cross-host
+    /// inventory as `Host → Project → Session → Agent`, displayed by the B+
+    /// rule of #505 ([`project_tree_rows`]). Local is always present; remote
+    /// roots are supplied only by live daemon connections. Every level starts
+    /// expanded and uses explicit, stable expansion state rather than
+    /// scale-dependent auto-collapse. Agent rows attach through
+    /// [`WorkspaceAction::AttachFleetSession`], the same route as the roomy
+    /// pane and the `w`-jump. The session of the focused pane keeps a stable
+    /// highlight.
+    #[allow(clippy::too_many_arguments)]
     fn render_conductor(
         &self,
         tree: &FleetTree,
         managed_fleet: &ManagedFleetInventory,
         animate_waiting: bool,
+        focused_terminal: Option<EntityId>,
+        app: &AppContext,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
         let family = appearance.ui_font_family();
@@ -771,83 +1330,44 @@ impl CockpitPanel {
                 .finish(),
             );
 
-        for host in &tree.hosts {
+        for (host_index, host) in tree.hosts.iter().enumerate() {
             let is_local = host.is_local;
-            let ident = host_ident(is_local, host.host_id.as_deref());
+            let host_id = host.host_id.as_deref();
+            let ident = host_ident(is_local, host_id);
             let host_expanded = self.expanded_hosts.get(&ident).copied().unwrap_or(true);
-            col = col.with_child(self.render_host_header(host, &ident, host_expanded, appearance));
+            let mut host_row =
+                Container::new(self.render_host_header(host, &ident, host_expanded, appearance));
+            if host_index > 0 {
+                host_row = host_row.with_margin_top(HOST_GROUP_GAP);
+            }
+            col = col.with_child(host_row.finish());
             if !host_expanded {
                 continue;
             }
+            let is_focused = |agent: &SessionSnapshot| {
+                focused_terminal.is_some()
+                    && terminal_for_inventory_session(agent, is_local, host_id, app)
+                        == focused_terminal
+            };
             for project in &host.projects {
                 let pkey = project_key(&ident, &project.root);
-                let expanded = self.expanded_projects.get(&pkey).copied().unwrap_or(true);
-                let sessions = group_project_sessions(
-                    host.is_local,
-                    host.host_id.as_deref(),
-                    &project.sessions,
+                let project_expanded = self.expanded_projects.get(&pkey).copied().unwrap_or(true);
+                let rows = project_tree_rows(
+                    &project.name,
+                    group_project_sessions(is_local, host_id, &project.sessions),
+                    pkey,
+                    project_expanded,
+                    |key| self.expanded_sessions.get(key).copied().unwrap_or(true),
+                    &is_focused,
                 );
-                let has_waiting = sessions.iter().any(|session| session.needs_me > 0);
-                col = col.with_child(
-                    Container::new(self.render_project_header(
-                        &pkey,
-                        &project.name,
-                        sessions.len(),
-                        has_waiting,
-                        expanded,
+                for row in &rows {
+                    col = col.with_child(self.render_tree_row(
+                        row,
+                        host,
+                        managed_fleet,
+                        animate_waiting,
                         appearance,
-                    ))
-                    .with_padding_left(TREE_DEPTH_INDENT)
-                    .finish(),
-                );
-                if expanded {
-                    for session in sessions {
-                        col = col.with_child(
-                            Container::new(
-                                self.render_session_header(
-                                    &session,
-                                    &project.name,
-                                    self.expanded_sessions
-                                        .get(&session.key)
-                                        .copied()
-                                        .unwrap_or(true),
-                                    appearance,
-                                ),
-                            )
-                            .with_padding_left(TREE_DEPTH_INDENT * 2.0)
-                            .finish(),
-                        );
-                        if self
-                            .expanded_sessions
-                            .get(&session.key)
-                            .copied()
-                            .unwrap_or(true)
-                        {
-                            for agent in session.agents {
-                                col = col.with_child(
-                                    Container::new(
-                                        self.render_conductor_row(
-                                            &host.host,
-                                            host.host_id.as_deref(),
-                                            agent,
-                                            is_local,
-                                            host.is_available(),
-                                            managed_fleet
-                                                .matching_agent_session(
-                                                    host.host_id.as_deref(),
-                                                    agent,
-                                                )
-                                                .is_some(),
-                                            animate_waiting,
-                                            appearance,
-                                        ),
-                                    )
-                                    .with_padding_left(TREE_DEPTH_INDENT * 3.0)
-                                    .finish(),
-                                );
-                            }
-                        }
-                    }
+                    ));
                 }
             }
             if host.projects.is_empty() {
@@ -875,142 +1395,6 @@ impl CockpitPanel {
             );
         }
         Some(col.finish())
-    }
-
-    /// One compact agent leaf: state glyph, provider, and optional model only.
-    /// The delayed fixed-size peek retains activity/task detail without adding a
-    /// task subrow or changing the tree's geometry.
-    #[allow(clippy::too_many_arguments)]
-    fn render_conductor_row(
-        &self,
-        host_label: &str,
-        host_id: Option<&str>,
-        session: &SessionSnapshot,
-        is_local: bool,
-        can_attach: bool,
-        is_managed: bool,
-        animate_waiting: bool,
-        appearance: &Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let family = appearance.ui_font_family();
-        let body = appearance.ui_font_body();
-        let model_size = appearance.ui_font_footnote();
-        let main = theme.main_text_color(theme.surface_1()).into_solid();
-        let muted = theme.sub_text_color(theme.surface_1()).into_solid();
-        let presentation = agent_leaf_presentation(session.provider, &session.model);
-        let key = session_key(is_local, host_id, session);
-
-        let mut identity = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_spacing(6.0)
-            .with_child(Self::text(
-                presentation.provider.to_string(),
-                family,
-                body,
-                main,
-            ));
-        if let Some(model) = presentation.model {
-            identity = identity.with_child(
-                Shrinkable::new(
-                    1.0,
-                    Self::identity_text(model.to_string(), family, model_size, muted),
-                )
-                .finish(),
-            );
-        }
-
-        let mut glance = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.0)
-            .with_child(Self::state_glyph(
-                session.presented_state(),
-                true,
-                animate_waiting,
-                self.conductor_row_glyph_states
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_default(),
-                appearance,
-            ))
-            .with_child(Shrinkable::new(1.0, identity.finish()).finish());
-        if is_managed {
-            glance = glance.with_child(Self::text("◆".to_string(), family, body, muted));
-        }
-        let glance = glance.with_main_axis_size(MainAxisSize::Max).finish();
-
-        // The whole glance line attaches on click — BOTH local and remote (remote
-        // in-place adopt is wired via `attach_fleet_session`).
-        let row = if can_attach {
-            match self.conductor_row_states.get(&key).cloned() {
-                Some(state) => {
-                    let action = WorkspaceAction::AttachFleetSession {
-                        host: host_label.to_string(),
-                        host_id: host_id.map(str::to_string),
-                        session_id: session.session_id.clone(),
-                        provider: session.provider,
-                        config_dir: session.config_dir.clone(),
-                        account_email: session.account_email.clone(),
-                        account_id: session.account_id.clone(),
-                        is_local,
-                    };
-                    // Same full-span hover grammar as the host rows (`hover_row`).
-                    // The mouse state used to be discarded here — a clickable row
-                    // that never says so (audit P0.2).
-                    Hoverable::new(state, move |mouse| {
-                        hover_row(glance, mouse.is_hovered(), appearance)
-                    })
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                    .finish()
-                }
-                None => hover_row(glance, false, appearance),
-            }
-        } else {
-            hover_row(glance, false, appearance)
-        };
-
-        let Some(peek_state) = self.conductor_peek_states.get(&key).cloned() else {
-            return row;
-        };
-        let peek_title = session_identity_label(session, "");
-        let peek_account = session.account_email.as_ref().map_or_else(
-            || provider_label(session.provider).to_owned(),
-            |email| format!("{} · {email}", provider_label(session.provider)),
-        );
-        let peek_host = host_label.to_owned();
-        let peek_cwd = session.cwd.clone();
-        let session_state = session.presented_state();
-        let task_state = session.task_state.clone();
-        let relative = format_relative(session.last_activity, chrono::Utc::now());
-        let activity = task_activity_label(task_state.as_ref(), &relative);
-        Hoverable::new(peek_state, move |mouse| {
-            let mut stack = Stack::new().with_child(row);
-            if mouse.is_hovered() {
-                stack.add_positioned_overlay_child(
-                    Self::render_task_peek(
-                        &peek_title,
-                        &peek_account,
-                        &peek_host,
-                        &peek_cwd,
-                        session_state,
-                        &activity,
-                        task_state.as_ref(),
-                        appearance,
-                    ),
-                    OffsetPositioning::offset_from_parent(
-                        vec2f(8.0, 0.0),
-                        ParentOffsetBounds::Unbounded,
-                        ParentAnchor::TopRight,
-                        ChildAnchor::TopLeft,
-                    ),
-                );
-            }
-            stack.finish()
-        })
-        .with_hover_in_delay(TASK_PEEK_DELAY)
-        .finish()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1201,6 +1585,9 @@ impl CockpitPanel {
                         .with_height(GLYPH_COL_WIDTH)
                         .finish(),
                 )
+                // The glyph column stays reserved, so the project name sits on
+                // the same text axis as the rows of its depth (#505).
+                .with_child(Self::empty_slot())
                 .with_child(
                     Shrinkable::new(
                         1.0,
@@ -1253,12 +1640,18 @@ impl View for CockpitPanel {
 
         let inventory = CockpitModel::as_ref(app).inventory().clone();
         let managed_fleet = CockpitModel::as_ref(app).managed_fleet().clone();
+        let focused_terminal = ActiveSession::as_ref(app).terminal_view_id(self.window_id);
         // The live object tree remains independent of account discovery: local
         // is always supplied by the model, while remote roots exist only for
         // currently open connections. One flat surface, no registry controls.
-        let session_content = if let Some(conductor) =
-            self.render_conductor(&inventory, &managed_fleet, animate_waiting, appearance)
-        {
+        let session_content = if let Some(conductor) = self.render_conductor(
+            &inventory,
+            &managed_fleet,
+            animate_waiting,
+            focused_terminal,
+            app,
+            appearance,
+        ) {
             zone_card(conductor, appearance)
                 .with_uniform_padding(CARD_PADDING)
                 .finish()

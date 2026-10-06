@@ -289,3 +289,206 @@ fn empty_local_inventory_does_not_hide_scan_failures() {
         crate::t!("cockpit-host-inventory-pending"),
     );
 }
+
+fn tree_agent(
+    session_id: &str,
+    cwd: &str,
+    branch: Option<&str>,
+    state: SessionState,
+) -> SessionSnapshot {
+    SessionSnapshot {
+        session_id: session_id.into(),
+        cwd: cwd.into(),
+        name: String::new(),
+        state,
+        provider: Provider::Claude,
+        model: "claude-opus-5-5".into(),
+        effort: None,
+        ctx_tokens: 0,
+        project_root: "/work/proj".into(),
+        repo_root: "/work/proj".into(),
+        project_name: "proj".into(),
+        branch: branch.map(str::to_string),
+        worktree: None,
+        config_dir: None,
+        account_email: None,
+        account_id: None,
+        process_fingerprint: None,
+        pty_session_id: None,
+        pty_session_generation: None,
+        pty_foreground: false,
+        task_state: None,
+        last_activity: chrono::Utc::now(),
+        pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
+    }
+}
+
+fn in_one_pty(mut agent: SessionSnapshot) -> SessionSnapshot {
+    agent.pty_session_id = Some("pty-1".into());
+    agent.pty_session_generation = Some(1);
+    agent
+}
+
+/// `(depth, kind, label, focused)` of one projected row.
+fn row_summary(row: &TreeRow<'_>) -> (usize, &'static str, String, bool) {
+    match &row.kind {
+        TreeRowKind::Project { name, .. } => (row.depth, "project", name.clone(), false),
+        TreeRowKind::SessionLeaf {
+            label,
+            agent,
+            focused,
+        } => (
+            row.depth,
+            "leaf",
+            label
+                .as_ref()
+                .map_or_else(|| format!("agent:{}", agent.session_id), |l| l.full.clone()),
+            *focused,
+        ),
+        TreeRowKind::SessionContainer { label, .. } => (
+            row.depth,
+            "session",
+            label.as_ref().map_or_else(String::new, |l| l.full.clone()),
+            false,
+        ),
+        TreeRowKind::Agent { agent, focused } => {
+            (row.depth, "agent", agent.session_id.clone(), *focused)
+        }
+    }
+}
+
+fn local_project_rows(
+    project_name: &str,
+    agents: &[SessionSnapshot],
+    session_expanded: bool,
+    focused_id: Option<&str>,
+) -> Vec<(usize, &'static str, String, bool)> {
+    let rows = project_tree_rows(
+        project_name,
+        group_project_sessions(false, Some("host-a"), agents),
+        "host-a\u{1f}/work/proj".to_string(),
+        true,
+        |_| session_expanded,
+        |agent: &SessionSnapshot| Some(agent.session_id.as_str()) == focused_id,
+    );
+    rows.iter().map(row_summary).collect()
+}
+
+#[test]
+fn single_untitled_session_merges_into_project_row() {
+    let agents = [tree_agent("a", "/work/proj", None, SessionState::Active)];
+    assert_eq!(
+        local_project_rows("proj", &agents, true, None),
+        vec![(1, "leaf", "proj".to_string(), false)],
+        "one untitled session with one agent is a single project row"
+    );
+}
+
+#[test]
+fn tree_never_repeats_parent_label_in_child_row() {
+    let agents = [
+        tree_agent("a", "/work/proj", None, SessionState::Active),
+        tree_agent("b", "/work/proj", None, SessionState::Idle),
+    ];
+    let rows = local_project_rows("proj", &agents, true, None);
+    assert_eq!(rows[0], (1, "project", "proj".to_string(), false));
+    for (_, kind, label, _) in &rows[1..] {
+        assert_eq!(*kind, "leaf");
+        assert_ne!(label, "proj", "a child row never repeats its project label");
+    }
+    assert_eq!(rows.len(), 3);
+}
+
+#[test]
+fn multiple_agents_in_one_pty_render_child_rows() {
+    let agents = [
+        in_one_pty(tree_agent(
+            "a",
+            "/work/proj",
+            Some("main"),
+            SessionState::Active,
+        )),
+        in_one_pty(tree_agent(
+            "b",
+            "/work/proj",
+            Some("main"),
+            SessionState::Idle,
+        )),
+    ];
+    let rows = local_project_rows("proj", &agents, true, None);
+    assert_eq!(rows[0], (1, "project", "proj".to_string(), false));
+    assert_eq!(rows[1], (2, "session", "main".to_string(), false));
+    assert_eq!(rows.len(), 4);
+    assert!(rows[2..].iter().all(|row| row.0 == 3 && row.1 == "agent"));
+
+    let collapsed = local_project_rows("proj", &agents, false, None);
+    assert_eq!(
+        collapsed.len(),
+        2,
+        "a collapsed multi-agent session hides its agent rows"
+    );
+}
+
+#[test]
+fn single_agent_sessions_are_leaves_without_agent_rows() {
+    let agents = [
+        tree_agent("a", "/work/proj", Some("main"), SessionState::Active),
+        tree_agent("b", "/work/proj", Some("feat/x"), SessionState::Idle),
+    ];
+    let rows = local_project_rows("proj", &agents, true, None);
+    assert_eq!(rows.len(), 3);
+    assert!(rows[1..].iter().all(|row| row.0 == 2 && row.1 == "leaf"));
+}
+
+#[test]
+fn similar_session_names_show_distinguishing_suffix() {
+    let titles = [
+        "vault-curator-inbox-2026-10-06-0300",
+        "vault-curator-inbox-2026-10-06-0900",
+        "vault-curator-inbox-2026-10-06-1500",
+    ];
+    let cut = shared_prefix_cut(&titles);
+    let label = split_title(titles[0], cut);
+    assert_eq!(label.text, "10-06-0300");
+    assert_eq!(label.dim_prefix.as_deref(), Some("vault-curator-…"));
+    assert_eq!(label.full, titles[0]);
+    for title in titles {
+        assert!(split_title(title, cut).text.chars().count() >= MIN_DISTINCT_TAIL_CHARS);
+    }
+
+    // Short or unrelated names keep their whole title.
+    assert_eq!(shared_prefix_cut(&["feat/a", "feat/b"]), None);
+    assert_eq!(shared_prefix_cut(&["main", "main"]), None);
+    assert_eq!(shared_prefix_cut(&["main", "release"]), None);
+    assert_eq!(shared_prefix_cut(&["only-one-title-here"]), None);
+}
+
+#[test]
+fn idle_session_title_uses_muted_role() {
+    assert_eq!(title_tone(SessionState::Idle), TitleTone::Quiet);
+    assert_eq!(title_tone(SessionState::Active), TitleTone::Active);
+    assert_eq!(title_tone(SessionState::Monitor), TitleTone::Active);
+    assert_eq!(title_tone(SessionState::Waiting), TitleTone::Active);
+}
+
+#[test]
+fn focused_session_row_has_stable_highlight() {
+    let agents = [
+        tree_agent("a", "/work/proj", Some("main"), SessionState::Active),
+        tree_agent("b", "/work/proj", Some("feat/x"), SessionState::Idle),
+    ];
+    let rows = local_project_rows("proj", &agents, true, Some("b"));
+    let focused: Vec<_> = rows.iter().filter(|row| row.3).collect();
+    assert_eq!(
+        focused.len(),
+        1,
+        "exactly the focused pane's session is marked"
+    );
+    assert_eq!(focused[0].2, "feat/x");
+    assert!(local_project_rows("proj", &agents, true, None)
+        .iter()
+        .all(|row| !row.3));
+}

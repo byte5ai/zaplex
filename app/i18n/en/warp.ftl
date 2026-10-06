@@ -4004,6 +4004,7 @@ cockpit-zone-connections = Connections
 cockpit-zone-connections-settings = Open SSH configuration
 cockpit-zone-sessions = AI sessions
 cockpit-zone-accounts = AI accounts
+cockpit-tree-session-untitled = Terminal
 cockpit-conductor-empty = No AI sessions yet
 cockpit-tt-favorite-add = Add to favorites
 cockpit-tt-favorite-remove = Remove from favorites

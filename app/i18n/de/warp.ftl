@@ -48,6 +48,7 @@ cockpit-zone-connections = Verbindungen
 cockpit-zone-connections-settings = SSH-Konfiguration öffnen
 cockpit-zone-sessions = KI-Sessions
 cockpit-zone-accounts = KI-Konten
+cockpit-tree-session-untitled = Terminal
 
 # Session-Zeilen-Aktionen im Cockpit
 cockpit-session-adopt = ▸ übernehmen

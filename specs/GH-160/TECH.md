@@ -278,6 +278,15 @@ depend on pixels:
 - a collapsed count turns amber if it hides waiting attention;
 - session containers have hierarchy only, not a duplicated aggregate state glyph;
 - agent leaves render state glyph, provider, and optional model only;
+- the B+ display rule (#505) is the pure projection `project_tree_rows`: it merges a project with
+  exactly one untitled session into one row, renders a single-agent PTY session as one leaf whose
+  second line carries provider icon, provider, and model, keeps agent rows only for multi-agent
+  PTYs, and dims a separator-bounded prefix shared by sibling titles (`shared_prefix_cut`, at
+  least `MIN_DISTINCT_TAIL_CHARS` distinguishing characters; full title as tooltip);
+- every row reserves the chevron and glyph columns; idle titles use the muted text role
+  (`title_tone`); the focused pane's session (workspace `ActiveSession::terminal_view_id` matched
+  through `terminal_for_inventory_session`) keeps a stable accent tint (`style::tree_row`);
+- tree rows open no hover preview; the task peek remains only in the large account pane table.
 - no tree leaf renders state words, context percentage, cost, email, effort, or activity age;
 - the section header renders only an amber glyph and numeric count when attention exists.
 

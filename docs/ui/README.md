@@ -6,6 +6,7 @@
 - [Interaktiver Mockup in voller Breite](premium-workspace.html): derselbe Entwurf für Desktop und schmale Breiten.
 - [PRODUCT](../../specs/GH-160/PRODUCT.md) und [TECH](../../specs/GH-160/TECH.md): Verhalten und native Umsetzung.
 - [#459](https://github.com/byte5ai/zaplex/issues/459): Koordination und Abnahme; [PR #465](https://github.com/byte5ai/zaplex/pull/465): bereits integrierte Implementierung.
+- [Session-Baum und Sidebar-Ansichten](cockpit-sessions-tree.html): Toolbelt-Einträge „KI-Sessions“ und „KI-Konten“ (#504) und Baumdarstellung „B+“ (#505). Für diese beiden Punkte hat sie Vorrang vor der Sidebar-Darstellung im interaktiven Mockup.
 
 Die HTML-Dateien nach dem Checkout direkt im Browser öffnen. GitHub zeigt HTML als Quelltext,
 nicht als laufenden Mockup. Es ist kein Zaplex-Build erforderlich. Der Standalone-Export enthält
