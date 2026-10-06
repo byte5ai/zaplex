@@ -1,8 +1,8 @@
 use super::*;
 use chrono::Utc;
 use zaplex_cockpit::{
-    Account, AccountStatus, AccountUsage, HostAvailability, HostNode, ProjectNode, UsageProvenance,
-    WindowTotals,
+    Account, AccountStatus, AccountUsage, HostAvailability, HostNode, ProjectNode, SessionState,
+    UsageProvenance, WindowTotals,
 };
 
 fn session(
@@ -36,6 +36,9 @@ fn session(
         task_state: None,
         last_activity: Utc::now(),
         pid: if state == SessionState::Idle { 0 } else { 10 },
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
     }
 }
 

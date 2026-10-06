@@ -171,7 +171,11 @@ mod tests;
 pub enum SessionState {
     /// Registry-reported busy: the agent is working right now.
     Active,
-    /// The assistant's last turn ended — the session is waiting for YOU.
+    /// The agent handed control back: its last turn ended, or it shows an open
+    /// question/permission prompt ([`SessionSnapshot::awaiting_input`]). This
+    /// is a discovery fact, not the attention signal: whether the session
+    /// actually needs the user is [`SessionSnapshot::attention`], which also
+    /// knows whether the finished turn was already seen.
     Waiting,
     /// Mid tool-run or a live background job: working, hands off.
     Monitor,
@@ -309,6 +313,58 @@ pub struct SessionSnapshot {
     pub task_state: Option<TaskState>,
     pub last_activity: DateTime<Utc>,
     pub pid: u32,
+    /// The agent is blocked on an open question, permission prompt or dialog
+    /// (Claude Code writes registry `status: "waiting"` while one is open). It
+    /// needs the user regardless of age or of having been looked at. `false`
+    /// when the provider records no such state (Codex rollouts do not) or the
+    /// producer predates the field.
+    #[serde(default)]
+    pub awaiting_input: bool,
+    /// Identity of the most recently completed turn: Claude's `uuid` of the
+    /// assistant line that ended it, Codex's `turn_id` of the closing
+    /// `task_complete`/`turn_aborted` event. `None` while a turn is running or
+    /// when the producer predates the field. Keys the "seen" ledger, so a new
+    /// turn is unread again while an idle one never re-arms by itself.
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    /// The app's attention verdict for this row: set only on the published
+    /// Cockpit inventory, and only for a session Zaplex can open right now.
+    /// Derived from discovery plus app-local state (seen ledger, hooks,
+    /// reachability), so it is never serialized or sent over the wire.
+    #[serde(skip)]
+    pub attention: Option<Attention>,
+}
+
+/// Why a session needs the user. The single attention signal behind the
+/// title-bar pulse, the Dock badge, the sidebar count and the inbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Attention {
+    /// An open question or permission prompt blocks the agent.
+    Decision,
+    /// The agent finished a turn the user has not looked at yet.
+    UnseenTurn,
+}
+
+impl SessionSnapshot {
+    /// Whether this row counts towards "needs you".
+    pub fn needs_you(&self) -> bool {
+        self.attention.is_some()
+    }
+
+    /// The state a status glyph renders. The amber waiting presentation is
+    /// reserved for [`Self::needs_you`]: a finished turn that was already seen
+    /// rests as the neutral idle ring, and a hook-reported prompt shows as
+    /// waiting even while discovery still reads a tool run. Routing decisions
+    /// (resume vs. focus) must keep using [`Self::state`].
+    pub fn presented_state(&self) -> SessionState {
+        if self.needs_you() {
+            return SessionState::Waiting;
+        }
+        match self.state {
+            SessionState::Waiting => SessionState::Idle,
+            state => state,
+        }
+    }
 }
 
 /// Coarse account activity derived from its live sessions.

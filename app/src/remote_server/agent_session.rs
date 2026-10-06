@@ -94,6 +94,8 @@ pub fn snapshot_to_proto(s: &SessionSnapshot) -> AgentSessionInfo {
             .unwrap_or_default(),
         account_email: s.account_email.clone().unwrap_or_default(),
         account_id: s.account_id.clone().unwrap_or_default(),
+        awaiting_input: s.awaiting_input,
+        turn_id: s.turn_id.clone().unwrap_or_default(),
         last_activity_epoch_millis: s.last_activity.timestamp_millis() as u64,
         pid: s.pid,
         process_fingerprint: s.process_fingerprint.clone().unwrap_or_default(),
@@ -189,6 +191,11 @@ pub fn proto_to_snapshot(p: &AgentSessionInfo) -> SessionSnapshot {
         }),
         last_activity,
         pid: p.pid,
+        awaiting_input: p.awaiting_input,
+        // Empty ⇒ None: a running turn, or a daemon that predates the field.
+        turn_id: (!p.turn_id.is_empty()).then(|| p.turn_id.clone()),
+        // App-side verdict; never part of the wire row.
+        attention: None,
     }
 }
 

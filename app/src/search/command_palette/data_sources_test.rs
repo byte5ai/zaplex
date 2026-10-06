@@ -298,6 +298,10 @@ fn active_action_query_refreshes_when_available_bindings_change() {
         });
         app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
         app.add_singleton_model(RemoteServerManager::new);
+        // The Cockpit attention projection follows terminal hook state.
+        app.add_singleton_model(|_| {
+            crate::terminal::cli_agent_sessions::CLIAgentSessionsModel::new()
+        });
         app.add_singleton_model(CockpitModel::new);
         app.add_singleton_model(|_| ActiveSession::default());
         app.add_singleton_model(CLIAgentInstallModel::new);

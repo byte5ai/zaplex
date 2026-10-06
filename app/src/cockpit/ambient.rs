@@ -3,6 +3,9 @@
 //! per-event notification spam: there is no toast, no banner, no OS
 //! notification per session. A single indicator reflects
 //! [`CockpitModel::needs_me`] and stays visible even when the app is minimised.
+//! It is the same number as the title-bar pulse, the sidebar header and the
+//! inbox: openable sessions with an open question/permission prompt or a
+//! finished turn the user has not seen yet.
 //!
 //! - **macOS Dock badge** (the core deliverable): the fleet-wide waiting count
 //!   painted on the app's dock tile — `"3"` when three agents wait on you,

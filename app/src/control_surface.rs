@@ -571,9 +571,12 @@ impl ControlSurfaceServer {
                     })
                     .collect::<Vec<_>>();
                 let model = CockpitModel::as_ref(ctx);
+                // The versioned export keeps the complete discovery (scripts
+                // read it); its attention list carries the UI's verdicts.
+                let inventory = model.machine_inventory();
                 let document = CockpitSnapshotDocument::from_runtime(
-                    model.snapshot(),
-                    model.inventory(),
+                    model.machine_snapshot(),
+                    &inventory,
                     &inventories,
                 );
                 let _ = response_tx.send(CockpitSnapshotResponse::success(document));

@@ -678,6 +678,9 @@ fn unavailable_live_session(provider: zaplex_cockpit::Provider) -> zaplex_cockpi
         task_state: None,
         last_activity: chrono::Utc::now(),
         pid: 4242,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
     }
 }
 

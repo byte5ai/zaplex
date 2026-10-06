@@ -54,10 +54,10 @@ pub use conductor::{
 };
 pub use favorites::{Favorite, FavoriteKind, Favorites};
 pub use fleet::{
-    build_fleet_tree, fold_inventory, mark_registry_bound_hosts_unverified,
-    reconcile_connected_hosts, sessions_of_account, AccountSession, AgentInventoryStatus,
-    AgentSession, FleetTree, HostAvailability, HostNode, HostSessions, ProjectNode, RegisteredHost,
-    RemoteHost,
+    apply_session_verdicts, build_fleet_tree, fold_inventory, mark_registry_bound_hosts_unverified,
+    reconcile_connected_hosts, recount_attention, sessions_of_account, AccountSession,
+    AgentInventoryStatus, AgentSession, FleetTree, HostAvailability, HostNode, HostSessions,
+    ProjectNode, RegisteredHost, RemoteHost, SeenTurns, SessionVerdict,
 };
 pub use format::{
     binding_window, context_fill, context_window, format_cost, format_relative, format_reset,
@@ -73,7 +73,8 @@ pub use overrides::{set_label_override, AccountOverride, AccountOverrides};
 pub use pricing::{ModelPrice, PricingSource, PricingTable};
 pub use process_identity::{
     current_process_fingerprint, local_process_signalling_supported, probe_registered_process,
-    send_verified_process_signal, ProcessPresence, ProcessProbe, ProcessSignalError,
+    send_verified_process_signal, terminal_link_for_pid, ProcessPresence, ProcessProbe,
+    ProcessSignalError, TerminalLink, ZAPLEX_SURFACE_ENV,
 };
 pub use project::{resolve_project, ResolvedProject};
 pub use review::{git_commit_all_cmd, git_diff_cmd, render_review_markdown, WorkingChanges};
@@ -85,8 +86,9 @@ pub use transcript::{
     TranscriptTurn, TurnRole, TurnUsage,
 };
 pub use types::{
-    Account, AccountStatus, AccountUsage, CockpitSnapshot, Provider, ScanHealth, SessionSnapshot,
-    SessionState, TaskItem, TaskState, TaskStatus, UsageEntry, UsageProvenance, WindowTotals,
+    Account, AccountStatus, AccountUsage, Attention, CockpitSnapshot, Provider, ScanHealth,
+    SessionSnapshot, SessionState, TaskItem, TaskState, TaskStatus, UsageEntry, UsageProvenance,
+    WindowTotals,
 };
 pub use windows::{
     build_account_usage, window_5h, window_week, with_idle_sessions, with_sessions,

@@ -79,6 +79,9 @@ fn session(config_dir: Option<&str>, account_email: Option<&str>) -> SessionSnap
         task_state: None,
         last_activity: Utc::now(),
         pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
     }
 }
 
@@ -94,9 +97,19 @@ fn row(session: SessionSnapshot) -> TableRow {
 
 #[test]
 fn needs_user_session_highlights_the_full_stable_row() {
+    // Only a row that needs the user (an open prompt or an unseen finished
+    // turn) is emphasized; Waiting alone is a discovery fact.
     let mut waiting = session(None, None);
     let stable_row_key = session_key(true, None, &waiting);
     waiting.state = SessionState::Waiting;
+    // A finished turn that was already seen rests: no highlight, and the
+    // status column presents it like an idle row.
+    let seen = row(waiting.clone());
+    assert!(!table_row_needs_attention(&seen));
+    if let TableRow::Session { session, .. } = &seen {
+        assert_eq!(session.presented_state(), SessionState::Idle);
+    }
+    waiting.attention = Some(zaplex_cockpit::Attention::UnseenTurn);
     let waiting_row = row(waiting);
     assert_eq!(
         match &waiting_row {

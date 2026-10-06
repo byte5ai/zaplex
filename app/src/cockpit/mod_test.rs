@@ -28,6 +28,9 @@ fn snap(cwd: &str, effort: Option<String>) -> SessionSnapshot {
         task_state: None,
         last_activity: Utc::now(),
         pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
     }
 }
 

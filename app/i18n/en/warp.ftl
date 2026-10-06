@@ -2839,6 +2839,11 @@ cockpit-attention-inbox-count = { $count ->
    *[other] { $count } agents are waiting on you
 }
 cockpit-attention-inbox-empty = All clear — nothing is waiting on you.
+cockpit-attention-pulse-tooltip = { $count ->
+    [one] { $count } agent needs you – click to open it
+   *[other] { $count } agents need you – click to open the next
+}
+cockpit-attention-nothing-waiting = Nothing needs you right now.
 cockpit-open-dashboard-tooltip = Open cockpit dashboard
 cockpit-pane-title = Cockpit
 cockpit-pane-col-today = Today

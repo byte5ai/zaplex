@@ -27,6 +27,9 @@ fn session(name: &str, cwd: &str, pid: u32) -> SessionSnapshot {
         task_state: None,
         last_activity: Utc::now(),
         pid,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
     }
 }
 

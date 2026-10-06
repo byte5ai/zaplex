@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use zaplex_cockpit::{
     host_ident, host_key, session_key, AgentInventoryStatus, CockpitSnapshot, FleetTree, Provider,
-    ScanHealth, SessionSnapshot, SessionState,
+    ScanHealth, SessionSnapshot,
 };
 
 use super::github_flows::{flow_keys, label_key_for_flow, RepositoryContext};
@@ -220,7 +220,7 @@ fn session_record(
         primary,
         secondary,
         search_text: searchable.join(" "),
-        waiting: session.state == SessionState::Waiting,
+        waiting: session.needs_you(),
         target: CockpitPaletteTarget::Session {
             key,
             host: host.to_string(),
@@ -277,10 +277,7 @@ pub fn build_palette_index(
             primary: usage.account.label.clone(),
             secondary,
             search_text,
-            waiting: usage
-                .sessions
-                .iter()
-                .any(|session| session.state == SessionState::Waiting),
+            waiting: usage.sessions.iter().any(|session| session.needs_you()),
             target: CockpitPaletteTarget::Account {
                 account_key: usage.account.key.clone(),
             },

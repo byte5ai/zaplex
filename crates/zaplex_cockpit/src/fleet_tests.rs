@@ -1,7 +1,7 @@
 //! Tests for the fleet aggregation / Conductor tree.
 
 use super::*;
-use crate::types::{Provider, SessionSnapshot, SessionState};
+use crate::types::{Attention, Provider, SessionSnapshot, SessionState};
 use chrono::{DateTime, Utc};
 
 fn at(secs: i64) -> DateTime<Utc> {
@@ -14,6 +14,10 @@ fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSn
 }
 
 /// A session with an explicit git `root` distinct from `cwd`.
+///
+/// Fixture rows model the *published* inventory: a Waiting row carries the
+/// unseen-turn attention the app stamps on openable rows. Tests about raw
+/// discovery and the verdict projection clear or set `attention` explicitly.
 fn session_in(
     id: &str,
     cwd: &str,
@@ -51,6 +55,9 @@ fn session_in(
         task_state: None,
         last_activity: at(activity),
         pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: (state == SessionState::Waiting).then_some(Attention::UnseenTurn),
     }
 }
 
@@ -937,4 +944,213 @@ fn the_join_does_not_hinge_on_how_the_address_is_capitalised() {
         &account(Provider::Claude, Some("me@example.de"), "/Users/me/.claude"),
     );
     assert_eq!(found.len(), 1, "same account, differently spelled");
+}
+
+// ── Attention: verdicts and the seen ledger ─────────────────────────────────
+
+/// A raw discovery row: Waiting only says a turn ended. Without the app's
+/// verdict it needs nobody.
+fn raw(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSnapshot {
+    let mut session = session(id, cwd, state, activity);
+    session.attention = None;
+    session
+}
+
+fn local_tree(sessions: Vec<SessionSnapshot>) -> FleetTree {
+    fold_inventory("laptop", sessions, Vec::new())
+}
+
+#[test]
+fn a_folded_waiting_row_needs_nobody_until_the_app_decides() {
+    let tree = local_tree(vec![raw("done", "/p/a", SessionState::Waiting, 10)]);
+    assert_eq!(tree.needs_me, 0);
+    assert_eq!(tree.hosts[0].needs_me, 0);
+    assert!(crate::conductor::waiting_sessions(&tree).is_empty());
+}
+
+#[test]
+fn verdicts_remove_external_rows_from_tree_counts_and_targets() {
+    let mut tree = local_tree(vec![
+        raw("external", "/p/outside", SessionState::Waiting, 30),
+        raw("owned-detached", "/p/mine", SessionState::Waiting, 20),
+        raw("openable", "/p/mine", SessionState::Waiting, 10),
+    ]);
+
+    apply_session_verdicts(&mut tree, |_, _, session| {
+        match session.session_id.as_str() {
+            "external" => SessionVerdict {
+                visible: false,
+                attention: Some(Attention::UnseenTurn),
+            },
+            "owned-detached" => SessionVerdict {
+                visible: true,
+                attention: None,
+            },
+            _ => SessionVerdict {
+                visible: true,
+                attention: Some(Attention::UnseenTurn),
+            },
+        }
+    });
+
+    let host = &tree.hosts[0];
+    let ids: Vec<&str> = host
+        .projects
+        .iter()
+        .flat_map(|project| &project.sessions)
+        .map(|session| session.session_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["openable", "owned-detached"], "attention first");
+    assert!(
+        host.projects
+            .iter()
+            .all(|project| project.root != "/p/outside"),
+        "a project emptied by external rows disappears"
+    );
+    assert_eq!(tree.needs_me, 1);
+    assert_eq!(host.needs_me, 1);
+    let targets: Vec<&str> = crate::conductor::waiting_sessions(&tree)
+        .into_iter()
+        .map(|(_, session)| session.session_id.as_str())
+        .collect();
+    assert_eq!(targets, vec!["openable"]);
+}
+
+#[test]
+fn rows_on_an_unavailable_host_stay_observed_but_never_need_the_user() {
+    let mut tree = fold_inventory(
+        "laptop",
+        Vec::new(),
+        vec![(
+            remote_host("devhost", "daemon-1"),
+            vec![raw("remote", "/p/r", SessionState::Waiting, 10)],
+        )],
+    );
+    for host in tree.hosts.iter_mut().filter(|host| !host.is_local) {
+        host.availability = HostAvailability::Removed;
+    }
+
+    apply_session_verdicts(&mut tree, |_, _, _| SessionVerdict {
+        visible: true,
+        attention: Some(Attention::Decision),
+    });
+
+    let remote = tree.hosts.iter().find(|host| !host.is_local).unwrap();
+    assert_eq!(remote.projects[0].sessions[0].attention, None);
+    assert_eq!(tree.needs_me, 0);
+}
+
+fn finished(turn_id: Option<&str>, activity: i64) -> SessionSnapshot {
+    let mut session = raw("s", "/p", SessionState::Waiting, activity);
+    session.turn_id = turn_id.map(str::to_string);
+    session
+}
+
+#[test]
+fn an_open_prompt_needs_the_user_regardless_of_age_or_having_been_seen() {
+    let mut ledger = SeenTurns::new(at(1_000));
+    // Older than the app start, and looked at: still blocked on the user.
+    let mut prompt = finished(None, 10);
+    prompt.awaiting_input = true;
+    ledger.mark_seen("k", &prompt);
+    assert_eq!(
+        ledger.attention("k", &prompt, false),
+        Some(Attention::Decision)
+    );
+
+    // A Zaplex hook reporting a blocked prompt counts even while discovery
+    // still reads a tool run.
+    let mut hooked = raw("h", "/p", SessionState::Monitor, 2_000);
+    hooked.turn_id = None;
+    assert_eq!(
+        ledger.attention("h", &hooked, true),
+        Some(Attention::Decision)
+    );
+}
+
+#[test]
+fn an_unseen_finished_turn_counts_until_viewed_and_the_next_turn_counts_again() {
+    let mut ledger = SeenTurns::new(at(1_000));
+    let first = finished(Some("turn-1"), 2_000);
+    assert_eq!(
+        ledger.attention("k", &first, false),
+        Some(Attention::UnseenTurn)
+    );
+
+    assert!(ledger.mark_seen("k", &first), "viewing records the turn");
+    assert_eq!(ledger.attention("k", &first, false), None);
+    assert!(
+        !ledger.mark_seen("k", &first),
+        "viewing again changes nothing"
+    );
+
+    let second = finished(Some("turn-2"), 3_000);
+    assert_eq!(
+        ledger.attention("k", &second, false),
+        Some(Attention::UnseenTurn)
+    );
+}
+
+#[test]
+fn a_seen_idle_session_never_counts_however_long_it_idles() {
+    let mut ledger = SeenTurns::new(at(1_000));
+    let seen = finished(Some("turn-1"), 2_000);
+    ledger.mark_seen("k", &seen);
+
+    // The registry may touch the session long after the turn (status writes),
+    // moving its activity time; the turn identity is what matters.
+    let much_later = finished(Some("turn-1"), 90_000);
+    assert_eq!(ledger.attention("k", &much_later, false), None);
+}
+
+#[test]
+fn startup_does_not_count_turns_that_finished_before_the_app_started() {
+    let mut ledger = SeenTurns::new(at(1_000));
+    let historical = finished(Some("old-turn"), 500);
+    assert_eq!(ledger.attention("k", &historical, false), None);
+
+    // Once baselined, a later activity bump without a new turn stays quiet…
+    let bumped = finished(Some("old-turn"), 5_000);
+    assert_eq!(ledger.attention("k", &bumped, false), None);
+    // …while a turn finished after the start is new mail.
+    let fresh = finished(Some("new-turn"), 6_000);
+    assert_eq!(
+        ledger.attention("k", &fresh, false),
+        Some(Attention::UnseenTurn)
+    );
+}
+
+#[test]
+fn a_running_turn_has_nothing_to_count_or_mark() {
+    let mut ledger = SeenTurns::new(at(1_000));
+    let running = raw("s", "/p", SessionState::Active, 2_000);
+    assert_eq!(SeenTurns::turn_identity(&running), None);
+    assert_eq!(ledger.attention("k", &running, false), None);
+    assert!(!ledger.mark_seen("k", &running));
+}
+
+#[test]
+fn older_producers_without_turn_ids_key_the_turn_by_its_activity_time() {
+    let mut ledger = SeenTurns::new(at(1_000));
+    let first = finished(None, 2_000);
+    ledger.mark_seen("k", &first);
+    assert_eq!(ledger.attention("k", &first, false), None);
+    let next = finished(None, 3_000);
+    assert_eq!(
+        ledger.attention("k", &next, false),
+        Some(Attention::UnseenTurn)
+    );
+}
+
+#[test]
+fn seen_turns_survive_a_temporary_disappearance_until_the_ledger_is_full() {
+    let mut ledger = SeenTurns::new(at(1_000));
+    let seen = finished(Some("turn-1"), 2_000);
+    ledger.mark_seen("reconnecting", &seen);
+    ledger.prune(&std::collections::HashSet::new());
+    assert_eq!(
+        ledger.attention("reconnecting", &seen, false),
+        None,
+        "a reconnect must not resurrect a turn that was already read"
+    );
 }
