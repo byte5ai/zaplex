@@ -227,7 +227,8 @@ fn test_drag_and_drop_resets_hover() {
 // Selection state tests
 // ============================================================
 
-/// Verifies that SelectEntry selects an entry
+/// A plain row click (SelectEntry) moves the MC cursor onto the row; it is
+/// not a marking gesture, so the row stays unmarked.
 #[test]
 fn test_select_entry() {
     warpui::App::test((), |mut app| async move {
@@ -235,53 +236,63 @@ fn test_select_entry() {
         let (_, view) = create_view(&mut app);
 
         view.update(&mut app, |view, ctx| {
-            view.entries = vec![entry("zero", false)];
-            let entry = view.entry_reference(0).unwrap();
+            view.entries = vec![entry("zero", false), entry("one", false)];
+            let entry = view.entry_reference(1).unwrap();
             view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
 
         view.read(&app, |view, _| {
+            assert_eq!(
+                view.cursor_entry_index(),
+                Some(1),
+                "the click moves the cursor onto the clicked row"
+            );
             assert!(
-                view.is_index_marked(0),
-                "After SelectEntry(0), index 0 should be selected"
+                view.selected.is_empty(),
+                "a plain click must not mark the row"
             );
         });
     });
 }
 
-/// Verifies SelectEntry selection toggling (single-select mode: re-selecting the same item keeps it selected)
+/// Plain clicks move the cursor from row to row and leave existing marks —
+/// on folders and files alike — exactly as they were (MC: only the marking
+/// gestures change marks).
 #[test]
 fn test_toggle_select_entry() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // Select index 2
         view.update(&mut app, |view, ctx| {
-            view.entries = (0..=5)
-                .map(|index| entry(&format!("entry-{index}"), false))
-                .collect();
-            let entry = view.entry_reference(2).unwrap();
+            view.entries = vec![
+                entry("dir-a", true),
+                entry("dir-b", true),
+                entry("file-c", false),
+                entry("file-d", false),
+            ];
+            view.mark_index_for_test(0);
+            view.mark_index_for_test(2);
+            let entry = view.entry_reference(1).unwrap();
             view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
         view.read(&app, |view, _| {
-            assert!(view.is_index_marked(2));
+            assert_eq!(view.cursor_entry_index(), Some(1));
+            assert!(view.is_index_marked(0) && view.is_index_marked(2));
+            assert_eq!(view.selected.len(), 2, "the click adds no mark");
         });
 
-        // Select index 5 → clears the previous selection, keeping only 5
         view.update(&mut app, |view, ctx| {
-            let entry = view.entry_reference(5).unwrap();
+            let entry = view.entry_reference(3).unwrap();
             view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
         view.read(&app, |view, _| {
+            assert_eq!(view.cursor_entry_index(), Some(3));
             assert!(
-                !view.is_index_marked(2),
-                "After SelectEntry(5), index 2 should be deselected"
+                view.is_index_marked(0) && view.is_index_marked(2),
+                "a second click must not drop the folder and file marks"
             );
-            assert!(
-                view.is_index_marked(5),
-                "After SelectEntry(5), index 5 should be selected"
-            );
+            assert!(!view.is_index_marked(3));
         });
     });
 }
@@ -407,7 +418,8 @@ fn test_initial_state() {
 // Context menu tests
 // ============================================================
 
-/// Verifies that the ContextMenu action sets the context_menu state and selects the entry
+/// Verifies that the ContextMenu action sets the context_menu state and puts
+/// the cursor on the entry
 #[test]
 fn test_context_menu_sets_state() {
     use pathfinder_geometry::vector::Vector2F;
@@ -436,10 +448,12 @@ fn test_context_menu_sets_state() {
                 cm.position, position,
                 "position should match the provided value"
             );
-            assert!(
-                view.is_index_marked(3),
-                "After ContextMenu, index 3 should be selected"
+            assert_eq!(
+                view.cursor_entry_index(),
+                Some(3),
+                "After ContextMenu, the cursor should be on index 3"
             );
+            assert!(view.selected.is_empty(), "a right-click is not a mark");
         });
     });
 }
@@ -524,8 +538,8 @@ fn test_context_menu_replaces_previous() {
             let cm = view.context_menu.as_ref().unwrap();
             assert_eq!(cm.entry, view.entry_reference(5).unwrap());
             assert_eq!(cm.position, new_position, "Should update to new position");
-            assert!(view.is_index_marked(5), "Should select new index 5");
-            assert!(!view.is_index_marked(0), "Should deselect old index 0");
+            assert_eq!(view.cursor_entry_index(), Some(5), "cursor on index 5");
+            assert!(view.selected.is_empty(), "opening menus marks nothing");
         });
     });
 }
@@ -554,7 +568,8 @@ fn test_context_menu_zero_index() {
             let cm = view.context_menu.as_ref().unwrap();
             assert_eq!(cm.entry, view.entry_reference(0).unwrap());
             assert_eq!(cm.position, position, "position should be saved correctly");
-            assert!(view.is_index_marked(0), "Should select index 0");
+            assert_eq!(view.cursor_entry_index(), Some(0), "cursor on index 0");
+            assert!(view.selected.is_empty(), "a right-click is not a mark");
         });
     });
 }
@@ -644,7 +659,9 @@ fn test_close_context_menu_when_none() {
     });
 }
 
-/// Verifies that ContextMenu clears the previous selection and selects the new entry
+/// A right-click moves the cursor onto the row and keeps the marks, so the
+/// menu's Delete can still act on the whole marked set (it does when the
+/// clicked row is marked, and on the clicked row alone otherwise).
 #[test]
 fn test_context_menu_clears_previous_selection() {
     use pathfinder_geometry::vector::Vector2F;
@@ -653,27 +670,15 @@ fn test_context_menu_clears_previous_selection() {
         initialize_app(&mut app);
         let (_, view) = create_view(&mut app);
 
-        // First select entries 2 and 3 (via two SelectEntry calls)
-        view.update(&mut app, |view, ctx| {
+        view.update(&mut app, |view, _| {
             view.entries = (0..=7)
                 .map(|index| entry(&format!("entry-{index}"), false))
                 .collect();
-            let entry = view.entry_reference(2).unwrap();
-            view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
-        });
-        view.update(&mut app, |view, ctx| {
-            let entry = view.entry_reference(3).unwrap();
-            view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
-        });
-        view.read(&app, |view, _| {
-            assert!(view.is_index_marked(3), "Should select 3");
-            assert!(
-                !view.is_index_marked(2),
-                "Single-select mode should clear 2"
-            );
+            view.mark_index_for_test(2);
+            view.mark_index_for_test(3);
         });
 
-        // Right-click on entry 7
+        // Right-click on the unmarked entry 7
         view.update(&mut app, |view, ctx| {
             let entry = view.entry_reference(7).unwrap();
             view.handle_action(
@@ -686,9 +691,14 @@ fn test_context_menu_clears_previous_selection() {
         });
 
         view.read(&app, |view, _| {
-            assert!(view.is_index_marked(7), "Should select 7");
-            assert!(!view.is_index_marked(3), "Should clear old selection 3");
-            assert_eq!(view.selected.len(), 1, "Should have only one selected item");
+            assert!(view.context_menu.is_some());
+            assert_eq!(view.cursor_entry_index(), Some(7), "cursor follows");
+            assert!(view.is_index_marked(2) && view.is_index_marked(3));
+            assert!(
+                !view.is_index_marked(7),
+                "opening the menu must not mark the clicked row"
+            );
+            assert_eq!(view.selected.len(), 2, "the marks are untouched");
         });
     });
 }
@@ -1565,7 +1575,8 @@ fn test_select_entry_usize_max() {
     });
 }
 
-/// Verifies that each SelectEntry call clears the previous selection
+/// A run of plain clicks never builds up marks: the cursor ends on the last
+/// clicked row and nothing is marked, so F5/F6/F8 target that row only.
 #[test]
 fn test_multiple_select_clears_previous() {
     warpui::App::test((), |mut app| async move {
@@ -1583,10 +1594,8 @@ fn test_multiple_select_clears_previous() {
         });
 
         view.read(&app, |view, _| {
-            assert_eq!(view.selected.len(), 1);
-            assert!(view.is_index_marked(7));
-            assert!(!view.is_index_marked(1));
-            assert!(!view.is_index_marked(3));
+            assert!(view.selected.is_empty(), "clicks are not marks");
+            assert_eq!(view.cursor_entry_index(), Some(7));
         });
     });
 }
@@ -2248,7 +2257,8 @@ fn test_insert_marks_and_advances() {
 }
 
 /// Clicking the mark zone toggles the multi-selection without collapsing it —
-/// the row click (SelectEntry) is exclusive, the mark click is additive.
+/// the mark click is additive, the row click (SelectEntry) only moves the
+/// cursor and leaves the marks alone.
 #[test]
 fn test_mark_clicks_accumulate_unlike_row_clicks() {
     warpui::App::test((), |mut app| async move {
@@ -2279,14 +2289,15 @@ fn test_mark_clicks_accumulate_unlike_row_clicks() {
             assert!(view.is_index_marked(2));
         });
 
-        // A plain row click replaces the whole selection.
+        // A plain row click moves the cursor and neither adds nor drops marks.
         view.update(&mut app, |view, ctx| {
             let entry = view.entry_reference(1).unwrap();
             view.handle_action(&SftpBrowserAction::SelectEntry(entry), ctx);
         });
         view.read(&app, |view, _| {
+            assert_eq!(view.cursor_entry_index(), Some(1));
             assert_eq!(view.selected.len(), 1);
-            assert!(view.is_index_marked(1));
+            assert!(view.is_index_marked(2) && !view.is_index_marked(1));
         });
     });
 }
@@ -2322,6 +2333,328 @@ fn test_search_filter_drops_marks_it_hides() {
             assert!(view.is_index_marked(1));
         });
     });
+}
+
+/// Names of the marked entries, sorted, for order-independent assertions.
+fn marked_names(view: &SftpBrowserView) -> Vec<String> {
+    let mut names: Vec<String> = view
+        .entries
+        .iter()
+        .filter(|entry| view.selected.contains(&entry.entry_identity()))
+        .map(|entry| entry.name.clone())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Folders are marked exactly like files: Space, Insert and the mouse mark
+/// zone all accept them, in any number and any mix, and the status counts
+/// tell folders and files apart.
+#[test]
+fn folders_and_files_are_marked_together() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(
+            &view,
+            &mut app,
+            vec![
+                entry("alpha", true),
+                entry("beta", true),
+                entry("gamma", true),
+                entry("notes.txt", false),
+                entry("report.pdf", false),
+            ],
+        );
+
+        view.update(&mut app, |view, ctx| {
+            // Space on the first folder, Insert on the second (marks and
+            // steps on), then a mouse mark on a file.
+            view.handle_action(&SftpBrowserAction::ToggleSelectCursor, ctx);
+            view.handle_action(&SftpBrowserAction::CursorDown, ctx);
+            view.handle_action(&SftpBrowserAction::MarkAndAdvance, ctx);
+            let file = view.entry_reference(4).unwrap();
+            view.handle_action(&SftpBrowserAction::ToggleMark(file), ctx);
+        });
+
+        view.read(&app, |view, _| {
+            assert!(view.is_index_marked(0), "Space marks a folder");
+            assert!(view.is_index_marked(1), "Insert marks a folder");
+            assert!(!view.is_index_marked(2) && !view.is_index_marked(3));
+            assert!(view.is_index_marked(4), "the mark zone marks a file");
+            assert_eq!(view.marked_counts(), (2, 1));
+        });
+    });
+}
+
+/// Shift+Down/Up mark a run across folders and files: the row under the
+/// cursor is marked, then the cursor steps. Unlike Insert this never unmarks,
+/// and the `..` row is stepped over without ever being marked.
+#[test]
+fn shift_arrows_mark_a_run_and_never_unmark() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, _| {
+            view.current_path = PathBuf::from("/sub");
+            view.entries = vec![
+                sized_entry("dir-a", true, 0, None),
+                sized_entry("dir-b", true, 0, None),
+                sized_entry("file-c", false, 3, None),
+                sized_entry("file-d", false, 4, None),
+            ];
+            // Already marked before the run starts.
+            view.mark_index_for_test(1);
+        });
+        view.read(&app, |view, _| assert!(view.cursor_on_parent_row()));
+
+        view.update(&mut app, |view, ctx| {
+            for _ in 0..3 {
+                view.handle_action(&SftpBrowserAction::MarkAndStep { down: true }, ctx);
+            }
+        });
+        view.read(&app, |view, _| {
+            assert!(view.is_index_marked(0));
+            assert!(view.is_index_marked(1), "a marked row stays marked");
+            assert!(
+                !view.is_index_marked(2),
+                "the landing row is not marked yet"
+            );
+            assert_eq!(view.cursor, 3);
+            assert_eq!(view.selected.len(), 2, "`..` was stepped over");
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::MarkAndStep { down: false }, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert!(view.is_index_marked(2), "Shift+Up marks the row it leaves");
+            assert_eq!(view.cursor, 2);
+            assert_eq!(view.marked_counts(), (2, 1));
+        });
+    });
+}
+
+/// Shift-click marks every row between the cursor and the clicked row, both
+/// included, in display order and in either direction; `..` is never part of
+/// the range.
+#[test]
+fn shift_click_marks_the_range_from_the_cursor() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, _| {
+            view.current_path = PathBuf::from("/sub");
+            view.entries = vec![
+                sized_entry("dir-a", true, 0, None),
+                sized_entry("dir-b", true, 0, None),
+                sized_entry("file-c", false, 3, None),
+                sized_entry("file-d", false, 4, None),
+                sized_entry("file-e", false, 5, None),
+            ];
+        });
+
+        // From `..` the range starts at the first entry.
+        view.update(&mut app, |view, ctx| {
+            let target = view.entry_reference(1).unwrap();
+            view.handle_action(&SftpBrowserAction::MarkRangeTo(target), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(marked_names(view), vec!["dir-a", "dir-b"]);
+            assert_eq!(view.cursor_entry_index(), Some(1), "cursor moves along");
+        });
+
+        // Upwards from the last row: both ends included, nothing beyond them.
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ClearMarks, ctx);
+            view.handle_action(&SftpBrowserAction::CursorLast, ctx);
+            let target = view.entry_reference(2).unwrap();
+            view.handle_action(&SftpBrowserAction::MarkRangeTo(target), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(marked_names(view), vec!["file-c", "file-d", "file-e"]);
+            assert_eq!(view.cursor_entry_index(), Some(2));
+        });
+    });
+}
+
+/// Cmd/Ctrl+A marks every listed folder and file — never the `..` row, and
+/// never a row the list does not show (a hidden dot-folder, a filtered-out
+/// name). Escape (ClearMarks) drops them all again.
+#[test]
+fn mark_all_marks_listed_entries_but_not_the_parent_row() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        view.update(&mut app, |view, _| {
+            view.current_path = PathBuf::from("/sub");
+            view.entries = vec![
+                sized_entry(".cache", true, 0, None),
+                sized_entry("src", true, 0, None),
+                sized_entry("main.rs", false, 10, None),
+                sized_entry("notes.txt", false, 20, None),
+            ];
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::MarkAll, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert!(view.has_parent_row());
+            assert_eq!(marked_names(view), vec!["main.rs", "notes.txt", "src"]);
+            assert_eq!(view.marked_counts(), (1, 2));
+            assert_eq!(view.marked_size(), 30, "folders add no size");
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ClearMarks, ctx);
+        });
+        view.read(&app, |view, _| assert!(view.selected.is_empty()));
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SetSearchFilter("n".to_string()), ctx);
+            view.handle_action(&SftpBrowserAction::MarkAll, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(marked_names(view), vec!["main.rs", "notes.txt"]);
+        });
+    });
+}
+
+/// Marks belong to the object, not the row: after a re-sort and after a
+/// refresh that reorders the listing, the same folder and file are still
+/// marked and nothing else is.
+#[test]
+fn folder_and_file_marks_survive_resort_and_refresh() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view) = create_view(&mut app);
+        seed(
+            &view,
+            &mut app,
+            vec![
+                entry("assets", true),
+                entry("build", true),
+                entry("a.txt", false),
+                entry("b.txt", false),
+            ],
+        );
+        view.update(&mut app, |view, _| {
+            view.mark_index_for_test(1); // build/
+            view.mark_index_for_test(2); // a.txt
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::SortBy(SortColumn::Name), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.visible_indices(), vec![1, 0, 3, 2], "descending");
+            assert_eq!(marked_names(view), vec!["a.txt", "build"]);
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.refresh_generation = view.refresh_generation.wrapping_add(1);
+            let generation = view.refresh_generation;
+            let listing = vec![
+                entry("b.txt", false),
+                entry("zeta", true),
+                entry("a.txt", false),
+                entry("build", true),
+                entry("assets", true),
+            ];
+            view.on_dir_listed(generation, Ok(Ok(listing)), ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.entries[3].name, "a.txt",
+                "the refresh moved the marked file to another index"
+            );
+            assert_eq!(marked_names(view), vec!["a.txt", "build"]);
+        });
+    });
+}
+
+/// The delete confirmation counts folders apart from files and always says
+/// that a folder is deleted together with its contents.
+#[test]
+fn delete_confirmation_counts_folders_and_files() {
+    crate::i18n::init(Some("en"));
+    // Fluent may wrap placeables in bidi isolation marks; compare the words.
+    let plain = |text: String| -> String {
+        text.chars()
+            .filter(|character| !matches!(character, '\u{2068}' | '\u{2069}'))
+            .collect()
+    };
+    let paths = |names: &[&str]| -> Vec<PathBuf> {
+        names
+            .iter()
+            .map(|name| PathBuf::from("/srv").join(name))
+            .collect()
+    };
+    let body = |names: &[&str], is_dirs: &[bool]| {
+        plain(super::dialogs::delete_confirm_body(&paths(names), is_dirs))
+    };
+
+    let mixed = body(
+        &["a", "b", "c", "1.txt", "2.txt", "3.txt", "4.txt", "5.txt"],
+        &[true, true, true, false, false, false, false, false],
+    );
+    assert!(
+        mixed.contains("3 folders (including contents) and 5 files"),
+        "{mixed}"
+    );
+
+    let folders = body(&["a", "b"], &[true, true]);
+    assert!(
+        folders.contains("2 folders including their contents"),
+        "{folders}"
+    );
+
+    let files = body(&["1.txt", "2.txt"], &[false, false]);
+    assert!(files.contains("delete 2 files?"), "{files}");
+    assert!(!files.contains("folder"), "{files}");
+
+    let one_folder = body(&["build"], &[true]);
+    assert!(
+        one_folder.contains("the folder \"build\" and everything in it"),
+        "{one_folder}"
+    );
+
+    let one_file = body(&["1.txt"], &[false]);
+    assert!(one_file.contains("\"1.txt\""), "{one_file}");
+    assert!(!one_file.contains("folder"), "{one_file}");
+}
+
+/// The status line under the list counts folders and files separately and
+/// labels the byte total as covering files only once folders are marked.
+#[test]
+fn selection_status_counts_folders_and_files_separately() {
+    crate::i18n::init(Some("en"));
+    let plain = |text: String| -> String {
+        text.chars()
+            .filter(|character| !matches!(character, '\u{2068}' | '\u{2069}'))
+            .collect()
+    };
+    let status = |folders, files, bytes| {
+        plain(super::file_list::selection_status_text(
+            folders, files, bytes,
+        ))
+    };
+
+    let files_only = status(0, 2, 2048);
+    assert!(files_only.starts_with("2 files marked"), "{files_only}");
+    assert!(!files_only.contains("folder"), "{files_only}");
+
+    let mixed = status(3, 1, 2048);
+    assert!(mixed.starts_with("3 folders · 1 file marked"), "{mixed}");
+    assert!(mixed.contains("excl. folders"), "{mixed}");
+
+    let folders_only = status(1, 0, 0);
+    assert!(
+        folders_only.starts_with("1 folder marked"),
+        "{folders_only}"
+    );
+    assert!(folders_only.contains("not computed"), "{folders_only}");
 }
 
 /// Re-sorting keeps the cursor on the same FILE, not on the same row number.

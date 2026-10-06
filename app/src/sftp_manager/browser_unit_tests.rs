@@ -678,3 +678,154 @@ fn local_path_formatting_preserves_windows_verbatim_disk_and_unc_prefixes() {
         normalize_remote_path(remote)
     );
 }
+
+#[test]
+fn space_marks_whether_the_platform_spells_it_as_a_blank_or_a_name() {
+    // The platform layer reports the space bar as " " (only the keymap spells
+    // it "space"); the old `"space"`-only match never fired.
+    for key in [" ", "space"] {
+        assert!(matches!(
+            list_key_action(key, false, false),
+            Some(SftpBrowserAction::ToggleSelectCursor)
+        ));
+    }
+    // While the filter field has focus, Space and Escape belong to the text.
+    assert!(list_key_action(" ", false, true).is_none());
+    assert!(list_key_action("escape", false, true).is_none());
+    assert!(matches!(
+        list_key_action("escape", false, false),
+        Some(SftpBrowserAction::ClearMarks)
+    ));
+    assert!(matches!(
+        list_key_action("insert", false, false),
+        Some(SftpBrowserAction::MarkAndAdvance)
+    ));
+}
+
+#[test]
+fn shift_arrows_mark_while_plain_arrows_only_move() {
+    assert!(matches!(
+        list_key_action("down", true, false),
+        Some(SftpBrowserAction::MarkAndStep { down: true })
+    ));
+    assert!(matches!(
+        list_key_action("up", true, false),
+        Some(SftpBrowserAction::MarkAndStep { down: false })
+    ));
+    assert!(matches!(
+        list_key_action("down", false, false),
+        Some(SftpBrowserAction::CursorDown)
+    ));
+    assert!(matches!(
+        list_key_action("up", false, false),
+        Some(SftpBrowserAction::CursorUp)
+    ));
+}
+
+#[test]
+fn mark_all_is_cmd_or_ctrl_a_without_other_modifiers() {
+    let chord = |text: &str| warpui::keymap::Keystroke::parse(text).unwrap();
+    assert!(is_mark_all_chord(&chord("cmd-a")));
+    assert!(is_mark_all_chord(&chord("ctrl-a")));
+    assert!(
+        !is_mark_all_chord(&chord("a")),
+        "a plain `a` is not a chord"
+    );
+    assert!(!is_mark_all_chord(&chord("cmd-shift-A")));
+    assert!(!is_mark_all_chord(&chord("ctrl-alt-a")));
+    assert!(!is_mark_all_chord(&chord("cmd-b")));
+}
+
+#[test]
+fn modified_clicks_toggle_or_extend_and_plain_clicks_stay_plain() {
+    use super::super::file_list::{modified_click, ModifiedClick};
+    use warpui::event::ModifiersState;
+
+    let with = |cmd, ctrl, shift, alt| ModifiersState {
+        cmd,
+        ctrl,
+        shift,
+        alt,
+        ..Default::default()
+    };
+    assert_eq!(
+        modified_click(&with(true, false, false, false)),
+        Some(ModifiedClick::Toggle)
+    );
+    assert_eq!(
+        modified_click(&with(false, true, false, false)),
+        Some(ModifiedClick::Toggle)
+    );
+    assert_eq!(
+        modified_click(&with(false, false, true, false)),
+        Some(ModifiedClick::Range)
+    );
+    assert_eq!(
+        modified_click(&with(true, false, true, false)),
+        Some(ModifiedClick::Toggle),
+        "Cmd wins over Shift"
+    );
+    assert_eq!(modified_click(&with(false, false, false, false)), None);
+    assert_eq!(modified_click(&with(false, false, false, true)), None);
+}
+
+#[test]
+fn marked_rows_cursor_and_inactive_pane_stay_distinct() {
+    use super::super::file_list::row_look;
+
+    let appearance = Appearance::mock();
+    let theme = appearance.theme();
+    let plain = row_look(theme, false, false, true, false);
+    let marked = row_look(theme, true, false, true, false);
+    let cursor = row_look(theme, false, true, true, false);
+    let both = row_look(theme, true, true, true, false);
+    let inactive_marked = row_look(theme, true, false, false, false);
+    let inactive_cursor = row_look(theme, false, true, false, false);
+
+    // A mark is colour (accent-tinted text and fill) plus a bold name.
+    assert_eq!(plain.background, None);
+    assert!(marked.bold && !plain.bold && !cursor.bold);
+    assert_eq!(marked.name, internal_colors::accent_fg_strong(theme));
+    assert_eq!(
+        marked.detail, marked.name,
+        "the whole line carries the mark"
+    );
+    assert_eq!(
+        marked.background,
+        Some(internal_colors::accent_overlay_2(theme))
+    );
+    assert_ne!(marked.name, plain.name);
+
+    // The cursor has its own channel: the accent outline.
+    assert_eq!(cursor.outline, Some(theme.accent()));
+    assert_eq!(marked.outline, None);
+    assert_ne!(cursor.background, marked.background);
+    assert_eq!(cursor.name, plain.name);
+
+    // Cursor on a marked row shows both at once.
+    assert_eq!(both.outline, Some(theme.accent()));
+    assert_eq!(both.background, marked.background);
+    assert!(both.bold);
+
+    // An inactive pane dims, but keeps the marks distinguishable; its cursor
+    // turns into a neutral outline.
+    assert!(inactive_marked.bold);
+    assert_eq!(inactive_marked.name, marked.name);
+    assert_eq!(
+        inactive_marked.background,
+        Some(internal_colors::accent_overlay_1(theme))
+    );
+    assert_ne!(inactive_marked.background, marked.background);
+    assert_eq!(
+        inactive_cursor.outline,
+        Some(internal_colors::fg_overlay_3(theme))
+    );
+    assert_eq!(inactive_cursor.background, None);
+
+    // Hover only fills an otherwise plain row (spec A4).
+    assert_eq!(
+        row_look(theme, false, false, true, true).background,
+        Some(internal_colors::fg_overlay_1(theme))
+    );
+    assert_eq!(row_look(theme, true, false, true, true), marked);
+}

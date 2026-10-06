@@ -670,24 +670,52 @@ fn wrap_dismiss(dialog_content: Box<dyn Element>) -> Box<dyn Element> {
         .finish()
 }
 
+/// Body text of the delete confirmation.
+///
+/// Folders are counted apart from files and always announced together with
+/// their contents, because deleting a folder is recursive: "Willst du
+/// 3 Ordner (inkl. Inhalt) und 5 Dateien wirklich löschen?". `is_dirs`
+/// corresponds 1:1 with `paths`; a symlink is not a folder here (deleting it
+/// removes only the link).
+pub(crate) fn delete_confirm_body(paths: &[PathBuf], is_dirs: &[bool]) -> String {
+    let folders = (0..paths.len())
+        .filter(|&index| is_dirs.get(index).copied().unwrap_or(false))
+        .count();
+    let files = paths.len() - folders;
+    if let [path] = paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        return if folders == 1 {
+            crate::t!("fm-dlg-delete-body-one-folder", name = name)
+        } else {
+            crate::t!("fm-dlg-delete-body-one", name = name)
+        };
+    }
+    let folder_count = crate::t!("fm-count-folders", count = folders);
+    let file_count = crate::t!("fm-count-files", count = files);
+    match (folders, files) {
+        (0, _) => crate::t!("fm-dlg-delete-body-files", files = file_count),
+        (_, 0) => crate::t!("fm-dlg-delete-body-folders", folders = folder_count),
+        _ => crate::t!(
+            "fm-dlg-delete-body-mixed",
+            folders = folder_count,
+            files = file_count
+        ),
+    }
+}
+
 /// Render delete confirmation dialog.
 fn render_delete_confirm(
     paths: &[PathBuf],
+    is_dirs: &[bool],
     appearance: &Appearance,
     confirm_btn_state: MouseStateHandle,
     cancel_btn_state: MouseStateHandle,
     close_btn_state: MouseStateHandle,
 ) -> Box<dyn Element> {
-    let count = paths.len();
-    let desc = if count == 1 {
-        let name = paths[0]
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| paths[0].display().to_string());
-        crate::t!("fm-dlg-delete-body-one", name = name)
-    } else {
-        crate::t!("fm-dlg-delete-body-many", count = count)
-    };
+    let desc = delete_confirm_body(paths, is_dirs);
 
     render_confirm_dialog(
         &crate::t!("fm-dlg-delete-title"),
@@ -1148,8 +1176,9 @@ pub fn render_dialog(
             cancel_btn_state,
             close_btn_state,
         ),
-        Dialog::DeleteConfirm { paths, .. } => render_delete_confirm(
+        Dialog::DeleteConfirm { paths, is_dirs, .. } => render_delete_confirm(
             paths,
+            is_dirs,
             appearance,
             confirm_btn_state,
             cancel_btn_state,

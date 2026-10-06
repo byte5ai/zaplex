@@ -4170,7 +4170,18 @@ fm-key-mkdir = New folder
 fm-key-delete = Delete
 fm-key-quit = Close
 fm-empty-folder = This folder is empty
-fm-selection-status = { $count } marked · { $size }
+fm-selection-status = { $items } marked · { $size }
+fm-selection-status-with-folders = { $items } marked · { $size } excl. folders
+fm-selection-status-folders-only = { $items } marked · folder size not computed
+fm-count-folders = { $count ->
+    [one] { $count } folder
+   *[other] { $count } folders
+}
+fm-count-files = { $count ->
+    [one] { $count } file
+   *[other] { $count } files
+}
+fm-count-folders-and-files = { $folders } · { $files }
 fm-tt-hidden = Show hidden files
 
 # ── T2.4: file-manager dialogs, transfer, status/toasts, SSH manager, connect ──
@@ -4194,7 +4205,10 @@ fm-dlg-newer-only-all = Replace newer for all
 fm-dlg-picker-title = { $verb } to which panel?
 fm-dlg-picker-body = More than one other file panel is open. Choose the destination:
 fm-dlg-delete-body-one = Are you sure you want to delete "{ $name }"? This action cannot be undone.
-fm-dlg-delete-body-many = Are you sure you want to delete { $count } items? This action cannot be undone.
+fm-dlg-delete-body-one-folder = Are you sure you want to delete the folder "{ $name }" and everything in it? This action cannot be undone.
+fm-dlg-delete-body-files = Are you sure you want to delete { $files }? This action cannot be undone.
+fm-dlg-delete-body-folders = Are you sure you want to delete { $folders } including their contents? This action cannot be undone.
+fm-dlg-delete-body-mixed = Are you sure you want to delete { $folders } (including contents) and { $files }? This action cannot be undone.
 fm-dlg-delete-title = Confirm Delete
 fm-dlg-delete = Delete
 fm-dlg-rename-title = Rename
