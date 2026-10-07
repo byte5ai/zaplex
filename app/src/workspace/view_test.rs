@@ -5936,6 +5936,206 @@ fn conflicting_remote_restore_degrades_duplicate_without_persisting_its_identity
     });
 }
 
+/// Opens a daemon-backed tab on `conn` and claims `binding` for its surface.
+#[cfg(unix)]
+fn add_claimed_daemon_tab(
+    workspace: &mut Workspace,
+    conn: warp_core::SessionId,
+    binding: &DaemonPtyIdentity,
+    ctx: &mut ViewContext<Workspace>,
+) -> (ViewHandle<PaneGroup>, DaemonPtyClaimOwner) {
+    let (group, _, terminal_view) = add_adopted_daemon_tab(workspace, conn, ctx);
+    let owner = DaemonPtyClaimOwner {
+        terminal_view_id: Some(terminal_view.id()),
+        connection_session_id: conn,
+        terminal_view: Some(terminal_view.downgrade()),
+    };
+    assert!(matches!(
+        crate::app_state::claim_daemon_pty(binding.clone(), owner.clone(), ctx),
+        DaemonPtyClaimOutcome::Claimed
+    ));
+    (group, owner)
+}
+
+#[cfg(unix)]
+fn hidden_owner_test_route() -> remote_server::transport::DaemonRuntimeRoute {
+    remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn reopening_a_pty_owned_by_an_undo_closed_tab_restores_that_tab() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let conn = warp_core::SessionId::from(905u64);
+        let open_conn = warp_core::SessionId::from(906u64);
+        let route = hidden_owner_test_route();
+        let binding = daemon_adoption_key("daemon-undo-closed-tab", &route, "pty-closed", 9);
+        let open_binding = daemon_adoption_key("daemon-undo-closed-tab", &route, "pty-open", 9);
+        workspace.update(&mut app, |workspace, ctx| {
+            let (closed_group, owner) = add_claimed_daemon_tab(workspace, conn, &binding, ctx);
+            let (_, open_owner) = add_claimed_daemon_tab(workspace, open_conn, &open_binding, ctx);
+            let tab_count = workspace.tabs.len();
+            let closed_index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == closed_group.id())
+                .unwrap();
+            workspace.remove_tab(closed_index, true, true, ctx);
+
+            assert_eq!(workspace.tabs.len(), tab_count - 1);
+            assert!(UndoCloseStack::as_ref(ctx).is_pane_group_tab_in_stack(closed_group.id()));
+            assert!(UndoCloseStack::as_ref(ctx)
+                .has_closed_tab_with_terminal_view(owner.terminal_view_id.unwrap(), ctx));
+            assert!(!UndoCloseStack::as_ref(ctx)
+                .has_closed_tab_with_terminal_view(open_owner.terminal_view_id.unwrap(), ctx));
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .and_then(|claim| claim.terminal_view_id),
+                owner.terminal_view_id,
+                "a tab inside its Undo Close grace period still owns the PTY"
+            );
+
+            assert!(workspace.focus_existing_adopted_daemon_session(&binding, None, ctx));
+
+            assert_eq!(workspace.tabs.len(), tab_count);
+            assert!(!UndoCloseStack::as_ref(ctx).is_pane_group_tab_in_stack(closed_group.id()));
+            assert_eq!(workspace.active_tab_pane_group().id(), closed_group.id());
+            let pane = closed_group
+                .as_ref(ctx)
+                .daemon_connection_pane(conn, ctx)
+                .expect("the reopened tab shows the live connection again");
+            assert_eq!(closed_group.as_ref(ctx).focused_pane_id(ctx), pane);
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .and_then(|claim| claim.terminal_view_id),
+                owner.terminal_view_id
+            );
+        });
+        crate::app_state::release_daemon_pty_claim_for_connection(conn);
+        crate::app_state::release_daemon_pty_claim_for_connection(open_conn);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn sidebar_open_retires_a_pty_owner_no_tab_can_show() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let conn = warp_core::SessionId::from(907u64);
+        let adopt_conn = warp_core::SessionId::from(908u64);
+        let route = hidden_owner_test_route();
+        let binding = daemon_adoption_key("daemon-orphaned-owner", &route, "pty-orphaned", 11);
+        let (orphaned_group, owner) = workspace.update(&mut app, |workspace, ctx| {
+            let (group, owner) = add_claimed_daemon_tab(workspace, conn, &binding, ctx);
+            assert!(
+                workspace.focus_existing_adopted_daemon_session(&binding, None, ctx),
+                "an owner shown by a tab is focused, never retired"
+            );
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .map(|claim| claim.connection_session_id),
+                Some(conn)
+            );
+            // Drop the tab without closing its panes while this test keeps the
+            // pane group alive: the surface and its claim outlive every tab.
+            let index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == group.id())
+                .unwrap();
+            workspace.remove_tab(index, false, false, ctx);
+            (group, owner)
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(orphaned_group
+                .as_ref(ctx)
+                .holds_terminal_view(owner.terminal_view_id.unwrap(), ctx));
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .map(|claim| claim.connection_session_id),
+                Some(conn),
+                "the orphaned surface is alive, so its claim still looks live"
+            );
+
+            assert!(!workspace.focus_existing_adopted_daemon_session(&binding, None, ctx));
+
+            assert!(crate::app_state::daemon_pty_claim(&binding, ctx).is_none());
+            let reservation = DaemonPtyClaimOwner {
+                terminal_view_id: None,
+                connection_session_id: adopt_conn,
+                terminal_view: None,
+            };
+            assert!(matches!(
+                crate::app_state::claim_daemon_pty(binding.clone(), reservation, ctx),
+                DaemonPtyClaimOutcome::Claimed
+            ));
+        });
+        crate::app_state::release_daemon_pty_claim_for_connection(conn);
+        crate::app_state::release_daemon_pty_claim_for_connection(adopt_conn);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn retry_claim_takes_over_only_from_an_unreachable_owner() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let conn = warp_core::SessionId::from(909u64);
+        let retry_conn = warp_core::SessionId::from(910u64);
+        let route = hidden_owner_test_route();
+        let binding = daemon_adoption_key("daemon-retry-takeover", &route, "pty-retry", 12);
+        let reservation = DaemonPtyClaimOwner {
+            terminal_view_id: None,
+            connection_session_id: retry_conn,
+            terminal_view: None,
+        };
+        let orphaned_group = workspace.update(&mut app, |workspace, ctx| {
+            let (group, _) = add_claimed_daemon_tab(workspace, conn, &binding, ctx);
+            assert!(matches!(
+                workspace.claim_daemon_pty_retiring_unreachable_owner(
+                    binding.clone(),
+                    reservation.clone(),
+                    ctx,
+                ),
+                DaemonPtyClaimOutcome::Existing(existing) if existing.connection_session_id == conn
+            ));
+            let index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == group.id())
+                .unwrap();
+            workspace.remove_tab(index, false, false, ctx);
+            group
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(matches!(
+                workspace.claim_daemon_pty_retiring_unreachable_owner(
+                    binding.clone(),
+                    reservation.clone(),
+                    ctx,
+                ),
+                DaemonPtyClaimOutcome::Claimed
+            ));
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .map(|claim| claim.connection_session_id),
+                Some(retry_conn)
+            );
+        });
+        drop(orphaned_group);
+        crate::app_state::release_daemon_pty_claim_for_connection(conn);
+        crate::app_state::release_daemon_pty_claim_for_connection(retry_conn);
+    });
+}
+
 #[cfg(unix)]
 #[test]
 fn listed_daemon_adoption_requires_complete_matching_handshake_identity() {

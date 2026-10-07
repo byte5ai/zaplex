@@ -200,6 +200,66 @@ impl UndoCloseStack {
         }
     }
 
+    /// Returns true if a closed tab in the stack still holds the given terminal view.
+    #[cfg(unix)]
+    pub fn has_closed_tab_with_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+        ctx: &AppContext,
+    ) -> bool {
+        self.closed_tab_position_with_terminal_view(terminal_view_id, ctx)
+            .is_some()
+    }
+
+    /// Removes the closed tab that holds the given terminal view from the stack
+    /// and hands it back for restoration, e.g. to surface a remote PTY that is
+    /// still owned by a tab within its grace period. The workspace is returned
+    /// weak: the caller may be that very workspace, mid-update.
+    #[cfg(unix)]
+    pub fn take_closed_tab_with_terminal_view(
+        &mut self,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<(WeakViewHandle<Workspace>, usize, TabData)> {
+        let position = self.closed_tab_position_with_terminal_view(terminal_view_id, ctx)?;
+        let removed_item = self.stack.remove(position);
+        removed_item.expiry_data.task_handle.abort();
+        match removed_item.closed_item {
+            ClosedItem::Tab {
+                workspace,
+                tab_index,
+                data,
+            } => Some((workspace, tab_index, data)),
+            closed_item @ (ClosedItem::Window(_) | ClosedItem::Pane { .. }) => {
+                closed_item.discard(ctx);
+                None
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn closed_tab_position_with_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+        ctx: &AppContext,
+    ) -> Option<usize> {
+        self.stack
+            .iter()
+            .position(|undo_data| match &undo_data.closed_item {
+                ClosedItem::Tab { data, .. } => {
+                    let pane_group = &data.pane_group;
+                    // A tab whose window has closed since can be neither read nor
+                    // restored here; its window entry owns it now.
+                    ctx.view_with_id::<PaneGroup>(pane_group.window_id(ctx), pane_group.id())
+                        .is_some()
+                        && pane_group
+                            .as_ref(ctx)
+                            .holds_terminal_view(terminal_view_id, ctx)
+                }
+                ClosedItem::Window(_) | ClosedItem::Pane { .. } => false,
+            })
+    }
+
     /// Handles a window being closed, adding the necessary data to the undo
     /// stack.
     pub fn handle_window_closed(&mut self, data: ClosedWindowData, ctx: &mut ModelContext<Self>) {
