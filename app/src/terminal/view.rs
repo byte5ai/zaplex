@@ -10289,6 +10289,13 @@ impl TerminalView {
                 // start nor close the pane.
                 let remote_restore_cancelled =
                     self.remote_input_phase == Some(RemoteInputPhase::Cancelled);
+                // A daemon-backed pane that ends before its shell bootstrapped
+                // lost its connection, not its shell start: the remote readiness
+                // notice already explains the failure and offers Retry, so the
+                // local shell-start banner (which blames the bootstrap script)
+                // would be wrong and redundant.
+                let daemon_startup_failure =
+                    self.remote_input_session_id.is_some() && !self.is_login_shell_bootstrapped;
                 if self.remote_input_phase.is_some() {
                     self.set_remote_input_phase(
                         RemoteInputPhase::Failed,
@@ -10301,7 +10308,7 @@ impl TerminalView {
                 }
 
                 // If the pty spawn has failed, we've already inserted a banner.
-                if !self.pty_spawn_failed && !remote_restore_cancelled {
+                if !self.pty_spawn_failed && !remote_restore_cancelled && !daemon_startup_failure {
                     let shell_detail = self.shell_detail.take().unwrap_or("shell".to_owned());
                     self.insert_shell_process_terminated_banner(
                         shell_terminated_banner::TerminationType::Premature {
