@@ -141,6 +141,17 @@ fn parse_byobu_screen_sessions(bytes: &[u8]) -> Result<Vec<MultiplexerSessionInf
     Ok(sessions)
 }
 
+/// Whether a failed tmux scan only means that no tmux server is running, the
+/// normal state on a host without tmux sessions. tmux reports a stale socket
+/// as `no server running on <path>` and a missing socket as
+/// `error connecting to <path> (No such file or directory)`; it does not
+/// localize that `strerror` text.
+fn tmux_reports_no_server(detail: &str) -> bool {
+    detail.contains("no server running on")
+        || (detail.contains("error connecting to")
+            && detail.contains("(No such file or directory)"))
+}
+
 fn tmux_server_is_byobu(output: &Output) -> bool {
     output.status.success()
         && std::str::from_utf8(&output.stdout)
@@ -177,7 +188,7 @@ pub async fn discover_multiplexer_sessions() -> MultiplexerSessionList {
         }
         Ok(output) => {
             let detail = output_text(&output);
-            if !detail.contains("no server running on") {
+            if !tmux_reports_no_server(&detail) {
                 warnings.push(if detail.is_empty() {
                     "tmux session scan failed".to_string()
                 } else {

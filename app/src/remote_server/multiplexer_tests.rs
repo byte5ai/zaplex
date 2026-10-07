@@ -72,3 +72,27 @@ fn backend_file_accepts_only_known_literal_values() {
         None
     );
 }
+
+#[test]
+fn tmux_scan_treats_a_missing_server_as_no_sessions() {
+    // tmux 3.x with no socket file (no server ever started on the host).
+    assert!(tmux_reports_no_server(
+        "error connecting to /tmp/tmux-1000/default (No such file or directory)"
+    ));
+    // A stale socket whose server is gone.
+    assert!(tmux_reports_no_server(
+        "no server running on /tmp/tmux-1000/default"
+    ));
+}
+
+#[test]
+fn tmux_scan_keeps_real_failures_as_warnings() {
+    for detail in [
+        "error connecting to /tmp/tmux-1000/default (Permission denied)",
+        "server exited unexpectedly",
+        "unknown option -- F",
+        "",
+    ] {
+        assert!(!tmux_reports_no_server(detail), "{detail:?}");
+    }
+}
