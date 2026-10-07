@@ -1939,6 +1939,80 @@ fn test_background_blocks_finished() {
     }
 }
 
+/// A bootstrapped block list wide enough that the test commands fit on one row.
+fn new_wide_bootstrapped_block_list() -> BlockList {
+    let block_sizes = BlockSize {
+        size: SizeInfo::new_without_font_metrics(10, 120),
+        ..test_utils::block_size()
+    };
+    new_bootstrapped_block_list(
+        Some(block_sizes),
+        None,
+        ChannelEventListener::new_for_test(),
+    )
+}
+
+#[test]
+fn test_replayed_in_band_command_echo_is_not_visible() {
+    let mut block_list = new_wide_bootstrapped_block_list();
+    let command = "warp_run_generator_command 1791414087539893 'compgen -c'";
+
+    // Replayed PTY output: the shell echoes the in-band command, but the client
+    // never started the active block for it (no
+    // `start_active_block_for_in_band_command`), so the echo is classified as
+    // background output.
+    input_string(&mut block_list, command);
+    block_list.carriage_return();
+    block_list.linefeed();
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+    assert!(block_list.background_block_mut().is_some());
+
+    block_list.preexec(PreexecValue {
+        command: command.to_owned(),
+    });
+    assert!(block_list.background_block_mut().is_none());
+    assert!(block_list.active_block().is_in_band_command_block());
+
+    command_finished_and_precmd(&mut block_list);
+
+    let agent_view_state = block_list.agent_view_state();
+    for block in block_list.blocks() {
+        let contains_generator = block.command_to_string().contains(command)
+            || block
+                .output_grid()
+                .contents_to_string(false, None)
+                .contains(command);
+        assert!(
+            !contains_generator || block.should_hide_block(agent_view_state),
+            "in-band command must not be visible in block {:?}",
+            block.index()
+        );
+    }
+}
+
+#[test]
+fn test_in_band_preexec_keeps_unrelated_background_output() {
+    let mut block_list = new_wide_bootstrapped_block_list();
+    let command = "warp_run_generator_command 1791414087539893 'compgen -c'";
+
+    // Output of a background job, not the echo of the in-band command.
+    input_string(&mut block_list, "[1]+  Done                    sleep 1");
+    block_list.carriage_return();
+    block_list.linefeed();
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+
+    block_list.preexec(PreexecValue {
+        command: command.to_owned(),
+    });
+
+    let background_output = block_list
+        .background_block_mut()
+        .expect("unrelated background output must be kept")
+        .output_grid()
+        .contents_to_string(false, None);
+    assert!(background_output.contains("[1]+  Done                    sleep 1"));
+}
+
 #[test]
 fn test_interleaves_background_with_gaps() {
     let mut block_list =

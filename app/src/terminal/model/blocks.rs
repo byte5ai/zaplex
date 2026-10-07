@@ -54,6 +54,7 @@ use super::image_map::StoredImageMetadata;
 use super::kitty::{KittyAction, KittyResponse};
 use super::rich_content::RichContentType;
 use super::secrets::RespectObfuscatedSecrets;
+use super::session::command_executor;
 use super::{ansi::InputBufferValue, block::SerializedAIMetadata};
 
 use super::selection::ScrollDelta;
@@ -1558,6 +1559,43 @@ impl BlockList {
             Some(block)
         } else {
             None
+        }
+    }
+
+    /// Removes the shell's echo of an in-band command if it was classified as
+    /// background output.
+    ///
+    /// Live in-band commands are written only after
+    /// [`Self::start_active_block_for_in_band_command`] has started the active
+    /// block, so the shell's echo lands in that hidden block. Replayed PTY output
+    /// (e.g. a daemon session re-attach) carries no such client-side mark: the
+    /// echo arrives while the active block is not started, becomes background
+    /// output, and would otherwise stay visible in the block list.
+    ///
+    /// Only a live, unfinished background block whose entire trimmed content is
+    /// exactly the echoed command line is removed. Any other background output is
+    /// left untouched.
+    fn remove_echoed_in_band_command(&mut self, command: &str) {
+        let command = command.trim();
+        if command.is_empty() {
+            return;
+        }
+        let Some(background_block) = self.background_block_mut() else {
+            return;
+        };
+        let contents = background_block
+            .output_grid()
+            .contents_to_string_with_secrets_unobfuscated(
+                false, /* include_escape_sequences */
+                None,  /* max_rows */
+            );
+        let is_only_echoed_command = contents
+            .trim_end()
+            .strip_suffix(command)
+            .is_some_and(|preceding| preceding.trim().is_empty());
+        if is_only_echoed_command {
+            log::debug!("Removing echoed in-band command from background output");
+            self.remove_background_block();
         }
     }
 
@@ -3855,6 +3893,13 @@ impl ansi::Handler for BlockList {
         // matters for user input.
         if self.is_bootstrapping_precmd_done() {
             EarlyOutput::preexec(self);
+        }
+
+        // In-band commands must never be visible. If their echo ended up as
+        // background output (replayed PTY output without the client-side
+        // in-band mark), drop it; the active block is hidden by its own preexec.
+        if command_executor::is_in_band_command(&data.command) {
+            self.remove_echoed_in_band_command(&data.command);
         }
 
         delegate_to_block!(self.preexec(data));
