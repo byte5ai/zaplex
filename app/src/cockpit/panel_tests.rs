@@ -643,3 +643,21 @@ fn directory_title_never_repeats_the_project_name() {
         "a distinct directory is the session title on its own"
     );
 }
+
+#[test]
+fn identical_titles_are_never_shortened() {
+    let title = "vault-curator-inbox-2026-10-06-0300";
+    assert_eq!(shared_prefix_cut(&[title, title]), None);
+    assert_eq!(
+        shared_prefix_cut(&["nightly-sync", "nightly-sync-2026-10-06"]),
+        None,
+        "a title that ends inside the shared part has nothing left to show"
+    );
+}
+
+#[test]
+fn session_name_repeating_the_project_falls_back_to_its_branch() {
+    let mut named = tree_agent("a", "/work/proj", Some("feat/x"), SessionState::Active);
+    named.name = "proj".into();
+    assert_eq!(session_title(&named, "proj").as_deref(), Some("feat/x"));
+}

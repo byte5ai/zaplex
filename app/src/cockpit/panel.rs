@@ -504,20 +504,20 @@ fn is_title_separator(c: char) -> bool {
 /// when nothing beyond the project's name identifies the session; the title
 /// never repeats the project name.
 fn session_title(session: &SessionSnapshot, project_name: &str) -> Option<String> {
-    let own = [
+    [
         Some(session.name.as_str()),
         session.branch.as_deref(),
         session.worktree.as_deref(),
     ]
     .into_iter()
     .flatten()
-    .find(|value| !value.trim().is_empty())
-    .map(str::to_string);
-    let title = own.or_else(|| {
+    .find(|value| !value.trim().is_empty() && *value != project_name)
+    .map(str::to_string)
+    .or_else(|| {
         (project_directory_label(project_name, &session.cwd) != project_name)
             .then(|| directory_name(&session.cwd))
-    })?;
-    (title != project_name).then_some(title)
+    })
+    .filter(|title| title != project_name)
 }
 
 /// Where a separator-bounded prefix shared by all sibling titles ends. The cut
@@ -540,6 +540,11 @@ fn shared_prefix_cut(titles: &[&str]) -> Option<usize> {
     }
     while !first.is_char_boundary(common) {
         common -= 1;
+    }
+    // A title that ends inside the shared part has no distinguishing rest
+    // (identical titles included), so nothing may be dimmed away.
+    if titles.iter().any(|title| title.len() <= common) {
+        return None;
     }
     let mut cut = first[..common].rfind(is_title_separator)? + 1;
     while titles
