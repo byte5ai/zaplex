@@ -234,15 +234,21 @@ The previous static illustrations are superseded, not alternative approved layou
 
 31. **A tab is a pane container, not a host.** Terminal panes for local and different remote hosts
     may coexist with File Manager and account-detail panes in one tab. No automatic host group or
-    global feature tab is added. A favorite-host click still opens a new tab; a pane-local split is
-    the explicit path for adding a session to the current tab.
+    global feature tab is added. A favorite-host click in the `+` menu still opens a new tab; a
+    pane-local split, or dragging an existing tab into the visible tab, is the explicit path for
+    adding a session to the current tab.
 
-32. **Pane-local split launch is explicit.** The initiating pane offers Right and Down followed by
-    the existing registered hosts and Local. The captured target is the initiating tab, pane,
+32. **One launch menu for tabs and panes.** `+` and all four split directions (Left, Right, Up,
+    Down) open the same launch menu: Terminal (local), New agent… (Cockpit enabled), the favorite
+    hosts, then a "More hosts" submenu holding exactly the registered hosts that are not favorites.
+    Tab-only entries (tab configs, Docker sandbox, worktree config, reopen closed session) appear
+    only in the `+` menu. From a split, every entry targets the captured initiating tab, pane,
     direction, and stable host reference; a later focus change cannot redirect it. Cancel creates
     nothing. A valid selection creates exactly one session at that position and focuses usable
     input only after readiness. Same-host launch may inherit its working directory; cross-host
-    launch uses the destination profile and never reinterprets a foreign path.
+    launch uses the destination profile and never reinterprets a foreign path. New agent… from a
+    split binds account, launch intent, and prompt prefill to the new pane and refuses a
+    multi-account batch with a notice. See `docs/ui/pane-launch-and-tab-join.html`.
 
 33. **Terminal identity is short, real, and pane-local.** The automatic pane title is
     `Host · project-or-directory`, with full host/path available accessibly. Missing metadata uses
@@ -255,8 +261,12 @@ The previous static illustrations are superseded, not alternative approved layou
 34. **Pane geometry preserves session identity.** A sole pane fills the available workspace.
     Splitting affects only the chosen pane. Dragging a pane header to a target edge moves that
     existing pane left, right, above, or below without opening a connection, PTY, or agent. Moving
-    to another tab remains supported. Invalid or cancelled drops leave the layout intact, and
-    file drag, text selection, splitter resize, and header-button clicks are not pane moves.
+    to another tab remains supported. Dragging an inactive tab out of the tab bar onto a pane of
+    the visible tab inserts all of its panes, with their layout, at the indicated edge; the source
+    tab closes and no connection, PTY, or agent restarts. Tabs activate on click so the visible tab
+    stays visible while another tab is dragged. Invalid or cancelled drops leave the layout
+    intact, and file drag, text selection, splitter resize, and header-button clicks are not pane
+    moves.
 
 35. **Focus and restore are exact.** Each tab retains its last valid focused pane. Closing, moving,
     reconnecting, and restoring preserve layout, host/daemon/PTY/generation identity, working

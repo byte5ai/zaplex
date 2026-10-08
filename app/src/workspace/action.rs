@@ -159,6 +159,21 @@ pub enum WorkspaceAction {
     OpenSshTerminalByNode {
         node_id: String,
     },
+    /// Launch-menu choice from a pane split: open a local terminal at the split
+    /// target captured when the split launch menu opened.
+    SplitLaunchLocal,
+    /// Launch-menu choice from a pane split: open a registered host at the
+    /// captured split target, resolving the connection by its `node_id`.
+    SplitLaunchHost {
+        node_id: String,
+    },
+    /// Launch-menu choice from a pane split: open the Spawn-Karte whose single
+    /// launch lands at the captured split target instead of a new tab.
+    /// `registry_node_id`/`host` pre-scope the card like [`Self::OpenSpawnCard`].
+    SplitLaunchSpawnCard {
+        registry_node_id: Option<String>,
+        host: Option<String>,
+    },
     /// Open an SFTP file-manager pane for a registered SSH host, resolving the
     /// connection by its stable registry node id. Dispatched by the visible
     /// "Files" action on a Conductor host node.
@@ -1057,6 +1072,8 @@ impl WorkspaceAction {
             | AddTerminalTab { .. }
             | OpenSshTerminal { .. }
             | OpenSshTerminalByNode { .. }
+            | SplitLaunchLocal
+            | SplitLaunchHost { .. }
             | OpenSftpPaneByNode { .. }
             | OpenLocalFileManager { .. }
             | ToggleSshManager
@@ -1262,6 +1279,7 @@ impl WorkspaceAction {
             | CreateReviewPr { .. }
             | LaunchAgent { .. }
             | OpenSpawnCard { .. }
+            | SplitLaunchSpawnCard { .. }
             | RunCockpitPaletteTarget { .. }
             | OpenFileInEditor { .. }
             | OpenReadOnlyTextInEditor { .. }

@@ -28,7 +28,7 @@ on:
       dmg_tag:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
         type: string
-        default: v1.1.1
+        default: v1.2.0
       fast:
         description: "Debug-Profil für Mac-App und Linux-Daemon. Nur für schnelle Entwicklerprüfung; für Abnahme-DMGs ausgeschaltet lassen."
         type: boolean
