@@ -491,6 +491,52 @@ fn cancelled_remote_restore_teardown_shows_no_shell_failure_banner() {
     });
 }
 
+/// A daemon-backed pane whose connection fails before the remote shell
+/// bootstrapped exits its terminal model. The remote failure notice (with
+/// Retry) must stay the only explanation; no shell-start failure banner may be
+/// added that blames the bootstrap script for a network problem.
+#[test]
+fn daemon_connect_failure_before_bootstrap_shows_no_shell_start_banner() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let session = warp_core::SessionId::from(943u64);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.is_login_shell_bootstrapped = false;
+            view.set_remote_input_phase(RemoteInputPhase::Transport, Some(session), ctx);
+            view.show_remote_session_error(
+                "ssh: connect to host 192.0.2.10 port 22: Network is unreachable".to_string(),
+                Some(session),
+                ctx,
+            );
+            view.set_remote_input_phase(RemoteInputPhase::Failed, Some(session), ctx);
+        });
+        let rich_content_before = terminal.read(&app, |view, _| view.rich_content_views.len());
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(
+                &ModelEvent::Exit {
+                    reason: crate::terminal::model::terminal_model::ExitReason::PtyDisconnected,
+                },
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, _| {
+            assert_eq!(view.rich_content_views.len(), rich_content_before);
+            assert!(view
+                .inline_banners_state
+                .shell_process_terminated_banner
+                .is_none());
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Failed));
+            assert_eq!(
+                view.remote_session_error.as_deref(),
+                Some("ssh: connect to host 192.0.2.10 port 22: Network is unreachable")
+            );
+        });
+    });
+}
+
 #[test]
 fn remote_notice_tone_separates_failures_from_ended_sessions() {
     assert_eq!(
