@@ -2416,6 +2416,21 @@ impl PaneGroup {
         self.panes_of::<TerminalPane>()
             .any(|pane| pane.terminal_view(ctx).id() == terminal_view_id)
     }
+
+    /// Like [`Self::contains_terminal_view`], but also matches a view stacked
+    /// below the active one, so a covered surface is never mistaken for an
+    /// orphan. Panes retained for Undo Close are included.
+    #[cfg(unix)]
+    pub(crate) fn holds_terminal_view(&self, terminal_view_id: EntityId, ctx: &AppContext) -> bool {
+        self.panes_of::<TerminalPane>().any(|pane| {
+            pane.pane_stack(ctx)
+                .as_ref(ctx)
+                .entries()
+                .iter()
+                .any(|(_, view)| view.id() == terminal_view_id)
+        })
+    }
+
     /// Iterate over the code editors in this pane group.
     pub fn code_panes<'a>(
         &'a self,

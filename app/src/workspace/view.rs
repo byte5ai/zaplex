@@ -12068,8 +12068,14 @@ impl Workspace {
                         connection_session_id: plan.connection_session_id,
                         terminal_view: None,
                     };
-                    if let DaemonPtyClaimOutcome::Existing(existing) =
-                        claim_daemon_pty(binding_key.clone(), reservation, ctx)
+                    // An owner no tab can show must not turn Retry into a
+                    // degraded pane plus a dead-end toast.
+                    if let DaemonPtyClaimOutcome::Existing(existing) = self
+                        .claim_daemon_pty_retiring_unreachable_owner(
+                            binding_key.clone(),
+                            reservation,
+                            ctx,
+                        )
                     {
                         self.degrade_conflicting_remote_restore(
                             pane_group, pane_id, &pane_uuid, draft, &existing, ctx,
@@ -13743,7 +13749,9 @@ impl Workspace {
     }
 
     /// Focuses an already-open exact daemon binding. Agent-backed bindings still
-    /// revalidate the foreground agent before moving focus.
+    /// revalidate the foreground agent before moving focus. Returns false when
+    /// the caller must open the PTY itself: nothing holds it, or its owner was
+    /// unreachable and has just been retired.
     #[cfg(unix)]
     fn focus_existing_adopted_daemon_session(
         &mut self,
@@ -13754,6 +13762,9 @@ impl Workspace {
         let Some(owner) = daemon_pty_claim(binding_key, ctx) else {
             return false;
         };
+        if self.retire_unreachable_daemon_claim_owner(&owner, ctx) {
+            return false;
+        }
         if let Some(expected_agent_binding) = expected_agent_binding {
             self.validate_and_focus_adopted_agent_session(
                 binding_key.clone(),
@@ -13843,6 +13854,41 @@ impl Workspace {
                 return true;
             }
         }
+        // A tab closed within its Undo Close grace period keeps the claim and
+        // its live connection (only a final close releases them). Reopen that
+        // tab instead of dead-ending on a surface no tab shows.
+        let closed_tab = UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
+            stack.take_closed_tab_with_terminal_view(terminal_view_id, ctx)
+        });
+        if let Some((closed_in, tab_index, tab_data)) = closed_tab {
+            // This workspace is mid-update, so its weak handle cannot be
+            // upgraded; restore into it directly.
+            let restored = if closed_in.id() == ctx.view_id() {
+                self.restore_closed_tab(tab_index, tab_data, ctx);
+                let focused = focus_in_workspace(self, ctx);
+                Some((self.window_id, focused))
+            } else if let Some(workspace) = closed_in.upgrade(ctx) {
+                let focused = workspace.update(ctx, |workspace, ctx| {
+                    workspace.restore_closed_tab(tab_index, tab_data, ctx);
+                    focus_in_workspace(workspace, ctx)
+                });
+                Some((workspace.window_id(ctx), focused))
+            } else {
+                // Its workspace cannot take the tab back right now; keep it
+                // available to Undo Close rather than losing it.
+                UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
+                    stack.handle_tab_closed(closed_in, tab_index, tab_data, ctx);
+                });
+                None
+            };
+            if let Some((window_id, focused)) = restored {
+                ctx.dispatch_global_action("workspace:save_app", ());
+                if focused {
+                    ctx.windows().show_window_and_focus_app(window_id);
+                    return true;
+                }
+            }
+        }
         self.toast_stack.update(ctx, |stack, ctx| {
             stack.add_persistent_toast(
                 DismissibleToast::error(crate::t!("workspace-remote-pty-already-open").to_string()),
@@ -13850,6 +13896,91 @@ impl Workspace {
             );
         });
         false
+    }
+
+    /// Whether the surface owning a daemon PTY claim can still be shown: it is
+    /// held by a tab of an open window (also covered, stacked or retained for
+    /// Undo Close) or by a tab Undo Close can reopen. An unbound reservation
+    /// belongs to a surface that is still being opened and counts as reachable.
+    #[cfg(unix)]
+    fn daemon_claim_owner_is_reachable(
+        &self,
+        owner: &DaemonPtyClaimOwner,
+        ctx: &AppContext,
+    ) -> bool {
+        let Some(terminal_view_id) = owner.terminal_view_id else {
+            return true;
+        };
+        let held_by_tab = |workspace: &Workspace| {
+            workspace.tabs.iter().any(|tab| {
+                tab.pane_group
+                    .as_ref(ctx)
+                    .holds_terminal_view(terminal_view_id, ctx)
+            })
+        };
+        if held_by_tab(self)
+            || UndoCloseStack::as_ref(ctx).has_closed_tab_with_terminal_view(terminal_view_id, ctx)
+        {
+            return true;
+        }
+        WorkspaceRegistry::as_ref(ctx)
+            .all_workspaces(ctx)
+            .into_iter()
+            .filter(|(window_id, _)| *window_id != self.window_id)
+            .any(|(_, workspace)| match workspace.try_as_ref(ctx) {
+                Some(workspace) => held_by_tab(workspace),
+                // A workspace that is mid-update cannot be inspected; never
+                // treat its surfaces as orphans.
+                None => true,
+            })
+    }
+
+    /// Detaches a claim owner that no tab can show any more (e.g. a window kept
+    /// for Undo Close or a leaked surface): releases its claim and drops its
+    /// connection so the PTY can be opened again. The daemon keeps the PTY
+    /// running; only this client's attachment ends. Returns whether the owner
+    /// was retired.
+    #[cfg(unix)]
+    fn retire_unreachable_daemon_claim_owner(
+        &mut self,
+        owner: &DaemonPtyClaimOwner,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if self.daemon_claim_owner_is_reachable(owner, ctx) {
+            return false;
+        }
+        let connection_session_id = owner.connection_session_id;
+        log::warn!(
+            "daemon PTY claim of connection {connection_session_id:?} has no reachable surface; \
+             detaching it"
+        );
+        if let Some(terminal_view_id) = owner.terminal_view_id {
+            release_daemon_pty_claim_for_terminal_view(terminal_view_id);
+        }
+        release_daemon_pty_claim_for_connection(connection_session_id);
+        RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.deregister_session(connection_session_id, false, ctx)
+        });
+        true
+    }
+
+    /// Claims a daemon PTY like [`claim_daemon_pty`], first retiring an
+    /// existing owner that no tab can show any more.
+    #[cfg(unix)]
+    fn claim_daemon_pty_retiring_unreachable_owner(
+        &mut self,
+        identity: DaemonPtyIdentity,
+        owner: DaemonPtyClaimOwner,
+        ctx: &mut ViewContext<Self>,
+    ) -> DaemonPtyClaimOutcome<DaemonPtyClaimOwner> {
+        match claim_daemon_pty(identity.clone(), owner.clone(), ctx) {
+            DaemonPtyClaimOutcome::Existing(existing)
+                if self.retire_unreachable_daemon_claim_owner(&existing, ctx) =>
+            {
+                claim_daemon_pty(identity, owner, ctx)
+            }
+            outcome => outcome,
+        }
     }
 
     /// Revalidates an agent row against a fresh daemon inventory snapshot before
