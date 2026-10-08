@@ -1,9 +1,9 @@
 use chrono::{TimeZone as _, Utc};
 use serde_json::json;
 use zaplex_cockpit::{
-    Account, AccountStatus, AccountUsage, AgentInventoryStatus, CockpitSnapshot, FleetTree,
-    HostAvailability, HostNode, ProjectNode, Provider, ScanHealth, SessionSnapshot, SessionState,
-    TaskItem, TaskState, TaskStatus, UsageProvenance, WindowTotals,
+    Account, AccountStatus, AccountUsage, AgentInventoryStatus, Attention, CockpitSnapshot,
+    FleetTree, HostAvailability, HostNode, ProjectNode, Provider, ScanHealth, SessionSnapshot,
+    SessionState, TaskItem, TaskState, TaskStatus, UsageProvenance, WindowTotals,
 };
 
 use crate::control::ControlAuth;
@@ -19,6 +19,8 @@ fn generated_at() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 20, 10, 0, 0).unwrap()
 }
 
+/// Fixture rows model the running app's export: a Waiting row carries the
+/// unseen-turn attention the UI stamps on sessions Zaplex can open.
 fn session(id: &str, state: SessionState) -> SessionSnapshot {
     SessionSnapshot {
         session_id: id.to_string(),
@@ -50,6 +52,9 @@ fn session(id: &str, state: SessionState) -> SessionSnapshot {
         }),
         last_activity: generated_at(),
         pid: 4242,
+        awaiting_input: false,
+        turn_id: None,
+        attention: (state == SessionState::Waiting).then_some(Attention::UnseenTurn),
     }
 }
 
@@ -246,6 +251,53 @@ fn account_ids_use_the_full_private_identity_without_exposing_it() {
     assert_ne!(document.accounts[0].id, document.accounts[1].id);
     assert!(!encoded.contains("/home/one"));
     assert!(!encoded.contains("/home/two"));
+}
+
+/// The runtime export stays complete for scripts, but its attention list is
+/// the UI's: a finished turn already seen, or a session Zaplex cannot open,
+/// is listed as a live waiting session without an attention entry.
+#[test]
+fn runtime_attention_follows_the_ui_verdict_not_the_discovery_state() {
+    let snapshot = CockpitSnapshot {
+        accounts: vec![account_with(Vec::new())],
+        generated_at: generated_at(),
+        health: ScanHealth::Loaded,
+    };
+    let mut seen = session("seen-turn", SessionState::Waiting);
+    seen.attention = None;
+    let mut prompt = session("open-prompt", SessionState::Monitor);
+    prompt.attention = Some(Attention::Decision);
+    let fleet = FleetTree {
+        hosts: vec![host(
+            "this machine",
+            true,
+            None,
+            AgentInventoryStatus::Ready,
+            vec![seen, prompt],
+        )],
+        needs_me: 1,
+    };
+
+    let document = CockpitSnapshotDocument::from_runtime(&snapshot, &fleet, &[]);
+    let sessions = &document
+        .accounts
+        .iter()
+        .find(|account| account.host_id == "local")
+        .unwrap()
+        .sessions;
+
+    assert_eq!(
+        sessions.len(),
+        2,
+        "the export lists every discovered session"
+    );
+    assert!(sessions.iter().any(|session| session.state == "waiting"));
+    assert_eq!(document.attention.len(), 1);
+    let monitor = sessions
+        .iter()
+        .find(|session| session.state == "monitor")
+        .unwrap();
+    assert_eq!(document.attention[0].session_id, monitor.id);
 }
 
 #[test]

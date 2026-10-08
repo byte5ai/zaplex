@@ -180,6 +180,9 @@ struct RolloutInfo {
     last_ts: Option<DateTime<Utc>>,
     /// The last turn-level event handed control back to the user.
     ended: bool,
+    /// Identity of the turn that `ended`: the closing event's `turn_id`, or
+    /// its timestamp when the event carries none. `None` while a turn runs.
+    turn_id: Option<String>,
     /// A real turn was observed (a lifecycle or usage line) —
     /// guards against listing an empty/aborted rollout as a session.
     has_turn: bool,
@@ -309,6 +312,99 @@ pub(crate) fn session_id_from_path(path: &Path) -> String {
 
 /// A uuid is five dash-separated groups (`8-4-4-4-12`).
 const UUID_GROUPS: usize = 5;
+
+/// Bound on the processes inspected for open rollouts in one scan.
+#[cfg(target_os = "linux")]
+const MAX_ROLLOUT_LINK_PROCESSES: usize = 4_096;
+
+/// Whether a NUL-separated command line belongs to a Codex agent process (the
+/// native `codex` binary, which holds the rollout open; the npm launcher only
+/// spawns it).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn is_codex_cmdline(cmdline: &[u8]) -> bool {
+    cmdline
+        .split(|byte| *byte == 0)
+        .find(|argument| !argument.is_empty())
+        .and_then(|executable| executable.rsplit(|byte| *byte == b'/').next())
+        .is_some_and(|basename| basename == b"codex")
+}
+
+/// Session ids of the Codex rollouts among a process's open file targets.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn rollout_session_ids<'a>(
+    open_files: impl IntoIterator<Item = &'a Path>,
+) -> Vec<String> {
+    let mut session_ids: Vec<String> = open_files
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
+        })
+        .map(session_id_from_path)
+        .filter(|session_id| valid_session_id(session_id))
+        .collect();
+    session_ids.sort();
+    session_ids.dedup();
+    session_ids
+}
+
+/// The Zaplex terminal link of every live local Codex session, keyed by the
+/// session id of the rollout its process holds open.
+///
+/// Codex records no pid, so the process is found through that open file
+/// (Linux procfs, same user only, bounded). A session without an entry has no
+/// process evidence: it may have exited, or the platform cannot tell — callers
+/// treat that as unknown, never as external.
+#[cfg(target_os = "linux")]
+pub fn live_rollout_terminal_links() -> HashMap<String, crate::process_identity::TerminalLink> {
+    let mut links: HashMap<String, crate::process_identity::TerminalLink> = HashMap::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return links;
+    };
+    for entry in entries.flatten().take(MAX_ROLLOUT_LINK_PROCESSES) {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(cmdline) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        if !is_codex_cmdline(&cmdline) {
+            continue;
+        }
+        let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {
+            continue;
+        };
+        let targets: Vec<PathBuf> = fds
+            .flatten()
+            .filter_map(|fd| std::fs::read_link(fd.path()).ok())
+            .collect();
+        let session_ids = rollout_session_ids(targets.iter().map(PathBuf::as_path));
+        if session_ids.is_empty() {
+            continue;
+        }
+        let link = crate::process_identity::terminal_link_for_pid(pid, None);
+        for session_id in session_ids {
+            let merged = match links.remove(&session_id) {
+                Some(previous) => previous.merge(link.clone()),
+                None => link.clone(),
+            };
+            links.insert(session_id, merged);
+        }
+    }
+    links
+}
+
+/// Platforms without procfs cannot see which process holds a rollout; every
+/// Codex session's terminal link stays unknown.
+#[cfg(not(target_os = "linux"))]
+pub fn live_rollout_terminal_links() -> HashMap<String, crate::process_identity::TerminalLink> {
+    HashMap::new()
+}
 
 fn valid_session_id(session_id: &str) -> bool {
     !session_id.is_empty()
@@ -957,6 +1053,7 @@ impl RolloutAccumulator {
                     }) {
                     Some("task_started") => {
                         self.info.ended = false;
+                        self.info.turn_id = None;
                         self.info.has_turn = true;
                         self.active_turn_id = v
                             .get("payload")
@@ -967,6 +1064,7 @@ impl RolloutAccumulator {
                     }
                     Some("task_complete" | "turn_aborted") => {
                         self.info.ended = true;
+                        self.info.turn_id = closing_turn_id(v);
                         self.info.has_turn = true;
                         self.active_turn_id = None;
                     }
@@ -979,6 +1077,7 @@ impl RolloutAccumulator {
                             && self.active_turn_id.is_some()
                         {
                             self.info.ended = true;
+                            self.info.turn_id = closing_turn_id(v);
                             self.info.has_turn = true;
                             self.active_turn_id = None;
                         }
@@ -1002,6 +1101,22 @@ impl RolloutAccumulator {
         info.task_state = self.tasks.state();
         info
     }
+}
+
+/// Stable identity of the turn a closing event ends: its `turn_id`, else the
+/// event's own timestamp (older rollouts), else `None`.
+fn closing_turn_id(v: &Value) -> Option<String> {
+    v.get("payload")
+        .and_then(|payload| payload.get("turn_id"))
+        .and_then(Value::as_str)
+        .filter(|turn_id| !turn_id.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            v.get("timestamp")
+                .and_then(Value::as_str)
+                .filter(|timestamp| !timestamp.is_empty())
+                .map(|timestamp| format!("at:{timestamp}"))
+        })
 }
 
 /// State from the distilled signals, mirroring Claude's ended→Waiting /
@@ -1099,12 +1214,13 @@ fn snapshot_of(
         return Ok(None);
     }
     let project = crate::project::resolve_project(Path::new(&info.cwd));
+    let state = force_state.unwrap_or_else(|| state_of(info.ended));
     Ok(Some(SessionSnapshot {
         session_id: info.session_id,
         cwd: info.cwd,
         // Codex rollouts carry no session name.
         name: String::new(),
-        state: force_state.unwrap_or_else(|| state_of(info.ended)),
+        state,
         provider: Provider::Codex,
         model: info.model,
         effort: info.effort,
@@ -1127,6 +1243,13 @@ fn snapshot_of(
         last_activity: info.last_ts.or(Some(mtime)).unwrap_or(now),
         // Codex records no pid — guardrail signalling can't target it.
         pid: 0,
+        // Rollouts persist no approval/question events, so an open Codex
+        // prompt is only known through the Zaplex terminal hook.
+        awaiting_input: false,
+        turn_id: (state == SessionState::Waiting)
+            .then_some(info.turn_id)
+            .flatten(),
+        attention: None,
     }))
 }
 

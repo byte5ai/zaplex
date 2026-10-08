@@ -261,3 +261,19 @@ fn supported_features_omits_session_host_on_non_unix() {
         FEATURE_MULTIPLEXER_INVENTORY_V1
     ));
 }
+
+#[cfg(unix)]
+#[test]
+fn session_takeover_is_negotiated_by_both_peers() {
+    // A daemon only takes a session over for a client that can render the
+    // displaced view's notice, so both sides must advertise the same version.
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_SESSION_TAKEOVER_V1
+    ));
+    assert!(has_feature(
+        &supported_client_features(),
+        FEATURE_SESSION_TAKEOVER_V1
+    ));
+    assert!(!has_feature(&[], FEATURE_SESSION_TAKEOVER_V1));
+}

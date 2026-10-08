@@ -173,6 +173,10 @@ pub fn render_context_menu(
             | SftpBrowserAction::SelectEntry(_)
             | SftpBrowserAction::ToggleMark(_)
             | SftpBrowserAction::MarkAndAdvance
+            | SftpBrowserAction::MarkAndStep { .. }
+            | SftpBrowserAction::MarkRangeTo(_)
+            | SftpBrowserAction::MarkAll
+            | SftpBrowserAction::ClearMarks
             | SftpBrowserAction::SortBy(_)
             | SftpBrowserAction::ToggleHidden
             | SftpBrowserAction::UploadFile

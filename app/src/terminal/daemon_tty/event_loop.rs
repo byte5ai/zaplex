@@ -14,7 +14,9 @@ use async_channel::Receiver;
 use parking_lot::FairMutex;
 use remote_server::{
     client::{ClientError, RemoteServerClient},
-    proto::{AgentLaunchRoute, AgentPtyBindingStatus, AgentSessionIdentity, SessionAttached},
+    proto::{
+        AgentLaunchRoute, AgentPtyBindingStatus, AgentSessionIdentity, ErrorCode, SessionAttached,
+    },
 };
 use std::borrow::Cow;
 use std::io::{self, Write};
@@ -25,7 +27,7 @@ use warpui::{Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WeakVi
 use zaplex_remote_session::types::{
     FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_PTY_BINDING_V2,
     FEATURE_LOGICAL_OPEN_ATTEMPT_V1, FEATURE_LOGICAL_OPEN_ID_V1, FEATURE_MANAGED_AGENT_FLEET_V1,
-    FEATURE_MANAGED_OPEN_ATTACH_V1, FEATURE_STARTUP_COMMAND_ACK,
+    FEATURE_MANAGED_OPEN_ATTACH_V1, FEATURE_STARTUP_COMMAND_ACK, SESSION_NOTICE_ATTACH_TAKEN_OVER,
 };
 
 use super::terminal_manager::OpenSessionParams;
@@ -77,6 +79,59 @@ fn account_route_is_compatible(
 
 const ATTACH_PARSE_CHUNK_BYTES: usize = 64 * 1024;
 const INITIAL_ATTACH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Backoff between automatic reattach attempts after a transient refusal.
+///
+/// A daemon without session takeover refuses a reattach while the previous,
+/// half-open connection is still registered. That connection only goes away
+/// once sshd's keepalive (`ClientAliveInterval` x `ClientAliveCountMax`,
+/// commonly 10-15 minutes) tears its proxy down, so the schedule spans about
+/// 16 minutes before the pane falls back to the manual Retry action.
+const ATTACH_RETRY_DELAYS_SECS: [u64; 10] = [2, 4, 8, 15, 30, 60, 120, 180, 240, 300];
+
+/// Daemon wording for a reattach refused because another registered
+/// connection still owns the PTY. Daemons without takeover only report it as
+/// text, so this is the only signal available for them.
+const ATTACH_HELD_BY_LIVE_CONNECTION: &str = "is already attached to a live connection";
+
+/// Delay before automatic retry number `retry` (1-based), or `None` once the
+/// bounded retry budget is spent.
+fn attach_retry_delay(retry: u32) -> Option<Duration> {
+    let index = usize::try_from(retry.checked_sub(1)?).ok()?;
+    ATTACH_RETRY_DELAYS_SECS
+        .get(index)
+        .copied()
+        .map(Duration::from_secs)
+}
+
+/// Attach attempts shown to the user: the first attach plus every retry.
+fn attach_attempt_total() -> u32 {
+    ATTACH_RETRY_DELAYS_SECS.len() as u32 + 1
+}
+
+fn attach_error_held_by_live_connection(error: &ClientError) -> bool {
+    matches!(
+        error,
+        ClientError::ServerError {
+            code: ErrorCode::InvalidRequest,
+            message,
+        } if message.contains(ATTACH_HELD_BY_LIVE_CONNECTION)
+    )
+}
+
+/// Whether a reattach failure may clear up on its own on the same transport.
+/// Every other rejection is authoritative and fails the pane immediately.
+fn attach_error_is_transient(error: &ClientError) -> bool {
+    matches!(error, ClientError::Timeout(_)) || attach_error_held_by_live_connection(error)
+}
+
+/// A remote shell that exited cleanly after the pane accepted input closes its
+/// pane like an exited local shell. Any other end, including a shell that quit
+/// before the pane ever became usable, is shown as a neutral ended state, never
+/// as a connection failure.
+fn remote_exit_closes_pane(exit_code: Option<i32>, input_was_ready: bool) -> bool {
+    exit_code == Some(0) && input_was_ready
+}
 
 struct PendingAttachReplay {
     bootstrap_preamble: Vec<u8>,
@@ -374,6 +429,22 @@ pub(crate) struct EventLoop {
     published_error_notices: Vec<String>,
     /// A startup failure may arrive before the terminal view has been bound.
     pending_error_notice: Option<String>,
+    /// Technical detail for `pending_error_notice`, shown secondary to it.
+    pending_error_detail: Option<String>,
+    /// `pending_error_notice` describes a remote shell that ended on its own,
+    /// not a connection failure.
+    pending_session_ended: bool,
+    /// A clean remote exit closes the pane once the view is bound.
+    pending_clean_exit_close: bool,
+    /// Automatic reattach retries spent on the current transport after
+    /// transient refusals. A replacement transport starts a fresh budget.
+    attach_retries: u32,
+    /// Token of the pending automatic retry timer. A replacement transport, a
+    /// successful attach, or a terminal state invalidates it.
+    attach_retry_scheduled: Option<u64>,
+    next_attach_retry_token: u64,
+    /// The pane accepted user input (Ready or Raw) at least once.
+    input_was_ready: bool,
     /// Whether a *terminal* end-state notice has already been surfaced — a clean
     /// `session ended` (`SessionExited`) or a `connection lost`
     /// (`SessionDisconnected` with no reconnect left). Guards against a second,
@@ -624,6 +695,20 @@ impl EventLoop {
                     ctx,
                 );
             }
+            // A newer generation-checked attach (another window or device)
+            // took this PTY over. Stay detached: retrying automatically here
+            // would steal it back and ping-pong between the two views.
+            RemoteServerManagerEvent::SessionNotice {
+                session_id,
+                pty_session_id,
+                kind,
+                ..
+            } if *session_id == me.connection_session_id
+                && me.is_our_session(pty_session_id)
+                && kind == SESSION_NOTICE_ATTACH_TAKEN_OVER =>
+            {
+                me.on_attach_taken_over(ctx);
+            }
             // The transport went away for good: a spontaneous drop with no
             // reconnect possible, or reconnect attempts exhausted (§9). A mere
             // blip never reaches here — it arrives as `SessionReconnected` and is
@@ -793,6 +878,13 @@ impl EventLoop {
             #[cfg(test)]
             published_error_notices: Vec::new(),
             pending_error_notice: None,
+            pending_error_detail: None,
+            pending_session_ended: false,
+            pending_clean_exit_close: false,
+            attach_retries: 0,
+            attach_retry_scheduled: None,
+            next_attach_retry_token: 0,
+            input_was_ready: false,
             terminated: false,
             report_bootstrap_boundary: false,
         }
@@ -815,6 +907,7 @@ impl EventLoop {
         }
         self.input_phase = phase;
         self.user_input_ready = matches!(phase, RemoteInputPhase::Ready | RemoteInputPhase::Raw);
+        self.input_was_ready |= self.user_input_ready;
         if let Some(terminal_view) = self
             .terminal_view
             .as_ref()
@@ -1157,6 +1250,82 @@ impl EventLoop {
         self.attach_in_flight = None;
     }
 
+    /// Schedules the next automatic reattach after a transient refusal and
+    /// shows its progress in the pane. Returns false once the bounded budget
+    /// is spent, leaving the final failure to the caller.
+    fn schedule_attach_retry(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if self.terminated {
+            return false;
+        }
+        let retry = self.attach_retries.saturating_add(1);
+        let Some(delay) = attach_retry_delay(retry) else {
+            return false;
+        };
+        self.attach_retries = retry;
+        self.next_attach_retry_token = self.next_attach_retry_token.wrapping_add(1);
+        let token = self.next_attach_retry_token;
+        self.attach_retry_scheduled = Some(token);
+        // The first attach was attempt 1, so the scheduled retry is `retry + 1`.
+        let attempt = retry + 1;
+        let total = attach_attempt_total();
+        self.show_attach_progress(
+            Some(crate::t!(
+                "terminal-daemon-attach-retrying",
+                attempt = attempt,
+                total = total
+            )),
+            ctx,
+        );
+        ctx.spawn(
+            async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+            move |me, (), ctx| {
+                if me.attach_retry_scheduled != Some(token) || me.terminated {
+                    return;
+                }
+                me.attach_retry_scheduled = None;
+                me.reattach(ctx);
+            },
+        );
+        true
+    }
+
+    /// Forgets automatic retry state. Called for a replacement transport (which
+    /// attaches immediately with a fresh budget) and after a successful attach.
+    fn reset_attach_retries(&mut self) {
+        self.attach_retries = 0;
+        self.attach_retry_scheduled = None;
+    }
+
+    fn show_attach_progress(&mut self, progress: Option<String>, ctx: &mut ModelContext<Self>) {
+        let Some(terminal_view) = self
+            .terminal_view
+            .as_ref()
+            .and_then(|terminal_view| terminal_view.upgrade(ctx))
+        else {
+            return;
+        };
+        let connection_session_id = self.connection_session_id;
+        terminal_view.update(ctx, |view, ctx| {
+            view.show_remote_session_progress(progress, Some(connection_session_id), ctx);
+        });
+    }
+
+    /// A newer attach took this PTY over. The view keeps its scrollback and
+    /// offers a manual reconnect, which would take the session back.
+    fn on_attach_taken_over(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.terminated {
+            return;
+        }
+        log::warn!(
+            "daemon_tty: PTY {:?} was taken over by another connection",
+            self.pty_session_id
+        );
+        self.write_notice(&crate::t!("terminal-daemon-attach-taken-over"), ctx);
+        self.abandon_failed_attach(ctx);
+    }
+
     /// On transport reconnect: re-attach to the still-running daemon session and
     /// replay everything produced while we were gone, reconstructing the grid.
     /// Falls back to opening the session if it was never opened (reconnect raced
@@ -1226,28 +1395,52 @@ impl EventLoop {
                 if !me.finish_attach_attempt(attempt) {
                     return;
                 }
-                if Self::attach_error_waits_for_reconnect(&err) {
-                    // A transport drop clears the old client's pending request
-                    // before the manager finishes reconnecting. Keep this loop
-                    // provisional; SessionReconnected starts a fresh attach.
-                    log::warn!("Session attach interrupted; waiting to retry: {err:?}");
-                } else {
-                    // A live connection will not emit SessionReconnected for a
-                    // timeout, malformed response, or authoritative rejection.
-                    // Fail visibly and release the provisional dedupe route.
-                    log::error!("Session attach failed: {err:?}");
-                    me.write_notice(
-                        &crate::t!("terminal-daemon-attach-failed", detail = err.to_string()),
-                        ctx,
-                    );
-                    me.abandon_failed_attach(ctx);
-                    if let Some(exit_code) = me.pending_exit.take() {
-                        me.awaiting_attach_snapshot = false;
-                        me.on_session_exited(exit_code, false, ctx);
-                    }
-                }
+                me.on_attach_error(err, ctx);
             }
         });
+    }
+
+    /// Handles a failed attach for the current attempt: wait for the
+    /// replacement transport, retry a transient refusal with bounded backoff,
+    /// or fail the pane with a readable summary and the raw error as detail.
+    fn on_attach_error(&mut self, err: ClientError, ctx: &mut ModelContext<Self>) {
+        if self.terminated {
+            // A late answer for a pane that already ended, failed, or was
+            // taken over must not add a second, contradictory notice.
+            return;
+        }
+        if Self::attach_error_waits_for_reconnect(&err) {
+            // A transport drop clears the old client's pending request
+            // before the manager finishes reconnecting. Keep this loop
+            // provisional; SessionReconnected starts a fresh attach.
+            log::warn!("Session attach interrupted; waiting to retry: {err:?}");
+            return;
+        }
+        if attach_error_is_transient(&err) && self.schedule_attach_retry(ctx) {
+            // The previous connection may still be registered on a daemon
+            // without takeover, or the answer was lost. Retry on the same
+            // transport instead of parking the pane until the user clicks Retry.
+            log::warn!(
+                "Session attach refused transiently; automatic retry {} scheduled: {err:?}",
+                self.attach_retries
+            );
+            return;
+        }
+        // A live connection will not emit SessionReconnected for a timeout,
+        // malformed response, or authoritative rejection. Fail visibly and
+        // release the provisional dedupe route.
+        log::error!("Session attach failed: {err:?}");
+        let summary = if attach_error_held_by_live_connection(&err) {
+            crate::t!("terminal-daemon-attach-held-exhausted")
+        } else {
+            crate::t!("terminal-daemon-attach-failed-summary")
+        };
+        self.write_notice_with_detail(&summary, err.to_string(), ctx);
+        self.abandon_failed_attach(ctx);
+        if let Some(exit_code) = self.pending_exit.take() {
+            self.awaiting_attach_snapshot = false;
+            self.on_session_exited(exit_code, false, ctx);
+        }
     }
 
     fn on_session_attached(
@@ -1259,6 +1452,10 @@ impl EventLoop {
         if self.terminated {
             return;
         }
+        if self.attach_retries > 0 {
+            self.show_attach_progress(None, ctx);
+        }
+        self.reset_attach_retries();
         if self.pty_session_id.as_deref() != Some(attached.session_id.as_str()) {
             log::error!(
                 "daemon_tty: rejected attach response for PTY {} (expected {:?})",
@@ -1562,6 +1759,11 @@ impl EventLoop {
         if self.terminated || !self.initial_attach_pending {
             return;
         }
+        if self.attach_retries > 0 {
+            // A transient refusal is being retried with its own bounded
+            // budget, which ends in either an attach or a visible failure.
+            return;
+        }
         self.write_notice(
             &crate::t!(
                 "terminal-daemon-initial-attach-timeout",
@@ -1575,6 +1777,17 @@ impl EventLoop {
     /// Finish a failed initial shell so its hidden bootstrap output becomes visible.
     /// An already bootstrapped session keeps its existing disconnect/reconnect UI.
     fn finish_failed_startup(&mut self, ctx: &mut ModelContext<Self>) {
+        self.latch_terminal_state(ctx);
+        self.set_input_phase(RemoteInputPhase::Failed, ctx);
+        let mut model = self.terminal_model.lock();
+        if !model.block_list().is_bootstrapped() {
+            model.exit(ExitReason::PtyDisconnected);
+        }
+    }
+
+    /// Drops all work that can no longer reach the remote PTY. Visible state is
+    /// left to the caller: a failure, an ended session, or a closing pane.
+    fn latch_terminal_state(&mut self, ctx: &mut ModelContext<Self>) {
         self.report_managed_launch_failed(
             crate::t!("terminal-daemon-managed-launch-failed").to_string(),
             ctx,
@@ -1587,13 +1800,9 @@ impl EventLoop {
         self.pending_attach_replay = None;
         self.pending_ready_notice = None;
         self.attach_in_flight = None;
+        self.reset_attach_retries();
         self.awaiting_managed_agent_binding = false;
         self.managed_open_identity = None;
-        self.set_input_phase(RemoteInputPhase::Failed, ctx);
-        let mut model = self.terminal_model.lock();
-        if !model.block_list().is_bootstrapped() {
-            model.exit(ExitReason::PtyDisconnected);
-        }
     }
 
     fn abandon_failed_attach(&mut self, ctx: &mut ModelContext<Self>) {
@@ -2377,10 +2586,17 @@ impl EventLoop {
             "Daemon session {:?} exited (code {exit_code:?})",
             self.pty_session_id
         );
-        // A clean exit is a terminal state: latch it so that if the transport
-        // later drops (a `SessionDisconnected` reaching this still-open tab) we
-        // don't append a contradictory "connection lost" line under this one.
-        self.terminated = true;
+        // An exit is a terminal state: latch it so that if the transport later
+        // drops (a `SessionDisconnected` reaching this still-open tab) we don't
+        // add a contradictory "connection lost" notice.
+        self.latch_terminal_state(ctx);
+        if remote_exit_closes_pane(exit_code, self.input_was_ready) {
+            // The user ended the shell (`exit`): close the pane like an exited
+            // local shell instead of presenting a failure with Retry.
+            self.pending_clean_exit_close = true;
+            self.publish_pending_error_notice(ctx);
+            return;
+        }
         let notice = match exit_code {
             Some(code) => crate::t!("terminal-daemon-session-ended-with-code", code = code),
             None => crate::t!("terminal-daemon-session-ended"),
@@ -2391,8 +2607,15 @@ impl EventLoop {
         } else {
             notice
         };
-        self.write_notice(&notice, ctx);
-        self.finish_failed_startup(ctx);
+        // A non-zero or signalled end is neither a connection failure nor
+        // retryable: the view offers a new session or closing the pane.
+        #[cfg(test)]
+        self.published_error_notices.push(notice.clone());
+        self.pending_error_notice = Some(notice);
+        self.pending_error_detail = None;
+        self.pending_session_ended = true;
+        self.publish_pending_error_notice(ctx);
+        self.set_input_phase(RemoteInputPhase::Failed, ctx);
     }
 
     /// A terminal transport loss with no auto-reconnect left (spontaneous drop
@@ -2421,6 +2644,24 @@ impl EventLoop {
         #[cfg(test)]
         self.published_error_notices.push(text.to_string());
         self.pending_error_notice = Some(text.to_string());
+        self.pending_error_detail = None;
+        self.pending_session_ended = false;
+        self.publish_pending_error_notice(ctx);
+    }
+
+    /// Like [`Self::write_notice`], with technical detail shown secondary to a
+    /// human-readable summary.
+    fn write_notice_with_detail(
+        &mut self,
+        summary: &str,
+        detail: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        #[cfg(test)]
+        self.published_error_notices.push(summary.to_string());
+        self.pending_error_notice = Some(summary.to_string());
+        self.pending_error_detail = Some(detail);
+        self.pending_session_ended = false;
         self.publish_pending_error_notice(ctx);
     }
 
@@ -2432,12 +2673,26 @@ impl EventLoop {
         else {
             return;
         };
+        let connection_session_id = self.connection_session_id;
+        if std::mem::take(&mut self.pending_clean_exit_close) {
+            terminal_view.update(ctx, |view, ctx| {
+                view.close_after_clean_remote_exit(Some(connection_session_id), ctx);
+            });
+            return;
+        }
         let Some(message) = self.pending_error_notice.take() else {
             return;
         };
-        let connection_session_id = self.connection_session_id;
+        let detail = self.pending_error_detail.take();
+        let ended = std::mem::take(&mut self.pending_session_ended);
         terminal_view.update(ctx, |view, ctx| {
-            view.show_remote_session_error(message, Some(connection_session_id), ctx);
+            view.show_remote_session_failure(
+                message,
+                detail,
+                ended,
+                Some(connection_session_id),
+                ctx,
+            );
         });
     }
 
@@ -2720,6 +2975,7 @@ impl EventLoop {
         self.allow_startup_command_retry();
         self.allow_agent_binding_retry();
         self.allow_attach_retry();
+        self.reset_attach_retries();
         if self.pending_attach_replay.is_some() {
             self.reattach_after_replay = true;
         }

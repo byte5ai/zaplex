@@ -422,6 +422,11 @@ impl ActionButton {
         ctx.notify();
     }
 
+    #[cfg(test)]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
     pub fn set_label(&mut self, label: impl Into<Cow<'static, str>>, ctx: &mut ViewContext<Self>) {
         self.label = label.into();
         ctx.notify();

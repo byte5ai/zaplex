@@ -1289,7 +1289,7 @@ impl CockpitPanel {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
             .with_child(Self::state_glyph(
-                session.state,
+                session.presented_state(),
                 true,
                 animate_waiting,
                 self.conductor_row_glyph_states
@@ -1345,7 +1345,7 @@ impl CockpitPanel {
         );
         let peek_host = host_label.to_owned();
         let peek_cwd = session.cwd.clone();
-        let session_state = session.state;
+        let session_state = session.presented_state();
         let task_state = session.task_state.clone();
         let relative = format_relative(session.last_activity, chrono::Utc::now());
         let activity = task_activity_label(task_state.as_ref(), &relative);

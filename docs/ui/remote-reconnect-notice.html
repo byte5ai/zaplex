@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="ui-spec-route" content="/native/terminal-remote-readiness-notice">
+  <meta name="ui-spec-viewports" content="1280x2400,760x2400,400x4200">
+  <title>UI-Spezifikation — Hinweiskarte bei Remote-Wiederverbindung</title>
+  <script>
+    (function () {
+      var theme = new URLSearchParams(location.search).get("theme");
+      if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+  <style>
+    /* Theme-Rollen. Die konkreten Farbwerte illustrieren nur Rollenbeziehungen (#spec A6). */
+    :root {
+      color-scheme: light dark;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --bg: #eceef2;
+      --surface-1: #ffffff;
+      --surface-2: #f1f2f5;
+      --outline: #d2d6dd;
+      --ui-error: #c42f48;
+      --text-main: #1c2028;
+      --text-sub: #5d6575;
+      --accent: #6656dc;
+      --accent-text: #ffffff;
+      --terminal-bg: #fbfbfd;
+      --terminal-fg: #2b303a;
+      --pane-pad: 16px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0b0d10;
+        --surface-1: #191c22;
+        --surface-2: #232730;
+        --outline: #363c48;
+        --ui-error: #ef6c78;
+        --text-main: #eef1f6;
+        --text-sub: #9aa3b2;
+        --accent: #8b7cf6;
+        --accent-text: #ffffff;
+        --terminal-bg: #111318;
+        --terminal-fg: #bec5d1;
+      }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0b0d10;
+      --surface-1: #191c22;
+      --surface-2: #232730;
+      --outline: #363c48;
+      --ui-error: #ef6c78;
+      --text-main: #eef1f6;
+      --text-sub: #9aa3b2;
+      --accent: #8b7cf6;
+      --accent-text: #ffffff;
+      --terminal-bg: #111318;
+      --terminal-fg: #bec5d1;
+    }
+    :root[data-theme="light"] { color-scheme: light; }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; color: var(--text-main); background: var(--bg); }
+    #spec, #copy, #mockups { max-width: 1220px; margin: 0 auto 22px; }
+    #spec, #copy {
+      padding: 16px 18px;
+      border: 1px solid var(--outline);
+      border-radius: 12px;
+      background: var(--surface-1);
+    }
+    h1 { margin: 0 0 8px; font-size: 18px; }
+    #spec > p, #copy > p { margin: 0 0 12px; color: var(--text-sub); }
+    .spec-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 16px 24px; }
+    h2 { margin: 0 0 6px; color: var(--text-sub); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    #spec ul { margin: 0; padding-left: 16px; color: var(--text-sub); font-size: 12px; }
+    #spec li { margin-bottom: 7px; }
+    #spec li > code:first-child { color: var(--text-main); font-weight: 600; }
+    code { font: 0.95em ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    a { color: var(--accent); }
+    code.nowrap { white-space: nowrap; }
+    .backoff { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+    .backoff span { padding: 0 5px; border: 1px solid var(--outline); border-radius: 4px; font-size: 11px; font-variant-numeric: tabular-nums; }
+
+    /* Mockups */
+    #mockups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 540px), 1fr)); gap: 20px; }
+    .viewport { min-width: 0; overflow: hidden; border: 1px solid var(--outline); border-radius: 12px; background: var(--surface-1); }
+    .viewport-label { padding: 7px 12px; border-bottom: 1px solid var(--outline); color: var(--text-sub); font-size: 11px; }
+    .viewport-label strong { color: var(--text-main); font-weight: 600; }
+    .viewport.before { grid-column: 1 / -1; }
+    .viewport.before .viewport-label { color: var(--ui-error); }
+    .caption { margin: 0; padding: 8px 12px 10px; border-top: 1px solid var(--outline); color: var(--text-sub); font-size: 11px; }
+
+    .pane { background: var(--terminal-bg); color: var(--terminal-fg); }
+    .output, .input-line { font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .output { padding: 12px var(--pane-pad) 6px; overflow-wrap: anywhere; }
+    .output .prompt { font-weight: 700; }
+    .input-line {
+      display: flex; gap: 8px; align-items: center;
+      margin: 0 var(--pane-pad); padding: 6px 8px;
+      border-top: 1px solid var(--outline);
+      color: var(--text-sub); opacity: .55;
+    }
+    .input-line .lock { margin-left: auto; font: 11px system-ui, sans-serif; }
+
+    /* Die Hinweiskarte: App-Chrome, UI-Schrift, eine Karte (#spec N1). */
+    .notice-slot { padding: 8px var(--pane-pad); }
+    .notice {
+      display: flex; gap: 8px; align-items: flex-start;
+      padding: 10px 12px;
+      border: 1px solid var(--outline);
+      border-radius: 6px;
+      background: var(--surface-2);
+      color: var(--text-main);
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+    .notice.error { border-color: var(--ui-error); }
+    .notice .icon { flex: 0 0 16px; width: 16px; height: 16px; margin-top: 1px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .notice.error .icon { color: var(--ui-error); }
+    .notice .icon.info { color: var(--text-sub); }
+    .notice-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+    .notice p { margin: 0; }
+    .detail { color: var(--text-sub); font-size: 11.5px; overflow-wrap: anywhere; }
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 3px 9px; border: 1px solid transparent; border-radius: 4px;
+      font-family: inherit; font-size: 12px; line-height: 1.5; color: var(--text-main); background: transparent; cursor: default;
+    }
+    .btn.primary { color: var(--accent-text); background: var(--accent); }
+    .btn.naked { border-color: var(--outline); }
+    .btn kbd { font: 10.5px ui-monospace, SFMono-Regular, Menlo, monospace; opacity: .72; }
+
+    /* Fortschritt: Zaplex-Glyph + schimmernder Ladetext, kein Icon (#spec N2). */
+    .shimmer {
+      background: linear-gradient(90deg, var(--text-sub) 0%, var(--text-sub) 35%, var(--text-main) 50%, var(--text-sub) 65%, var(--text-sub) 100%);
+      background-size: 250% 100%;
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      animation: shimmer 1.8s linear infinite;
+    }
+    .glyph { color: var(--accent); margin-right: 4px; }
+    @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+    @media (prefers-reduced-motion: reduce) { .shimmer { animation: none; background: none; color: var(--text-sub); } }
+
+    /* Vorher (ersetzt, nicht normativ) */
+    .old-error { padding: 0 var(--pane-pad) 4px; color: var(--ui-error); font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    .old-actions { display: flex; gap: 8px; padding: 18px var(--pane-pad) 12px; }
+    .strike-note { color: var(--ui-error); }
+
+    /* Copy-Tabelle */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--outline); text-align: left; vertical-align: top; }
+    th { color: var(--text-sub); font-size: 11px; font-weight: 600; }
+    td:first-child code { color: var(--text-main); }
+    tr.existing td { color: var(--text-sub); }
+    .tag { margin-left: 4px; padding: 0 4px; border: 1px solid var(--outline); border-radius: 3px; color: var(--text-sub); font-size: 10px; }
+
+    body:has(.viewport:target) #spec,
+    body:has(.viewport:target) #copy,
+    body:has(.viewport:target) .viewport:not(:target) { display: none; }
+    .viewport:target { grid-column: 1 / -1; }
+    @media (max-width: 640px) {
+      body { padding: 10px; }
+      :root { --pane-pad: 12px; }
+      thead { display: none; }
+      table, tbody, tr, td { display: block; }
+      tr { padding: 6px 0; border-bottom: 1px solid var(--outline); }
+      td { padding: 2px 0; border: 0; }
+      td[data-label]::before { content: attr(data-label) " · "; color: var(--text-sub); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+    }
+  </style>
+</head>
+<body>
+  <section id="spec">
+    <h1>UI-Spezifikation — Hinweiskarte bei Remote-Wiederverbindung</h1>
+    <p>Gilt für daemon-gestützte Remote-Terminal-Panes, deren Bereitschaftshinweis eine Wiederverbindung, einen Fehler,
+      eine Übernahme durch ein anderes Fenster oder das Ende der Session meldet. Ergänzt
+      <a href="cockpit-sidebar-connections.html#spec"><code>#spec R1</code> der verbindlichen Referenz</a>, ersetzt sie nicht.
+      Dieses Dokument ist kein Nachweis nativer Abnahme. Farbschema folgt dem System; <code class="nowrap">?theme=light</code> bzw.
+      <code class="nowrap">?theme=dark</code> erzwingt eine Variante (nur Vorschau).</p>
+    <div class="spec-grid">
+      <div>
+        <h2>Darstellung</h2>
+        <ul>
+          <li><code>#spec N1</code> Der Hinweis ist App-Chrome, niemals Terminalausgabe: UI-Schrift, Icon, Fläche <code>surface_2</code>,
+            1-px-Rahmen in der Rolle <code>outline</code> (bei Fehlern <code>ui_error_color</code>), Radius 6 px, Innenabstand 12 px horizontal
+            und 10 px vertikal, 16-px-Icon mit 8 px Abstand, 4 px zwischen Meldung, Detail und Aktionen. Meldung, Detail und Aktionen stehen in
+            <em>einer</em> Karte unter dem Eingabebereich, mit dem linken/rechten Terminal-Innenabstand und 8 px vertikal. Sie wird nie in das
+            Terminal-Grid geschrieben und nutzt nie die Terminalschrift. Nur vorhandene Theme-Rollen
+            (<a href="cockpit-sidebar-connections.html#spec"><code>#spec A6</code></a>).</li>
+          <li><code>#spec N7</code> „Erneut versuchen“ und „Neue Session“ nutzen den Primärstil (Akzentfläche) mit Tastenhinweis Enter;
+            „Abbrechen“ und „Schließen“ den sekundären/naked Stil mit Esc.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Wiederverbindung</h2>
+        <ul>
+          <li><code>#spec N2</code> Vorübergehende Attach-Ablehnungen (eine ältere Verbindung ist am Daemon noch registriert oder die
+            Attach-Antwort lief in ein Timeout) werden automatisch mit begrenztem Backoff wiederholt. Der ursprüngliche Attach ist Versuch 1,
+            danach folgen Wartezeiten von
+            <span class="backoff"><span>2</span><span>4</span><span>8</span><span>15</span><span>30</span><span>60</span><span>120</span><span>180</span><span>240</span><span>300 s</span></span>
+            — insgesamt 11 Versuche in rund 16 Minuten, bemessen auf sshd <code>ClientAliveInterval × ClientAliveCountMax</code>.
+            Die Karte zeigt „Verbindung wird wiederhergestellt… (Versuch n/11)“; ein manuelles „Erneut versuchen“ erscheint erst nach
+            ausgeschöpftem Budget. Ein Transport-Reconnect (SSH-Verbindung verloren) wiederholt der Connection-Manager für persistente Sessions
+            mit eigenem begrenztem Backoff; die Karte zeigt dann „Verbindung zur Remote-Sitzung wird wiederhergestellt…“. Fortschrittszustände
+            haben kein Icon und nutzen den vorhandenen schimmernden Zaplex-Ladetext in UI-Schrift.</li>
+          <li><code>#spec N3</code> Daemons mit der ausgehandelten Fähigkeit <code>session-takeover-v1</code> übergeben die Session sofort an die
+            neue, generationsgeprüfte Verbindung, statt abzulehnen. Die verdrängte Ansicht erhält den Hinweis <code>attach-taken-over</code>, zeigt die
+            Übernahme-Karte und wiederholt <strong>nie</strong> automatisch (kein Ping-Pong zwischen zwei Fenstern). Ihr manuelles „Erneut versuchen“
+            holt die Session zurück (Übernahme wie bei tmux/mosh).</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Fehler, Ende, Abbruch</h2>
+        <ul>
+          <li><code>#spec N4</code> Ein endgültiger Fehler zeigt eine verständliche Zusammenfassung. Der rohe Serverfehler ist nur sekundäres
+            Detail („Details: …“) in der kleineren Rolle für Nebentext.</li>
+          <li><code>#spec N5</code> Exit-Code 0 (Benutzer tippt <code>exit</code>) schließt die Pane — und den Tab, wenn es die letzte Pane war —
+            wie bei einer lokalen Shell; kein Hinweis, kein Retry. Das gilt, sobald die Pane einmal eingabebereit war (Ready oder einfacher
+            Terminalmodus); eine Shell, die schon vorher mit 0 endet, zeigt wie unten die neutrale Ende-Karte, damit die Pane nicht kommentarlos
+            verschwindet. Ein Exit-Code ungleich 0 oder ein Signal zeigt eine neutrale Ende-Karte
+            „Session beendet (Exit-Code 1).“ mit primär „Neue Session“ (frische Shell auf demselben Host) und „Schließen“; nie „Erneut versuchen“.</li>
+          <li><code>#spec N6</code> „Abbrechen“ ersetzt nie die Pane, startet nie eine lokale Shell, zeigt nie das Startfehler-Banner
+            („Shell-Prozess wurde vorzeitig beendet!“) und behält Pane- und Tabtitel (konsistent mit
+            <a href="cockpit-sidebar-connections.html#spec"><code>#spec R1</code></a>). Bei einer beendeten Session ist die Sekundäraktion
+            „Schließen“ und schließt die Pane.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <main id="mockups">
+    <article class="viewport" id="retrying">
+      <div class="viewport-label"><strong>a</strong> · Automatischer Wiederholversuch · <code>#spec N2</code></div>
+      <div class="pane">
+        <div class="output">
+          <div><span class="prompt">developer@buildnode:~/app$</span> cargo test -p server</div>
+          <div>test result: ok. 214 passed; 0 failed; 3 ignored</div>
+        </div>
+        <div class="input-line" aria-disabled="true"><span>$</span><span class="lock">Eingabe bis Bereitschaft gesperrt</span></div>
+        <div class="notice-slot">
+          <div class="notice" role="status">
+            <div class="notice-body">
+              <p class="shimmer"><span class="glyph">⚡︎</span>Verbindung wird wiederhergestellt… (Versuch 2/11)</p>
+              <div class="actions"><button class="btn naked" type="button">Abbrechen <kbd>esc</kbd></button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Fortschritt ohne Icon und ohne Retry; Zähler läuft bis 11/11.</p>
+    </article>
+
+    <article class="viewport" id="transport">
+      <div class="viewport-label"><strong>b</strong> · Transport-Reconnect (SSH verloren) · <code>#spec N2</code></div>
+      <div class="pane">
+        <div class="output">
+          <div><span class="prompt">developer@worknode:~/svc$</span> tail -f log/app.log</div>
+          <div>2026-10-06T09:14:02Z INFO request served path=/health status=200</div>
+        </div>
+        <div class="input-line" aria-disabled="true"><span>$</span><span class="lock">Eingabe bis Bereitschaft gesperrt</span></div>
+        <div class="notice-slot">
+          <div class="notice" role="status">
+            <div class="notice-body">
+              <p class="shimmer"><span class="glyph">⚡︎</span>Verbindung zur Remote-Sitzung wird wiederhergestellt…</p>
+              <div class="actions"><button class="btn naked" type="button">Abbrechen <kbd>esc</kbd></button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Backoff des Connection-Managers; kein Versuchszähler.</p>
+    </article>
+
+    <article class="viewport" id="failed">
+      <div class="viewport-label"><strong>c</strong> · Fehlgeschlagen nach ausgeschöpftem Budget · <code>#spec N2</code> <code>#spec N4</code></div>
+      <div class="pane">
+        <div class="output">
+          <div><span class="prompt">developer@buildnode:~/app$</span> git status --short</div>
+          <div> M src/lib.rs</div>
+        </div>
+        <div class="input-line" aria-disabled="true"><span>$</span><span class="lock">Eingabe bis Bereitschaft gesperrt</span></div>
+        <div class="notice-slot">
+          <div class="notice error" role="alert">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 14.6 13.6H1.4Z"/><path d="M8 6v3.6M8 11.6v.1"/></svg>
+            <div class="notice-body">
+              <p>Die Remote-Sitzung ist noch an eine ältere Verbindung gebunden, die sich noch nicht abgemeldet hat. In ein paar Minuten erneut versuchen.</p>
+              <p class="detail">Details: Server error (InvalidRequest): session 31ebbf1a-… is already attached to a live connection; detach it before handoff</p>
+              <div class="actions">
+                <button class="btn primary" type="button">Erneut versuchen <kbd>↵</kbd></button>
+                <button class="btn naked" type="button">Abbrechen <kbd>esc</kbd></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Zusammenfassung zuerst, Rohfehler nur als „Details: …“ in Nebentextrolle.</p>
+    </article>
+
+    <article class="viewport" id="taken-over">
+      <div class="viewport-label"><strong>d</strong> · Von anderem Fenster/Gerät übernommen · <code>#spec N3</code></div>
+      <div class="pane">
+        <div class="output">
+          <div><span class="prompt">developer@testnode:~$</span> htop</div>
+          <div>[detached]</div>
+        </div>
+        <div class="input-line" aria-disabled="true"><span>$</span><span class="lock">Eingabe gesperrt</span></div>
+        <div class="notice-slot">
+          <div class="notice error" role="alert">
+            <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 14.6 13.6H1.4Z"/><path d="M8 6v3.6M8 11.6v.1"/></svg>
+            <div class="notice-body">
+              <p>Diese Sitzung ist jetzt in einem anderen Fenster oder auf einem anderen Gerät geöffnet. Erneut verbinden, um sie hierher zurückzuholen.</p>
+              <div class="actions">
+                <button class="btn primary" type="button">Erneut versuchen <kbd>↵</kbd></button>
+                <button class="btn naked" type="button">Abbrechen <kbd>esc</kbd></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Kein automatischer Retry; „Erneut versuchen“ holt die Session zurück.</p>
+    </article>
+
+    <article class="viewport" id="ended">
+      <div class="viewport-label"><strong>e</strong> · Session beendet, Exit-Code ≠ 0 · <code>#spec N5</code></div>
+      <div class="pane">
+        <div class="output">
+          <div><span class="prompt">developer@worknode:~$</span> ./deploy.sh --dry-run</div>
+          <div>error: missing environment DEPLOY_TARGET</div>
+        </div>
+        <div class="input-line" aria-disabled="true"><span>$</span><span class="lock">Session beendet</span></div>
+        <div class="notice-slot">
+          <div class="notice" role="status">
+            <svg class="icon info" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.4"/><path d="M8 7.2v4M8 4.9v.1"/></svg>
+            <div class="notice-body">
+              <p>Session beendet (Exit-Code 1).</p>
+              <div class="actions">
+                <button class="btn primary" type="button">Neue Session <kbd>↵</kbd></button>
+                <button class="btn naked" type="button">Schließen <kbd>esc</kbd></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Neutraler Ton; Exit-Code 0 schließt die Pane ohne Karte.</p>
+    </article>
+
+    <article class="viewport" id="cancelled">
+      <div class="viewport-label"><strong>f</strong> · Wiederherstellung abgebrochen · <code>#spec N6</code></div>
+      <div class="pane">
+        <div class="output">
+          <div><span class="prompt">developer@buildnode:~/app$</span> make docs</div>
+          <div>docs/ built in 4.2 s</div>
+        </div>
+        <div class="input-line" aria-disabled="true"><span>$</span><span class="lock">Eingabe gesperrt</span></div>
+        <div class="notice-slot">
+          <div class="notice" role="status">
+            <svg class="icon info" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.4"/><path d="M8 7.2v4M8 4.9v.1"/></svg>
+            <div class="notice-body">
+              <p>Wiederherstellung der Remote-Sitzung abgebrochen.</p>
+              <div class="actions"><button class="btn primary" type="button">Erneut versuchen <kbd>↵</kbd></button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Pane und Titel bleiben; keine lokale Shell, kein Startfehler-Banner.</p>
+    </article>
+
+    <article class="viewport before" id="before">
+      <div class="viewport-label"><strong>Vorher</strong> · ersetzter Zustand · nicht normativ</div>
+      <div class="pane">
+        <div class="output">
+          <div><span class="prompt">developer@buildnode:~/app$</span> git status --short</div>
+          <div> M src/lib.rs</div>
+        </div>
+        <div class="old-error">Server error (InvalidRequest): session 31ebbf1a-… is already attached to a live connection; detach it before handoff</div>
+        <div class="old-actions">
+          <button class="btn primary" type="button">Erneut versuchen</button>
+          <button class="btn naked" type="button">Abbrechen</button>
+        </div>
+      </div>
+      <p class="caption"><span class="strike-note">Ersetzt:</span> rote Monospace-Zeile direkt unter der Host-Ausgabe, Buttons losgelöst darunter.
+        Zaplex-Meldung und Host-Ausgabe waren nicht unterscheidbar. Verbindlich ist die Karte aus <code>#spec N1</code>.</p>
+    </article>
+  </main>
+
+  <section id="copy">
+    <h1>Texte (EN/DE)</h1>
+    <p>Neue Schlüssel für diese Karte; bestehende Schlüssel sind zur Zuordnung der Mockups mit aufgeführt.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Schlüssel</th><th>EN</th><th>DE</th></tr></thead>
+        <tbody>
+          <tr><td><code>terminal-daemon-attach-retrying</code></td><td data-label="EN">Reconnecting to the remote session… (attempt { $attempt }/{ $total })</td><td data-label="DE">Verbindung wird wiederhergestellt… (Versuch { $attempt }/{ $total })</td></tr>
+          <tr><td><code>terminal-daemon-attach-held-exhausted</code></td><td data-label="EN">The remote session is still held by an earlier connection that has not signed off yet. Try again in a few minutes.</td><td data-label="DE">Die Remote-Sitzung ist noch an eine ältere Verbindung gebunden, die sich noch nicht abgemeldet hat. In ein paar Minuten erneut versuchen.</td></tr>
+          <tr><td><code>terminal-daemon-attach-failed-summary</code></td><td data-label="EN">Could not reconnect to the remote session.</td><td data-label="DE">Die Remote-Sitzung konnte nicht wieder verbunden werden.</td></tr>
+          <tr><td><code>terminal-daemon-attach-taken-over</code></td><td data-label="EN">This session is now open in another window or on another device. Reconnect to bring it back here.</td><td data-label="DE">Diese Sitzung ist jetzt in einem anderen Fenster oder auf einem anderen Gerät geöffnet. Erneut verbinden, um sie hierher zurückzuholen.</td></tr>
+          <tr><td><code>terminal-remote-notice-detail</code></td><td data-label="EN">Details: { $detail }</td><td data-label="DE">Details: { $detail }</td></tr>
+          <tr><td><code>terminal-remote-readiness-new-session</code></td><td data-label="EN">New session</td><td data-label="DE">Neue Session</td></tr>
+          <tr><td><code>terminal-remote-readiness-close</code></td><td data-label="EN">Close</td><td data-label="DE">Schließen</td></tr>
+          <tr class="existing"><td><code>terminal-remote-readiness-reconnecting</code><span class="tag">bestehend</span></td><td data-label="EN">Reconnecting to the remote session…</td><td data-label="DE">Verbindung zur Remote-Sitzung wird wiederhergestellt…</td></tr>
+          <tr class="existing"><td><code>terminal-remote-readiness-cancelled</code><span class="tag">bestehend</span></td><td data-label="EN">Remote session restore cancelled.</td><td data-label="DE">Wiederherstellung der Remote-Sitzung abgebrochen.</td></tr>
+          <tr class="existing"><td><code>terminal-remote-readiness-retry</code> / <code>-cancel</code><span class="tag">bestehend</span></td><td data-label="EN">Retry / Cancel</td><td data-label="DE">Erneut versuchen / Abbrechen</td></tr>
+          <tr class="existing"><td><code>terminal-daemon-session-ended-with-code</code><span class="tag">bestehend</span></td><td data-label="EN">Session ended (exit code { $code }).</td><td data-label="DE">Session beendet (Exit-Code { $code }).</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</body>
+</html>

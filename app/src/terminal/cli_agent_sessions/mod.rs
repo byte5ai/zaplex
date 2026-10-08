@@ -633,6 +633,19 @@ impl CLIAgentSessionsModel {
         matches.next().is_none().then_some(matched)
     }
 
+    /// Whether any Zaplex terminal on the given side (local or remote) hosts
+    /// this provider session id, whatever account route is bound to it. This
+    /// is ownership evidence only — it keeps a Zaplex-hosted agent visible in
+    /// the Cockpit — and never a routing target: focusing requires the exact,
+    /// account-checked [`Self::terminal_view_id_for_agent_session_matching_with_id`].
+    pub fn hosts_agent_session(&self, agent: CLIAgent, session_id: &str, is_remote: bool) -> bool {
+        self.sessions.values().any(|session| {
+            session.agent == agent
+                && session.is_remote() == is_remote
+                && session.session_context.session_id.as_deref() == Some(session_id)
+        })
+    }
+
     /// Returns `true` if the rich input editor is currently open for this terminal.
     pub fn is_input_open(&self, terminal_view_id: EntityId) -> bool {
         self.sessions

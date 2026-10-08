@@ -1,9 +1,12 @@
 //! The **"Offene Punkte" inbox** — the calm, in-app counterpart to the ambient
 //! Dock badge. Where the badge answers *"is there anything for me?"* with a
 //! single number, this modal answers *"what, exactly?"*: a prioritized,
-//! human-friendly to-do list of every agent across the whole fleet that is
-//! **waiting on you** (`SessionState::Waiting`), waiting-first, grouped by host
-//! and project.
+//! human-friendly to-do list of every agent across the whole fleet that
+//! **needs you** — an open question/permission prompt or a finished turn you
+//! have not seen ([`zaplex_cockpit::SessionSnapshot::needs_you`]) — exactly the
+//! rows the title-bar pulse and Dock badge count, attention-first, grouped by
+//! host and project. Agents running outside Zaplex that it cannot open never
+//! appear here.
 //!
 //! It is deliberately an *inbox you clear without dread*, not an alarm: neutral
 //! copy, no red, the same calm `✋` glyph the cockpit's Conductor uses.
@@ -32,7 +35,7 @@ use warpui::platform::Cursor;
 use warpui::{
     AppContext, Entity, SingletonEntity as _, TypedActionView, View, ViewContext, ViewHandle,
 };
-use zaplex_cockpit::{session_key, SessionState};
+use zaplex_cockpit::session_key;
 
 use crate::appearance::Appearance;
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
@@ -109,7 +112,7 @@ impl AttentionInbox {
                 h.projects.iter().flat_map(move |p| {
                     p.sessions
                         .iter()
-                        .filter(|s| s.state == SessionState::Waiting)
+                        .filter(|s| s.needs_you())
                         .map(move |s| session_key(h.is_local, h.host_id.as_deref(), s))
                 })
             })
@@ -269,7 +272,7 @@ impl AttentionInbox {
             {
                 for project in &host.projects {
                     for session in &project.sessions {
-                        if session.state != SessionState::Waiting {
+                        if !session.needs_you() {
                             continue;
                         }
                         list = list.with_child(self.render_row(

@@ -213,6 +213,9 @@ fn snapshot(state: SessionState) -> crate::types::SessionSnapshot {
         task_state: None,
         last_activity: ts("2026-06-30T12:00:00Z"),
         pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
     }
 }
 

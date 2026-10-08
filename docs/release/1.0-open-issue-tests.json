@@ -362,7 +362,7 @@
     "139": {
       "updated_at": "2026-07-23T11:39:30Z",
       "required_tests": [
-        "function_bar_keeps_required_actions_visible_without_overlap",
+        "function_bar_shows_every_key_without_overlap_at_any_width",
         "function_bar_fits_minimum_supported_pane_width",
         "file_pane_body_consumes_remaining_height_above_footer",
         "active_pane_style_differs_from_selection_and_hover",

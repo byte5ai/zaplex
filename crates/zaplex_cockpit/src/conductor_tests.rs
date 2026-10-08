@@ -3,13 +3,15 @@
 
 use super::*;
 use crate::fleet::{build_fleet_tree, HostSessions};
-use crate::types::{Provider, SessionSnapshot, SessionState};
+use crate::types::{Attention, Provider, SessionSnapshot, SessionState};
 use chrono::{DateTime, Utc};
 
 fn at(secs: i64) -> DateTime<Utc> {
     DateTime::from_timestamp(secs, 0).expect("valid timestamp")
 }
 
+/// Fixture rows model the published inventory: a Waiting row carries the
+/// unseen-turn attention the app stamps on openable rows.
 fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSnapshot {
     let name = cwd
         .trim_end_matches('/')
@@ -41,6 +43,9 @@ fn session(id: &str, cwd: &str, state: SessionState, activity: i64) -> SessionSn
         task_state: None,
         last_activity: at(activity),
         pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: (state == SessionState::Waiting).then_some(Attention::UnseenTurn),
     }
 }
 
@@ -242,6 +247,40 @@ fn next_waiting_keys_on_stable_host_id_not_label() {
     assert_eq!(
         third, first,
         "cycle length is exactly two, back to the first"
+    );
+}
+
+/// The pulse click goes only to counted rows. A finished turn the user has
+/// already seen is still Waiting in discovery, but it is neither counted nor a
+/// jump target, and its row rests like an idle one.
+#[test]
+fn the_jump_targets_only_rows_that_need_the_user() {
+    let mut seen = session("seen", "/p/seen", SessionState::Waiting, 5);
+    seen.attention = None;
+    let mut prompt = session("prompt", "/p/prompt", SessionState::Waiting, 1);
+    prompt.attention = Some(Attention::Decision);
+    let tree = build_fleet_tree(vec![host("h1", vec![seen, prompt])]);
+
+    assert_eq!(tree.needs_me, 1);
+    let first = next_waiting(&tree, None).expect("the prompt needs the user");
+    assert_eq!(first.session_id, "prompt");
+    assert_eq!(
+        next_waiting(&tree, Some(&first)),
+        Some(first),
+        "the cycle never reaches the seen turn"
+    );
+
+    let seen_project = tree.hosts[0]
+        .projects
+        .iter()
+        .find(|project| project.root == "/p/seen")
+        .unwrap();
+    let grouped = group_project_sessions(false, None, &seen_project.sessions);
+    assert_eq!(grouped[0].state, SessionState::Idle);
+    assert_eq!(grouped[0].needs_me, 0);
+    assert_eq!(
+        session_glyph(seen_project.sessions[0].presented_state()),
+        GLYPH_IDLE
     );
 }
 
