@@ -555,10 +555,12 @@ impl EventLoop {
             // Open a fresh session once the transport is connected. Only a
             // fresh open witnesses the real bootstrap handshake from seq 0, so
             // only it reports the boundary the daemon freezes (T1.3).
+            // The attach deadline starts in `on_transport_connected`, not here:
+            // preflight, a first-connect daemon install and the ControlMaster
+            // run before that with their own budgets (#495).
             (None, None) => {
                 event_loop.pending_open = Some(PendingOpen::new(open_params, size_info));
                 event_loop.report_bootstrap_boundary = true;
-                event_loop.arm_initial_attach_timeout(ctx);
             }
         }
 
@@ -750,6 +752,7 @@ impl EventLoop {
         }
         self.set_input_phase(RemoteInputPhase::Attach, ctx);
         if self.pending_open.is_some() {
+            self.arm_initial_attach_timeout(ctx);
             self.try_open(ctx);
             return;
         }

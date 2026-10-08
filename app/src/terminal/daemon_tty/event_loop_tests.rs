@@ -508,7 +508,9 @@ fn ordinary_session_open_ack_emits_exact_surface_without_managed_launch() {
             )
         });
         assert!(events_rx.is_empty());
-        assert!(event_loop.read(&app, |me, _| me.initial_attach_pending));
+        // No transport yet, so no attach deadline; a connected transport arms it.
+        assert!(!event_loop.read(&app, |me, _| me.initial_attach_pending));
+        event_loop.update(&mut app, |me, ctx| me.arm_initial_attach_timeout(ctx));
 
         event_loop.update(&mut app, |me, ctx| {
             assert!(me.managed_launch_id.is_none());
@@ -923,7 +925,8 @@ fn managed_launch_failure_is_reported_exactly_once() {
         });
 
         event_loop.update(&mut app, |me, ctx| {
-            assert!(me.initial_attach_pending);
+            // Armed as `on_transport_connected` does once the transport is up.
+            me.arm_initial_attach_timeout(ctx);
             me.on_initial_attach_timeout(ctx);
         });
 
@@ -3422,6 +3425,48 @@ fn initshell_of_a_non_daemon_model_stays_unstamped() {
              client-side bootstrap write still initializes local/legacy panes"
         );
         let _ = &mut app_;
+    });
+}
+
+#[test]
+fn fresh_open_has_no_attach_deadline_before_the_transport_connects() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(904u64);
+        let _manager = app.add_singleton_model(RemoteServerManager::new);
+        let (listener, _wakeups_rx) = test_listener();
+        let model = Arc::new(FairMutex::new(TerminalModel::mock(
+            None,
+            Some(listener.clone()),
+        )));
+        let (_event_loop_tx, event_loop_rx) = async_channel::unbounded::<EventLoopMessage>();
+        let event_loop = app.add_model(|ctx| {
+            EventLoop::start(
+                model,
+                event_loop_rx,
+                listener,
+                SizeInfo::new_without_font_metrics(24, 80),
+                conn,
+                OpenSessionParams::default(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                HOST.to_string(),
+                ctx,
+            )
+        });
+        // A first-connect install can outlast the attach deadline; it must not
+        // count against it while the transport is still being set up.
+        event_loop.update(&mut app, |me, ctx| {
+            assert!(!me.initial_attach_pending);
+            me.on_transport_connected(ctx);
+            assert!(!me.initial_attach_pending);
+            assert!(me.pending_open.is_some());
+            assert_eq!(me.input_phase(), RemoteInputPhase::Transport);
+            me.on_initial_attach_timeout(ctx);
+            assert!(!me.terminated);
+        });
     });
 }
 
