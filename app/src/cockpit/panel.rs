@@ -368,32 +368,113 @@ fn title_tone(state: SessionState) -> TitleTone {
     }
 }
 
-/// A row title, optionally split into a dimmed prefix shared with its
-/// siblings and the distinguishing rest. `full` is the unshortened title.
+/// A title longer than this keeps a short last segment visible and shortens in
+/// the middle instead of at its end (`feat/checkout-re…-step-2`).
+const MIDDLE_CLIP_MIN_CHARS: usize = 20;
+/// The kept last segment of a middle-shortened title has at least this many
+/// characters, so it still identifies the title …
+const MIN_KEPT_SEGMENT_CHARS: usize = 6;
+/// … and at most this many, so the shortened head keeps some room.
+const MAX_KEPT_SEGMENT_CHARS: usize = 16;
+/// Flex share of a merged row's project name: it keeps two thirds of a tight
+/// row, the session title beside it gives way first.
+const PROJECT_TITLE_FLEX: f32 = 2.0;
+/// Air between a merged row's project name and its session title; no glyph
+/// separates them.
+const MERGED_TITLE_GAP: f32 = 6.0;
+
+/// How a title part reads: in the row's title tone, or dimmed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PartTone {
+    Title,
+    Dim,
+}
+
+/// How a title part behaves when the row is too narrow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PartFit {
+    /// Never shrinks: the distinguishing end of a title.
+    Fixed,
+    /// Shrinks with an end ellipsis.
+    Shrinks,
+    /// Shrinks too, but keeps the larger share (a merged row's project name).
+    Holds,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LabelPart {
+    text: String,
+    tone: PartTone,
+    fit: PartFit,
+    /// Separated from the previous part by air, not by a glyph.
+    gap_before: bool,
+}
+
+/// A row title as parts that render side by side; `full` is the whole title
+/// for the tooltip.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TreeLabel {
-    dim_prefix: Option<String>,
-    text: String,
+    parts: Vec<LabelPart>,
     full: String,
 }
 
 impl TreeLabel {
     fn plain(text: &str) -> Self {
         Self {
-            dim_prefix: None,
-            text: text.to_string(),
+            parts: middle_clipped(text, PartTone::Title),
             full: text.to_string(),
         }
+    }
+
+    /// Whether the visible title can differ from `full`, which then becomes
+    /// the tooltip.
+    fn can_shorten(&self) -> bool {
+        self.parts.len() > 1 || self.full.chars().count() > MIDDLE_CLIP_MIN_CHARS
+    }
+}
+
+fn label_part(text: &str, tone: PartTone, fit: PartFit) -> LabelPart {
+    LabelPart {
+        text: text.to_string(),
+        tone,
+        fit,
+        gap_before: false,
+    }
+}
+
+/// Where the kept end of a long title starts (a separator), so the title
+/// shortens in the middle; `None` keeps the plain end ellipsis.
+fn kept_suffix_start(text: &str) -> Option<usize> {
+    if text.chars().count() <= MIDDLE_CLIP_MIN_CHARS {
+        return None;
+    }
+    let mut start = text.rfind(is_title_separator)?;
+    while text[start..].chars().count() < MIN_KEPT_SEGMENT_CHARS {
+        start = text[..start].rfind(is_title_separator)?;
+    }
+    (start > 0 && text[start..].chars().count() <= MAX_KEPT_SEGMENT_CHARS).then_some(start)
+}
+
+/// One title text as parts: a long text keeps its last segment and shortens
+/// before it; anything else shortens at its end.
+fn middle_clipped(text: &str, tone: PartTone) -> Vec<LabelPart> {
+    match kept_suffix_start(text) {
+        Some(start) => vec![
+            label_part(&text[..start], tone, PartFit::Shrinks),
+            label_part(&text[start..], tone, PartFit::Fixed),
+        ],
+        None => vec![label_part(text, tone, PartFit::Shrinks)],
     }
 }
 
 /// One displayed row of a project's part of the live tree.
 #[derive(Debug)]
 enum TreeRowKind<'a> {
-    /// Collapsible project group header; `count` is what it hides.
+    /// Collapsible project group header; `count` is what it hides. A project
+    /// with a single multi-agent session carries that session's title too.
     Project {
         key: String,
-        name: String,
+        label: TreeLabel,
         expanded: bool,
         count: usize,
         has_waiting: bool,
@@ -506,26 +587,62 @@ fn abbreviate_shared_prefix(prefix: &str) -> String {
     format!("{kept}…")
 }
 
+/// A session title under its project: a prefix shared with a sibling is
+/// dimmed and may shrink; the distinguishing rest stays whole when short and
+/// shortens in its middle when long.
 fn split_title(title: &str, cut: Option<usize>) -> TreeLabel {
-    match cut {
-        Some(cut) => TreeLabel {
-            dim_prefix: Some(abbreviate_shared_prefix(&title[..cut])),
-            text: title[cut..].to_string(),
-            full: title.to_string(),
-        },
-        None => TreeLabel::plain(title),
+    let Some(cut) = cut else {
+        return TreeLabel::plain(title);
+    };
+    let rest = &title[cut..];
+    let mut parts = vec![label_part(
+        &abbreviate_shared_prefix(&title[..cut]),
+        PartTone::Dim,
+        PartFit::Shrinks,
+    )];
+    if rest.chars().count() <= MAX_KEPT_SEGMENT_CHARS {
+        parts.push(label_part(rest, PartTone::Title, PartFit::Fixed));
+    } else {
+        parts.extend(middle_clipped(rest, PartTone::Title));
+    }
+    TreeLabel {
+        parts,
+        full: title.to_string(),
+    }
+}
+
+/// The title of a project shown as its only session (#505): the project name
+/// keeps priority, the session's own title follows dimmed after some air and
+/// gives way first.
+fn merged_label(project_name: &str, session_title: Option<&str>) -> TreeLabel {
+    let mut parts = vec![label_part(project_name, PartTone::Title, PartFit::Holds)];
+    let Some(title) = session_title else {
+        return TreeLabel {
+            parts,
+            full: project_name.to_string(),
+        };
+    };
+    let mut title_parts = middle_clipped(title, PartTone::Dim);
+    if let Some(first) = title_parts.first_mut() {
+        first.gap_before = true;
+    }
+    parts.extend(title_parts);
+    TreeLabel {
+        parts,
+        full: format!("{project_name} / {title}"),
     }
 }
 
 /// The B+ display rule (#505) for one project of the live tree. The data
 /// model stays `Host → Project → PTY session → Agent`; only the rows differ:
-/// - a project with exactly one untitled session is that session: with one
-///   agent it is a single leaf row, with several the session level is skipped
-///   and the agents follow the project row;
-/// - a PTY session with one agent is one leaf row carrying that agent;
+/// - a project with exactly one PTY session is that session: the project name
+///   leads, the session's own title follows dimmed; with one agent it is a
+///   single leaf row, with several the agents follow the project row;
+/// - a PTY session with one agent is one leaf row carrying that agent; an
+///   untitled one among several shows the agent as its headline;
 /// - only a PTY session with several agents keeps child agent rows;
 /// - a title sharing a long prefix with a sibling dims it and keeps the
-///   distinct rest.
+///   distinct rest; a long title keeps its last segment.
 fn project_tree_rows<'a>(
     project_name: &str,
     sessions: Vec<ConductorSession<'a>>,
@@ -539,13 +656,14 @@ fn project_tree_rows<'a>(
         .map(|session| session_title(session.representative, project_name))
         .collect();
     let mut rows = Vec::new();
-    if let ([only], [None]) = (sessions.as_slice(), titles.as_slice()) {
+    if let [only] = sessions.as_slice() {
+        let label = merged_label(project_name, titles[0].as_deref());
         if let [agent] = only.agents.as_slice() {
             let agent: &'a SessionSnapshot = *agent;
             rows.push(TreeRow {
                 depth: 1,
                 kind: TreeRowKind::SessionLeaf {
-                    label: Some(TreeLabel::plain(project_name)),
+                    label: Some(label),
                     agent,
                     focused: is_focused(agent),
                 },
@@ -556,7 +674,7 @@ fn project_tree_rows<'a>(
             depth: 1,
             kind: TreeRowKind::Project {
                 key: project_key,
-                name: project_name.to_string(),
+                label,
                 expanded: project_expanded,
                 count: only.agents.len(),
                 has_waiting: only.needs_me > 0,
@@ -581,7 +699,7 @@ fn project_tree_rows<'a>(
         depth: 1,
         kind: TreeRowKind::Project {
             key: project_key,
-            name: project_name.to_string(),
+            label: TreeLabel::plain(project_name),
             expanded: project_expanded,
             count: sessions.len(),
             has_waiting: sessions.iter().any(|session| session.needs_me > 0),
@@ -990,8 +1108,55 @@ impl CockpitPanel {
         .finish()
     }
 
-    /// A row title. A dimmed shared prefix may shrink to an ellipsis; the
-    /// distinguishing rest never clips. The full title is the tooltip then.
+    /// The parts of a title side by side. Fixed parts never clip, shrinking
+    /// parts end in an ellipsis; a merged row's project name keeps the larger
+    /// share. Parts are separated by air only.
+    fn label_parts(
+        label: &TreeLabel,
+        size: f32,
+        color: ColorU,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let family = appearance.ui_font_family();
+        let theme = appearance.theme();
+        let dim = theme
+            .sub_text_color(theme.surface_1())
+            .with_opacity(55)
+            .into_solid();
+        let mut line = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Max);
+        for part in &label.parts {
+            let part_color = match part.tone {
+                PartTone::Title => color,
+                PartTone::Dim => dim,
+            };
+            let text = match part.fit {
+                PartFit::Fixed => Self::text(part.text.clone(), family, size, part_color),
+                PartFit::Shrinks | PartFit::Holds => {
+                    Self::identity_text(part.text.clone(), family, size, part_color)
+                }
+            };
+            let text = if part.gap_before {
+                Container::new(text)
+                    .with_padding_left(MERGED_TITLE_GAP)
+                    .finish()
+            } else {
+                text
+            };
+            line = match part.fit {
+                PartFit::Fixed => line.with_child(text),
+                PartFit::Shrinks => line.with_child(Shrinkable::new(1.0, text).finish()),
+                PartFit::Holds => {
+                    line.with_child(Shrinkable::new(PROJECT_TITLE_FLEX, text).finish())
+                }
+            };
+        }
+        line.finish()
+    }
+
+    /// A row title; when the visible title can be shorter than the full one,
+    /// the full title is the tooltip.
     fn tree_label(
         &self,
         label: &TreeLabel,
@@ -1000,24 +1165,10 @@ impl CockpitPanel {
         color: ColorU,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let family = appearance.ui_font_family();
-        let Some(prefix) = &label.dim_prefix else {
-            return Self::identity_text(label.text.clone(), family, size, color);
-        };
-        let theme = appearance.theme();
-        let dim = theme
-            .sub_text_color(theme.surface_1())
-            .with_opacity(55)
-            .into_solid();
-        let line = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_child(
-                Shrinkable::new(1.0, Self::identity_text(prefix.clone(), family, size, dim))
-                    .finish(),
-            )
-            .with_child(Self::text(label.text.clone(), family, size, color))
-            .finish();
+        let line = Self::label_parts(label, size, color, appearance);
+        if !label.can_shorten() {
+            return line;
+        }
         appearance.ui_builder().overlay_tool_tip_on_element(
             label.full.clone(),
             self.conductor_title_states
@@ -1031,9 +1182,10 @@ impl CockpitPanel {
         )
     }
 
-    /// Provider icon, provider and model of one agent. As a row's headline
-    /// (`headline = Some(color)`) the provider takes the title tone; as the
-    /// second line under a session title the whole line stays muted.
+    /// Provider icon, provider and model of one agent, separated by air, not
+    /// by a glyph. As a row's headline (`headline = Some(color)`) the provider
+    /// takes the title tone; as the second line under a session title the
+    /// provider is muted and the model quieter still.
     fn agent_identity_line(
         agent: &SessionSnapshot,
         is_managed: bool,
@@ -1044,6 +1196,10 @@ impl CockpitPanel {
         let family = appearance.ui_font_family();
         let footnote = appearance.ui_font_footnote();
         let muted = theme.sub_text_color(theme.surface_1()).into_solid();
+        let faint = theme
+            .sub_text_color(theme.surface_1())
+            .with_opacity(55)
+            .into_solid();
         let presentation = agent_leaf_presentation(agent.provider, &agent.model);
         let icon = ConstrainedBox::new(
             provider_icon(agent.provider)
@@ -1053,40 +1209,30 @@ impl CockpitPanel {
         .with_width(PROVIDER_ICON_SIZE)
         .with_height(PROVIDER_ICON_SIZE)
         .finish();
+        let (provider_size, provider_color, model_color) = match headline {
+            Some(color) => (appearance.ui_font_body(), color, muted),
+            None => (footnote, muted, faint),
+        };
         let line = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(5.0)
-            .with_child(icon);
-        let line = match headline {
-            Some(color) => {
-                let line = line.with_child(Self::text(
-                    presentation.provider.to_string(),
-                    family,
-                    appearance.ui_font_body(),
-                    color,
-                ));
-                match presentation.model {
-                    Some(model) => line.with_child(
-                        Shrinkable::new(
-                            1.0,
-                            Self::identity_text(model.to_string(), family, footnote, muted),
-                        )
-                        .finish(),
-                    ),
-                    None => line,
-                }
-            }
-            None => {
-                let identity = match presentation.model {
-                    Some(model) => format!("{} · {model}", presentation.provider),
-                    None => presentation.provider.to_string(),
-                };
-                line.with_child(
-                    Shrinkable::new(1.0, Self::identity_text(identity, family, footnote, muted))
-                        .finish(),
+            .with_child(icon)
+            .with_child(Self::text(
+                presentation.provider.to_string(),
+                family,
+                provider_size,
+                provider_color,
+            ));
+        let line = match presentation.model {
+            Some(model) => line.with_child(
+                Shrinkable::new(
+                    1.0,
+                    Self::identity_text(model.to_string(), family, footnote, model_color),
                 )
-            }
+                .finish(),
+            ),
+            None => line,
         };
         let line = if is_managed {
             line.with_child(Self::text("◆".to_string(), family, footnote, muted))
@@ -1261,14 +1407,14 @@ impl CockpitPanel {
         let element = match &row.kind {
             TreeRowKind::Project {
                 key,
-                name,
+                label,
                 expanded,
                 count,
                 has_waiting,
                 focused,
             } => self.render_project_header(
                 key,
-                name,
+                label,
                 *count,
                 *has_waiting,
                 *expanded,
@@ -1601,7 +1747,7 @@ impl CockpitPanel {
     fn render_project_header(
         &self,
         pkey: &str,
-        name: &str,
+        label: &TreeLabel,
         count: usize,
         has_waiting: bool,
         expanded: bool,
@@ -1633,7 +1779,7 @@ impl CockpitPanel {
             .cloned()
             .unwrap_or_default();
         let pkey_owned = pkey.to_string();
-        let name_s = name.to_string();
+        let label = label.clone();
         Hoverable::new(handle, move |mouse| {
             let name_color = if mouse.is_hovered() { main_c } else { muted_c };
             let mut row = Flex::row()
@@ -1649,14 +1795,8 @@ impl CockpitPanel {
                 // the same text axis as the rows of its depth (#505).
                 .with_child(Self::empty_slot())
                 .with_child(
-                    Shrinkable::new(
-                        1.0,
-                        Text::new_inline(name_s.clone(), family, body)
-                            .with_color(name_color)
-                            .with_clip(ClipConfig::ellipsis())
-                            .finish(),
-                    )
-                    .finish(),
+                    Shrinkable::new(1.0, Self::label_parts(&label, body, name_color, appearance))
+                        .finish(),
                 );
             if let Some(count) = count {
                 let count_color = if count.attention {

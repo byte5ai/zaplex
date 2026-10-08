@@ -18,6 +18,10 @@ workspace-new-session-terminal = Terminal
 # ── Cockpit ──────────────────────────────────────────────────────────────────
 workspace-left-panel-cockpit = KI-Sessions
 workspace-left-panel-cockpit-accounts = KI-Konten
+workspace-left-panel-cockpit-waiting = { $count ->
+    [one] KI-Sessions: { $count } Agent wartet auf Dich
+   *[other] KI-Sessions: { $count } Agents warten auf Dich
+}
 workspace-left-panel-cockpit-empty = Keine Claude- oder Codex-Konten gefunden.
 cockpit-loading = Konten werden geladen…
 cockpit-scan-failed = Einige Konten ließen sich nicht lesen.

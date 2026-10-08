@@ -258,8 +258,9 @@ pub struct LeftPanelView {
     skill_manager_view: ViewHandle<SkillManagerPanel>,
     cockpit_view: ViewHandle<CockpitPanel>,
     cockpit_accounts_view: ViewHandle<CockpitAccountsPanel>,
-    /// Whether any fleet agent waits on the user (drives the toolbelt mark).
-    fleet_waiting: bool,
+    /// How many fleet agents wait on the user (drives the toolbelt mark and
+    /// its accessible label).
+    fleet_waiting: usize,
     active_view: active_view_state::ActiveViewState,
     available_views: Vec<ToolPanelView>,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
@@ -368,14 +369,14 @@ impl LeftPanelView {
         // view is active; re-render only when that fact flips.
         ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, model, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
-                let waiting = model.as_ref(ctx).inventory().needs_me > 0;
+                let waiting = model.as_ref(ctx).inventory().needs_me;
                 if waiting != me.fleet_waiting {
                     me.fleet_waiting = waiting;
                     ctx.notify();
                 }
             }
         });
-        let fleet_waiting = CockpitModel::as_ref(ctx).inventory().needs_me > 0;
+        let fleet_waiting = CockpitModel::as_ref(ctx).inventory().needs_me;
         ctx.subscribe_to_view(&ssh_manager_view, |_me, _, event, ctx| {
             use crate::ssh_manager::SshManagerPanelEvent;
             match event {
@@ -1215,6 +1216,7 @@ impl LeftPanelView {
     fn render_button(
         button_config: &ToolbeltButtonConfig,
         mouse_state: MouseStateHandle,
+        tooltip_text: String,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let action = button_config.action.clone();
@@ -1232,14 +1234,11 @@ impl LeftPanelView {
 
         let tooltip = if let Some(keybinding) = tooltip_keybinding {
             ui_builder
-                .tool_tip_with_sublabel(button_config.tooltip_text.clone(), keybinding)
+                .tool_tip_with_sublabel(tooltip_text, keybinding)
                 .build()
                 .finish()
         } else {
-            ui_builder
-                .tool_tip(button_config.tooltip_text.clone())
-                .build()
-                .finish()
+            ui_builder.tool_tip(tooltip_text).build().finish()
         };
 
         let icon = if button_config.render_with_active_state {
@@ -1511,7 +1510,7 @@ impl View for LeftPanelView {
             self.mouse_state_handles.cockpit_accounts_button.clone(),
         ];
         let sessions_attention =
-            sessions_entry_shows_attention(self.active_view.get(), self.fleet_waiting);
+            sessions_entry_shows_attention(self.active_view.get(), self.fleet_waiting > 0);
 
         // If there is only one button in the toolbelt row,
         // there is no need to show it as it's a bit redundant.
@@ -1522,14 +1521,31 @@ impl View for LeftPanelView {
                     .with_spacing(4.0)
                     .with_children(self.toolbelt_buttons.iter().zip(&mouse_state_handles).map(
                         |(button_config, mouse_state)| {
-                            let button =
-                                Self::render_button(button_config, mouse_state.clone(), appearance);
                             if sessions_attention
                                 && matches!(button_config.action, LeftPanelAction::Cockpit)
                             {
-                                Self::with_attention_mark(button, appearance)
+                                // The mark is never colour alone: the tooltip
+                                // names how many agents wait.
+                                let tooltip = crate::t!(
+                                    "workspace-left-panel-cockpit-waiting",
+                                    count = (self.fleet_waiting as i64)
+                                );
+                                Self::with_attention_mark(
+                                    Self::render_button(
+                                        button_config,
+                                        mouse_state.clone(),
+                                        tooltip,
+                                        appearance,
+                                    ),
+                                    appearance,
+                                )
                             } else {
-                                button
+                                Self::render_button(
+                                    button_config,
+                                    mouse_state.clone(),
+                                    button_config.tooltip_text.clone(),
+                                    appearance,
+                                )
                             }
                         },
                     ))

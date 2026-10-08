@@ -335,8 +335,8 @@ fn in_one_pty(mut agent: SessionSnapshot) -> SessionSnapshot {
 /// `(depth, kind, label, focused)` of one projected row.
 fn row_summary(row: &TreeRow<'_>) -> (usize, &'static str, String, bool) {
     match &row.kind {
-        TreeRowKind::Project { name, focused, .. } => {
-            (row.depth, "project", name.clone(), *focused)
+        TreeRowKind::Project { label, focused, .. } => {
+            (row.depth, "project", label.full.clone(), *focused)
         }
         TreeRowKind::SessionLeaf {
             label,
@@ -419,27 +419,122 @@ fn multiple_agents_in_one_pty_render_child_rows() {
             Some("main"),
             SessionState::Idle,
         )),
+        tree_agent("c", "/work/proj", Some("feat/x"), SessionState::Idle),
     ];
     let rows = local_project_rows("proj", &agents, true, None);
     assert_eq!(rows[0], (1, "project", "proj".to_string(), false));
-    assert_eq!(rows[1], (2, "session", "main".to_string(), false));
-    assert_eq!(rows.len(), 4);
-    assert!(rows[2..].iter().all(|row| row.0 == 3 && row.1 == "agent"));
+    let container = rows
+        .iter()
+        .position(|row| row.1 == "session")
+        .expect("the multi-agent PTY keeps its own row");
+    assert_eq!(rows[container], (2, "session", "main".to_string(), false));
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.0 == 3 && row.1 == "agent")
+            .count(),
+        2
+    );
 
     let collapsed = local_project_rows("proj", &agents, false, None);
-    assert_eq!(
-        collapsed.len(),
-        2,
+    assert!(
+        collapsed.iter().all(|row| row.1 != "agent"),
         "a collapsed multi-agent session hides its agent rows"
     );
 
     // A collapsed session hiding the focused agent carries the highlight
     // itself; expanded, only the agent row does.
     let collapsed_focused = local_project_rows("proj", &agents, false, Some("b"));
-    assert!(collapsed_focused[1].3);
+    assert!(collapsed_focused
+        .iter()
+        .any(|row| row.1 == "session" && row.3));
     let expanded_focused = local_project_rows("proj", &agents, true, Some("b"));
-    assert!(!expanded_focused[1].3);
-    assert_eq!(expanded_focused.iter().filter(|row| row.3).count(), 1);
+    let marked: Vec<_> = expanded_focused.iter().filter(|row| row.3).collect();
+    assert_eq!(marked.len(), 1);
+    assert_eq!(marked[0].1, "agent");
+}
+
+#[test]
+fn single_multi_agent_session_merges_into_project_row() {
+    let agents = [
+        in_one_pty(tree_agent(
+            "a",
+            "/work/proj",
+            Some("main"),
+            SessionState::Active,
+        )),
+        in_one_pty(tree_agent(
+            "b",
+            "/work/proj",
+            Some("main"),
+            SessionState::Idle,
+        )),
+    ];
+    let rows = local_project_rows("proj", &agents, true, None);
+    assert_eq!(rows[0], (1, "project", "proj / main".to_string(), false));
+    assert_eq!(rows.len(), 3);
+    assert!(rows[1..].iter().all(|row| row.0 == 2 && row.1 == "agent"));
+}
+
+#[test]
+fn single_titled_session_merges_with_dimmed_title() {
+    let agents = [tree_agent(
+        "a",
+        "/work/proj",
+        Some("main"),
+        SessionState::Active,
+    )];
+    assert_eq!(
+        local_project_rows("proj", &agents, true, None),
+        vec![(1, "leaf", "proj / main".to_string(), false)]
+    );
+    let label = merged_label("proj", Some("main"));
+    assert_eq!(label.parts.len(), 2);
+    assert_eq!(
+        (
+            label.parts[0].text.as_str(),
+            label.parts[0].tone,
+            label.parts[0].fit
+        ),
+        ("proj", PartTone::Title, PartFit::Holds),
+        "the project name leads and keeps the larger share"
+    );
+    assert_eq!(
+        (
+            label.parts[1].text.as_str(),
+            label.parts[1].tone,
+            label.parts[1].gap_before
+        ),
+        ("main", PartTone::Dim, true),
+        "the session title follows dimmed after air, without a glyph"
+    );
+}
+
+#[test]
+fn long_titles_shorten_in_the_middle_and_keep_their_end() {
+    let label = TreeLabel::plain("feat/checkout-redesign-step-2");
+    let parts: Vec<_> = label
+        .parts
+        .iter()
+        .map(|part| (part.text.as_str(), part.fit))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            ("feat/checkout-redesign", PartFit::Shrinks),
+            ("-step-2", PartFit::Fixed),
+        ]
+    );
+    assert!(label.can_shorten());
+
+    // Short titles, and long ones without a short last segment, end-clip.
+    assert_eq!(TreeLabel::plain("main").parts.len(), 1);
+    assert!(!TreeLabel::plain("main").can_shorten());
+    assert_eq!(
+        TreeLabel::plain("averyveryverylongbranchnamewithoutseparators")
+            .parts
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -462,11 +557,22 @@ fn similar_session_names_show_distinguishing_suffix() {
     ];
     let cut = shared_prefix_cut(&titles);
     let label = split_title(titles[0], cut);
-    assert_eq!(label.text, "10-06-0300");
-    assert_eq!(label.dim_prefix.as_deref(), Some("vault-curator-…"));
+    let parts: Vec<_> = label
+        .parts
+        .iter()
+        .map(|part| (part.text.as_str(), part.tone, part.fit))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            ("vault-curator-…", PartTone::Dim, PartFit::Shrinks),
+            ("10-06-0300", PartTone::Title, PartFit::Fixed),
+        ]
+    );
     assert_eq!(label.full, titles[0]);
     for title in titles {
-        assert!(split_title(title, cut).text.chars().count() >= MIN_DISTINCT_TAIL_CHARS);
+        let tail = split_title(title, cut).parts.last().unwrap().text.clone();
+        assert!(tail.chars().count() >= MIN_DISTINCT_TAIL_CHARS);
     }
 
     // Short or unrelated names keep their whole title.
@@ -515,6 +621,12 @@ fn prefix_dimming_ignores_unrelated_siblings() {
         cuts[0], None,
         "a title without a similar sibling stays whole"
     );
-    assert_eq!(split_title(titles[1], cuts[1]).text, "10-06-0300");
-    assert_eq!(split_title(titles[2], cuts[2]).text, "10-06-0900");
+    assert_eq!(
+        split_title(titles[1], cuts[1]).parts.last().unwrap().text,
+        "10-06-0300"
+    );
+    assert_eq!(
+        split_title(titles[2], cuts[2]).parts.last().unwrap().text,
+        "10-06-0900"
+    );
 }

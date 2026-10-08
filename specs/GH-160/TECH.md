@@ -278,13 +278,16 @@ depend on pixels:
 - a collapsed count turns amber if it hides waiting attention;
 - session containers have hierarchy only, not a duplicated aggregate state glyph;
 - agent leaves render state glyph, provider, and optional model only;
-- the B+ display rule (#505) is the pure projection `project_tree_rows`: it merges a project with
-  exactly one untitled session into one row, renders a single-agent PTY session as one leaf whose
-  second line carries provider icon, provider, and model, keeps agent rows only for multi-agent
-  PTYs, and dims a separator-bounded prefix a title shares with at least one sibling
+- the B+ display rule (#505) is the pure projection `project_tree_rows`: a project with exactly
+  one PTY session becomes one row (`merged_label`: project name with `PartFit::Holds`, the
+  session title dimmed after `MERGED_TITLE_GAP`); a single-agent PTY session among several is one
+  leaf whose second line carries provider icon, provider, and model, and an untitled one shows
+  the agent as its headline; agent rows remain only for multi-agent PTYs. Titles are
+  `TreeLabel` parts: a separator-bounded prefix shared with at least one sibling is dimmed
   (`shared_prefix_cuts` over pairwise `shared_prefix_cut`, at least `MIN_DISTINCT_TAIL_CHARS`
-  distinguishing characters; full title as tooltip); a session title that only repeats the
-  project name counts as untitled;
+  distinguishing characters), and a long title keeps its last segment fixed while the head
+  shrinks (`kept_suffix_start`, `MIDDLE_CLIP_MIN_CHARS`); `TreeLabel::can_shorten` attaches the
+  full title as tooltip. Parts, provider, and model are separated by spacing, never by glyphs;
 - every row reserves the chevron and glyph columns; idle titles use the muted text role
   (`title_tone`); the focused pane's session (workspace `ActiveSession::terminal_view_id` matched
   through `terminal_for_inventory_session`) keeps a stable accent tint (`style::tree_row`);

@@ -2834,6 +2834,10 @@ workspace-left-panel-server-file-browser = Server files
 workspace-left-panel-skill-manager = Skill Manager
 workspace-left-panel-cockpit = AI sessions
 workspace-left-panel-cockpit-accounts = AI accounts
+workspace-left-panel-cockpit-waiting = { $count ->
+    [one] AI sessions: { $count } agent needs you
+   *[other] AI sessions: { $count } agents need you
+}
 cockpit-sessions-waiting-toast = Waiting on you: { $sessions }
 cockpit-attention-inbox-title = Open items
 cockpit-attention-inbox-count = { $count ->

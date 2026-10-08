@@ -77,16 +77,22 @@ The previous static illustrations are superseded, not alternative approved layou
    fallback session containers and are never merged by label alone.
 
    **Display rule „B+“ (#505).** The tree shows this model without empty levels. A project with
-   exactly one untitled session is a single row carrying its agent; a session is untitled when it
-   has no name, branch, worktree, or distinct directory, or when that identity only repeats the
-   project name. A PTY session with one agent is one row: its title, then a second line with
-   provider icon, provider, and model. Only a PTY session with several agents keeps agent rows,
-   and its row carries no aggregate glyph. A title sharing a long, separator-bounded prefix with
-   at least one sibling shows it shortened and dimmed while at least eight distinguishing
-   characters stay visible; the full title is the tooltip. Every row reserves the chevron and glyph columns, so titles of one
-   depth share a text axis. Idle session titles use the muted text role. The session of the
+   exactly one PTY session is a single row: the project name leads and keeps priority, the
+   session's own title (name, branch, worktree, or distinct directory) follows dimmed after some
+   air and gives way first; a title that only repeats the project name is omitted. With one agent
+   that row carries the agent; with several, the agents follow it. In a project with several PTY
+   sessions, a session with one agent is one row: its title, then a second line with provider
+   icon, provider, and model; an untitled session there shows its agent as the one-line headline.
+   Only a PTY session with several agents keeps agent rows, and its row carries no aggregate
+   glyph. A title sharing a long, separator-bounded prefix with at least one sibling shows it
+   shortened and dimmed while at least eight distinguishing characters stay visible. A long title
+   keeps a short last segment and shortens in the middle (`feat/checkout-re…-step-2`); otherwise
+   it ends in an ellipsis. Whenever the visible title can be shorter, the full title is the
+   tooltip. Title parts, provider, and model are separated by air and tone, never by separator
+   glyphs such as a middle dot. Every row reserves the chevron and glyph columns, so titles of
+   one depth share a text axis. Idle session titles use the muted text role. The session of the
    focused pane keeps a stable accent tint. Groups separate by spacing, not lines. Session rows
-   are two lines; this supersedes the earlier single-line session row. Reference:
+   with a title are two lines; this supersedes the earlier single-line session row. Reference:
    [`docs/ui/cockpit-sessions-tree.html`](../../docs/ui/cockpit-sessions-tree.html).
 
    The tree contains only agent sessions Zaplex can open, decided by the same reachability rule
