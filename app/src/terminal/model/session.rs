@@ -100,9 +100,10 @@ pub struct Sessions {
     /// various mock executor types in order to test and assert on behaviors.
     executor_for_all_sessions: Option<Arc<dyn CommandExecutor>>,
 
-    /// Remote-server connection of a daemon-hosted PTY. Its shell bootstraps as a
-    /// local session with its own id, so generators must be routed through this
-    /// connection explicitly or they would run on the client machine.
+    /// Remote-server connection of a daemon-hosted PTY. Its root shell bootstraps
+    /// with its own id (as `Local` or `ZaplexifiedRemote`, depending only on
+    /// whether its hostname matches this client's), so generators must be routed
+    /// through this connection explicitly.
     daemon_connection_session_id: Option<SessionId>,
 
     /// Select environment variables and their values.
@@ -287,11 +288,23 @@ impl Sessions {
             .collect()
     }
 
-    /// Whether a bootstrapped shell runs directly in this terminal's daemon PTY.
-    /// A nested SSH session inside it lives on another host and keeps its own routing.
+    /// Whether a bootstrapped shell is the root shell of this terminal's daemon PTY.
+    ///
+    /// Decided by the PTY's provenance, never by the bootstrap session type: that
+    /// type compares the shell's hostname with this client's, so a daemon on
+    /// another machine bootstraps its root shell as `ZaplexifiedRemote`, and only
+    /// a daemon sharing the client's hostname yields `Local`.
+    ///
+    /// Shells nested inside the daemon PTY keep their own routing: subshells
+    /// (including containers), legacy SSH hops, and shells bootstrapped inside
+    /// tmux control mode (the tmux SSH hop) are not the PTY's root process. The
+    /// subshell and legacy-SSH exclusions match the daemon-root classification of
+    /// `TerminalModel::init_shell`.
     pub(crate) fn is_daemon_hosted_shell(&self, session_info: &SessionInfo) -> bool {
         self.daemon_connection_session_id.is_some()
-            && matches!(session_info.session_type, BootstrapSessionType::Local)
+            && session_info.subshell_info.is_none()
+            && session_info.is_legacy_ssh_session == IsLegacySSHSession::No
+            && !session_info.tmux_control_mode
     }
 
     /// The generator executor for a daemon-hosted shell, once its connection
@@ -973,7 +986,8 @@ pub enum SessionType {
 
     /// The session host is a different host from where Zaplex is running.
     /// Note that we only know this for sure when we Zaplexify a block, or when
-    /// the shell runs in a daemon-hosted PTY (it bootstraps as `Local` there).
+    /// the shell is the root shell of a daemon-hosted PTY (which bootstraps as
+    /// `Local` if the daemon's host shares this client's hostname).
     ///
     /// `host_id` is `Some` when the remote server feature flag is enabled and
     /// `RemoteServerManager` has completed the connection handshake. It is
@@ -1014,9 +1028,9 @@ pub struct Session {
     /// when `RemoteServerManager` reports a connected session (to fill in the
     /// `host_id`). Interior mutability allows updating through `Arc<Session>`.
     session_type: Mutex<SessionType>,
-    /// A shell inside a daemon-hosted PTY bootstraps as `Local`, but runs on the
-    /// daemon's host. Its `session_type` is remote; this flag keeps routing its
-    /// generators and history through the daemon connection.
+    /// The root shell of a daemon-hosted PTY runs on the daemon's host, whatever
+    /// its bootstrap session type. Its `session_type` is remote; this flag keeps
+    /// routing its generators and history through the daemon connection.
     daemon_hosted: AtomicBool,
 }
 
