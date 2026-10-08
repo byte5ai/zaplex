@@ -2925,6 +2925,10 @@ enum FileManagerOrigin {
         same_host: bool,
         /// The shell's directory when the file manager opened.
         directory: Option<PathBuf>,
+        /// The shell active when this origin was recorded. The directory is
+        /// offered as a draft only while that shell is still the active one; any
+        /// other shell may see a different filesystem and only gets a notice.
+        shell: Option<SessionId>,
     },
 }
 
@@ -6601,12 +6605,13 @@ impl TerminalView {
         self.cancel_file_manager_directory(ctx);
         let directory = self.active_session_cwd(ctx);
         let proven = same_host && self.file_manager_session_matches_target(is_local, ctx);
-        let bound_session = self.active_block_session_id().filter(|_| proven);
-        self.file_manager_origin = Some(match bound_session {
+        let active_session = self.active_block_session_id();
+        self.file_manager_origin = Some(match active_session.filter(|_| proven) {
             Some(id) => FileManagerOrigin::Session { id, directory },
             None => FileManagerOrigin::Unproven {
                 same_host,
                 directory,
+                shell: active_session,
             },
         });
     }
@@ -6618,6 +6623,7 @@ impl TerminalView {
         self.file_manager_origin = Some(FileManagerOrigin::Unproven {
             same_host: false,
             directory: None,
+            shell: None,
         });
     }
 
@@ -6656,7 +6662,12 @@ impl TerminalView {
             Some(FileManagerOrigin::Unproven {
                 same_host,
                 directory,
-            }) => Some((*same_host, directory.clone())),
+                shell,
+            }) => Some((
+                // Once the shell changed, its filesystem may be another one.
+                *same_host && shell.is_some() && self.active_block_session_id() == *shell,
+                directory.clone(),
+            )),
             // No binding survived (e.g. the terminal surface was replaced).
             None => Some((false, self.active_session_cwd(ctx))),
         };
@@ -6689,23 +6700,56 @@ impl TerminalView {
     /// The bound shell can no longer take the directory (it changed, exited, or
     /// its remote connection failed). Never drop it silently: report it now, or,
     /// while the file manager is still open, when it closes.
+    ///
+    /// Reports at most once: afterwards the binding is gone or unproven, so a
+    /// later terminal event finds nothing to report. Terminal-state callers run
+    /// this after the state that ends ordinary input is set, so the report is
+    /// the "not applied" notice rather than a draft for a shell that is gone.
+    ///
+    /// A draft is offered only to a shell on the filesystem the file manager
+    /// showed; e.g. the local shell a classic-SSH pane falls back to after its
+    /// remote shell ended only ever gets the notice.
     fn abandon_file_manager_directory(&mut self, ctx: &mut ViewContext<Self>) {
-        let directory = match &self.file_manager_origin {
-            Some(FileManagerOrigin::Session { directory, .. }) => directory.clone(),
-            Some(FileManagerOrigin::Restoring { .. }) => None,
+        let (directory, same_filesystem) = match &self.file_manager_origin {
+            Some(FileManagerOrigin::Session { id, directory }) => (
+                directory.clone(),
+                self.active_shell_shares_file_manager_filesystem(*id, ctx),
+            ),
+            Some(FileManagerOrigin::Restoring { is_local }) => (
+                None,
+                self.file_manager_session_matches_target(*is_local, ctx),
+            ),
             Some(FileManagerOrigin::Unproven { .. }) | None => return,
         };
         let pending = self.pending_file_manager_directory.take();
         self.cancel_file_manager_directory(ctx);
         match pending {
-            Some(path) => self.offer_file_manager_directory(&path, true, ctx),
+            Some(path) => self.offer_file_manager_directory(&path, same_filesystem, ctx),
             None => {
                 self.file_manager_origin = Some(FileManagerOrigin::Unproven {
-                    same_host: true,
+                    same_host: same_filesystem,
                     directory,
+                    shell: self.active_block_session_id(),
                 });
             }
         }
+    }
+
+    /// Whether the active shell sees the filesystem the file manager took from
+    /// `bound`: `bound` itself, or a shell this pane would bind for the same
+    /// target (a daemon root shell reattached as a new session). A nested shell,
+    /// or the local shell left after a classic-SSH remote shell ended, does not.
+    fn active_shell_shares_file_manager_filesystem(
+        &self,
+        bound: SessionId,
+        ctx: &AppContext,
+    ) -> bool {
+        if self.active_block_session_id() == Some(bound) {
+            return true;
+        }
+        self.sessions.as_ref(ctx).get(bound).is_some_and(|session| {
+            self.file_manager_session_matches_target(session.is_local(), ctx)
+        })
     }
 
     /// Never sends an unproven `cd`. An empty, idle editor of a shell on the
@@ -6922,6 +6966,7 @@ impl TerminalView {
             input.clear_file_manager_directory_input();
             input.set_ordinary_command_input_ready(false, ctx);
         });
+        self.abandon_file_manager_directory(ctx);
         ctx.notify();
     }
 
@@ -6937,6 +6982,7 @@ impl TerminalView {
             input.clear_file_manager_directory_input();
             input.set_ordinary_command_input_ready(false, ctx);
         });
+        self.abandon_file_manager_directory(ctx);
         ctx.notify();
     }
 
@@ -6958,6 +7004,8 @@ impl TerminalView {
             input.clear_file_manager_directory_input();
             input.set_ordinary_command_input_ready(false, ctx);
         });
+        // A raw terminal never returns to an idle prompt that could take it.
+        self.abandon_file_manager_directory(ctx);
         ctx.notify();
     }
 
@@ -7006,19 +7054,25 @@ impl TerminalView {
             self.remote_session_error = None;
             self.remote_session_error_detail = None;
         }
+        // Ordinary command input never returns to this pane's shell after these
+        // (unlike Transport/Attach/Replay, which a reconnect leaves for Ready).
+        let ordinary_input_ended = matches!(
+            phase,
+            RemoteInputPhase::Failed
+                | RemoteInputPhase::Corrupt
+                | RemoteInputPhase::Cancelled
+                | RemoteInputPhase::Raw
+        );
         self.input.update(ctx, |input, ctx| {
-            if matches!(
-                phase,
-                RemoteInputPhase::Failed
-                    | RemoteInputPhase::Corrupt
-                    | RemoteInputPhase::Cancelled
-                    | RemoteInputPhase::Raw
-            ) {
+            if ordinary_input_ended {
                 input.cancel_pending_system_command();
                 input.clear_file_manager_directory_input();
             }
             input.set_ordinary_command_input_ready(phase == RemoteInputPhase::Ready, ctx);
         });
+        if ordinary_input_ended {
+            self.abandon_file_manager_directory(ctx);
+        }
         if phase != RemoteInputPhase::Ready && ctx.is_self_or_child_focused() {
             self.focus_terminal(ctx);
         }
@@ -7162,6 +7216,9 @@ impl TerminalView {
             input.clear_file_manager_directory_input();
             input.set_ordinary_command_input_ready(false, ctx);
         });
+        // The phase stays as it was and the pane closes; with input no longer
+        // ready this reports a deferred directory instead of drafting it.
+        self.abandon_file_manager_directory(ctx);
         ctx.emit(Event::Exited);
         ctx.notify();
     }
@@ -10284,6 +10341,10 @@ impl TerminalView {
                 self.cancel_su_root_confirmation(ctx);
                 self.input
                     .update(ctx, |input, _| input.clear_file_manager_directory_input());
+                // `TerminalModel::exit` already made the model read-only, so a
+                // deferred directory is reported, never drafted, and the remote
+                // Failed transition below finds nothing left to report.
+                self.abandon_file_manager_directory(ctx);
                 // A cancelled remote restore stays inert by request: tearing
                 // down its connection must neither present it as a failed shell
                 // start nor close the pane.
