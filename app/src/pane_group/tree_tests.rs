@@ -821,3 +821,59 @@ fn closing_nested_split_collapses_to_the_original_leaf() {
     assert_eq!(tree.visible_pane_ids(), vec![left]);
     assert_eq!(tree.len(), 1);
 }
+
+#[test]
+fn visible_layout_mirrors_nesting_and_skips_hidden_panes() {
+    let [left, top_right, bottom_right, background] = [(); 4].map(|_| PaneId::dummy_pane_id());
+    let mut tree = PaneData::new(left);
+    tree.split(left, top_right, Direction::Right);
+    tree.split(top_right, bottom_right, Direction::Down);
+    tree.split(bottom_right, background, Direction::Right);
+    tree.hide_pane_for_job(background);
+
+    let layout = tree.visible_layout().expect("three panes are visible");
+    assert_eq!(
+        layout,
+        PaneLayout::Split {
+            axis: SplitDirection::Horizontal,
+            children: vec![
+                PaneLayout::Leaf(left),
+                PaneLayout::Split {
+                    axis: SplitDirection::Vertical,
+                    children: vec![PaneLayout::Leaf(top_right), PaneLayout::Leaf(bottom_right)],
+                },
+            ],
+        }
+    );
+    assert_eq!(layout.first_pane(), left);
+    assert_eq!(layout.pane_ids(), vec![left, top_right, bottom_right]);
+    assert_eq!(
+        layout.retain(&|pane_id| pane_id != top_right),
+        Some(PaneLayout::Split {
+            axis: SplitDirection::Horizontal,
+            children: vec![PaneLayout::Leaf(left), PaneLayout::Leaf(bottom_right)],
+        })
+    );
+    assert_eq!(layout.retain(&|_| false), None);
+}
+
+#[test]
+fn only_running_or_moving_hidden_panes_block_handing_over_a_group() {
+    let [visible, hidden] = [(); 2].map(|_| PaneId::dummy_pane_id());
+    let mut tree = PaneData::new(visible);
+    tree.split(visible, hidden, Direction::Right);
+    assert!(!tree.has_hidden_panes_in_use());
+
+    tree.hide_pane_for_job(hidden);
+    assert!(tree.has_hidden_panes_in_use());
+    tree.show_pane_for_job(hidden);
+    assert!(!tree.has_hidden_panes_in_use());
+
+    // A pane closed for undo is discarded with its group, nothing runs in it.
+    tree.hide_closed_pane(hidden);
+    assert!(!tree.has_hidden_panes_in_use());
+    tree.unhide_closed_pane(hidden);
+
+    tree.hide_pane_for_child_agent(hidden);
+    assert!(tree.has_hidden_panes_in_use());
+}

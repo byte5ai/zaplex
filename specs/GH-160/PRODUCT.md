@@ -261,12 +261,12 @@ The previous static illustrations are superseded, not alternative approved layou
 34. **Pane geometry preserves session identity.** A sole pane fills the available workspace.
     Splitting affects only the chosen pane. Dragging a pane header to a target edge moves that
     existing pane left, right, above, or below without opening a connection, PTY, or agent. Moving
-    to another tab remains supported. Dragging an inactive tab out of the tab bar onto a pane of
-    the visible tab inserts all of its panes, with their layout, at the indicated edge; the source
-    tab closes and no connection, PTY, or agent restarts. Tabs activate on click so the visible tab
-    stays visible while another tab is dragged. Invalid or cancelled drops leave the layout
-    intact, and file drag, text selection, splitter resize, and header-button clicks are not pane
-    moves.
+    to another tab remains supported. Dragging an inactive tab out of the tab bar (or the vertical
+    tabs panel) onto a pane of the visible tab inserts all of its panes, with their layout, at the
+    indicated edge; the source tab closes and no connection, PTY, or agent restarts. Tabs activate
+    on click so the visible tab stays visible while another tab is dragged. Invalid or cancelled
+    drops leave the layout intact, and file drag, text selection, splitter resize, and
+    header-button clicks are not pane moves.
 
 35. **Focus and restore are exact.** Each tab retains its last valid focused pane. Closing, moving,
     reconnecting, and restoring preserve layout, host/daemon/PTY/generation identity, working

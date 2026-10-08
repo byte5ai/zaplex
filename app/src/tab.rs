@@ -35,7 +35,8 @@ use crate::workspace::{
 };
 use crate::BlocklistAIHistoryModel;
 use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde::{Deserialize, Serialize};
 use warp_core::context_flag::ContextFlag;
 use warp_core::ui::builder::UiBuilder;
@@ -43,11 +44,11 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColors;
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, DragAxis, Draggable, DraggableState, DropShadow, DropTarget, Element,
-    Empty, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, Padding, ParentAnchor, ParentElement, ParentOffsetBounds,
-    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable,
-    SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
+    CrossAxisAlignment, Draggable, DraggableState, DropShadow, DropTarget, Element, Empty, Fill,
+    Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, Padding,
+    ParentAnchor, ParentElement, ParentOffsetBounds, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Rect, SavePosition, Shrinkable, SizeConstraintCondition,
+    SizeConstraintSwitch, Stack, Text,
 };
 use warpui::fonts::Weight;
 use warpui::text_layout::ClipConfig;
@@ -1634,7 +1635,9 @@ impl UiComponent for TabComponent<'_> {
         // We only want the on_click action to take effect on the tab, if it's not being renamed at a moment.
         // Note that clicking on other tabs is still ok.
         if !is_tab_being_renamed {
-            tab = tab.on_mouse_down(move |ctx, _app, _| {
+            // Activate on release, not on press: dragging another tab out of
+            // the tab bar keeps the visible tab on screen as its drop target.
+            tab = tab.on_click(move |ctx, _app, _| {
                 let is_hovered = mouse_close_state
                     .lock()
                     .expect("lock acquired")
@@ -1697,7 +1700,12 @@ impl UiComponent for TabComponent<'_> {
             let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() {
                 draggable
             } else {
-                draggable.with_drag_axis(DragAxis::HorizontalOnly)
+                // Without window tear-off a tab may still leave the tab bar
+                // inside this window: over the content it joins the visible tab
+                // as a split pane.
+                draggable.with_drag_bounds_callback(|_, window_size| {
+                    Some(RectF::new(Vector2F::zero(), window_size))
+                })
             };
             let tab_with_drag: Box<dyn Element> = draggable.finish();
             SavePosition::new(tab_with_drag, &tab_position_id(tab_index)).finish()

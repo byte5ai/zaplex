@@ -3896,6 +3896,62 @@ fn every_split_direction_opens_the_launch_menu_without_adding_a_pane() {
 }
 
 #[test]
+fn dragging_a_tab_onto_a_pane_joins_its_panes_as_a_split() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        let target_group_id = workspace.update(&mut app, |workspace, ctx| {
+            let target_group = workspace.active_tab_pane_group().clone();
+            let target_pane = target_group.as_ref(ctx).focused_pane_id(ctx);
+            workspace.add_terminal_tab(false, ctx);
+            let source_group = workspace.active_tab_pane_group().clone();
+            source_group.update(ctx, |group, ctx| {
+                group.add_terminal_pane(Direction::Down, None, ctx);
+            });
+            let source_panes = source_group.as_ref(ctx).visible_pane_ids();
+            assert_eq!(source_panes.len(), 2);
+            let focused_source_pane = source_group.as_ref(ctx).focused_pane_id(ctx);
+            workspace.set_active_tab_index(0, ctx);
+
+            // The visible tab is never a drop target for itself.
+            let no_drag = RectF::new(Vector2F::zero(), Vector2F::zero());
+            assert!(workspace
+                .tab_join_drop_target_at(workspace.active_tab_index, no_drag, ctx)
+                .is_none());
+
+            workspace.join_tab_as_pane(
+                TabJoinDropTarget {
+                    source_group_id: source_group.id(),
+                    target_group_id: target_group.id(),
+                    pane_id: target_pane,
+                    direction: Direction::Right,
+                    zone: no_drag,
+                },
+                ctx,
+            );
+
+            // The same panes (and so the same sessions) now follow the
+            // target pane in their original order.
+            let mut expected = vec![target_pane];
+            expected.extend(source_panes);
+            assert_eq!(target_group.as_ref(ctx).visible_pane_ids(), expected);
+            assert_eq!(
+                target_group.as_ref(ctx).focused_pane_id(ctx),
+                focused_source_pane
+            );
+            target_group.id()
+        });
+
+        // The emptied source tab closes once its exit event is handled.
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(workspace.tabs.len(), 1);
+            assert_eq!(workspace.active_tab_pane_group().id(), target_group_id);
+        });
+    });
+}
+
+#[test]
 fn split_agent_launch_recaptures_its_target_until_the_source_pane_closes() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

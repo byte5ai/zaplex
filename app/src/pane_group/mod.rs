@@ -178,7 +178,7 @@ pub use pane::{
     AnyPaneContent, BackingView, PaneConfiguration, PaneConfigurationEvent, PaneContent, PaneEvent,
     PaneId, PaneView, TerminalPaneId,
 };
-pub use tree::{Direction, PaneData, PaneFlex, PaneNode, SplitDirection};
+pub use tree::{Direction, PaneData, PaneFlex, PaneLayout, PaneNode, SplitDirection};
 pub use working_directories::{WorkingDirectoriesEvent, WorkingDirectoriesModel};
 
 use self::pane::{DetachType, PaneViewEvent};
@@ -967,6 +967,10 @@ impl PaneMoveBundle {
             visible_pane: pane,
             temporary_original: None,
         }
+    }
+
+    fn pane_id(&self) -> PaneId {
+        self.visible_pane.as_pane().id()
     }
 }
 
@@ -4898,13 +4902,8 @@ impl PaneGroup {
         direction: Direction,
         ctx: &mut ViewContext<Self>,
     ) {
-        let PaneMoveBundle {
-            visible_pane,
-            temporary_original,
-        } = pane;
-        let visible_pane_id = visible_pane.as_pane().id();
-        let Some(added_pane_id) = self.add_pane_with_options(
-            visible_pane,
+        self.add_moved_pane(
+            pane,
             AddPaneOptions {
                 direction,
                 base_pane_id: None,
@@ -4913,13 +4912,27 @@ impl PaneGroup {
                 emit_app_state_changed: true,
             },
             ctx,
-        ) else {
-            return;
-        };
+        );
+    }
+
+    /// Adds a pane moved out of another group and restores a file manager
+    /// overlay's relation to the terminal it covers. Returns the added pane.
+    fn add_moved_pane(
+        &mut self,
+        pane: PaneMoveBundle,
+        options: AddPaneOptions,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<PaneId> {
+        let PaneMoveBundle {
+            visible_pane,
+            temporary_original,
+        } = pane;
+        let visible_pane_id = visible_pane.as_pane().id();
+        let added_pane_id = self.add_pane_with_options(visible_pane, options, ctx)?;
         debug_assert_eq!(added_pane_id, visible_pane_id);
 
         let Some(original) = temporary_original else {
-            return;
+            return Some(visible_pane_id);
         };
         let original_pane_id = original.as_pane().id();
         if self.init_pane(original, ctx).is_none() {
@@ -4929,7 +4942,7 @@ impl PaneGroup {
             self.panes.remove(visible_pane_id);
             self.pane_contents.remove(&visible_pane_id);
             self.handle_pane_count_change(ctx);
-            return;
+            return None;
         }
         if !self
             .panes
@@ -4943,11 +4956,167 @@ impl PaneGroup {
             self.panes.remove(visible_pane_id);
             self.pane_contents.remove(&visible_pane_id);
             self.handle_pane_count_change(ctx);
-            return;
+            return None;
         }
         self.pane_history.push(original_pane_id);
         self.handle_pane_count_change(ctx);
         ctx.emit(Event::AppStateChanged);
+        Some(visible_pane_id)
+    }
+
+    /// Whether this group can hand all its visible panes to another tab: no
+    /// hidden pane still runs something (a background job or a child agent)
+    /// and no pane move is in flight.
+    pub(crate) fn can_join_another_tab(&self) -> bool {
+        !self.panes.has_hidden_panes_in_use()
+    }
+
+    /// Removes every visible pane, with their layout, to join another tab.
+    /// Panes closed for undo are discarded first, so removing the last visible
+    /// pane closes this group's tab. `None` leaves the group untouched.
+    pub(crate) fn take_panes_for_join(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<(PaneLayout, Vec<PaneMoveBundle>)> {
+        if !self.can_join_another_tab() {
+            return None;
+        }
+        let layout = self.panes.visible_layout()?;
+        let pane_ids = layout.pane_ids();
+        let all_present = pane_ids.iter().all(|pane_id| {
+            self.pane_contents.contains_key(pane_id)
+                && self
+                    .panes
+                    .original_pane_for_replacement(*pane_id)
+                    .is_none_or(|original_id| self.pane_contents.contains_key(&original_id))
+        });
+        if !all_present {
+            log::error!("Could not find all pane data needed to join another tab");
+            return None;
+        }
+        self.clear_hidden_closed_panes(ctx);
+        let panes = pane_ids
+            .iter()
+            .filter_map(|pane_id| self.remove_pane_for_move(pane_id, ctx))
+            .collect::<Vec<_>>();
+        let moved = panes
+            .iter()
+            .map(PaneMoveBundle::pane_id)
+            .collect::<Vec<_>>();
+        let layout = layout.retain(&|pane_id| moved.contains(&pane_id))?;
+        Some((layout, panes))
+    }
+
+    /// Inserts panes taken from another tab ([`Self::take_panes_for_join`])
+    /// as a split at `direction` of `base_pane_id`. Sibling order and nesting
+    /// are kept; the joined panes start with even sizes. Focuses `focus` when
+    /// it is among them, else the first joined pane.
+    pub(crate) fn insert_joined_panes(
+        &mut self,
+        base_pane_id: PaneId,
+        direction: Direction,
+        layout: PaneLayout,
+        panes: Vec<PaneMoveBundle>,
+        focus: Option<PaneId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let mut panes = panes
+            .into_iter()
+            .map(|pane| (pane.pane_id(), pane))
+            .collect::<HashMap<_, _>>();
+        let first_pane = layout.first_pane();
+        if self.place_joined_pane(first_pane, base_pane_id, direction, &mut panes, ctx) {
+            self.expand_joined_layout(&layout, &mut panes, ctx);
+        }
+        // A pane whose neighbour could not be placed must not be lost: it
+        // joins at the edge of the whole tab instead.
+        for pane_id in layout.pane_ids() {
+            if let Some(pane) = panes.remove(&pane_id) {
+                log::warn!("Joined pane {pane_id:?} placed at the tab edge");
+                self.add_moved_pane(
+                    pane,
+                    AddPaneOptions {
+                        direction,
+                        base_pane_id: None,
+                        focus_new_pane: false,
+                        visibility: NewPaneVisibility::Visible,
+                        emit_app_state_changed: true,
+                    },
+                    ctx,
+                );
+            }
+        }
+        let visible = self.panes.visible_pane_ids();
+        let focus = focus
+            .filter(|pane_id| visible.contains(pane_id))
+            .or_else(|| visible.contains(&first_pane).then_some(first_pane));
+        if let Some(pane_id) = focus {
+            self.focus_pane_by_id(pane_id, ctx);
+        }
+        ctx.notify();
+    }
+
+    /// Places one joined pane next to an already placed one.
+    fn place_joined_pane(
+        &mut self,
+        pane_id: PaneId,
+        base_pane_id: PaneId,
+        direction: Direction,
+        panes: &mut HashMap<PaneId, PaneMoveBundle>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !self.panes.visible_pane_ids().contains(&base_pane_id) {
+            return false;
+        }
+        let Some(pane) = panes.remove(&pane_id) else {
+            return false;
+        };
+        self.add_moved_pane(
+            pane,
+            AddPaneOptions {
+                direction,
+                base_pane_id: Some(base_pane_id),
+                focus_new_pane: false,
+                visibility: NewPaneVisibility::Visible,
+                emit_app_state_changed: true,
+            },
+            ctx,
+        )
+        .is_some()
+    }
+
+    /// Rebuilds `layout` around its first pane, which is already placed. Each
+    /// split first places its children's first panes side by side, then
+    /// expands every child, so nesting follows the original layout.
+    fn expand_joined_layout(
+        &mut self,
+        layout: &PaneLayout,
+        panes: &mut HashMap<PaneId, PaneMoveBundle>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let PaneLayout::Split { axis, children } = layout else {
+            return;
+        };
+        let forward = match axis {
+            SplitDirection::Horizontal => Direction::Right,
+            SplitDirection::Vertical => Direction::Down,
+        };
+        let mut placed = vec![&children[0]];
+        for pair in children.windows(2) {
+            let (previous, next) = (&pair[0], &pair[1]);
+            if self.place_joined_pane(
+                next.first_pane(),
+                previous.first_pane(),
+                forward,
+                panes,
+                ctx,
+            ) {
+                placed.push(next);
+            }
+        }
+        for child in placed {
+            self.expand_joined_layout(child, panes, ctx);
+        }
     }
 
     /// We return a pane_id if the pane successfully attached
