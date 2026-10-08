@@ -162,6 +162,23 @@ impl PaneLayout {
             }
         }
     }
+
+    /// A tree node with this layout; sibling panes start with even sizes.
+    fn to_node(&self) -> PaneNode {
+        match self {
+            PaneLayout::Leaf(pane_id) => PaneNode::Leaf(*pane_id),
+            PaneLayout::Split { axis, children } => PaneNode::Branch(PaneBranch {
+                axis: *axis,
+                nodes: children
+                    .iter()
+                    .map(|child| (DEFAULT_FLEX_SIZE, child.to_node()))
+                    .collect(),
+                dividers: iter::repeat_with(Divider::new)
+                    .take(children.len().saturating_sub(1))
+                    .collect(),
+            }),
+        }
+    }
 }
 
 /// Single Node in the tree of panes
@@ -613,6 +630,26 @@ impl PaneData {
             .retain(&|pane_id| !self.is_pane_hidden(&pane_id))
     }
 
+    /// Places `layout`, whose panes are not in this tree yet, next to `target`
+    /// in `direction`. The target's leaf becomes a split of the target and the
+    /// whole layout, so the layout keeps its own structure and shares only the
+    /// target's former space; neighbouring panes keep their sizes. Returns
+    /// false when `target` is not a leaf of this tree.
+    pub fn graft(&mut self, target: PaneId, layout: &PaneLayout, direction: Direction) -> bool {
+        let grafted = self.root.graft(target, layout, direction);
+        if grafted {
+            self.len += layout.pane_ids().len();
+        }
+        grafted
+    }
+
+    /// Places `layout` at the `direction` edge of the whole tree.
+    pub fn graft_at_root(&mut self, layout: &PaneLayout, direction: Direction) {
+        let root = mem::replace(&mut self.root, PaneNode::Leaf(layout.first_pane()));
+        self.root = PaneNode::Branch(PaneBranch::new(root, layout.to_node(), direction));
+        self.len += layout.pane_ids().len();
+    }
+
     /// Whether a hidden pane still has something running in it (a background
     /// job or a child agent) or is in the middle of a move. Such a group cannot
     /// hand over its visible panes and close, because the hidden pane would go
@@ -826,6 +863,24 @@ impl PaneNode {
                     PaneNode::Branch(PaneBranch::for_leaves(*old_pane_id, new_pane_id, direction));
             }
             PaneNode::Branch(branch) => branch.insert(new_pane_id, direction),
+        }
+    }
+
+    fn graft(&mut self, target: PaneId, layout: &PaneLayout, direction: Direction) -> bool {
+        match self {
+            PaneNode::Leaf(pane_id) if *pane_id == target => {
+                *self = PaneNode::Branch(PaneBranch::new(
+                    PaneNode::Leaf(target),
+                    layout.to_node(),
+                    direction,
+                ));
+                true
+            }
+            PaneNode::Leaf(_) => false,
+            PaneNode::Branch(branch) => branch
+                .nodes
+                .iter_mut()
+                .any(|(_, node)| node.graft(target, layout, direction)),
         }
     }
 

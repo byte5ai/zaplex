@@ -34137,7 +34137,7 @@ impl Workspace {
         }
         let source = &self.tabs.get(dragged_index)?.pane_group;
         let target = &self.tabs.get(self.active_tab_index)?.pane_group;
-        if !source.as_ref(ctx).can_join_another_tab()
+        if !source.as_ref(ctx).can_join_tab(target.as_ref(ctx))
             || self.tab_has_pending_cross_window_daemon_start(dragged_index, ctx)
         {
             return None;
@@ -34188,8 +34188,12 @@ impl Workspace {
         else {
             return;
         };
+        let source_group = self.tabs[source_index].pane_group.clone();
         if source_index == self.active_tab_index
             || self.tab_has_pending_cross_window_daemon_start(source_index, ctx)
+            || !source_group
+                .as_ref(ctx)
+                .can_join_tab(target_group.as_ref(ctx))
             || !target_group
                 .as_ref(ctx)
                 .visible_pane_ids()
@@ -34197,29 +34201,20 @@ impl Workspace {
         {
             return;
         }
-        let source_group = self.tabs[source_index].pane_group.clone();
         let focused = source_group.as_ref(ctx).focused_pane_id(ctx);
-        let Some((layout, panes)) =
-            source_group.update(ctx, |group, ctx| group.take_panes_for_join(ctx))
+        let Some(joined) = source_group.update(ctx, |group, ctx| group.take_panes_for_join(ctx))
         else {
             return;
         };
         // A single-pane tab may still carry its host only at tab level; keep
         // that route with the pane now that the tab goes away.
         if let Some(node_id) = self.ssh_tab_nodes.remove(&source_group.id()) {
-            if let [pane_id] = layout.pane_ids().as_slice() {
+            if let [pane_id] = joined.pane_ids().as_slice() {
                 self.ssh_pane_nodes.entry(*pane_id).or_insert(node_id);
             }
         }
         target_group.update(ctx, |group, ctx| {
-            group.insert_joined_panes(
-                target.pane_id,
-                target.direction,
-                layout,
-                panes,
-                Some(focused),
-                ctx,
-            );
+            group.insert_joined_panes(target.pane_id, target.direction, joined, Some(focused), ctx);
         });
         self.focus_active_tab(ctx);
     }

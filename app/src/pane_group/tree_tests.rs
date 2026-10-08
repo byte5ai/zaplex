@@ -877,3 +877,56 @@ fn only_running_or_moving_hidden_panes_block_handing_over_a_group() {
     tree.hide_pane_for_child_agent(hidden);
     assert!(tree.has_hidden_panes_in_use());
 }
+
+#[test]
+fn graft_keeps_the_joined_layout_inside_the_target_pane() {
+    let [neighbour, target, a, b] = [(); 4].map(|_| PaneId::dummy_pane_id());
+    let mut tree = PaneData::new(neighbour);
+    tree.split(neighbour, target, Direction::Right);
+    let joined = PaneLayout::Split {
+        axis: SplitDirection::Horizontal,
+        children: vec![PaneLayout::Leaf(a), PaneLayout::Leaf(b)],
+    };
+
+    assert!(tree.graft(target, &joined, Direction::Right));
+
+    // Same axis as the parent split, yet nested: the joined panes share only
+    // the target's former space and the neighbour is untouched.
+    assert_eq!(
+        tree.visible_layout(),
+        Some(PaneLayout::Split {
+            axis: SplitDirection::Horizontal,
+            children: vec![
+                PaneLayout::Leaf(neighbour),
+                PaneLayout::Split {
+                    axis: SplitDirection::Horizontal,
+                    children: vec![PaneLayout::Leaf(target), joined.clone()],
+                },
+            ],
+        })
+    );
+    assert_eq!(tree.len(), 4);
+    assert_eq!(tree.visible_pane_ids(), vec![neighbour, target, a, b]);
+}
+
+#[test]
+fn graft_before_the_target_and_at_the_root() {
+    let [target, joined_pane, missing, edge] = [(); 4].map(|_| PaneId::dummy_pane_id());
+    let mut tree = PaneData::new(target);
+
+    assert!(tree.graft(target, &PaneLayout::Leaf(joined_pane), Direction::Up));
+    assert_eq!(
+        tree.visible_layout(),
+        Some(PaneLayout::Split {
+            axis: SplitDirection::Vertical,
+            children: vec![PaneLayout::Leaf(joined_pane), PaneLayout::Leaf(target)],
+        })
+    );
+
+    assert!(!tree.graft(missing, &PaneLayout::Leaf(edge), Direction::Right));
+    assert_eq!(tree.len(), 2);
+
+    tree.graft_at_root(&PaneLayout::Leaf(edge), Direction::Right);
+    assert_eq!(tree.visible_pane_ids(), vec![joined_pane, target, edge]);
+    assert_eq!(tree.len(), 3);
+}

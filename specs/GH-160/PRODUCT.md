@@ -284,8 +284,11 @@ The previous static illustrations are superseded, not alternative approved layou
     existing pane left, right, above, or below without opening a connection, PTY, or agent. Moving
     to another tab remains supported. Dragging an inactive tab out of the tab bar (or the vertical
     tabs panel) onto a pane of the visible tab inserts all of its panes, with their layout, at the
-    indicated edge; the source tab closes and no connection, PTY, or agent restarts. Tabs activate
-    on click so the visible tab stays visible while another tab is dragged. Invalid or cancelled
+    indicated edge, inside that pane's former space; other panes keep their sizes. The source tab
+    closes and no connection, PTY, or agent restarts; child-agent bindings move along. Tabs with
+    hidden running panes, a pending conversation restore or summarization, or a provisional daemon
+    start offer no drop target, and editor panes join only a tab without editors. Tabs activate on
+    click so the visible tab stays visible while another tab is dragged. Invalid or cancelled
     drops leave the layout intact, and file drag, text selection, splitter resize, and
     header-button clicks are not pane moves.
 
