@@ -62,8 +62,6 @@ use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
 use zaplex_remote_session::agent_binding::{
     AgentIdentity, AgentPtyBindings, BindingError, BindingRequest,
 };
-#[cfg(unix)]
-use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
     supported_features, FEATURE_AGENT_ACCOUNT_ROUTING_V1, FEATURE_AGENT_MODEL_DISCOVERY_V1,
     FEATURE_AGENT_PROCESS_SIGNAL_V1, FEATURE_AGENT_PTY_BINDING_V2,
@@ -71,6 +69,10 @@ use zaplex_remote_session::types::{
     FEATURE_MANAGED_AGENT_FLEET_V1, FEATURE_MANAGED_OPEN_ATTACH_V1,
     FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
     FEATURE_SAFE_FILE_TRANSACTIONS_V2,
+};
+#[cfg(unix)]
+use zaplex_remote_session::types::{
+    FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SESSION_TAKEOVER_V1, SESSION_NOTICE_ATTACH_TAKEN_OVER,
 };
 
 // Buffer-sync related: depends on GlobalBufferModel, which server-local operations are only
@@ -441,6 +443,18 @@ impl InFlightOpen {
                 .iter()
                 .any(|waiter| waiter.attempt == self.latest_attempt)
     }
+}
+
+/// Whether an attach may move a session away from another registered
+/// connection. Only a client that negotiated the takeover capability and names
+/// the exact current PTY generation qualifies; id-only legacy attaches never do.
+#[cfg(unix)]
+fn attach_may_take_over(
+    client_supports_session_takeover: bool,
+    expected_generation: Option<u64>,
+    current_generation: u64,
+) -> bool {
+    client_supports_session_takeover && expected_generation == Some(current_generation)
 }
 
 #[cfg(unix)]
@@ -6557,12 +6571,19 @@ impl ServerModel {
         Ok(())
     }
 
+    fn client_supports_session_takeover(&self, conn_id: ConnectionId) -> bool {
+        self.connection_features
+            .get(&conn_id)
+            .is_some_and(|features| features.contains(FEATURE_SESSION_TAKEOVER_V1))
+    }
+
     fn handle_attach_session(
         &mut self,
         conn_id: ConnectionId,
         msg: AttachSession,
     ) -> HandlerOutcome {
         let client_supports_agent_pty_binding = self.client_supports_agent_pty_binding(conn_id);
+        let client_supports_session_takeover = self.client_supports_session_takeover(conn_id);
         let managed_session = self
             .sessions
             .get(&msg.session_id)
@@ -6632,9 +6653,23 @@ impl ServerModel {
                 message: format!("stale generation for session {}", msg.session_id),
             }));
         }
-        if session.attached != conn_id
+        // A different connection that is still registered owns the session.
+        // The daemon cannot tell a live second window from a half-open
+        // transport (no liveness probe; a dead SSH link keeps its proxy alive
+        // until sshd's keepalive gives up). Every connection to this per-user
+        // socket is the same OS user, so a capability-aware client that proves
+        // the exact PTY generation may take the session over. The previous
+        // owner is only told after every remaining check below has passed.
+        let previous_owner = (session.attached != conn_id
             && session.attached != uuid::Uuid::nil()
-            && self.connection_senders.contains_key(&session.attached)
+            && self.connection_senders.contains_key(&session.attached))
+        .then_some(session.attached);
+        if previous_owner.is_some()
+            && !attach_may_take_over(
+                client_supports_session_takeover,
+                msg.expected_generation,
+                session.generation,
+            )
         {
             return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
                 code: ErrorCode::InvalidRequest.into(),
@@ -6703,6 +6738,24 @@ impl ServerModel {
             replay.len(),
             bootstrap_preamble.len(),
         );
+        if let Some(previous_owner) = previous_owner {
+            // Output, input, resize, and agent-binding authority already moved
+            // to `conn_id`. The previous connection is left open because it may
+            // serve other sessions; it only learns that this view is detached.
+            log::info!(
+                "Daemon: session {} taken over from conn {previous_owner} by conn {conn_id}",
+                msg.session_id
+            );
+            self.send_server_message(
+                Some(previous_owner),
+                None,
+                server_message::Message::SessionNotice(SessionNotice {
+                    session_id: msg.session_id.clone(),
+                    kind: SESSION_NOTICE_ATTACH_TAKEN_OVER.to_string(),
+                    detail: String::new(),
+                }),
+            );
+        }
         HandlerOutcome::Sync(server_message::Message::SessionAttached(SessionAttached {
             session_id: msg.session_id,
             size: Some(size),

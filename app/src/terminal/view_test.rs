@@ -184,6 +184,101 @@ fn only_remote_terminal_draft_changes_request_a_snapshot() {
 }
 
 #[test]
+fn remote_draft_edits_request_a_save_without_workspace_refresh() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let save_requests = Rc::new(RefCell::new(0usize));
+        let workspace_refreshes = Rc::new(RefCell::new(0usize));
+        let observed_saves = save_requests.clone();
+        app.add_global_action("workspace:save_app", move |_: &(), _: &mut AppContext| {
+            *observed_saves.borrow_mut() += 1;
+        });
+        let observed_refreshes = workspace_refreshes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if matches!(event, Event::AppStateChanged) {
+                    *observed_refreshes.borrow_mut() += 1;
+                }
+            });
+        });
+        let session = warp_core::SessionId::from(81u64);
+        let editor = terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(session), ctx);
+            view.input.as_ref(ctx).editor().clone()
+        });
+        let refreshes_before_typing = *workspace_refreshes.borrow();
+
+        for text in ["c", "d", " ", "x"] {
+            let saves_before = *save_requests.borrow();
+            editor.update(&mut app, |editor, ctx| editor.user_insert(text, ctx));
+            assert!(
+                *save_requests.borrow() > saves_before,
+                "typing {text:?} must schedule the remote draft snapshot"
+            );
+        }
+
+        // `AppStateChanged` drives the workspace's pane/session refresh; a
+        // draft edit must not run it once per keystroke.
+        assert_eq!(*workspace_refreshes.borrow(), refreshes_before_typing);
+        terminal.read(&app, |view, ctx| {
+            // `TerminalPane::snapshot` persists exactly this buffer as the draft.
+            assert_eq!(view.input_draft(ctx), "cd x");
+        });
+    });
+}
+
+#[test]
+fn ready_remote_input_keeps_accepting_keys_after_space_with_ghost_text() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let session = warp_core::SessionId::from(82u64);
+        let editor = terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Transport, Some(session), ctx);
+            view.input.as_ref(ctx).editor().clone()
+        });
+        // Keys are refused until the attach is confirmed.
+        editor.update(&mut app, |editor, ctx| editor.user_insert("z", ctx));
+        terminal.update(&mut app, |view, ctx| {
+            assert_eq!(view.input_draft(ctx), "");
+            view.set_remote_input_phase(RemoteInputPhase::Ready, Some(session), ctx);
+            view.focus_input_box(ctx);
+        });
+
+        for text in ["c", "d", " "] {
+            editor.update(&mut app, |editor, ctx| editor.user_insert(text, ctx));
+        }
+        // A history suggestion is showing as ghost text behind `cd `.
+        editor.update(&mut app, |editor, ctx| {
+            editor.set_autosuggestion(
+                "/home/dev/projects/app && codex resume 019f",
+                AutosuggestionLocation::EndOfBuffer,
+                AutosuggestionType::Command {
+                    was_intelligent_autosuggestion: false,
+                },
+                ctx,
+            );
+        });
+        for text in ["x", "y"] {
+            editor.update(&mut app, |editor, ctx| editor.user_insert(text, ctx));
+        }
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(view.input_draft(ctx), "cd xy");
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Ready));
+            let input = view.input.as_ref(ctx);
+            assert!(input.ordinary_command_input_is_ready());
+            assert_eq!(
+                input.editor().as_ref(ctx).interaction_state(ctx),
+                InteractionState::Editable
+            );
+            assert!(input.editor().is_focused(ctx));
+        });
+    });
+}
+
+#[test]
 fn failed_and_cancelled_remote_readiness_expose_retry_actions() {
     assert!(remote_readiness_retry_visible(
         RemoteInputPhase::Failed,
@@ -342,6 +437,123 @@ fn remote_session_notice_failure_detail_survives_failure_and_rejects_stale_updat
         terminal.read(&app, |view, _| {
             assert!(view.remote_session_error.is_none());
             assert_eq!(view.remote_session_notice(), None);
+        });
+    });
+}
+
+/// Teardown of a cancelled remote restore exits its terminal model. That must
+/// not show the shell-start failure banner or close the pane, while the same
+/// exit on a pane that was not cancelled still does.
+#[test]
+fn cancelled_remote_restore_teardown_shows_no_shell_failure_banner() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let session = warp_core::SessionId::from(941u64);
+        for cancelled in [false, true] {
+            let terminal = add_window_with_terminal(&mut app, None);
+            let exits = Rc::new(RefCell::new(0usize));
+            let observed = exits.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                    if matches!(event, Event::Exited) {
+                        *observed.borrow_mut() += 1;
+                    }
+                });
+            });
+            let banner_shown = terminal.update(&mut app, |view, ctx| {
+                view.is_login_shell_bootstrapped = true;
+                view.set_remote_input_phase(RemoteInputPhase::Attach, Some(session), ctx);
+                view.show_remote_session_error("connection lost".to_string(), Some(session), ctx);
+                view.set_remote_input_phase(RemoteInputPhase::Failed, Some(session), ctx);
+                if cancelled {
+                    view.cancel_remote_input_readiness(ctx);
+                }
+                view.handle_terminal_event(
+                    &ModelEvent::Exit {
+                        reason: crate::terminal::model::terminal_model::ExitReason::PtyDisconnected,
+                    },
+                    ctx,
+                );
+                if cancelled {
+                    assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Cancelled));
+                }
+                view.inline_banners_state
+                    .shell_process_terminated_banner
+                    .is_some()
+            });
+            assert_eq!(banner_shown, !cancelled, "cancelled: {cancelled}");
+            assert_eq!(
+                *exits.borrow(),
+                usize::from(!cancelled),
+                "cancelled: {cancelled}"
+            );
+        }
+    });
+}
+
+#[test]
+fn remote_notice_tone_separates_failures_from_ended_sessions() {
+    assert_eq!(
+        remote_notice_tone(RemoteInputPhase::Attach, false),
+        RemoteNoticeTone::Progress
+    );
+    assert_eq!(
+        remote_notice_tone(RemoteInputPhase::Failed, false),
+        RemoteNoticeTone::Error
+    );
+    assert_eq!(
+        remote_notice_tone(RemoteInputPhase::Failed, true),
+        RemoteNoticeTone::Neutral,
+        "a shell that ended on its own is not a connection failure"
+    );
+    assert_eq!(
+        remote_notice_tone(RemoteInputPhase::Cancelled, false),
+        RemoteNoticeTone::Neutral
+    );
+    assert!(remote_readiness_close_visible(
+        RemoteInputPhase::Failed,
+        true
+    ));
+    assert!(!remote_readiness_close_visible(
+        RemoteInputPhase::Failed,
+        false
+    ));
+}
+
+/// An ended remote session relabels its actions to New session / Close and
+/// keeps no stale reconnect progress or technical detail.
+#[test]
+fn ended_remote_session_offers_new_session_and_close() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        let terminal = add_window_with_terminal(&mut app, None);
+        let session = warp_core::SessionId::from(942u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.set_remote_input_phase(RemoteInputPhase::Attach, Some(session), ctx);
+            view.show_remote_session_progress(Some("attempt 2/11".to_string()), Some(session), ctx);
+            assert_eq!(view.remote_session_progress(), Some("attempt 2/11"));
+            view.show_remote_session_failure(
+                "Session ended (exit code 1).".to_string(),
+                None,
+                true,
+                Some(session),
+                ctx,
+            );
+            view.set_remote_input_phase(RemoteInputPhase::Failed, Some(session), ctx);
+        });
+        terminal.read(&app, |view, ctx| {
+            assert!(view.remote_session_has_ended());
+            assert!(view.remote_session_progress().is_none());
+            assert!(view.remote_session_error_detail().is_none());
+            assert_eq!(
+                view.remote_restore_retry_button.as_ref(ctx).label(),
+                crate::t!("terminal-remote-readiness-new-session")
+            );
+            assert_eq!(
+                view.remote_restore_cancel_button.as_ref(ctx).label(),
+                crate::t!("terminal-remote-readiness-close")
+            );
         });
     });
 }
@@ -5200,6 +5412,7 @@ fn file_manager_directory_quotes_literal_paths_for_each_shell() {
 fn file_manager_directory_discards_changed_session_and_superseded_navigation() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let toasts = record_toasts(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
         terminal.update(&mut app, |view, ctx| {
             view.file_manager_origin = Some(FileManagerOrigin::Session {
@@ -5209,12 +5422,117 @@ fn file_manager_directory_discards_changed_session_and_superseded_navigation() {
             view.pending_file_manager_directory = Some(PathBuf::from("/remote/only"));
             view.apply_file_manager_directory(ctx);
             assert!(view.pending_file_manager_directory.is_none());
+            assert!(view.file_manager_origin.is_none());
             view.pending_file_manager_directory = Some(PathBuf::from("/old/navigation"));
-            view.begin_file_manager_navigation(true, ctx);
+            view.begin_file_manager_navigation(true, true, ctx);
             assert!(view.pending_file_manager_directory.is_none());
             view.finish_file_manager_navigation(None, ctx);
             assert!(view.pending_file_manager_directory.is_none());
+            assert!(view.file_manager_origin.is_none());
         });
+        // The bound shell is gone: the directory is reported, never dropped.
+        // Nothing was listed in the superseded navigation, so it stays quiet.
+        let toasts = toasts.lock().unwrap().clone();
+        assert_eq!(toasts.len(), 1, "{toasts:?}");
+        assert!(toasts[0].contains("/remote/only"), "{toasts:?}");
+    });
+}
+
+/// Registers the global toast stack and records every ephemeral toast text.
+fn record_toasts(app: &mut App) -> Arc<std::sync::Mutex<Vec<String>>> {
+    // Toast texts carry the path only once the catalog is loaded.
+    crate::i18n::init(Some("en"));
+    app.add_singleton_model(|_| ToastStack);
+    let toasts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = toasts.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_model(&ToastStack::handle(ctx), move |_, event, _| {
+            if let crate::workspace::ToastStackEvent::AddEphemeralToast { toast, .. } = event {
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(toast.main_text_for_test().to_owned());
+            }
+        });
+    });
+    toasts
+}
+
+#[test]
+fn file_manager_directory_unproven_shell_is_offered_cd_but_never_sent() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let toasts = record_toasts(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let navigated = PathBuf::from("/srv/it's a dir");
+        let (executed_tx, executed_rx) = async_channel::unbounded();
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let InputEvent::ExecuteCommand(event) = event {
+                    let _ = executed_tx.try_send(event.command.clone());
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            // A remote shell this pane did not connect itself (no daemon
+            // connection, no classic-SSH root): its host cannot be proven.
+            let manual_ssh = SessionId::from(910u64);
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(manual_ssh)
+                        .with_session_type(BootstrapSessionType::ZaplexifiedRemote),
+                );
+            });
+            view.active_block_metadata = Some(BlockMetadata::new(
+                Some(manual_ssh),
+                Some("/home/dev".to_string()),
+            ));
+            view.begin_file_manager_navigation(false, true, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Unproven {
+                    same_host: true,
+                    ..
+                })
+            ));
+            view.finish_file_manager_navigation(Some(navigated.clone()), ctx);
+            assert!(view.file_manager_origin.is_none());
+            assert!(view.pending_file_manager_directory.is_none());
+            let shell = view.active_session_shell_type(ctx).unwrap();
+            assert_eq!(
+                view.input_draft(ctx),
+                file_manager_directory_command(&navigated, shell).unwrap(),
+                "an empty editor is prefilled with the quoted command"
+            );
+
+            // A draft is never replaced: the folder is named in a notice instead.
+            view.restore_input_draft("git status".to_string(), ctx);
+            view.begin_file_manager_navigation(false, true, ctx);
+            view.finish_file_manager_navigation(Some(PathBuf::from("/srv/second")), ctx);
+            assert_eq!(view.input_draft(ctx), "git status");
+
+            // Another host's directory is never offered as a command.
+            view.input
+                .update(ctx, |input, ctx| input.replace_buffer_content("", ctx));
+            view.begin_file_manager_navigation(false, false, ctx);
+            view.finish_file_manager_navigation(Some(PathBuf::from("/other/host")), ctx);
+            assert_eq!(view.input_draft(ctx), "");
+
+            // Closing on the shell's own directory is not a navigation.
+            view.begin_file_manager_navigation(false, true, ctx);
+            view.finish_file_manager_navigation(Some(PathBuf::from("/home/dev")), ctx);
+            assert_eq!(view.input_draft(ctx), "");
+        });
+        assert!(
+            executed_rx.try_recv().is_err(),
+            "an unproven directory must never be executed"
+        );
+        let toasts = toasts.lock().unwrap().clone();
+        assert_eq!(toasts.len(), 2, "{toasts:?}");
+        assert!(toasts[0].contains("/srv/second"), "{toasts:?}");
+        assert!(toasts[1].contains("/other/host"), "{toasts:?}");
     });
 }
 
@@ -5222,6 +5540,7 @@ fn file_manager_directory_discards_changed_session_and_superseded_navigation() {
 fn file_manager_directory_restore_never_binds_remote_paths_to_bootstrap_shell() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let toasts = record_toasts(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
         terminal.update(&mut app, |view, ctx| {
             view.restore_file_manager_navigation(false, ctx);
@@ -5239,6 +5558,14 @@ fn file_manager_directory_restore_never_binds_remote_paths_to_bootstrap_shell() 
             assert!(view.file_manager_origin.is_none());
             assert!(view.pending_file_manager_directory.is_none());
         });
+        // First the wait is announced, then the failed connection is reported.
+        let toasts = toasts.lock().unwrap().clone();
+        assert_eq!(toasts.len(), 2, "{toasts:?}");
+        assert_ne!(toasts[0], toasts[1]);
+        assert!(
+            toasts.iter().all(|toast| toast.contains("/remote/project")),
+            "{toasts:?}"
+        );
     });
 }
 
@@ -5246,6 +5573,7 @@ fn file_manager_directory_restore_never_binds_remote_paths_to_bootstrap_shell() 
 fn file_manager_directory_restore_is_superseded_by_another_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        let _toasts = record_toasts(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
         terminal.update(&mut app, |view, ctx| {
             view.restore_file_manager_navigation(false, ctx);
@@ -5305,10 +5633,10 @@ fn file_manager_directory_binds_only_matching_root_session() {
             view.remote_input_phase = Some(RemoteInputPhase::Ready);
             view.is_login_shell_bootstrapped = true;
             view.active_block_metadata = Some(BlockMetadata::new(Some(nested), None));
-            view.begin_file_manager_navigation(false, ctx);
-            assert!(view.file_manager_origin.is_none());
-            view.begin_file_manager_navigation(true, ctx);
-            assert!(view.file_manager_origin.is_none());
+            view.begin_file_manager_navigation(false, true, ctx);
+            assert!(is_unproven_on_same_host(view));
+            view.begin_file_manager_navigation(true, true, ctx);
+            assert!(is_unproven_on_same_host(view));
             view.restore_file_manager_navigation(false, ctx);
             assert!(matches!(
                 view.file_manager_origin,
@@ -5316,8 +5644,8 @@ fn file_manager_directory_binds_only_matching_root_session() {
             ));
 
             view.active_block_metadata = Some(BlockMetadata::new(Some(legacy), None));
-            view.begin_file_manager_navigation(false, ctx);
-            assert!(view.file_manager_origin.is_none());
+            view.begin_file_manager_navigation(false, true, ctx);
+            assert!(is_unproven_on_same_host(view));
             view.restore_file_manager_navigation(false, ctx);
             assert!(matches!(
                 view.file_manager_origin,
@@ -5325,7 +5653,7 @@ fn file_manager_directory_binds_only_matching_root_session() {
             ));
 
             view.active_block_metadata = Some(BlockMetadata::new(Some(root), None));
-            view.begin_file_manager_navigation(false, ctx);
+            view.begin_file_manager_navigation(false, true, ctx);
             assert!(matches!(
                 view.file_manager_origin,
                 Some(FileManagerOrigin::Session { id, .. }) if id == root
@@ -5335,11 +5663,42 @@ fn file_manager_directory_binds_only_matching_root_session() {
                 view.file_manager_origin,
                 Some(FileManagerOrigin::Session { id, .. }) if id == root
             ));
+            // The pane's terminal is bound to another host than the one browsed.
+            view.begin_file_manager_navigation(false, false, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Unproven {
+                    same_host: false,
+                    ..
+                })
+            ));
+
+            // Classic SSH: no daemon connection. A remote shell is bound only
+            // when it is the shell that completed this pane's own ssh connection.
             view.remote_input_session_id = None;
-            view.begin_file_manager_navigation(false, ctx);
-            assert!(view.file_manager_origin.is_none());
+            view.begin_file_manager_navigation(false, true, ctx);
+            assert!(is_unproven_on_same_host(view));
+            view.classic_ssh_root_session_id = Some(root);
+            view.begin_file_manager_navigation(false, true, ctx);
+            assert!(matches!(
+                view.file_manager_origin,
+                Some(FileManagerOrigin::Session { id, .. }) if id == root
+            ));
+            view.active_block_metadata = Some(BlockMetadata::new(Some(nested), None));
+            view.begin_file_manager_navigation(false, true, ctx);
+            assert!(is_unproven_on_same_host(view));
         });
     });
+}
+
+fn is_unproven_on_same_host(view: &TerminalView) -> bool {
+    matches!(
+        view.file_manager_origin,
+        Some(FileManagerOrigin::Unproven {
+            same_host: true,
+            ..
+        })
+    )
 }
 
 #[test]
@@ -5368,10 +5727,10 @@ fn file_manager_directory_rejects_local_subshell_namespaces() {
                 sessions.register_session_for_test(info);
             });
             view.active_block_metadata = Some(BlockMetadata::new(Some(nested), None));
-            view.begin_file_manager_navigation(true, ctx);
-            assert!(view.file_manager_origin.is_none());
+            view.begin_file_manager_navigation(true, true, ctx);
+            assert!(is_unproven_on_same_host(view));
             view.active_block_metadata = Some(BlockMetadata::new(Some(root), None));
-            view.begin_file_manager_navigation(true, ctx);
+            view.begin_file_manager_navigation(true, true, ctx);
             assert!(matches!(
                 view.file_manager_origin,
                 Some(FileManagerOrigin::Session { id, .. }) if id == root

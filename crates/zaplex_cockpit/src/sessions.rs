@@ -10,8 +10,12 @@
 //! or is mid-tool-run (working). States:
 //!
 //! - **Active** — the registry reports the session as `busy`.
-//! - **Waiting** — the last assistant turn ended (`stop_reason != tool_use`):
-//!   the session needs YOU. The cockpit's most important signal.
+//! - **Waiting** — the registry reports `waiting` (Claude Code writes it, with
+//!   a `waitingFor` reason, while a permission prompt, question or dialog is
+//!   open — [`SessionSnapshot::awaiting_input`]), or the last assistant turn
+//!   ended (`stop_reason != tool_use`; the ending line's `uuid` becomes
+//!   [`SessionSnapshot::turn_id`]). Whether that needs the user is decided by
+//!   the app's attention verdict, which also knows what was already seen.
 //! - **Monitor** — mid tool-run / live background job: working, hands off.
 //!
 //! [`idle_sessions`] covers the other half: conversations whose process is
@@ -196,6 +200,9 @@ fn is_real_reg(r: &RegEntry) -> bool {
 struct TranscriptTail {
     /// The assistant's last turn ended (`stop_reason != tool_use`) — waiting.
     ended: bool,
+    /// `uuid` of the assistant line that ended the last turn; `None` while a
+    /// turn is still running (or the line carries no id).
+    turn_id: Option<String>,
     model: String,
     /// Context-window fill of the latest assistant turn (input + cache tokens).
     ctx_tokens: u64,
@@ -236,6 +243,7 @@ fn read_transcript_tail(path: &Path) -> TranscriptTail {
     // claudeplex's parseSessionFile: assistant_end vs assistant_tool /
     // tool_result (Claude continues) vs plain user input.
     let mut last_kind_ended = false;
+    let mut last_assistant_uuid: Option<String> = None;
     for line in lines {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -268,6 +276,11 @@ fn read_transcript_tail(path: &Path) -> TranscriptTail {
                 }
                 let stop_reason = message.get("stop_reason").and_then(Value::as_str);
                 last_kind_ended = stop_reason != Some("tool_use");
+                last_assistant_uuid = v
+                    .get("uuid")
+                    .and_then(Value::as_str)
+                    .filter(|uuid| !uuid.is_empty())
+                    .map(str::to_string);
                 if let Some(model) = message.get("model").and_then(Value::as_str) {
                     tail.model = model.to_string();
                 }
@@ -305,6 +318,7 @@ fn read_transcript_tail(path: &Path) -> TranscriptTail {
         }
     }
     tail.ended = last_kind_ended;
+    tail.turn_id = last_kind_ended.then_some(last_assistant_uuid).flatten();
     tail
 }
 
@@ -334,11 +348,22 @@ fn transcript_modified(path: &Path, now: DateTime<Utc>) -> DateTime<Utc> {
         .unwrap_or(now)
 }
 
-/// claudeplex `stateOf`: busy → Active; live background job → Monitor;
-/// otherwise ended → Waiting, mid-run → Monitor.
+/// Claude Code's registry status while a permission prompt, question or
+/// dialog blocks the session (accompanied by a `waitingFor` reason).
+const REGISTRY_STATUS_WAITING: &str = "waiting";
+
+/// claudeplex `stateOf`: busy → Active; an open prompt → Waiting; live
+/// background job → Monitor; otherwise ended → Waiting, mid-run → Monitor.
+///
+/// The open-prompt check precedes the transcript: a pending permission
+/// request leaves an unanswered `tool_use` as the last line, which would
+/// otherwise read as "mid tool-run".
 fn state_of(status: &str, ended: bool, background: bool) -> SessionState {
     if status == "busy" {
         return SessionState::Active;
+    }
+    if status == REGISTRY_STATUS_WAITING {
+        return SessionState::Waiting;
     }
     if background {
         return SessionState::Monitor;
@@ -715,11 +740,18 @@ fn snapshot_of(
     let background = r.kind == "bg"
         && (r.status == "busy" || (now - last_activity).num_milliseconds() < ACTIVE_WINDOW_MS);
     let project = crate::project::resolve_project(Path::new(&r.cwd));
+    let state = force_state.unwrap_or_else(|| state_of(&r.status, tail.ended, background));
+    // Only a live registry entry can hold a prompt open; a dormant row's
+    // stale status says nothing about the present.
+    let awaiting_input = force_state.is_none() && r.status == REGISTRY_STATUS_WAITING;
+    let turn_id = (state == SessionState::Waiting && !awaiting_input)
+        .then_some(tail.turn_id)
+        .flatten();
     SessionSnapshot {
         session_id: r.session_id,
         cwd: r.cwd,
         name: r.name,
-        state: force_state.unwrap_or_else(|| state_of(&r.status, tail.ended, background)),
+        state,
         provider: Provider::Claude,
         model: tail.model,
         // Not in the transcript; populated at launch time later.
@@ -742,6 +774,9 @@ fn snapshot_of(
         task_state: task_cache.parse_file(Provider::Claude, transcript),
         last_activity,
         pid: r.pid,
+        awaiting_input,
+        turn_id,
+        attention: None,
     }
 }
 

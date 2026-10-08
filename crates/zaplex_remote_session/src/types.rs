@@ -153,6 +153,21 @@ pub const FEATURE_MANAGED_AGENT_FLEET_V1: &str = "managed-agent-fleet-v1";
 /// safely complete an existing-session or lost-ack open.
 pub const FEATURE_MANAGED_OPEN_ATTACH_V1: &str = "managed-open-attach-v1";
 
+/// Versioned capability for reattach takeover of a still-registered connection.
+///
+/// A client's transport can die without the daemon noticing (a half-open SSH
+/// connection after sleep or a network change keeps its proxy alive until
+/// sshd's keepalive gives up). When both peers advertise this feature, a
+/// generation-checked `AttachSession` moves the session to the new connection
+/// instead of being refused, and the previous connection receives a
+/// [`SESSION_NOTICE_ATTACH_TAKEN_OVER`] notice. Peers without it keep the
+/// refusal, so a client that cannot render the notice is never silently cut off.
+pub const FEATURE_SESSION_TAKEOVER_V1: &str = "session-takeover-v1";
+
+/// `SessionNotice.kind` pushed to a connection whose session attachment was
+/// taken over by a newer, generation-checked attach.
+pub const SESSION_NOTICE_ATTACH_TAKEN_OVER: &str = "attach-taken-over";
+
 /// A persistent session identifier assigned by the daemon.
 ///
 /// Unlike the protocol's existing `session_id: uint64` (which is the client's
@@ -229,6 +244,7 @@ pub fn supported_features() -> Vec<String> {
         features.push(FEATURE_AGENT_PTY_BINDING.to_string());
         features.push(FEATURE_AGENT_PTY_BINDING_V2.to_string());
         features.push(FEATURE_MULTIPLEXER_INVENTORY_V1.to_string());
+        features.push(FEATURE_SESSION_TAKEOVER_V1.to_string());
     }
     #[cfg(target_os = "linux")]
     {
@@ -269,6 +285,7 @@ pub fn supported_client_features() -> Vec<String> {
         FEATURE_MULTIPLEXER_INVENTORY_V1.to_string(),
         FEATURE_MANAGED_AGENT_FLEET_V1.to_string(),
         FEATURE_MANAGED_OPEN_ATTACH_V1.to_string(),
+        FEATURE_SESSION_TAKEOVER_V1.to_string(),
     ]
 }
 

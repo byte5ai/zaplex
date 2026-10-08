@@ -75,6 +75,19 @@ The previous static illustrations are superseded, not alternative approved layou
    supported agent conversation. Agent conversations without PTY metadata receive separate stable
    fallback session containers and are never merged by label alone.
 
+   The tree contains only agent sessions Zaplex can open, decided by the same reachability rule
+   as a click: a Zaplex pane hosts the session, a remote live session has a reattachable
+   foreground daemon PTY with a registry route, or the session is dormant and resumes safely.
+   Agents started outside Zaplex that it cannot open this way are not shown anywhere — not in the
+   tree, the counter, the Dock badge, the inbox, the palette, account tables, or the dashboard.
+   Account usage figures (tokens, cost, limits) still include their spend, because they describe
+   the account and must match the provider's own numbers. Zaplex ownership does not depend on the
+   opt-in hook bridge: a local agent process that inherited a Zaplex pane's `ZAPLEX_SURFACE_ID`
+   belongs to that pane, which also becomes its click target. A session Zaplex launched or hosts
+   (daemon PTY binding, exact launch binding, hook-reported id, or inherited pane id) stays visible
+   while it is momentarily unreachable, e.g. during a reconnect, but is not counted until a click
+   can open it. A local agent whose process cannot be inspected is never hidden.
+
 5. **Local remains visible.** The local host root and its discovered live sessions are always part
    of the Cockpit. With no local agent sessions, the root remains and shows an honest empty state.
 
@@ -117,17 +130,28 @@ The previous static illustrations are superseded, not alternative approved layou
     tooltip. Detail tables retain their explicit status word because they are the semantic detail
     surface.
 
-12. **Waiting attention is visible but restrained.** Only the amber waiting glyph pulses. Its
+12. **Waiting attention is visible but restrained.** An agent is *waiting on you* when (a) an open
+    question or permission prompt blocks it — regardless of its age and of whether you looked at
+    it — or (b) it finished a turn you have not seen yet, like unread mail. Opening, focusing, or
+    viewing its pane in the active window marks the current turn as seen; the agent's next
+    finished turn counts again. An idle session whose turn you have seen never counts, however
+    long it idles, and rests as the neutral idle ring. Turns that finished before the app started
+    are not counted after launch. Only the amber waiting glyph pulses. Its
     1.6-second cycle combines a modest core-brightness change with an expanding ring capped at
     approximately twice the glyph footprint. Working, idle, host-connection, and other glyphs are
     static. Reduced-motion mode replaces the animation with a static amber emphasis.
 
-13. **Aggregate attention does not add prose.** The tree section header uses the amber waiting
-    glyph plus a count when attention exists. It does not add “N waiting.”
+13. **Aggregate attention does not add prose and is one number.** The title-bar pulse, the Dock
+    badge, the tree section header, and the attention inbox show the same count: the sessions
+    from #12 that Zaplex can open right now. The tree section header uses the amber waiting glyph
+    plus that count when attention exists. It does not add “N waiting.” The title-bar pulse has a
+    localized tooltip and accessibility announcement naming the count and the click action.
 
 14. **Selecting an agent is exact.** Clicking a leaf attaches to or resumes that exact agent using
-    the existing stable local/remote route. Collapsing or expanding a row never changes routing,
-    account association, waiting order, guardrails, or capability gates.
+    the existing stable local/remote route. Clicking the title-bar pulse opens the next counted
+    session; every counted session is openable, and opening it marks its finished turn as seen.
+    When nothing waits, a localized notice says so. Collapsing or expanding a row never changes
+    routing, account association, waiting order, guardrails, or capability gates.
 
 15. **Account identity has one hierarchy on every surface.** Sidebar account cards and large
     account panes use the provider (`Claude` or `Codex`) as the headline. The subordinate line
@@ -140,7 +164,7 @@ The previous static illustrations are superseded, not alternative approved layou
     provenance without duplicating the identity heading.
 
 17. **Sessions needing the user are emphasized across the detail row.** In large Claude and Codex
-    session tables, a waiting session receives a subtle amber-tinted background across the full,
+    session tables, a session waiting on you (#12) receives a subtle amber-tinted background across the full,
     stable row. Its Status column still contains the amber glyph and explicit status word. No badge,
     new column, or row-size change is introduced.
 
@@ -269,11 +293,12 @@ The previous static illustrations are superseded, not alternative approved layou
     retained. A newer shell command or reopening the File Manager supersedes a deferred change.
     A changed session/host or failed connection must never redirect a foreign path into another shell.
 
-38. **The File Manager function bar is one stable row per pane.** F3/F4/F5/F6 and their actions are
-    visible in every File Manager pane; only the focused pane enables them. Unfocused panes keep the
-    same disabled geometry. Focus in a terminal, account pane, or overlay prevents file actions from
-    firing elsewhere. Narrow widths and long translations do not wrap or overlap the command bar,
-    and existing commands/shortcuts remain available.
+38. **The File Manager function bar always shows every key with its caption.** F2–F8 and F10 and
+    their actions are visible with a short one-word caption in every File Manager pane; only the
+    focused pane enables them. Unfocused panes keep the same disabled geometry. Focus in a terminal,
+    account pane, or overlay prevents file actions from firing elsewhere. A pane too narrow for one
+    row wraps the bar into two rows of equal cells (four in very narrow panes); the bar never
+    scrolls, hides captions, or overlaps, and existing commands/shortcuts remain available.
 
 39. **Transfers bind exact source and destination identity.** Copy and Move show source and target.
     A single valid visible counterpart may be the default; ambiguity requires selection, including

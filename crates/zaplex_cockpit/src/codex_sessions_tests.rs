@@ -150,6 +150,67 @@ fn aborted_turn_is_waiting() {
     assert_eq!(sessions[0].state, SessionState::Waiting);
 }
 
+/// The finished turn is identified by the closing event's `turn_id`, so the
+/// seen ledger can tell a new turn from the same idle one; a running turn has
+/// no identity, and an older rollout without ids falls back to the event time.
+/// Rollouts carry no approval events, so Codex never claims an open prompt.
+#[test]
+fn completed_turn_is_identified_by_its_turn_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-00-turn-ids.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-turns"),
+            event_for_turn("task_started", "turn-1"),
+            event_for_turn("task_complete", "turn-1"),
+            event_for_turn("task_started", "turn-2"),
+            event_for_turn("task_complete", "turn-2"),
+        ],
+    );
+    write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-01-running.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-running"),
+            event_for_turn("task_started", "turn-1"),
+            event_for_turn("task_complete", "turn-1"),
+            event_for_turn("task_started", "turn-2"),
+        ],
+    );
+    let legacy_complete = json!({
+        "type": "event_msg",
+        "timestamp": "2026-07-07T12:00:02Z",
+        "payload": {"type": "task_complete"}
+    });
+    write_rollout(
+        tmp.path(),
+        "rollout-2026-07-07T12-00-02-legacy.jsonl",
+        &[
+            session_meta("/tmp/proj", "sess-legacy"),
+            event("task_started"),
+            legacy_complete,
+            event("token_count"),
+        ],
+    );
+
+    let sessions = live_sessions(tmp.path(), Utc::now());
+    let by_id = |id: &str| {
+        sessions
+            .iter()
+            .find(|session| session.session_id == id)
+            .unwrap()
+    };
+    assert_eq!(by_id("sess-turns").turn_id.as_deref(), Some("turn-2"));
+    assert_eq!(by_id("sess-running").state, SessionState::Monitor);
+    assert_eq!(by_id("sess-running").turn_id, None);
+    assert_eq!(
+        by_id("sess-legacy").turn_id.as_deref(),
+        Some("at:2026-07-07T12:00:02Z")
+    );
+    assert!(sessions.iter().all(|session| !session.awaiting_input));
+}
+
 #[test]
 fn task_started_after_an_aborted_turn_restores_monitor_state() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1337,4 +1398,34 @@ fn transcript_revision_is_stable_until_visible_source_changes() {
         .unwrap();
     assert_ne!(first.source_revision, changed.source_revision);
     assert_eq!(changed.turns.last().unwrap().text, "second");
+}
+
+/// Codex records no pid, so its process is found through the rollout it holds
+/// open. Only the native `codex` binary qualifies, and only rollout files name
+/// a session.
+#[test]
+fn codex_processes_are_found_through_their_open_rollouts() {
+    assert!(is_codex_cmdline(
+        b"/home/me/.npm/vendor/x86_64-unknown-linux-musl/bin/codex\0resume\0"
+    ));
+    assert!(!is_codex_cmdline(
+        b"node\0/usr/lib/node_modules/codex/bin/codex.js\0"
+    ));
+    assert!(!is_codex_cmdline(b"/usr/bin/codex-code-mode-host\0"));
+    assert!(!is_codex_cmdline(b""));
+
+    let open_files = [
+        PathBuf::from(
+            "/home/me/.codex/sessions/2026/09/28/rollout-2026-09-28T00-39-34-01a0e506-0c73-7101-8939-f8ef34852482.jsonl",
+        ),
+        PathBuf::from("/home/me/.codex/log/codex-tui.log"),
+        PathBuf::from("/dev/pts/3"),
+        PathBuf::from(
+            "/home/me/.codex/sessions/2026/09/28/rollout-2026-09-28T00-39-34-01a0e506-0c73-7101-8939-f8ef34852482.jsonl",
+        ),
+    ];
+    assert_eq!(
+        rollout_session_ids(open_files.iter().map(PathBuf::as_path)),
+        vec!["01a0e506-0c73-7101-8939-f8ef34852482".to_string()]
+    );
 }

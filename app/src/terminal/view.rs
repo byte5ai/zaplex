@@ -70,7 +70,7 @@ pub use crate::terminal::view::rich_content::{
 };
 use crate::terminal::view::zero_state_block::TerminalViewZeroStateBlock;
 use crate::view_components::action_button::{
-    ActionButton, ButtonSize, KeystrokeSource, NakedTheme, SecondaryTheme,
+    ActionButton, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
 
 use use_agent_footer::UseAgentToolbar;
@@ -263,7 +263,9 @@ use crate::terminal::event::RemoteServerSetupState;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
-use crate::terminal::input::{CommandExecutionSource, InputAction, InputEmptyStateChangeReason};
+use crate::terminal::input::{
+    AutomaticCommandOutcome, CommandExecutionSource, InputAction, InputEmptyStateChangeReason,
+};
 use crate::terminal::ligature_settings::{should_use_ligature_rendering, LigatureSettings};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::get_shell_starter;
@@ -1908,6 +1910,35 @@ fn remote_readiness_retry_visible(phase: RemoteInputPhase, has_restore_identity:
         )
 }
 
+/// Visual weight of the remote readiness notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteNoticeTone {
+    /// Connecting, attaching, replaying, or retrying automatically.
+    Progress,
+    /// The connection or restore failed and needs the user.
+    Error,
+    /// Informational end states that are not failures.
+    Neutral,
+}
+
+fn remote_notice_tone(phase: RemoteInputPhase, session_ended: bool) -> RemoteNoticeTone {
+    match phase {
+        RemoteInputPhase::Transport | RemoteInputPhase::Attach | RemoteInputPhase::Replay => {
+            RemoteNoticeTone::Progress
+        }
+        RemoteInputPhase::Failed if session_ended => RemoteNoticeTone::Neutral,
+        RemoteInputPhase::Failed | RemoteInputPhase::Corrupt => RemoteNoticeTone::Error,
+        RemoteInputPhase::Raw | RemoteInputPhase::Ready | RemoteInputPhase::Cancelled => {
+            RemoteNoticeTone::Neutral
+        }
+    }
+}
+
+/// An ended remote shell can always be closed, even without a live connection.
+fn remote_readiness_close_visible(phase: RemoteInputPhase, session_ended: bool) -> bool {
+    session_ended && phase == RemoteInputPhase::Failed
+}
+
 fn remote_readiness_cancel_visible(
     phase: RemoteInputPhase,
     has_cancellable_connection: bool,
@@ -1945,6 +1976,8 @@ fn remote_readiness_message(
     })
 }
 
+/// Remote panes persist their unsent draft for restore, so a draft edit there
+/// requests an app snapshot.
 fn remote_input_draft_change_needs_snapshot(phase: Option<RemoteInputPhase>) -> bool {
     phase.is_some()
 }
@@ -2506,6 +2539,10 @@ pub struct TerminalView {
     file_manager_origin: Option<FileManagerOrigin>,
     /// Applied at the next idle prompt, never written into a running process.
     pending_file_manager_directory: Option<PathBuf>,
+    /// The shell session whose bootstrap completed this pane's own classic SSH
+    /// connection (Transport -> Ready): the top-level shell on the pane's host.
+    /// Nested shells and later manual `ssh` hops never match it.
+    classic_ssh_root_session_id: Option<SessionId>,
     /// When true, enter agent view after pending setup commands complete
     /// (i.e. after `PendingCommandCompleted` is emitted). Set by
     /// `pane_tree_from_template_recursive` when a tab config has both
@@ -2827,6 +2864,19 @@ pub struct TerminalView {
     remote_session_notice: Option<String>,
     /// Failure details stay visible with Retry/Cancel until this pane is retired.
     remote_session_error: Option<String>,
+    /// Technical detail for `remote_session_error`, rendered secondary to the
+    /// human-readable summary.
+    remote_session_error_detail: Option<String>,
+    /// Automatic reconnect progress ("attempt 2/11") while the pane is still
+    /// attaching. Cleared by every phase outside attach/replay.
+    remote_session_progress: Option<String>,
+    /// The remote shell ended on its own with a non-zero code or a signal. The
+    /// pane shows a neutral ended state with New session/Close instead of a
+    /// connection failure with Retry/Cancel.
+    remote_session_ended: bool,
+    /// The remote shell exited cleanly and this pane is closing like an exited
+    /// local shell.
+    remote_session_closed_cleanly: bool,
     /// Bumped per notice so an expiry timer only clears its own notice.
     remote_session_notice_generation: u64,
     remote_restore_retry_button: ViewHandle<ActionButton>,
@@ -2865,6 +2915,15 @@ enum FileManagerOrigin {
     Restoring { is_local: bool },
     Session {
         id: SessionId,
+        directory: Option<PathBuf>,
+    },
+    /// The browsed filesystem cannot be proven to belong to this pane's shell
+    /// (another host, a nested/legacy shell, or a shell that changed while the
+    /// file manager was open). The directory is offered, never sent blindly.
+    Unproven {
+        /// The file manager browsed the host this pane's terminal is bound to.
+        same_host: bool,
+        /// The shell's directory when the file manager opened.
         directory: Option<PathBuf>,
     },
 }
@@ -3971,7 +4030,7 @@ impl TerminalView {
             })
         });
         let remote_restore_retry_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new(crate::t!("terminal-remote-readiness-retry"), SecondaryTheme)
+            ActionButton::new(crate::t!("terminal-remote-readiness-retry"), PrimaryTheme)
                 .with_size(ButtonSize::Small)
                 .with_keybinding(
                     KeystrokeSource::Fixed(Keystroke {
@@ -4045,6 +4104,7 @@ impl TerminalView {
             awaiting_pending_command_completion: false,
             file_manager_origin: None,
             pending_file_manager_directory: None,
+            classic_ssh_root_session_id: None,
             enter_agent_view_after_pending_commands: false,
             enter_agent_view_after_ssh_bootstrap: false,
             slow_bootstrap_banner,
@@ -4066,6 +4126,10 @@ impl TerminalView {
             remote_input_session_id: None,
             remote_session_notice: None,
             remote_session_error: None,
+            remote_session_error_detail: None,
+            remote_session_progress: None,
+            remote_session_ended: false,
+            remote_session_closed_cleanly: false,
             remote_session_notice_generation: 0,
             remote_restore_retry_button,
             remote_restore_cancel_button,
@@ -6514,30 +6578,47 @@ impl TerminalView {
         if is_local {
             // Subshells can use a different filesystem namespace (for example containers).
             session.subshell_info().is_none()
-        } else {
+        } else if self.remote_input_session_id.is_some() {
             // Match TerminalModel::init_shell's daemon-root classification. The
             // daemon connection ID and shell session ID are separate namespaces.
-            self.remote_input_session_id.is_some()
-                && session.subshell_info().is_none()
-                && !session.is_legacy_ssh_session()
+            session.subshell_info().is_none() && !session.is_legacy_ssh_session()
+        } else {
+            // Classic SSH: only the shell that completed this pane's own ssh
+            // connection is proven to run on the pane's host. Both sides are
+            // shell session IDs.
+            self.classic_ssh_root_session_id == Some(id)
         }
     }
 
+    /// `same_host` is false when the browsed filesystem is not the host this
+    /// pane's terminal is bound to; such a directory is never sent to the shell.
     pub(crate) fn begin_file_manager_navigation(
         &mut self,
         is_local: bool,
+        same_host: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         self.cancel_file_manager_directory(ctx);
-        if !self.file_manager_session_matches_target(is_local, ctx) {
-            return;
-        }
-        self.file_manager_origin =
-            self.active_block_session_id()
-                .map(|id| FileManagerOrigin::Session {
-                    id,
-                    directory: self.active_session_cwd(ctx),
-                });
+        let directory = self.active_session_cwd(ctx);
+        let proven = same_host && self.file_manager_session_matches_target(is_local, ctx);
+        let bound_session = self.active_block_session_id().filter(|_| proven);
+        self.file_manager_origin = Some(match bound_session {
+            Some(id) => FileManagerOrigin::Session { id, directory },
+            None => FileManagerOrigin::Unproven {
+                same_host,
+                directory,
+            },
+        });
+    }
+
+    /// A restored file manager whose host does not match this terminal's
+    /// persisted identity: closing it reports the folder instead of applying it.
+    pub(crate) fn restore_unproven_file_manager_navigation(&mut self, ctx: &mut ViewContext<Self>) {
+        self.cancel_file_manager_directory(ctx);
+        self.file_manager_origin = Some(FileManagerOrigin::Unproven {
+            same_host: false,
+            directory: None,
+        });
     }
 
     /// The caller verifies the persisted file-manager namespace against the
@@ -6565,20 +6646,122 @@ impl TerminalView {
         path: Option<PathBuf>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if path.is_none() || self.file_manager_origin.is_none() {
+        let Some(path) = path else {
+            // Nothing was listed successfully: there is no directory to hand off.
             self.cancel_file_manager_directory(ctx);
             return;
+        };
+        let unproven = match &self.file_manager_origin {
+            Some(FileManagerOrigin::Restoring { .. } | FileManagerOrigin::Session { .. }) => None,
+            Some(FileManagerOrigin::Unproven {
+                same_host,
+                directory,
+            }) => Some((*same_host, directory.clone())),
+            // No binding survived (e.g. the terminal surface was replaced).
+            None => Some((false, self.active_session_cwd(ctx))),
+        };
+        if let Some((same_host, directory)) = unproven {
+            self.cancel_file_manager_directory(ctx);
+            if directory.as_ref() != Some(&path) {
+                self.offer_file_manager_directory(&path, same_host, ctx);
+            }
+            return;
         }
-        self.pending_file_manager_directory = path;
+        self.pending_file_manager_directory = Some(path);
         self.input.update(ctx, |input, _| {
             input.preserve_pending_file_manager_draft();
         });
         self.apply_file_manager_directory(ctx);
+        if let Some(path) = self.pending_file_manager_directory.clone() {
+            // Applied once the shell is ready and idle; say so instead of
+            // leaving the user to wonder why the prompt did not move.
+            self.show_file_manager_directory_toast(
+                crate::t!(
+                    "file-manager-shell-directory-deferred",
+                    path = path.display().to_string()
+                )
+                .to_string(),
+                ctx,
+            );
+        }
+    }
+
+    /// The bound shell can no longer take the directory (it changed, exited, or
+    /// its remote connection failed). Never drop it silently: report it now, or,
+    /// while the file manager is still open, when it closes.
+    fn abandon_file_manager_directory(&mut self, ctx: &mut ViewContext<Self>) {
+        let directory = match &self.file_manager_origin {
+            Some(FileManagerOrigin::Session { directory, .. }) => directory.clone(),
+            Some(FileManagerOrigin::Restoring { .. }) => None,
+            Some(FileManagerOrigin::Unproven { .. }) | None => return,
+        };
+        let pending = self.pending_file_manager_directory.take();
+        self.cancel_file_manager_directory(ctx);
+        match pending {
+            Some(path) => self.offer_file_manager_directory(&path, true, ctx),
+            None => {
+                self.file_manager_origin = Some(FileManagerOrigin::Unproven {
+                    same_host: true,
+                    directory,
+                });
+            }
+        }
+    }
+
+    /// Never sends an unproven `cd`. An empty, idle editor of a shell on the
+    /// browsed host receives the quoted command for the user to confirm with
+    /// Enter; otherwise a notice names the folder and the draft stays untouched.
+    fn offer_file_manager_directory(
+        &mut self,
+        path: &Path,
+        same_host: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let command = if same_host {
+            self.active_session_shell_type(ctx)
+                .and_then(|shell| file_manager_directory_command(path, shell))
+        } else {
+            None
+        };
+        let editor_is_free = {
+            let input = self.input.as_ref(ctx);
+            input.ordinary_command_input_is_ready() && input.buffer_text(ctx).is_empty()
+        };
+        let shell_is_idle = {
+            let model = self.model.lock();
+            !model.is_read_only()
+                && !model
+                    .block_list()
+                    .active_block()
+                    .is_active_and_long_running()
+        };
+        let can_prefill = editor_is_free
+            && shell_is_idle
+            && !self.remote_raw_terminal
+            && !self.remote_input_has_failed();
+        match command.filter(|_| can_prefill) {
+            Some(command) => self.restore_input_draft(command, ctx),
+            None => self.show_file_manager_directory_toast(
+                crate::t!(
+                    "file-manager-shell-directory-not-applied",
+                    path = path.display().to_string()
+                )
+                .to_string(),
+                ctx,
+            ),
+        }
+    }
+
+    fn show_file_manager_directory_toast(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(DismissibleToast::default(text), window_id, ctx);
+        });
     }
 
     fn apply_file_manager_directory(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.remote_input_has_failed() {
-            self.cancel_file_manager_directory(ctx);
+        if self.remote_input_has_failed() || self.model.lock().is_read_only() {
+            self.abandon_file_manager_directory(ctx);
             return;
         }
         if let Some(FileManagerOrigin::Restoring { is_local }) = self.file_manager_origin {
@@ -6601,15 +6784,16 @@ impl TerminalView {
         let Some(FileManagerOrigin::Session { id, directory }) = &self.file_manager_origin else {
             return;
         };
+        let (id, directory) = (*id, directory.clone());
         // Once bound, subshell exits and reconnects cannot retarget the request.
-        if self.active_block_session_id() != Some(*id) {
-            self.cancel_file_manager_directory(ctx);
+        if self.active_block_session_id() != Some(id) {
+            self.abandon_file_manager_directory(ctx);
             return;
         }
-        let Some(path) = self.pending_file_manager_directory.as_ref() else {
+        let Some(path) = self.pending_file_manager_directory.clone() else {
             return;
         };
-        if directory.as_ref() == Some(path) {
+        if directory.as_ref() == Some(&path) {
             self.cancel_file_manager_directory(ctx);
             return;
         }
@@ -6617,17 +6801,34 @@ impl TerminalView {
             return;
         }
         let Some(shell) = self.active_session_shell_type(ctx) else {
+            // The bound session is no longer known to this terminal.
+            self.abandon_file_manager_directory(ctx);
             return;
         };
-        let Some(command) = file_manager_directory_command(path, shell) else {
+        let Some(command) = file_manager_directory_command(&path, shell) else {
+            // No safe single-line command exists for this path (control bytes).
             self.cancel_file_manager_directory(ctx);
+            self.show_file_manager_directory_toast(
+                crate::t!(
+                    "file-manager-shell-directory-not-applied",
+                    path = path.display().to_string()
+                )
+                .to_string(),
+                ctx,
+            );
             return;
         };
-        if self.input.update(ctx, |input, ctx| {
+        match self.input.update(ctx, |input, ctx| {
             input.try_execute_command_preserving_draft(&command, ctx)
         }) {
-            self.pending_file_manager_directory = None;
-            self.file_manager_origin = None;
+            AutomaticCommandOutcome::Submitted => {
+                self.pending_file_manager_directory = None;
+                self.file_manager_origin = None;
+            }
+            // Retried by the next idle prompt (block completion, bootstrap
+            // precmd, remote readiness).
+            AutomaticCommandOutcome::Deferred => {}
+            AutomaticCommandOutcome::Refused => self.abandon_file_manager_directory(ctx),
         }
     }
 
@@ -6713,6 +6914,8 @@ impl TerminalView {
         self.remote_input_phase = Some(RemoteInputPhase::Corrupt);
         self.remote_session_notice = None;
         self.remote_session_error = None;
+        self.remote_session_error_detail = None;
+        self.remote_session_progress = None;
         self.remote_input_session_id = None;
         self.input.update(ctx, |input, ctx| {
             input.cancel_pending_system_command();
@@ -6726,6 +6929,8 @@ impl TerminalView {
         self.remote_input_phase = Some(RemoteInputPhase::Cancelled);
         self.remote_session_notice = None;
         self.remote_session_error = None;
+        self.remote_session_error_detail = None;
+        self.remote_session_progress = None;
         self.remote_input_session_id = None;
         self.input.update(ctx, |input, ctx| {
             input.cancel_pending_system_command();
@@ -6794,8 +6999,12 @@ impl TerminalView {
         if phase != RemoteInputPhase::Ready {
             self.remote_session_notice = None;
         }
+        if !matches!(phase, RemoteInputPhase::Attach | RemoteInputPhase::Replay) {
+            self.remote_session_progress = None;
+        }
         if phase == RemoteInputPhase::Transport || became_ready {
             self.remote_session_error = None;
+            self.remote_session_error_detail = None;
         }
         self.input.update(ctx, |input, ctx| {
             if matches!(
@@ -6871,6 +7080,20 @@ impl TerminalView {
         connection_session_id: Option<warp_core::SessionId>,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.show_remote_session_failure(message, None, false, connection_session_id, ctx);
+    }
+
+    /// Shows why a remote pane is no longer usable. `detail` is technical
+    /// context rendered secondary to `message`; `ended` marks a remote shell
+    /// that ended on its own rather than a lost connection.
+    pub(crate) fn show_remote_session_failure(
+        &mut self,
+        message: String,
+        detail: Option<String>,
+        ended: bool,
+        connection_session_id: Option<warp_core::SessionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         if matches!(
             self.remote_input_phase,
             Some(RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled)
@@ -6881,8 +7104,87 @@ impl TerminalView {
             return;
         }
         self.remote_session_notice = None;
+        self.remote_session_progress = None;
         self.remote_session_error = Some(message);
+        self.remote_session_error_detail = detail;
+        if ended && !self.remote_session_ended {
+            self.remote_session_ended = true;
+            // Nothing is left to reconnect to: the primary action starts a
+            // fresh shell on the same host and the secondary one closes the pane.
+            self.remote_restore_retry_button.update(ctx, |button, ctx| {
+                button.set_label(crate::t!("terminal-remote-readiness-new-session"), ctx);
+            });
+            self.remote_restore_cancel_button
+                .update(ctx, |button, ctx| {
+                    button.set_label(crate::t!("terminal-remote-readiness-close"), ctx);
+                });
+        }
         ctx.notify();
+    }
+
+    /// Automatic reconnect progress for the readiness notice; `None` restores
+    /// the generic phase copy.
+    pub(crate) fn show_remote_session_progress(
+        &mut self,
+        progress: Option<String>,
+        connection_session_id: Option<warp_core::SessionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.remote_input_has_failed()
+            || !remote_input_phase_update_matches(
+                self.remote_input_session_id,
+                connection_session_id,
+            )
+        {
+            return;
+        }
+        self.remote_session_progress = progress;
+        ctx.notify();
+    }
+
+    /// The remote shell exited cleanly (the user typed `exit`). Like an exited
+    /// local shell, the pane closes; there is nothing to retry or cancel.
+    pub(crate) fn close_after_clean_remote_exit(
+        &mut self,
+        connection_session_id: Option<warp_core::SessionId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !remote_input_phase_update_matches(self.remote_input_session_id, connection_session_id)
+            || self.remote_session_closed_cleanly
+        {
+            return;
+        }
+        self.remote_session_closed_cleanly = true;
+        self.remote_session_notice = None;
+        self.remote_session_progress = None;
+        self.input.update(ctx, |input, ctx| {
+            input.cancel_pending_system_command();
+            input.clear_file_manager_directory_input();
+            input.set_ordinary_command_input_ready(false, ctx);
+        });
+        ctx.emit(Event::Exited);
+        ctx.notify();
+    }
+
+    /// Whether the remote shell behind this pane ended on its own (non-zero
+    /// code or signal), as opposed to a failed or cancelled connection.
+    pub(crate) fn remote_session_has_ended(&self) -> bool {
+        self.remote_session_ended
+    }
+
+    /// Whether this pane is closing because its remote shell exited cleanly.
+    pub(crate) fn remote_session_closed_cleanly(&self) -> bool {
+        self.remote_session_closed_cleanly
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_session_error_detail(&self) -> Option<&str> {
+        self.remote_session_error_detail.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_session_progress(&self) -> Option<&str> {
+        self.remote_session_progress.as_deref()
     }
 
     #[cfg(test)]
@@ -9982,6 +10284,11 @@ impl TerminalView {
                 self.cancel_su_root_confirmation(ctx);
                 self.input
                     .update(ctx, |input, _| input.clear_file_manager_directory_input());
+                // A cancelled remote restore stays inert by request: tearing
+                // down its connection must neither present it as a failed shell
+                // start nor close the pane.
+                let remote_restore_cancelled =
+                    self.remote_input_phase == Some(RemoteInputPhase::Cancelled);
                 if self.remote_input_phase.is_some() {
                     self.set_remote_input_phase(
                         RemoteInputPhase::Failed,
@@ -9994,7 +10301,7 @@ impl TerminalView {
                 }
 
                 // If the pty spawn has failed, we've already inserted a banner.
-                if !self.pty_spawn_failed {
+                if !self.pty_spawn_failed && !remote_restore_cancelled {
                     let shell_detail = self.shell_detail.take().unwrap_or("shell".to_owned());
                     self.insert_shell_process_terminated_banner(
                         shell_terminated_banner::TerminationType::Premature {
@@ -10015,11 +10322,11 @@ impl TerminalView {
 
                 // If we failed to bootstrap by the time we exited, show the
                 // bootstrap block so the user might be able to see what went wrong.
-                if !self.is_login_shell_bootstrapped {
+                if !self.is_login_shell_bootstrapped && !remote_restore_cancelled {
                     self.show_initialization_block();
                 }
 
-                if !self.pty_spawn_failed {
+                if !self.pty_spawn_failed && !remote_restore_cancelled {
                     ctx.emit(Event::Exited);
                 }
             }
@@ -11376,6 +11683,9 @@ impl TerminalView {
             .finish()
     }
 
+    /// Renders the remote readiness state as one Zaplex notice card: icon,
+    /// message, optional technical detail, and its actions together, in the UI
+    /// font on a framed surface so it never reads as host terminal output.
     fn render_remote_input_readiness_footer(
         &self,
         appearance: &Appearance,
@@ -11385,65 +11695,114 @@ impl TerminalView {
         let has_restore_identity = self.has_remote_restore_identity();
         let has_cancellable_connection =
             has_restore_identity || self.remote_input_session_id.is_some();
-        let message = if phase == RemoteInputPhase::Failed {
-            self.remote_session_error.clone().or_else(|| {
+        let ended = self.remote_session_ended;
+        let message = match phase {
+            RemoteInputPhase::Failed => self.remote_session_error.clone().or_else(|| {
                 remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)
-            })?
-        } else {
-            remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)?
+            })?,
+            RemoteInputPhase::Transport | RemoteInputPhase::Attach | RemoteInputPhase::Replay => {
+                self.remote_session_progress.clone().or_else(|| {
+                    remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)
+                })?
+            }
+            _ => remote_readiness_message(phase, self.remote_input_has_reached_initial_ready)?,
         };
-        let content = if phase == RemoteInputPhase::Raw {
-            Text::new(
-                message.clone(),
-                appearance.monospace_font_family(),
-                appearance.monospace_font_size() - 2.,
-            )
-            .finish()
-        } else if matches!(
-            phase,
-            RemoteInputPhase::Failed | RemoteInputPhase::Corrupt | RemoteInputPhase::Cancelled
-        ) {
-            Text::new(
-                message.clone(),
-                appearance.monospace_font_family(),
-                appearance.monospace_font_size() - 2.,
-            )
-            .with_color(appearance.theme().ui_error_color())
-            .finish()
-        } else {
+        let detail = (phase == RemoteInputPhase::Failed)
+            .then(|| self.remote_session_error_detail.clone())
+            .flatten();
+        let tone = remote_notice_tone(phase, ended);
+        let theme = appearance.theme();
+        let surface = theme.surface_2();
+        let font_size = appearance.ui_font_size();
+
+        let message = if tone == RemoteNoticeTone::Progress {
             shimmering_warp_loading_text(
                 message,
-                appearance.monospace_font_size() - 2.,
+                font_size,
                 self.remote_server_shimmer_handle.clone(),
                 app,
             )
+        } else {
+            Text::new(message, appearance.ui_font_family(), font_size)
+                .with_color(theme.main_text_color(surface).into())
+                .soft_wrap(true)
+                .finish()
         };
-        let content = if remote_readiness_retry_visible(phase, has_restore_identity)
-            || remote_readiness_cancel_visible(phase, has_cancellable_connection)
-        {
-            let message = Flex::row()
-                .with_child(Shrinkable::new(1., content).finish())
-                .finish();
+        let mut body = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_spacing(4.)
+            .with_child(message);
+        if let Some(detail) = detail {
+            body.add_child(
+                Text::new(
+                    crate::t!("terminal-remote-notice-detail", detail = detail),
+                    appearance.ui_font_family(),
+                    font_size - 1.,
+                )
+                .with_color(theme.sub_text_color(surface).into())
+                .soft_wrap(true)
+                .finish(),
+            );
+        }
+        let retry_visible = remote_readiness_retry_visible(phase, has_restore_identity);
+        let cancel_visible = remote_readiness_cancel_visible(phase, has_cancellable_connection)
+            || remote_readiness_close_visible(phase, ended);
+        if retry_visible || cancel_visible {
             let mut actions = Flex::row().with_spacing(8.);
-            if remote_readiness_retry_visible(phase, has_restore_identity) {
+            if retry_visible {
                 actions.add_child(ChildView::new(&self.remote_restore_retry_button).finish());
             }
-            if remote_readiness_cancel_visible(phase, has_cancellable_connection) {
+            if cancel_visible {
                 actions.add_child(ChildView::new(&self.remote_restore_cancel_button).finish());
             }
-            let actions = actions.finish();
-            Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-                .with_spacing(8.)
-                .with_child(message)
-                .with_child(actions)
-                .finish()
-        } else {
-            content
+            body.add_child(
+                Container::new(actions.finish())
+                    .with_margin_top(4.)
+                    .finish(),
+            );
+        }
+
+        let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Start);
+        let icon = match tone {
+            RemoteNoticeTone::Progress => None,
+            RemoteNoticeTone::Error => {
+                Some(icons::Icon::AlertTriangle.to_warpui_icon(theme.ui_error_color().into()))
+            }
+            RemoteNoticeTone::Neutral => {
+                Some(icons::Icon::Info.to_warpui_icon(theme.sub_text_color(surface)))
+            }
         };
+        if let Some(icon) = icon {
+            row.add_child(
+                Container::new(
+                    ConstrainedBox::new(icon.finish())
+                        .with_width(16.)
+                        .with_height(16.)
+                        .finish(),
+                )
+                .with_margin_right(8.)
+                .finish(),
+            );
+        }
+        row.add_child(Shrinkable::new(1., body.finish()).finish());
+
+        let border = match tone {
+            RemoteNoticeTone::Error => Border::all(1.).with_border_color(theme.ui_error_color()),
+            RemoteNoticeTone::Progress | RemoteNoticeTone::Neutral => {
+                Border::all(1.).with_border_fill(theme.outline())
+            }
+        };
+        let card = Container::new(row.finish())
+            .with_horizontal_padding(12.)
+            .with_vertical_padding(10.)
+            .with_background(surface)
+            .with_border(border)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .finish();
         Some(
-            Container::new(content)
+            Container::new(card)
                 .with_padding_left(*PADDING_LEFT)
+                .with_padding_right(*PADDING_LEFT)
                 .with_vertical_padding(8.)
                 .finish(),
         )
@@ -12074,6 +12433,12 @@ impl TerminalView {
         self.refresh_warp_prompt(ctx);
         ctx.emit(Event::SessionBootstrapped);
         if is_ssh_session {
+            if self.remote_input_phase == Some(RemoteInputPhase::Transport)
+                && self.remote_input_session_id.is_none()
+            {
+                // The first remote shell after this pane's own classic ssh command.
+                self.classic_ssh_root_session_id = Some(session_id);
+            }
             if self.remote_input_phase.is_some() && self.remote_input_session_id.is_none() {
                 self.set_remote_input_phase(RemoteInputPhase::Ready, None, ctx);
             }
@@ -20265,7 +20630,10 @@ impl TerminalView {
                 operations,
             } => {
                 if remote_input_draft_change_needs_snapshot(self.remote_input_phase) {
-                    ctx.emit(Event::AppStateChanged);
+                    // Only schedule the coalesced snapshot that persists the draft.
+                    // `AppStateChanged` would also run the workspace's pane/session
+                    // refresh synchronously on every keystroke.
+                    ctx.dispatch_global_action("workspace:save_app", ());
                 }
                 ctx.emit(Event::InputEditorUpdated {
                     block_id: block_id.clone(),

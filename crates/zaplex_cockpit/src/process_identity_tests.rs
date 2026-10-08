@@ -324,3 +324,95 @@ fn unsupported_presence_probe_keeps_current_process_unverified_and_not_cleanable
     assert!(!probe.presence.allows_registry_cleanup());
     assert_eq!(probe.fingerprint, None);
 }
+
+// ── Zaplex terminal link (hookless ownership) ───────────────────────────────
+
+#[test]
+fn surface_id_is_the_only_value_taken_from_an_environment_block() {
+    let environ =
+        b"HOME=/home/me\0ZAPLEX_CONTROL_TOKEN=secret\0ZAPLEX_SURFACE_ID=9a1f-22\0PATH=/bin\0";
+    assert_eq!(surface_id_from_environ(environ).as_deref(), Some("9a1f-22"));
+    assert_eq!(surface_id_from_environ(b"HOME=/home/me\0PATH=/bin\0"), None);
+    // A prefix of another variable is not the surface id.
+    assert_eq!(surface_id_from_environ(b"XZAPLEX_SURFACE_ID=1\0"), None);
+    // Malformed or oversized values are ignored rather than trusted.
+    assert_eq!(surface_id_from_environ(b"ZAPLEX_SURFACE_ID=a b\0"), None);
+    let oversized = format!("ZAPLEX_SURFACE_ID={}\0", "a".repeat(129));
+    assert_eq!(surface_id_from_environ(oversized.as_bytes()), None);
+}
+
+#[test]
+fn an_unreadable_environment_is_unknown_never_external() {
+    assert_eq!(terminal_link_from_environ(None), TerminalLink::Unknown);
+    assert_eq!(terminal_link_from_environ(Some(b"")), TerminalLink::Unknown);
+    assert_eq!(
+        terminal_link_from_environ(Some(b"HOME=/home/me\0")),
+        TerminalLink::External
+    );
+    assert_eq!(
+        terminal_link_from_environ(Some(b"ZAPLEX_SURFACE_ID=s1\0")),
+        TerminalLink::Surface("s1".to_string())
+    );
+}
+
+#[test]
+fn merged_links_prefer_a_zaplex_surface_then_external_evidence() {
+    let surface = TerminalLink::Surface("s1".to_string());
+    assert_eq!(TerminalLink::External.merge(surface.clone()), surface);
+    assert_eq!(TerminalLink::Unknown.merge(surface.clone()), surface);
+    assert_eq!(
+        TerminalLink::Unknown.merge(TerminalLink::External),
+        TerminalLink::External
+    );
+    assert_eq!(
+        TerminalLink::Unknown.merge(TerminalLink::Unknown),
+        TerminalLink::Unknown
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn sleeping_child_with_surface(surface_id: Option<&str>) -> std::process::Child {
+    let mut command = command::blocking::Command::new("/bin/sleep");
+    command.arg("60").env_remove(ZAPLEX_SURFACE_ENV);
+    if let Some(surface_id) = surface_id {
+        command.env(ZAPLEX_SURFACE_ENV, surface_id);
+    }
+    command.spawn().expect("spawn a harmless agent stand-in")
+}
+
+/// A process started in a Zaplex pane carries that pane's surface id even
+/// without any hook bridge; one started elsewhere carries none.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_live_process_is_linked_to_the_zaplex_pane_it_was_started_in() {
+    let mut inside = sleeping_child_with_surface(Some("surface-1"));
+    let mut outside = sleeping_child_with_surface(None);
+    let inside_fingerprint = current_process_fingerprint(inside.id());
+
+    let inside_link = terminal_link_for_pid(inside.id(), inside_fingerprint.as_deref());
+    let outside_link = terminal_link_for_pid(outside.id(), None);
+    stop_child(&mut inside);
+    stop_child(&mut outside);
+
+    assert_eq!(inside_link, TerminalLink::Surface("surface-1".to_string()));
+    assert_eq!(outside_link, TerminalLink::External);
+}
+
+/// PID reuse can never attribute a session to a pane: a process whose start
+/// identity differs from the one discovery bound is no evidence at all.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_reused_or_vanished_pid_is_never_linked() {
+    let mut child = sleeping_child_with_surface(Some("surface-2"));
+    let pid = child.id();
+    let fingerprint = current_process_fingerprint(pid).expect("child is inspectable");
+    let reused = terminal_link_for_pid(pid, Some(&format!("{fingerprint}:other-process")));
+    stop_child(&mut child);
+
+    assert_eq!(reused, TerminalLink::Unknown);
+    assert_eq!(
+        terminal_link_for_pid(pid, Some(&fingerprint)),
+        TerminalLink::Unknown
+    );
+    assert_eq!(terminal_link_for_pid(0, None), TerminalLink::Unknown);
+}

@@ -29,6 +29,9 @@ fn snapshot(provider: Provider) -> SessionSnapshot {
         task_state: None,
         last_activity: Utc::now(),
         pid: 42,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
     }
 }
 

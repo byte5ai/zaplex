@@ -49,6 +49,9 @@ fn sample(state: SessionState, provider: Provider, effort: Option<String>) -> Se
             .single()
             .unwrap(),
         pid: 4242,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
     }
 }
 
@@ -224,6 +227,39 @@ fn a_daemon_that_sends_no_process_fingerprint_decodes_as_unsignalable() {
     proto.process_fingerprint = String::new();
 
     assert_eq!(proto_to_snapshot(&proto).process_fingerprint, None);
+}
+
+/// A blocked prompt and the finished turn's identity cross the wire, while the
+/// app-local attention verdict never does: the client decides it from its own
+/// seen ledger and reachability, not from what a daemon claims.
+#[test]
+fn open_prompt_and_turn_identity_round_trip_but_attention_stays_local() {
+    let mut original = sample(SessionState::Waiting, Provider::Claude, None);
+    original.awaiting_input = true;
+    original.turn_id = Some("assistant-uuid-9".to_string());
+    original.attention = Some(zaplex_cockpit::Attention::Decision);
+
+    let wire = snapshot_to_proto(&original);
+    assert!(wire.awaiting_input);
+    assert_eq!(wire.turn_id, "assistant-uuid-9");
+
+    let decoded = proto_to_snapshot(&wire);
+    assert!(decoded.awaiting_input);
+    assert_eq!(decoded.turn_id.as_deref(), Some("assistant-uuid-9"));
+    assert_eq!(decoded.attention, None);
+}
+
+/// An older daemon sends neither field: no prompt is claimed and the turn
+/// identity is unknown (the seen ledger then falls back to the activity time).
+#[test]
+fn an_older_daemon_without_attention_fields_decodes_as_no_prompt_and_no_turn_id() {
+    let mut proto = snapshot_to_proto(&sample(SessionState::Waiting, Provider::Claude, None));
+    proto.awaiting_input = false;
+    proto.turn_id = String::new();
+
+    let decoded = proto_to_snapshot(&proto);
+    assert!(!decoded.awaiting_input);
+    assert_eq!(decoded.turn_id, None);
 }
 
 #[test]

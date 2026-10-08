@@ -32,6 +32,7 @@ use warpui::elements::{
     SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth, Shrinkable,
     SizeConstraintCondition, SizeConstraintSwitch, Stack, Text,
 };
+use warpui::fonts::{Cache as FontCache, FamilyId};
 use warpui::platform::{Cursor, FilePickerConfiguration, SaveFilePickerConfiguration};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::text_layout::ClipConfig;
@@ -102,7 +103,9 @@ fn pane_cycle_action(key: &str, shift: bool) -> Option<crate::pane_group::PaneGr
     }
 }
 
-/// Localized caption for a [`FUNCTION_BAR`] key.
+/// Localized caption for a [`FUNCTION_BAR`] key. Every key always shows its
+/// caption, so each catalog keeps these to one short word (at most eight
+/// characters). F10 reads "Terminal" because it returns the pane to its shell.
 fn function_bar_caption(key: &str) -> String {
     match key {
         "F2" => crate::t!("fm-key-rename"),
@@ -112,7 +115,7 @@ fn function_bar_caption(key: &str) -> String {
         "F6" => crate::t!("fm-key-move"),
         "F7" => crate::t!("fm-key-mkdir"),
         "F8" => crate::t!("fm-key-delete"),
-        _ => crate::t!("fm-key-quit"),
+        _ => crate::t!("fm-key-terminal"),
     }
 }
 
@@ -130,49 +133,107 @@ fn function_bar_action_enabled(
         ) || identity_bound_mutations_available)
 }
 
-/// A pane-local legend must never compete with file rows for horizontal space.
+/// How a pane-local function legend arranges its keys. Every arrangement shows
+/// every key with its caption in equal cells: a pane too narrow for one row
+/// trades rows for width instead of hiding captions or scrolling keys away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FunctionLegendMode {
-    Full,
-    Compact,
+enum FunctionLegendLayout {
+    OneRow,
+    TwoRows,
+    /// Very narrow panes only.
+    FourRows,
 }
 
-impl FunctionLegendMode {
-    fn position_suffix(self) -> &'static str {
+impl FunctionLegendLayout {
+    fn cells_per_row(self) -> usize {
         match self {
-            Self::Full => "legend-full",
-            Self::Compact => "legend-compact",
+            Self::OneRow => FUNCTION_BAR.len(),
+            Self::TwoRows => FUNCTION_BAR.len().div_ceil(2),
+            Self::FourRows => FUNCTION_BAR.len().div_ceil(4),
         }
     }
 
-    fn shows_caption(self, key: &str) -> bool {
-        self == Self::Full || matches!(key, "F3" | "F4" | "F5" | "F6")
+    fn position_suffix(self) -> &'static str {
+        match self {
+            Self::OneRow => "legend-rows-1",
+            Self::TwoRows => "legend-rows-2",
+            Self::FourRows => "legend-rows-4",
+        }
+    }
+
+    /// Narrowest legend, padding included, whose cells all fit their keycap
+    /// and caption unclipped.
+    fn min_bar_width(self, cell_min_width: f32) -> f32 {
+        let cells = self.cells_per_row() as f32;
+        cells * cell_min_width
+            + (cells - 1.0) * FUNCTION_LEGEND_CELL_SPACING
+            + FUNCTION_LEGEND_HORIZONTAL_PADDING
     }
 }
 
-// The widest localized caption is German "Verschieben". Full mode reserves
-// room for every caption; compact mode keeps the required F3-F6 captions and
-// reduces the remaining commands to their established keycaps.
-const FUNCTION_LEGEND_COMPACT_MIN_WIDTH: f32 = 280.0;
-const FUNCTION_LEGEND_CAPTION_MIN_WIDTH: f32 = 128.0;
+// Cell geometry, shared by `render_function_bar` and the minimum-width
+// computation so the wrap thresholds can never drift from what is painted.
+const FUNCTION_LEGEND_CELL_PADDING_X: f32 = 6.0;
+const FUNCTION_LEGEND_KEYCAP_PADDING_X: f32 = 4.0;
+const FUNCTION_LEGEND_KEYCAP_BORDER: f32 = 1.0;
+const FUNCTION_LEGEND_KEYCAP_GAP: f32 = 4.0;
+const FUNCTION_LEGEND_CELL_SPACING: f32 = 4.0;
+const FUNCTION_LEGEND_ROW_SPACING: f32 = 2.0;
+// Covers sub-pixel rounding and kerning differences between the summed glyph
+// advances and the laid-out caption, so a cell at exactly the threshold width
+// never ellipsizes.
+const FUNCTION_LEGEND_TEXT_SLACK: f32 = 2.0;
 const FUNCTION_LEGEND_HORIZONTAL_PADDING: f32 = PANEL_PADDING * 2.0;
 
-fn function_legend_mode(pane_width: f32) -> FunctionLegendMode {
-    let (_, full_width) = function_legend_widths();
-
-    if pane_width >= full_width {
-        FunctionLegendMode::Full
-    } else {
-        FunctionLegendMode::Compact
-    }
+/// Narrowest cell that shows the widest keycap and the widest caption side by
+/// side without clipping either.
+fn function_legend_cell_min_width(widest_key_text: f32, widest_caption_text: f32) -> f32 {
+    2.0 * FUNCTION_LEGEND_CELL_PADDING_X
+        + widest_key_text
+        + 2.0 * (FUNCTION_LEGEND_KEYCAP_PADDING_X + FUNCTION_LEGEND_KEYCAP_BORDER)
+        + FUNCTION_LEGEND_KEYCAP_GAP
+        + widest_caption_text
+        + FUNCTION_LEGEND_TEXT_SLACK
 }
 
-fn function_legend_widths() -> (f32, f32) {
-    (
-        FUNCTION_LEGEND_COMPACT_MIN_WIDTH,
-        FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_CAPTION_MIN_WIDTH
-            + FUNCTION_LEGEND_HORIZONTAL_PADDING,
-    )
+/// `(legend width below which it applies, layout)`, narrowest first, in the
+/// first-match order `SizeConstraintSwitch` expects. Wider legends use
+/// [`FunctionLegendLayout::OneRow`]. Below the four-row minimum (narrower than
+/// any practical file pane) the four-row layout stays and captions ellipsize
+/// as a last resort instead of overlapping.
+fn function_legend_breakpoints(cell_min_width: f32) -> [(f32, FunctionLegendLayout); 2] {
+    [
+        (
+            FunctionLegendLayout::TwoRows.min_bar_width(cell_min_width),
+            FunctionLegendLayout::FourRows,
+        ),
+        (
+            FunctionLegendLayout::OneRow.min_bar_width(cell_min_width),
+            FunctionLegendLayout::TwoRows,
+        ),
+    ]
+}
+
+/// Advance width of `text` in the UI font: the sum of its glyph advances, the
+/// metric text layout positions glyphs by. A glyph missing from the font
+/// counts as a full em, which never underestimates.
+fn function_legend_text_width(
+    font_cache: &FontCache,
+    family: FamilyId,
+    font_size: f32,
+    text: &str,
+) -> f32 {
+    let font = font_cache.select_font(family, Default::default());
+    text.chars()
+        .map(|ch| {
+            font_cache
+                .glyph_for_char(font, ch, false)
+                .and_then(|(glyph, glyph_font)| {
+                    font_cache.glyph_advance(glyph_font, font_size, glyph).ok()
+                })
+                .map_or(font_size, |advance| advance.x())
+        })
+        .sum()
 }
 
 fn save_layout_position(child: Box<dyn Element>, position_id: &str) -> Box<dyn Element> {
@@ -227,6 +288,51 @@ impl SortState {
             }
         }
     }
+}
+
+/// The list's own unmodified (or Shift-only) keys, MC conventions.
+///
+/// The platform layer delivers the space bar as `" "`; `"space"` is only the
+/// keymap's *spelling* of that key, so a match on `"space"` alone never fires
+/// (which is why Space-marking used to be dead). Both are accepted here.
+/// While a text field (the filter) has focus, Space and Escape belong to the
+/// text, not to the marks.
+fn list_key_action(key: &str, shift: bool, text_input_focused: bool) -> Option<SftpBrowserAction> {
+    match key {
+        // Shift+Up/Down mark the current row and step on (MC's MarkUp/MarkDown),
+        // so a run of files and folders is marked by holding Shift.
+        "down" if shift => Some(SftpBrowserAction::MarkAndStep { down: true }),
+        "up" if shift => Some(SftpBrowserAction::MarkAndStep { down: false }),
+        "down" => Some(SftpBrowserAction::CursorDown),
+        "up" => Some(SftpBrowserAction::CursorUp),
+        "home" => Some(SftpBrowserAction::CursorFirst),
+        "end" => Some(SftpBrowserAction::CursorLast),
+        "pageup" => Some(SftpBrowserAction::CursorPageUp),
+        "pagedown" => Some(SftpBrowserAction::CursorPageDown),
+        // Directory traversal, MC-style: Enter/Right open, Left/Backspace go up.
+        "enter" | "numpadenter" => Some(SftpBrowserAction::ActivateCursor),
+        "right" => Some(SftpBrowserAction::EnterCursorDir),
+        "left" | "backspace" => Some(SftpBrowserAction::NavigateUp),
+        " " | "space" if !text_input_focused => Some(SftpBrowserAction::ToggleSelectCursor),
+        // MC's Insert: mark and step down. Space marks in place.
+        "insert" => Some(SftpBrowserAction::MarkAndAdvance),
+        "delete" => Some(SftpBrowserAction::DeleteSelected),
+        // Dialogs and the context menu disable the list keys entirely, so an
+        // Escape that reaches the list has nothing else to close: it drops
+        // the marks (but never while the user is typing a filter).
+        "escape" if !text_input_focused => Some(SftpBrowserAction::ClearMarks),
+        _ => None,
+    }
+}
+
+/// Cmd+A / Ctrl+A marks every listed entry. Either modifier is accepted on
+/// every platform; neither chord has another meaning inside the file list.
+fn is_mark_all_chord(keystroke: &warpui::keymap::Keystroke) -> bool {
+    keystroke.key.eq_ignore_ascii_case("a")
+        && (keystroke.cmd || keystroke.ctrl)
+        && !keystroke.alt
+        && !keystroke.shift
+        && !keystroke.meta
 }
 
 /// Toolbar button size
@@ -292,6 +398,17 @@ pub enum SftpBrowserAction {
     ToggleMark(EntryReference),
     /// Mark the row under the cursor and advance one row (MC's Insert).
     MarkAndAdvance,
+    /// Mark (never unmark) the row under the cursor, then step one row down
+    /// or up — Shift+Down / Shift+Up.
+    MarkAndStep { down: bool },
+    /// Mark every row from the keyboard cursor to the referenced entry, both
+    /// ends included, and move the cursor there (Shift-click).
+    MarkRangeTo(EntryReference),
+    /// Mark every listed entry, folders and files alike (Cmd/Ctrl+A). The
+    /// `..` row is not an entry, so it is never marked.
+    MarkAll,
+    /// Drop every mark (Escape).
+    ClearMarks,
     /// Order the list by this column (or flip the direction if it already is).
     SortBy(SortColumn),
     /// Show / hide dot-files.
@@ -762,6 +879,9 @@ pub struct SftpBrowserView {
     pub(crate) current_path: PathBuf,
     /// Only successfully listed directories may change the underlying shell.
     last_listed_path: Option<PathBuf>,
+    /// The shell handoff directory captured by `close()` before it tears the
+    /// connection down; the pane group reads it only after that teardown.
+    shell_directory_at_close: Option<PathBuf>,
     /// File entries in the current directory
     pub(crate) entries: Vec<FileEntry>,
     /// Set of selected filesystem objects. Indices are never persisted because
@@ -1032,6 +1152,7 @@ impl SftpBrowserView {
             safe_file_client: SafeFileClientSlot::default(),
             current_path: start_path.clone().unwrap_or_else(|| PathBuf::from("/")),
             last_listed_path: None,
+            shell_directory_at_close: None,
             entries: Vec::new(),
             selected: HashSet::new(),
             path_history: vec![start_path.clone().unwrap_or_else(|| PathBuf::from("/"))],
@@ -2231,6 +2352,72 @@ impl SftpBrowserView {
         ctx.notify();
     }
 
+    /// Add the entry at `index` to the marks; an already marked entry stays
+    /// marked. Files and folders are treated alike.
+    fn mark_index(&mut self, index: usize) {
+        if let Some(identity) = self.entries.get(index).map(FileEntry::entry_identity) {
+            self.selected.insert(identity);
+        }
+    }
+
+    /// Shift+Down / Shift+Up: mark the row under the cursor, then step. Unlike
+    /// Insert this never unmarks, so holding Shift over a run that is already
+    /// partly marked leaves the whole run marked. The `..` row is stepped over
+    /// without being marked.
+    fn mark_and_step(&mut self, down: bool, ctx: &mut ViewContext<Self>) {
+        if let Some(index) = self.cursor_entry_index() {
+            self.mark_index(index);
+        }
+        let mv = if down {
+            CursorMove::Down
+        } else {
+            CursorMove::Up
+        };
+        self.cursor = apply_cursor_move(self.cursor, self.row_count(), mv);
+        ctx.notify();
+    }
+
+    /// Shift-click: mark every visible entry between the cursor and the entry
+    /// at `target_index`, both included, in display order, and move the cursor
+    /// onto the target. From the `..` row the range starts at the first entry;
+    /// `..` itself is never part of it.
+    fn mark_range_to(&mut self, target_index: usize, ctx: &mut ViewContext<Self>) {
+        let visible = self.visible_indices();
+        let Some(target_position) = visible.iter().position(|&index| index == target_index) else {
+            return;
+        };
+        let offset = usize::from(self.has_parent_row());
+        let anchor_position = self
+            .cursor
+            .saturating_sub(offset)
+            .min(visible.len().saturating_sub(1));
+        let (first, last) = if anchor_position <= target_position {
+            (anchor_position, target_position)
+        } else {
+            (target_position, anchor_position)
+        };
+        let identities: Vec<EntryIdentity> = visible[first..=last]
+            .iter()
+            .filter_map(|&index| self.entries.get(index).map(FileEntry::entry_identity))
+            .collect();
+        self.selected.extend(identities);
+        self.cursor = target_position + offset;
+        ctx.notify();
+    }
+
+    /// Cmd/Ctrl+A: mark every entry the list currently shows. Rows hidden by
+    /// the filter or the dot-file toggle stay unmarked, so the marked set never
+    /// contains anything the user cannot see.
+    fn mark_all(&mut self, ctx: &mut ViewContext<Self>) {
+        let identities: Vec<EntryIdentity> = self
+            .visible_indices()
+            .into_iter()
+            .filter_map(|index| self.entries.get(index).map(FileEntry::entry_identity))
+            .collect();
+        self.selected.extend(identities);
+        ctx.notify();
+    }
+
     /// Total byte size of the marked entries — the number MC puts in its
     /// selection status line. Directories contribute nothing (their size is
     /// unknown without walking them).
@@ -2241,6 +2428,21 @@ impl SftpBrowserView {
             .filter(|entry| !matches!(entry.file_type, FileEntryType::Directory))
             .map(|entry| entry.size)
             .sum()
+    }
+
+    /// How many marked entries are folders and how many are not, for the
+    /// selection status line: `(folders, files)`.
+    pub(crate) fn marked_counts(&self) -> (usize, usize) {
+        self.entries
+            .iter()
+            .filter(|entry| self.selected.contains(&entry.entry_identity()))
+            .fold((0, 0), |(folders, files), entry| {
+                if matches!(entry.file_type, FileEntryType::Directory) {
+                    (folders + 1, files)
+                } else {
+                    (folders, files + 1)
+                }
+            })
     }
 
     /// Rename the row under the cursor (F2).
@@ -2289,6 +2491,11 @@ impl SftpBrowserView {
 
     /// Only a successfully connected browser directory may be returned to its shell.
     pub(crate) fn shell_directory_on_close(&self) -> Option<PathBuf> {
+        // The header close button tears the connection down before the pane
+        // group asks; the directory trusted at that moment still applies.
+        if let Some(directory) = &self.shell_directory_at_close {
+            return Some(directory.clone());
+        }
         if self.pick_mode.is_some() || !matches!(self.connection, ConnectionState::Connected) {
             return None;
         }
@@ -4435,22 +4642,48 @@ impl SftpBrowserView {
             .finish()
     }
 
+    /// The function legend in one, two, or four rows, chosen from the cell
+    /// width the current UI font and the localized captions actually need.
     fn render_responsive_function_bar(
         &self,
+        app: &AppContext,
         appearance: &Appearance,
         pane_actions_active: bool,
     ) -> Box<dyn Element> {
-        let (_, full_width) = function_legend_widths();
+        let captions: Vec<String> = FUNCTION_BAR
+            .iter()
+            .map(|(key, _)| function_bar_caption(key))
+            .collect();
+        let font_cache = app.font_cache();
+        let family = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+        let widest_key = FUNCTION_BAR
+            .iter()
+            .map(|(key, _)| function_legend_text_width(font_cache, family, size, key))
+            .fold(0.0, f32::max);
+        let widest_caption = captions
+            .iter()
+            .map(|caption| function_legend_text_width(font_cache, family, size, caption))
+            .fold(0.0, f32::max);
+        let cell_min_width = function_legend_cell_min_width(widest_key, widest_caption);
+
+        let narrower_layouts = function_legend_breakpoints(cell_min_width)
+            .into_iter()
+            .map(|(below_width, layout)| {
+                (
+                    SizeConstraintCondition::WidthLessThan(below_width),
+                    self.render_function_bar(appearance, layout, &captions, pane_actions_active),
+                )
+            })
+            .collect::<Vec<_>>();
         SizeConstraintSwitch::new(
-            self.render_function_bar(appearance, FunctionLegendMode::Full, pane_actions_active),
-            vec![(
-                SizeConstraintCondition::WidthLessThan(full_width),
-                self.render_function_bar(
-                    appearance,
-                    FunctionLegendMode::Compact,
-                    pane_actions_active,
-                ),
-            )],
+            self.render_function_bar(
+                appearance,
+                FunctionLegendLayout::OneRow,
+                &captions,
+                pane_actions_active,
+            ),
+            narrower_layouts,
         )
         .finish()
     }
@@ -4597,13 +4830,14 @@ impl SftpBrowserView {
             .finish()
     }
 
-    /// Render the MC-style function-key bar footer. Required F3-F6 captions
-    /// survive compact mode; the remaining established commands keep their
-    /// keycaps. Clicking dispatches only while this compatible pane is focused.
+    /// Render the MC-style function-key bar footer: every key with its short
+    /// caption, in `layout.cells_per_row()` equal cells per row. Clicking
+    /// dispatches only while this compatible pane is focused.
     fn render_function_bar(
         &self,
         appearance: &Appearance,
-        mode: FunctionLegendMode,
+        layout: FunctionLegendLayout,
+        captions: &[String],
         pane_actions_active: bool,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -4611,109 +4845,110 @@ impl SftpBrowserView {
         let size = appearance.ui_font_size();
         let key_color = theme.sub_text_color(theme.background());
         let caption_color = theme.sub_text_color(theme.background());
+        let cells_per_row = layout.cells_per_row();
 
-        let mut row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_spacing(if mode == FunctionLegendMode::Compact {
-                2.0
-            } else {
-                4.0
-            });
+        let mut rows = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(FUNCTION_LEGEND_ROW_SPACING);
 
-        for (i, (key, make_action)) in FUNCTION_BAR.iter().enumerate() {
-            let handle = self.fn_bar_handles.get(i).cloned().unwrap_or_default();
-            let key = *key;
-            let make_action = *make_action;
-            let action = make_action();
-            let enabled = function_bar_action_enabled(
-                &action,
-                pane_actions_active,
-                self.identity_bound_mutations_available(),
-            );
-            let item_key_color = if enabled {
-                key_color
-            } else {
-                theme.disabled_ui_text_color()
-            };
-            let item_caption_color = if enabled {
-                caption_color
-            } else {
-                theme.disabled_ui_text_color()
-            };
-            let cell = Hoverable::new(handle, move |mouse| {
-                // The key renders as a quiet keycap chip (surface_2, hairline
-                // border, small radius) instead of a bare accent "F3" shouting
-                // DOS at the bottom of the pane (polish audit FM.4). Muted at
-                // rest, the shared hover fill on approach; the VERBS stay
-                // captions.
-                let compact = mode == FunctionLegendMode::Compact;
-                let keycap = Container::new(
-                    Text::new_inline(key.to_string(), family, size)
-                        .with_color(item_key_color.into())
-                        .finish(),
-                )
-                .with_padding_left(if compact { 1.0 } else { 4.0 })
-                .with_padding_right(if compact { 1.0 } else { 4.0 })
-                .with_padding_top(1.0)
-                .with_padding_bottom(1.0)
-                .with_background(theme.surface_2())
-                .with_border(Border::all(1.0).with_border_fill(theme.split_pane_border_color()))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
-                .finish();
-                let mut content = Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(if compact { 2.0 } else { 4.0 })
-                    .with_child(keycap);
-                if mode.shows_caption(key) {
-                    content.add_child(
-                        Shrinkable::new(
-                            1.0,
-                            Text::new_inline(function_bar_caption(key), family, size)
-                                .with_color(item_caption_color.into())
-                                .with_clip(ClipConfig::ellipsis())
-                                .finish(),
-                        )
-                        .finish(),
-                    );
-                }
-                let mut container = Container::new(content.finish())
-                    .with_padding_left(if compact { 1.0 } else { 6.0 })
-                    .with_padding_right(if compact { 1.0 } else { 6.0 })
-                    .with_padding_top(2.0)
-                    .with_padding_bottom(2.0)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
-                if enabled && mouse.is_hovered() {
-                    container = container.with_background(internal_colors::fg_overlay_1(theme));
-                }
-                container.finish()
-            })
-            .with_cursor(if enabled {
-                Cursor::PointingHand
-            } else {
-                Cursor::NotAllowed
-            });
-            let cell = if enabled {
-                cell.on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                    .finish()
-            } else {
-                // Do not arm a click that could complete after the pane gains focus.
-                cell.disable().finish()
-            };
-            let weight = if mode == FunctionLegendMode::Compact
-                && !matches!(key, "F3" | "F4" | "F5" | "F6")
-            {
-                0.8
-            } else {
-                1.0
-            };
-            let position_id = self.layout_position_id(&format!("function-{key}"));
-            row.add_child(Expanded::new(weight, save_layout_position(cell, &position_id)).finish());
+        for (row_index, keys) in FUNCTION_BAR.chunks(cells_per_row).enumerate() {
+            let mut row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_spacing(FUNCTION_LEGEND_CELL_SPACING);
+            for (column, (key, make_action)) in keys.iter().enumerate() {
+                let i = row_index * cells_per_row + column;
+                let handle = self.fn_bar_handles.get(i).cloned().unwrap_or_default();
+                let key = *key;
+                let caption = captions.get(i).cloned().unwrap_or_default();
+                let action = make_action();
+                let enabled = function_bar_action_enabled(
+                    &action,
+                    pane_actions_active,
+                    self.identity_bound_mutations_available(),
+                );
+                let item_key_color = if enabled {
+                    key_color
+                } else {
+                    theme.disabled_ui_text_color()
+                };
+                let item_caption_color = if enabled {
+                    caption_color
+                } else {
+                    theme.disabled_ui_text_color()
+                };
+                let cell = Hoverable::new(handle, move |mouse| {
+                    // The key renders as a quiet keycap chip (surface_2,
+                    // hairline border, small radius) instead of a bare accent
+                    // "F3" shouting DOS at the bottom of the pane (polish
+                    // audit FM.4). Muted at rest, the shared hover fill on
+                    // approach; the VERBS stay captions.
+                    let keycap = Container::new(
+                        Text::new_inline(key.to_string(), family, size)
+                            .with_color(item_key_color.into())
+                            .finish(),
+                    )
+                    .with_padding_left(FUNCTION_LEGEND_KEYCAP_PADDING_X)
+                    .with_padding_right(FUNCTION_LEGEND_KEYCAP_PADDING_X)
+                    .with_padding_top(1.0)
+                    .with_padding_bottom(1.0)
+                    .with_background(theme.surface_2())
+                    .with_border(
+                        Border::all(FUNCTION_LEGEND_KEYCAP_BORDER)
+                            .with_border_fill(theme.split_pane_border_color()),
+                    )
+                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
+                    .finish();
+                    // The layout breakpoints keep the caption whole; the
+                    // ellipsis only engages below the four-row minimum.
+                    let content = Flex::row()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(FUNCTION_LEGEND_KEYCAP_GAP)
+                        .with_child(keycap)
+                        .with_child(
+                            Shrinkable::new(
+                                1.0,
+                                Text::new_inline(caption, family, size)
+                                    .with_color(item_caption_color.into())
+                                    .with_clip(ClipConfig::ellipsis())
+                                    .finish(),
+                            )
+                            .finish(),
+                        );
+                    let mut container = Container::new(content.finish())
+                        .with_padding_left(FUNCTION_LEGEND_CELL_PADDING_X)
+                        .with_padding_right(FUNCTION_LEGEND_CELL_PADDING_X)
+                        .with_padding_top(2.0)
+                        .with_padding_bottom(2.0)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)));
+                    if enabled && mouse.is_hovered() {
+                        container = container.with_background(internal_colors::fg_overlay_1(theme));
+                    }
+                    container.finish()
+                })
+                .with_cursor(if enabled {
+                    Cursor::PointingHand
+                } else {
+                    Cursor::NotAllowed
+                });
+                let cell = if enabled {
+                    cell.on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                        .finish()
+                } else {
+                    // Do not arm a click that could complete after the pane gains focus.
+                    cell.disable().finish()
+                };
+                let position_id = self.layout_position_id(&format!("function-{key}"));
+                row.add_child(
+                    Expanded::new(1.0, save_layout_position(cell, &position_id)).finish(),
+                );
+            }
+            rows.add_child(row.finish());
         }
 
         // A hairline seats the bar against the list above it — footer chrome,
         // not another list row.
-        let bar = Container::new(row.finish())
+        let bar = Container::new(rows.finish())
             .with_padding_left(PANEL_PADDING)
             .with_padding_right(PANEL_PADDING)
             .with_padding_top(4.0)
@@ -4721,12 +4956,13 @@ impl SftpBrowserView {
             .with_background(theme.background())
             .with_border(Border::top(1.0).with_border_fill(theme.split_pane_border_color()))
             .finish();
-        let position_id = self.layout_position_id(mode.position_suffix());
+        let position_id = self.layout_position_id(layout.position_suffix());
         save_layout_position(bar, &position_id)
     }
 
-    /// Render the file list
-    fn render_file_list(&self, appearance: &Appearance) -> Box<dyn Element> {
+    /// Render the file list. `pane_focused` dims the cursor and the marks of
+    /// an inactive pane without hiding them.
+    fn render_file_list(&self, appearance: &Appearance, pane_focused: bool) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         // Filter the entries — same source of truth as the keyboard cursor.
@@ -4765,22 +5001,36 @@ impl SftpBrowserView {
             &self.row_mouse_handles,
             &self.mark_handles,
             self.parent_row_handle.clone(),
+            pane_focused,
             appearance,
         );
 
-        let mut col = Flex::column()
+        Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(header)
-            .with_child(rows);
-        // MC's selection status line: what is marked, and how much of it.
-        if !self.selected.is_empty() {
-            col = col.with_child(super::file_list::render_selection_status(
-                self.selected.len(),
-                self.marked_size(),
-                appearance,
-            ));
+            .with_child(rows)
+            .finish()
+    }
+
+    /// MC's selection status line — how many folders and files are marked and
+    /// how big the files are. Pinned below the scrolling list rather than
+    /// appended to it, so the count stays in view in a long directory.
+    fn render_marked_status(
+        &self,
+        appearance: &Appearance,
+        pane_focused: bool,
+    ) -> Option<Box<dyn Element>> {
+        let (folders, files) = self.marked_counts();
+        if folders == 0 && files == 0 {
+            return None;
         }
-        col.finish()
+        Some(super::file_list::render_selection_status(
+            folders,
+            files,
+            self.marked_size(),
+            pane_focused,
+            appearance,
+        ))
     }
 
     /// Render the transfer panel
@@ -5718,6 +5968,23 @@ impl TypedActionView for SftpBrowserView {
                 ctx.notify();
             }
             SftpBrowserAction::MarkAndAdvance => self.mark_and_advance(ctx),
+            SftpBrowserAction::MarkAndStep { down } => self.mark_and_step(*down, ctx),
+            SftpBrowserAction::MarkRangeTo(entry) => {
+                if self.row_clicks_suppressed() {
+                    return;
+                }
+                let Some(index) = self.resolve_entry_reference(entry) else {
+                    return;
+                };
+                self.mark_range_to(index, ctx);
+            }
+            SftpBrowserAction::MarkAll => self.mark_all(ctx),
+            SftpBrowserAction::ClearMarks => {
+                if !self.selected.is_empty() {
+                    self.selected.clear();
+                    ctx.notify();
+                }
+            }
             SftpBrowserAction::SortBy(column) => {
                 // Resolve which FILE the cursor is on BEFORE reordering: after
                 // `self.sort` changes, the same row index resolves to a
@@ -5754,8 +6021,10 @@ impl TypedActionView for SftpBrowserView {
                 if let Some(pos) = self.visible_indices().iter().position(|&i| i == index) {
                     self.cursor = pos + usize::from(self.has_parent_row());
                 }
-                self.selected.clear();
-                self.selected.insert(entry.identity.clone());
+                // A plain click only moves the cursor (MC): it neither marks
+                // the row nor drops the marks the user built with Insert, Space,
+                // Shift or Cmd/Ctrl-click. With nothing marked, F5/F6/F8 act on
+                // the cursor row anyway (`operation_sources`).
                 ctx.notify();
             }
             SftpBrowserAction::OpenEntry(entry) => {
@@ -6069,8 +6338,13 @@ impl TypedActionView for SftpBrowserView {
                     return;
                 };
                 self.context_menu = Some(ContextMenuState::new(entry.clone(), position));
-                self.selected.clear();
-                self.selected.insert(self.entries[index].entry_identity());
+                // Like a plain click, a right-click moves the cursor and keeps
+                // the marks. The menu's Delete then acts on the whole marked set
+                // when the clicked row is part of it, and on that row alone
+                // otherwise (`delete_selected`).
+                if let Some(pos) = self.visible_indices().iter().position(|&i| i == index) {
+                    self.cursor = pos + usize::from(self.has_parent_row());
+                }
                 ctx.notify();
             }
             SftpBrowserAction::CloseContextMenu => {
@@ -6580,7 +6854,7 @@ impl View for SftpBrowserView {
         if self.is_loading {
             col.add_child(Expanded::new(1.0, self.render_loading(appearance)).finish());
         } else {
-            let file_list = self.render_file_list(appearance);
+            let file_list = self.render_file_list(appearance, pane_is_focused);
             let scrollbar_color = theme.disabled_text_color(theme.background()).into();
             let scrollbar_thumb_hover = theme.main_text_color(theme.background()).into();
             let scrollable = ClippedScrollable::vertical(
@@ -6595,12 +6869,17 @@ impl View for SftpBrowserView {
             let body_position_id = self.layout_position_id("body");
             let positioned_body = save_layout_position(scrollable, &body_position_id);
             col.add_child(Expanded::new(1.0, positioned_body).finish());
+            // 5b. What is marked, pinned under the list (only while something is).
+            if let Some(status) = self.render_marked_status(appearance, pane_is_focused) {
+                let status_position_id = self.layout_position_id("marked-status");
+                col.add_child(save_layout_position(status, &status_position_id));
+            }
         }
 
         // 6. MC-style function-key footer. It belongs to this browser view,
-        // never to a shared pane-group container. Compact mode preserves the
-        // F3-F6 verbs and ellipsizes them before a narrow split can overlap.
-        col.add_child(self.render_responsive_function_bar(appearance, pane_actions_active));
+        // never to a shared pane-group container. Every key keeps its caption;
+        // a narrow split wraps the legend into two or four rows instead.
+        col.add_child(self.render_responsive_function_bar(app, appearance, pane_actions_active));
 
         // 7. Transfer panel (floating at the bottom)
         // Wrap the `Flex(Max)` body in a tight `Container` before it becomes the
@@ -6702,9 +6981,10 @@ impl View for SftpBrowserView {
         let positioned_content = save_layout_position(main_content, &panel_position_id);
 
         // 12. Keyboard event interception — MC-style navigation. A modifier
-        // (other than Shift, used for range operations later) means the
-        // keystroke belongs to a shortcut elsewhere; let it propagate.
+        // (other than Shift, which marks while moving) means the keystroke
+        // belongs to a shortcut elsewhere; let it propagate.
         let focus_handle = self.focus_handle.clone();
+        let search_editor = self.search_editor.clone();
         let key_handler =
             EventHandler::new(positioned_content).on_keydown(move |ctx, app, keystroke| {
                 if !pane_actions_active
@@ -6731,6 +7011,13 @@ impl View for SftpBrowserView {
                     ctx.dispatch_typed_action(SftpBrowserAction::CloseFileManager);
                     return DispatchEventResult::StopPropagation;
                 }
+                // The filter field keeps its own text keys (Space, Cmd/Ctrl+A).
+                let text_input_focused = search_editor.is_focused(app);
+                // Mark all: a modifier chord, so it is matched before the guard.
+                if is_mark_all_chord(keystroke) && !text_input_focused {
+                    ctx.dispatch_typed_action(SftpBrowserAction::MarkAll);
+                    return DispatchEventResult::StopPropagation;
+                }
                 if keystroke.ctrl || keystroke.cmd || keystroke.alt || keystroke.meta {
                     return DispatchEventResult::PropagateToParent;
                 }
@@ -6740,24 +7027,8 @@ impl View for SftpBrowserView {
                 }
                 let action = shifted_function_key_action(&keystroke.key, keystroke.shift)
                     .or_else(|| function_key_action(&keystroke.key))
-                    .or(match keystroke.key.as_str() {
-                        // Cursor movement
-                        "down" => Some(SftpBrowserAction::CursorDown),
-                        "up" => Some(SftpBrowserAction::CursorUp),
-                        "home" => Some(SftpBrowserAction::CursorFirst),
-                        "end" => Some(SftpBrowserAction::CursorLast),
-                        "pageup" => Some(SftpBrowserAction::CursorPageUp),
-                        "pagedown" => Some(SftpBrowserAction::CursorPageDown),
-                        // Directory traversal, MC-style: Enter/Right open, Left/Backspace go up.
-                        "enter" | "numpadenter" => Some(SftpBrowserAction::ActivateCursor),
-                        "right" => Some(SftpBrowserAction::EnterCursorDir),
-                        "left" | "backspace" => Some(SftpBrowserAction::NavigateUp),
-                        "space" => Some(SftpBrowserAction::ToggleSelectCursor),
-                        // MC's Insert: mark and step down. Space marks in place.
-                        "insert" => Some(SftpBrowserAction::MarkAndAdvance),
-                        "delete" => Some(SftpBrowserAction::DeleteSelected),
-                        "escape" => Some(SftpBrowserAction::CloseDialog),
-                        _ => None,
+                    .or_else(|| {
+                        list_key_action(&keystroke.key, keystroke.shift, text_input_focused)
                     });
                 match action {
                     Some(action) => {
@@ -6789,6 +7060,9 @@ impl BackingView for SftpBrowserView {
 
     /// Close the view
     fn close(&mut self, ctx: &mut ViewContext<Self>) {
+        // Capture before the teardown below marks the connection disconnected:
+        // the emitted close reverts to the shell, which asks for this directory.
+        self.shell_directory_at_close = self.shell_directory_on_close();
         // Legacy, pane-owned transfers are cancelled. Global queue jobs keep
         // running and remain visible from other panes/workspaces.
         for task in &self.transfers {

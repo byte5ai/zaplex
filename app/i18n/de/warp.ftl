@@ -36,6 +36,11 @@ cockpit-attention-inbox-count = { $count ->
    *[other] { $count } Agents warten auf dich
 }
 cockpit-attention-inbox-empty = Alles erledigt — nichts wartet auf dich.
+cockpit-attention-pulse-tooltip = { $count ->
+    [one] { $count } Agent wartet auf Dich – Klick öffnet ihn
+   *[other] { $count } Agents warten auf Dich – Klick öffnet den nächsten
+}
+cockpit-attention-nothing-waiting = Gerade wartet nichts auf Dich.
 cockpit-conductor-title = Hosts
 # Zonen-Header der Sidebar (spec v3 §S1) — Label wird großgeschrieben gerendert
 cockpit-zone-connections = Verbindungen
@@ -904,6 +909,8 @@ cockpit-spawn-card-batch-native-required = Remote-Starts benötigen die native A
 cockpit-account-rename = Konto umbenennen
 cockpit-account-alias-write-error = Kontoname konnte nicht gespeichert werden: { $error }
 file-manager-unknown-host = Datei-Manager nicht möglich: Der Host dieses Panes ließ sich nicht bestimmen — stattdessen diesen Rechner zu zeigen, wären die falschen Dateien.
+file-manager-shell-directory-deferred = Die Shell wechselt nach { $path }, sobald sie bereit und frei ist.
+file-manager-shell-directory-not-applied = Die Shell bleibt im bisherigen Verzeichnis: { $path } aus dem Datei-Manager ließ sich nicht sicher in diese Shell übernehmen.
 sftp-file-manager-title = Datei-Manager
 sftp-context-menu-open = Öffnen
 sftp-context-menu-download = Herunterladen
@@ -919,16 +926,27 @@ fm-col-modified = Geändert
 fm-search-placeholder = Dateien filtern…
 fm-rename-placeholder = Neuer Name
 fm-folder-name-placeholder = Ordnername
-fm-key-view = Ansehen
-fm-key-edit = Bearbeiten
-fm-key-rename = Umbenennen
+fm-key-view = Ansicht
+fm-key-edit = Editor
+fm-key-rename = Benennen
 fm-key-copy = Kopieren
-fm-key-move = Verschieben
-fm-key-mkdir = Neuer Ordner
+fm-key-move = Schieben
+fm-key-mkdir = Ordner
 fm-key-delete = Löschen
-fm-key-quit = Schließen
+fm-key-terminal = Terminal
 fm-empty-folder = Dieser Ordner ist leer
-fm-selection-status = { $count } markiert · { $size }
+fm-selection-status = { $items } markiert · { $size }
+fm-selection-status-with-folders = { $items } markiert · { $size } ohne Ordner
+fm-selection-status-folders-only = { $items } markiert · Ordnergröße nicht berechnet
+fm-count-folders = { $count ->
+    [one] { $count } Ordner
+   *[other] { $count } Ordner
+}
+fm-count-files = { $count ->
+    [one] { $count } Datei
+   *[other] { $count } Dateien
+}
+fm-count-folders-and-files = { $folders } · { $files }
 fm-tt-hidden = Versteckte Dateien anzeigen
 
 # ── T2.4: Dateimanager-Dialoge, Transfer, Status/Toasts, SSH-Manager, Verbinden ──
@@ -952,7 +970,10 @@ fm-dlg-newer-only-all = Alle nur ersetzen, wenn neuer
 fm-dlg-picker-title = { $verb } — in welches Panel?
 fm-dlg-picker-body = Mehr als ein anderes Datei-Panel ist offen. Bitte Ziel wählen:
 fm-dlg-delete-body-one = Willst du „{ $name }“ wirklich löschen? Das kann nicht rückgängig gemacht werden.
-fm-dlg-delete-body-many = Willst du { $count } Objekte wirklich löschen? Das kann nicht rückgängig gemacht werden.
+fm-dlg-delete-body-one-folder = Willst du den Ordner „{ $name }“ samt Inhalt wirklich löschen? Das kann nicht rückgängig gemacht werden.
+fm-dlg-delete-body-files = Willst du { $files } wirklich löschen? Das kann nicht rückgängig gemacht werden.
+fm-dlg-delete-body-folders = Willst du { $folders } samt Inhalt wirklich löschen? Das kann nicht rückgängig gemacht werden.
+fm-dlg-delete-body-mixed = Willst du { $folders } (inkl. Inhalt) und { $files } wirklich löschen? Das kann nicht rückgängig gemacht werden.
 fm-dlg-delete-title = Löschen bestätigen
 fm-dlg-delete = Löschen
 fm-dlg-rename-title = Umbenennen
@@ -1369,6 +1390,8 @@ terminal-zaplexify-subshell = Subshell Zaplexifizieren
 terminal-zaplexify-subshell-tooltip = Zaplex-Shell-Integration in dieser Session aktivieren
 terminal-use-agent = Agent verwenden
 terminal-use-agent-tooltip = Den Zaplex-Agenten um Hilfe bitten
+terminal-use-agent-dismiss = Ausblenden
+terminal-use-agent-dont-show-again = Nicht mehr anzeigen
 terminal-give-control-back-to-agent = Steuerung an den Agenten zurückgeben
 terminal-resume-agent-tooltip = Den Zaplex-Agenten zum Fortfahren auffordern
 terminal-voice-input-tooltip = Spracheingabe
@@ -3478,6 +3501,9 @@ terminal-remote-readiness-corrupt = Diese Remote-Sitzung konnte nicht wiederherg
 terminal-remote-readiness-cancelled = Wiederherstellung der Remote-Sitzung abgebrochen.
 terminal-remote-readiness-retry = Erneut versuchen
 terminal-remote-readiness-cancel = Abbrechen
+terminal-remote-readiness-new-session = Neue Session
+terminal-remote-readiness-close = Schließen
+terminal-remote-notice-detail = Details: { $detail }
 terminal-bootstrapping-installing-progress = Wird installiert… ({ $p } %)
 terminal-bootstrapping-installing = Wird installiert…
 terminal-bootstrapping-updating = Wird aktualisiert…
@@ -4077,7 +4103,10 @@ terminal-daemon-attach-identity-invalid = Die Session konnte nicht erneut angeh�
 terminal-daemon-multiplexer-nested = Diese Session läuft innerhalb von { $detail } (automatisch über das Anmeldeprofil des Hosts angehängt). Zaplex hält diese Session bereits nativ am Leben, daher sind zwei Persistenzebenen verschachtelt.
 terminal-daemon-attach-generation-invalid = Die Session konnte nicht erneut angehängt werden: Der Daemon hat eine ungültige PTY-Generation zurückgegeben.
 terminal-daemon-attach-agent-routing-unsupported = Der Agent konnte nicht erneut angehängt werden: Der Host unterstützt kein validiertes Agent-Routing.
-terminal-daemon-attach-failed = Die Session konnte nicht erneut angehängt werden: { $detail }
+terminal-daemon-attach-failed-summary = Die Remote-Sitzung konnte nicht wieder verbunden werden.
+terminal-daemon-attach-held-exhausted = Die Remote-Sitzung ist noch an eine ältere Verbindung gebunden, die sich noch nicht abgemeldet hat. In ein paar Minuten erneut versuchen.
+terminal-daemon-attach-retrying = Verbindung wird wiederhergestellt… (Versuch { $attempt }/{ $total })
+terminal-daemon-attach-taken-over = Diese Sitzung ist jetzt in einem anderen Fenster oder auf einem anderen Gerät geöffnet. Erneut verbinden, um sie hierher zurückzuholen.
 terminal-daemon-attach-generation-mismatch = Die Session konnte nicht erneut angehängt werden: Die Daemon-Generation stimmt nicht überein.
 terminal-daemon-scrollback-truncated = Der Scrollback wurde während einer längeren Unterbrechung gekürzt.
 terminal-daemon-final-output-truncated = Ein Teil der letzten Session-Ausgabe wurde vor der Beendigungsbenachrichtigung gekürzt.

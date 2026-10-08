@@ -1469,6 +1469,18 @@ enum FileManagerDirectoryInput {
     },
 }
 
+/// Result of submitting an automatic command on the user's behalf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AutomaticCommandOutcome {
+    /// The command was handed to the shell.
+    Submitted,
+    /// The shell is busy or not ready yet; a later idle prompt can submit it.
+    Deferred,
+    /// This input can never submit it (shared session, or an idle shell whose
+    /// session history cannot record commands); no later prompt will change that.
+    Refused,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanExecuteCommand {
     Yes,
@@ -5923,18 +5935,39 @@ impl Input {
         &mut self,
         command: &str,
         ctx: &mut ViewContext<Self>,
-    ) -> bool {
+    ) -> AutomaticCommandOutcome {
+        if self.automatic_command_is_refused(ctx) {
+            return AutomaticCommandOutcome::Refused;
+        }
         if !self.ordinary_command_input_ready || self.has_pending_command {
-            return false;
+            return AutomaticCommandOutcome::Deferred;
         }
         let Some((block_id, session_id)) = self.emit_automatic_command(command, ctx) else {
-            return false;
+            return AutomaticCommandOutcome::Deferred;
         };
         self.file_manager_directory_input = Some(FileManagerDirectoryInput::Executing {
             block_id,
             session_id,
         });
-        true
+        AutomaticCommandOutcome::Submitted
+    }
+
+    /// Refusals no later prompt event can lift. Everything else (a running
+    /// process, bootstrap, missing precmd, remote readiness) is retried by the
+    /// terminal at its next idle prompt.
+    fn automatic_command_is_refused(&self, ctx: &AppContext) -> bool {
+        let (is_shared, idle_prompt_has_session) = {
+            let model = self.model.lock();
+            let active_block = model.block_list().active_block();
+            (
+                model.shared_session_status().is_sharer_or_viewer(),
+                active_block.has_received_precmd() && active_block.session_id().is_some(),
+            )
+        };
+        is_shared
+            || (idle_prompt_has_session
+                && self.can_execute_command(ctx)
+                    == CanExecuteCommand::No(DenyExecutionReason::HistoryNotAppendable))
     }
 
     fn emit_automatic_command(

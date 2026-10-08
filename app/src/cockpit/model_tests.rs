@@ -359,6 +359,8 @@ fn successful_empty_registry_read_remains_authoritative() {
     assert_eq!(inventory.needs_me, 0);
 }
 
+/// Fixture rows model the published inventory: a Waiting row carries the
+/// unseen-turn attention the projection stamps on openable rows.
 fn session(id: &str, state: zaplex_cockpit::SessionState) -> SessionSnapshot {
     SessionSnapshot {
         session_id: id.into(),
@@ -384,6 +386,10 @@ fn session(id: &str, state: zaplex_cockpit::SessionState) -> SessionSnapshot {
         task_state: None,
         last_activity: Utc::now(),
         pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: (state == zaplex_cockpit::SessionState::Waiting)
+            .then_some(Attention::UnseenTurn),
     }
 }
 
@@ -530,6 +536,7 @@ fn same_host_and_session_id_in_different_accounts_do_not_mask_waiting_transition
 
     let mut new_personal = old_personal.clone();
     new_personal.state = SessionState::Waiting;
+    new_personal.attention = Some(Attention::UnseenTurn);
     let new_work = old_work.clone();
 
     let host = |sessions| HostNode {
@@ -1219,4 +1226,368 @@ fn local_scan_failure_cannot_become_an_authoritative_empty_inventory() {
             &remote_before
         );
     }
+}
+
+// ── Attention projection (owner decisions on the attention indicator) ───────
+
+fn raw_row(id: &str, state: zaplex_cockpit::SessionState) -> SessionSnapshot {
+    let mut row = session(id, state);
+    row.attention = None;
+    row.last_activity = Utc::now();
+    row
+}
+
+fn facts_for(
+    tree: &FleetTree,
+    mut decide: impl FnMut(&SessionSnapshot) -> RowFacts,
+) -> HashMap<String, RowFacts> {
+    tree.hosts
+        .iter()
+        .flat_map(|host| {
+            host.projects
+                .iter()
+                .flat_map(|project| &project.sessions)
+                .map(move |session| (host, session))
+        })
+        .map(|(host, session)| {
+            (
+                session_key(host.is_local, host.host_id.as_deref(), session),
+                decide(session),
+            )
+        })
+        .collect()
+}
+
+fn reach(reach: SessionReach) -> RowFacts {
+    RowFacts {
+        reach,
+        zaplex_owned: false,
+        origin_unknown: false,
+        hook_blocked: false,
+    }
+}
+
+fn all_rows(tree: &FleetTree) -> Vec<&SessionSnapshot> {
+    tree.hosts
+        .iter()
+        .flat_map(|host| host.projects.iter().flat_map(|project| &project.sessions))
+        .collect()
+}
+
+/// An external agent Zaplex can neither focus, reattach nor resume is not shown
+/// anywhere: not in the tree, not in the count (pulse/Dock/sidebar), and not
+/// in the inbox or jump order — even with an unseen finished turn.
+#[test]
+fn external_unreachable_session_is_excluded_from_tree_count_and_inbox() {
+    use zaplex_cockpit::SessionState;
+    let raw = fold_inventory(
+        "laptop",
+        vec![
+            raw_row("external", SessionState::Waiting),
+            raw_row("in-zaplex", SessionState::Waiting),
+        ],
+        Vec::new(),
+    );
+    let pane = EntityId::new();
+    let facts = facts_for(&raw, |session| match session.session_id.as_str() {
+        "external" => reach(SessionReach::Unreachable),
+        _ => reach(SessionReach::Terminal(pane)),
+    });
+    let mut seen = SeenTurns::new(Utc::now() - chrono::Duration::hours(1));
+
+    let projected = project_inventory_attention(&raw, &facts, None, &mut seen);
+
+    let ids: Vec<&str> = all_rows(&projected)
+        .into_iter()
+        .map(|session| session.session_id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["in-zaplex"]);
+    assert_eq!(projected.needs_me, 1);
+    let inbox: Vec<&str> = zaplex_cockpit::waiting_sessions(&projected)
+        .into_iter()
+        .map(|(_, session)| session.session_id.as_str())
+        .collect();
+    assert_eq!(inbox, vec!["in-zaplex"]);
+}
+
+/// A Zaplex-launched agent whose daemon PTY is momentarily not reattachable
+/// (reconnect, foreground handover) stays visible instead of flickering away,
+/// but is not counted until a click can actually open it.
+#[test]
+fn zaplex_owned_session_stays_visible_while_momentarily_unreachable() {
+    use zaplex_cockpit::SessionState;
+    let mut owned = raw_row("owned", SessionState::Waiting);
+    owned.pty_session_id = Some("pty-1".to_string());
+    owned.pty_session_generation = Some(3);
+    let mut raw = fold_inventory(
+        "laptop",
+        Vec::new(),
+        vec![(connected_root("devhost", "daemon-1", None), vec![owned])],
+    );
+    for host in &mut raw.hosts {
+        host.inventory_status = AgentInventoryStatus::Ready;
+    }
+    let facts = facts_for(&raw, |session| RowFacts {
+        reach: SessionReach::Unreachable,
+        zaplex_owned: capabilities::zaplex_owned(session, false),
+        origin_unknown: false,
+        hook_blocked: false,
+    });
+    let mut seen = SeenTurns::new(Utc::now() - chrono::Duration::hours(1));
+
+    let projected = project_inventory_attention(&raw, &facts, None, &mut seen);
+
+    let rows = all_rows(&projected);
+    assert_eq!(rows.len(), 1, "the owned row survives the reconnect");
+    assert_eq!(rows[0].attention, None);
+    assert_eq!(projected.needs_me, 0);
+    assert_eq!(zaplex_cockpit::next_waiting(&projected, None), None);
+}
+
+/// Looking at an agent's pane (the active window's focused terminal) marks its
+/// finished turn as seen; the agent's next finished turn counts again.
+#[test]
+fn viewing_the_pane_clears_the_unseen_turn_and_a_new_turn_counts_again() {
+    use zaplex_cockpit::SessionState;
+    let pane = EntityId::new();
+    let mut done = raw_row("agent", SessionState::Waiting);
+    done.turn_id = Some("turn-1".to_string());
+    let raw = fold_inventory("laptop", vec![done.clone()], Vec::new());
+    let facts = facts_for(&raw, |_| reach(SessionReach::Terminal(pane)));
+    let mut seen = SeenTurns::new(Utc::now() - chrono::Duration::hours(1));
+
+    assert_eq!(
+        project_inventory_attention(&raw, &facts, None, &mut seen).needs_me,
+        1,
+        "an unseen finished turn counts"
+    );
+    assert_eq!(
+        project_inventory_attention(&raw, &facts, Some(pane), &mut seen).needs_me,
+        0,
+        "viewing its pane clears it"
+    );
+    assert_eq!(
+        project_inventory_attention(&raw, &facts, None, &mut seen).needs_me,
+        0,
+        "an idle, seen session stays quiet after the user looks away"
+    );
+
+    let mut next_turn = done;
+    next_turn.turn_id = Some("turn-2".to_string());
+    let raw = fold_inventory("laptop", vec![next_turn], Vec::new());
+    let facts = facts_for(&raw, |_| reach(SessionReach::Terminal(pane)));
+    assert_eq!(
+        project_inventory_attention(&raw, &facts, None, &mut seen).needs_me,
+        1,
+        "the next finished turn is unread again"
+    );
+}
+
+/// A hook-reported permission prompt in a Zaplex terminal counts even though
+/// discovery still reads a tool run, and viewing does not clear it.
+#[test]
+fn hook_blocked_terminal_counts_until_answered_even_while_viewed() {
+    use zaplex_cockpit::SessionState;
+    let pane = EntityId::new();
+    let raw = fold_inventory(
+        "laptop",
+        vec![raw_row("asking", SessionState::Monitor)],
+        Vec::new(),
+    );
+    let facts = facts_for(&raw, |_| RowFacts {
+        reach: SessionReach::Terminal(pane),
+        zaplex_owned: true,
+        origin_unknown: false,
+        hook_blocked: true,
+    });
+    let mut seen = SeenTurns::new(Utc::now());
+
+    let projected = project_inventory_attention(&raw, &facts, Some(pane), &mut seen);
+    assert_eq!(projected.needs_me, 1);
+    assert_eq!(
+        all_rows(&projected)[0].presented_state(),
+        SessionState::Waiting
+    );
+}
+
+/// Startup baseline: a turn that finished before the app started is history,
+/// not unread mail.
+#[test]
+fn startup_does_not_count_turns_finished_before_the_app_started() {
+    use zaplex_cockpit::SessionState;
+    let started = Utc::now();
+    let mut historical = raw_row("old", SessionState::Waiting);
+    historical.last_activity = started - chrono::Duration::hours(3);
+    historical.turn_id = Some("old-turn".to_string());
+    let raw = fold_inventory("laptop", vec![historical], Vec::new());
+    let facts = facts_for(&raw, |_| reach(SessionReach::Terminal(EntityId::new())));
+    let mut seen = SeenTurns::new(started);
+
+    let projected = project_inventory_attention(&raw, &facts, None, &mut seen);
+    assert_eq!(projected.needs_me, 0);
+    assert_eq!(all_rows(&projected).len(), 1, "still listed, just quiet");
+}
+
+/// The projection's verdict reaches the account snapshot rows the dashboard
+/// reads, so the same session never shows attention on one surface only.
+#[test]
+fn account_rows_hide_external_sessions_and_carry_the_projected_attention() {
+    use zaplex_cockpit::SessionState;
+    let row = raw_row("agent", SessionState::Waiting);
+    let external = raw_row("external", SessionState::Waiting);
+    let raw = fold_inventory("laptop", vec![row.clone(), external.clone()], Vec::new());
+    let pane = EntityId::new();
+    let facts = facts_for(&raw, |session| match session.session_id.as_str() {
+        "external" => reach(SessionReach::Unreachable),
+        _ => reach(SessionReach::Terminal(pane)),
+    });
+    let mut seen = SeenTurns::new(Utc::now() - chrono::Duration::hours(1));
+    let projected = project_inventory_attention(&raw, &facts, None, &mut seen);
+
+    let mut snapshot = empty_snapshot();
+    snapshot.accounts.push(zaplex_cockpit::AccountUsage {
+        account: zaplex_cockpit::Account {
+            provider: Provider::Claude,
+            key: "claude".to_string(),
+            config_dir: PathBuf::from("/home/me/.claude"),
+            label: "Claude".to_string(),
+            provider_account_id: None,
+            email: None,
+            org: None,
+            role: None,
+            plan_tier: None,
+            is_default: true,
+        },
+        block5h: zaplex_cockpit::WindowTotals::default(),
+        today: zaplex_cockpit::WindowTotals::default(),
+        today_by_session: Default::default(),
+        week: zaplex_cockpit::WindowTotals::default(),
+        reset5h: None,
+        reset_week: None,
+        heat: 0.0,
+        heat_week: 0.0,
+        heat_opus: None,
+        heat_sonnet: None,
+        sessions: vec![row, external],
+        idle_sessions: Vec::new(),
+        status: zaplex_cockpit::AccountStatus::Live,
+        provenance: zaplex_cockpit::UsageProvenance::Estimate,
+    });
+    snapshot.accounts[0].today.messages = 7;
+
+    let published = published_snapshot(&snapshot, &projected);
+    let rows: Vec<&str> = published.accounts[0]
+        .sessions
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect();
+    assert_eq!(rows, vec!["agent"], "no row for the external session");
+    assert_eq!(
+        published.accounts[0].sessions[0].attention,
+        Some(Attention::UnseenTurn)
+    );
+    assert_eq!(
+        published.accounts[0].today.messages, 7,
+        "account usage still describes the whole account"
+    );
+    assert_eq!(snapshot.accounts[0].sessions.len(), 2, "discovery is kept");
+}
+
+/// Without any hook bridge, an agent started in a Zaplex pane inherits that
+/// pane's surface id: it stays visible, is counted, and the pane is its click
+/// target. A truly external agent (readable environment, no Zaplex surface)
+/// stays hidden; one whose process cannot be inspected is never hidden.
+#[test]
+fn hookless_agent_in_a_zaplex_pane_is_visible_counted_and_openable() {
+    use zaplex_cockpit::SessionState;
+    let pane = EntityId::new();
+    let raw = fold_inventory(
+        "laptop",
+        vec![
+            raw_row("hookless", SessionState::Waiting),
+            raw_row("external", SessionState::Waiting),
+            raw_row("uninspectable", SessionState::Waiting),
+        ],
+        Vec::new(),
+    );
+    // Facts as `attention_row_facts` derives them from the process links: the
+    // hookless agent's linked pane makes it reachable and owned.
+    let facts = facts_for(&raw, |session| match session.session_id.as_str() {
+        "hookless" => RowFacts {
+            reach: capabilities::session_reach(session, true, Some(pane), false),
+            zaplex_owned: capabilities::zaplex_owned(session, true),
+            origin_unknown: false,
+            hook_blocked: false,
+        },
+        "external" => reach(SessionReach::Unreachable),
+        _ => RowFacts {
+            reach: SessionReach::Unreachable,
+            zaplex_owned: false,
+            origin_unknown: true,
+            hook_blocked: false,
+        },
+    });
+    let mut seen = SeenTurns::new(Utc::now() - chrono::Duration::hours(1));
+
+    let projected = project_inventory_attention(&raw, &facts, None, &mut seen);
+
+    let mut ids: Vec<&str> = all_rows(&projected)
+        .into_iter()
+        .map(|session| session.session_id.as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["hookless", "uninspectable"]);
+    assert_eq!(
+        projected.needs_me, 1,
+        "only the openable hookless agent counts"
+    );
+    let target = zaplex_cockpit::next_waiting(&projected, None).expect("a target");
+    assert_eq!(target.session_id, "hookless");
+}
+
+/// The local process link is computed per discovered account row and keyed
+/// exactly like the inventory rows the projection looks up.
+#[test]
+fn local_terminal_links_are_keyed_like_inventory_rows() {
+    use zaplex_cockpit::SessionState;
+    let mut codex = raw_row("codex-session", SessionState::Waiting);
+    codex.provider = Provider::Codex;
+    let mut snapshot = empty_snapshot();
+    snapshot.accounts.push(zaplex_cockpit::AccountUsage {
+        account: zaplex_cockpit::Account {
+            provider: Provider::Codex,
+            key: "codex".to_string(),
+            config_dir: PathBuf::from("/home/me/.codex"),
+            label: "Codex".to_string(),
+            provider_account_id: None,
+            email: None,
+            org: None,
+            role: None,
+            plan_tier: None,
+            is_default: true,
+        },
+        block5h: zaplex_cockpit::WindowTotals::default(),
+        today: zaplex_cockpit::WindowTotals::default(),
+        today_by_session: Default::default(),
+        week: zaplex_cockpit::WindowTotals::default(),
+        reset5h: None,
+        reset_week: None,
+        heat: 0.0,
+        heat_week: 0.0,
+        heat_opus: None,
+        heat_sonnet: None,
+        sessions: vec![codex.clone()],
+        idle_sessions: Vec::new(),
+        status: zaplex_cockpit::AccountStatus::Live,
+        provenance: zaplex_cockpit::UsageProvenance::Estimate,
+    });
+
+    let links = local_terminal_links(&snapshot);
+    let raw = fold_inventory("laptop", vec![codex], Vec::new());
+    let row = all_rows(&raw)[0];
+    // No process holds this fixture's rollout: no evidence, never "external".
+    assert_eq!(
+        links.get(&session_key(true, None, row)),
+        Some(&TerminalLink::Unknown)
+    );
 }

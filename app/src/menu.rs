@@ -1608,6 +1608,9 @@ impl<A: Action + Clone> MenuItem<A> {
                     primary_fields.disabled =
                         fields.disabled || fields.split_submenu_primary_disabled;
 
+                    // Both halves share the row's selection so the highlight always
+                    // spans the full row: while the label is the target, and while the
+                    // trigger's submenu is open (including when the pointer is inside it).
                     let primary_width = split_submenu_primary_width(menu_width);
                     let primary = ConstrainedBox::new(primary_fields.render(
                         menu_background_color,
@@ -1615,7 +1618,7 @@ impl<A: Action + Clone> MenuItem<A> {
                         row_index,
                         0,
                         dispatch_item_actions,
-                        is_row_selected && selected_item_in_row != Some(1),
+                        is_row_selected,
                         ignore_hover_when_covered,
                         safe_zone_suppresses_hover,
                         submenu_being_shown_for_item,
@@ -1633,7 +1636,7 @@ impl<A: Action + Clone> MenuItem<A> {
                         row_index,
                         1,
                         dispatch_item_actions,
-                        is_row_selected && selected_item_in_row == Some(1),
+                        is_row_selected,
                         ignore_hover_when_covered,
                         safe_zone_suppresses_hover,
                         submenu_being_shown_for_item,

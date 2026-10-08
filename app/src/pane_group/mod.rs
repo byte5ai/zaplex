@@ -1852,15 +1852,17 @@ impl PaneGroup {
                         if !pane_data.replace_pane(pane_id, visible_pane_id, true) {
                             pane_contents.remove(&visible_pane_id);
                             visible_pane_id = pane_id;
-                        } else if same_host {
-                            if let Some(terminal) = pane_contents
-                                .get(&pane_id)
-                                .and_then(|pane| pane.as_any().downcast_ref::<TerminalPane>())
-                            {
-                                terminal.terminal_view(ctx).update(ctx, |view, ctx| {
+                        } else if let Some(terminal) = pane_contents
+                            .get(&pane_id)
+                            .and_then(|pane| pane.as_any().downcast_ref::<TerminalPane>())
+                        {
+                            terminal.terminal_view(ctx).update(ctx, |view, ctx| {
+                                if same_host {
                                     view.restore_file_manager_navigation(is_local, ctx);
-                                });
-                            }
+                                } else {
+                                    view.restore_unproven_file_manager_navigation(ctx);
+                                }
+                            });
                         }
                     }
                 }
@@ -4617,18 +4619,12 @@ impl PaneGroup {
                 (FileManagerTarget::Local { .. }, Some(_))
                 | (FileManagerTarget::Remote { .. }, None) => false,
             };
-            if same_host {
-                terminal.terminal_view(ctx).update(ctx, |view, ctx| {
-                    view.begin_file_manager_navigation(
-                        matches!(&target, FileManagerTarget::Local { .. }),
-                        ctx,
-                    );
-                });
-            } else {
-                terminal.terminal_view(ctx).update(ctx, |view, ctx| {
-                    view.cancel_file_manager_directory(ctx);
-                });
-            }
+            // Another host's directory is never sent to this shell, but closing
+            // the file manager still reports it instead of dropping it silently.
+            let is_local = matches!(&target, FileManagerTarget::Local { .. });
+            terminal.terminal_view(ctx).update(ctx, |view, ctx| {
+                view.begin_file_manager_navigation(is_local, same_host, ctx);
+            });
         }
         match target {
             FileManagerTarget::Local { start_path } => {

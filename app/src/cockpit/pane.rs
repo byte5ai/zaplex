@@ -311,7 +311,7 @@ enum TableRow {
 fn table_row_needs_attention(row: &TableRow) -> bool {
     matches!(
         row,
-        TableRow::Session { session, .. } if session.state == SessionState::Waiting
+        TableRow::Session { session, .. } if session.needs_you()
     )
 }
 
@@ -1426,7 +1426,7 @@ impl CockpitPaneView {
             ));
         }
 
-        all.retain(|(s, ..)| self.session_filter.matches(s.state));
+        all.retain(|(s, ..)| self.session_filter.matches(s.presented_state()));
 
         // Live search over the coordinates that identify a session to a human:
         // its project, its branch, its worktree — plus its own name and host.
@@ -1498,7 +1498,9 @@ impl CockpitPaneView {
                             .unwrap_or(std::cmp::Ordering::Equal)
                     }
                     // Waiting first — the whole point of the cockpit's order.
-                    SortColumn::Status => state_rank(a.0.state).cmp(&state_rank(b.0.state)),
+                    SortColumn::Status => {
+                        state_rank(a.0.presented_state()).cmp(&state_rank(b.0.presented_state()))
+                    }
                     SortColumn::Last => a.0.last_activity.cmp(&b.0.last_activity),
                 };
                 let ord = if self.sort.ascending {
@@ -2290,11 +2292,11 @@ impl CockpitPaneView {
             .sessions
             .iter()
             .chain(acct.idle_sessions.iter())
-            .map(|s| s.state)
+            .map(|s| s.presented_state())
             .collect();
         for row in zaplex_cockpit::sessions_of_account(tree, &acct.account) {
             if !row.is_local {
-                states.push(row.session.state);
+                states.push(row.session.presented_state());
             }
         }
         let count = |f: SessionFilter| states.iter().filter(|s| f.matches(**s)).count();
@@ -2637,19 +2639,20 @@ impl CockpitPaneView {
                         None => Self::cell("—".to_string(), faint, true, appearance),
                     };
 
+                    let presented_state = session.presented_state();
                     let state_cell = Flex::row()
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .with_spacing(6.0)
                         .with_child(glyph_cell(
-                            session_glyph(session.state),
-                            status_dot_coloru(session.state, appearance),
+                            session_glyph(presented_state),
+                            status_dot_coloru(presented_state, appearance),
                             appearance,
                         ))
                         .with_child(Self::text(
-                            zaplex_cockpit::state_word(session.state).to_string(),
+                            zaplex_cockpit::state_word(presented_state).to_string(),
                             family,
                             body,
-                            if session.state == SessionState::Waiting {
+                            if presented_state == SessionState::Waiting {
                                 main
                             } else {
                                 muted
@@ -3151,8 +3154,8 @@ impl CockpitPaneView {
             // green alone — indistinguishable with red-green colour blindness, and
             // it silently drifted from the shared vocabulary while its comment
             // claimed to follow it. Both now come from the single source of truth.
-            let glyph = session_glyph(session.state);
-            let color = status_dot_coloru(session.state, appearance);
+            let glyph = session_glyph(session.presented_state());
+            let color = status_dot_coloru(session.presented_state(), appearance);
             let dir = std::path::Path::new(&session.cwd)
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -3244,7 +3247,7 @@ impl CockpitPaneView {
         let waiting: usize = accounts
             .iter()
             .flat_map(|a| &a.sessions)
-            .filter(|s| s.state == SessionState::Waiting)
+            .filter(|s| s.needs_you())
             .count();
         // Working = the agent is busy (Active) or mid tool-run / live job
         // (Monitor) — hands off. Surfaced next to the waiting count so the

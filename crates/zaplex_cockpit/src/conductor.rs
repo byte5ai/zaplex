@@ -28,10 +28,11 @@ use std::collections::BTreeMap;
 /// Working: the agent is busy (Active) or mid tool-run / live job (Monitor) —
 /// hands off. A **filled** dot (rendered green).
 pub const GLYPH_WORKING: &str = "●";
-/// Waiting: the agent handed control back — **this** is the attention state.
-/// A **fisheye** dot (a filled centre inside a ring — a halo) rendered in the
-/// amber attention colour: it stands out by shape *and* colour, so it reads as
-/// "needs you" even without colour and without an emoji.
+/// Waiting: the agent needs you — an open question/permission prompt or a
+/// finished turn you have not seen ([`SessionSnapshot::needs_you`]). **This** is
+/// the attention state. A **fisheye** dot (a filled centre inside a ring — a
+/// halo) rendered in the amber attention colour: it stands out by shape *and*
+/// colour, so it reads as "needs you" even without colour and without an emoji.
 pub const GLYPH_WAITING: &str = "◉";
 /// Idle: a resumable session with no live turn in flight. A **hollow** ring
 /// (reads as "not active") in the faint colour.
@@ -40,7 +41,8 @@ pub const GLYPH_IDLE: &str = "○";
 /// The one consistent status glyph for a session, used identically on every
 /// Conductor surface (pane, sidebar, and — later — the ambient bit). Active and
 /// Monitor collapse to a single "working" glyph on purpose: the calm view cares
-/// about *working vs. waiting vs. idle*, not the busy sub-states.
+/// about *working vs. waiting vs. idle*, not the busy sub-states. Surfaces pass
+/// [`SessionSnapshot::presented_state`], so amber means "needs you" only.
 pub fn session_glyph(state: SessionState) -> &'static str {
     match state {
         SessionState::Active | SessionState::Monitor => GLYPH_WORKING,
@@ -307,17 +309,18 @@ pub struct ConductorSession<'a> {
     pub representative: &'a SessionSnapshot,
     /// Waiting-first, then most-recent child agents.
     pub agents: Vec<&'a SessionSnapshot>,
-    /// Aggregate state for the Session row.
+    /// Presented aggregate state for the Session row (waiting = a child needs
+    /// the user).
     pub state: SessionState,
-    /// Number of child agents waiting for the user.
+    /// Number of child agents that need the user.
     pub needs_me: usize,
 }
 
+/// Presented aggregate for a Session row: waiting only when a child needs the
+/// user ([`SessionSnapshot::needs_you`]); a child whose finished turn was
+/// already seen rests like an idle one.
 fn aggregate_session_state(agents: &[&SessionSnapshot]) -> SessionState {
-    if agents
-        .iter()
-        .any(|agent| agent.state == SessionState::Waiting)
-    {
+    if agents.iter().any(|agent| agent.needs_you()) {
         SessionState::Waiting
     } else if agents
         .iter()
@@ -365,8 +368,8 @@ pub fn group_project_sessions<'a>(
         .into_iter()
         .map(|(key, mut agents)| {
             agents.sort_by(|a, b| {
-                (b.state == SessionState::Waiting)
-                    .cmp(&(a.state == SessionState::Waiting))
+                b.needs_you()
+                    .cmp(&a.needs_you())
                     .then_with(|| b.last_activity.cmp(&a.last_activity))
                     .then_with(|| {
                         session_key(is_local, host_id, a).cmp(&session_key(is_local, host_id, b))
@@ -386,10 +389,7 @@ pub fn group_project_sessions<'a>(
                 })
                 .expect("a grouped Conductor session always has an agent");
             let state = aggregate_session_state(&agents);
-            let needs_me = agents
-                .iter()
-                .filter(|agent| agent.state == SessionState::Waiting)
-                .count();
+            let needs_me = agents.iter().filter(|agent| agent.needs_you()).count();
             ConductorSession {
                 key,
                 representative,
@@ -480,8 +480,11 @@ impl WaitingTarget {
     }
 }
 
-/// Every Waiting agent across the fleet, in the tree's canonical order (host,
-/// then project, then session — all already waiting-first sorted). Each entry is
+/// Every agent that needs the user across the fleet — exactly the rows counted
+/// by the title-bar pulse and Dock badge ([`SessionSnapshot::needs_you`]) — in
+/// the tree's canonical order (host, then project, then session — all already
+/// attention-first sorted). A row whose finished turn was already seen is not
+/// a target even though discovery still reports it as Waiting. Each entry is
 /// `(&host, &session)` so callers can read the host's **stable** identity
 /// (`is_local`/`host_id`) alongside its display label; session identity is
 /// host-scoped (`session_id` is unique only within a host).
@@ -494,13 +497,15 @@ pub fn waiting_sessions(tree: &FleetTree) -> Vec<(&HostNode, &SessionSnapshot)> 
                 .iter()
                 .flat_map(move |p| p.sessions.iter().map(move |s| (h, s)))
         })
-        .filter(|(_, s)| s.state == SessionState::Waiting)
+        .filter(|(_, s)| s.needs_you())
         .collect()
 }
 
-/// The next Waiting agent across the whole fleet after `current`, cycling back
-/// to the first — the `w`-jump order. `current = None`, or a `current` that is
-/// no longer waiting / no longer present, starts at the first waiting agent.
+/// The next agent that needs the user across the whole fleet after `current`,
+/// cycling back to the first — the `w`-jump and title-bar pulse order. Targets
+/// are exactly [`waiting_sessions`], i.e. the counted rows, which the app only
+/// stamps on sessions it can open. `current = None`, or a `current` that no
+/// longer needs the user / is no longer present, starts at the first target.
 ///
 /// `current` and the returned [`WaitingTarget`] key on the **stable** host
 /// identity `(is_local, host_id)` plus provider, account route,

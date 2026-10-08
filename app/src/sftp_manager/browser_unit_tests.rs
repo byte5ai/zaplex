@@ -412,28 +412,124 @@ fn shift_f5_f6_open_the_target_picker() {
     assert!(shifted_function_key_action("f5", false).is_none());
 }
 
+/// The layout `SizeConstraintSwitch` picks for a legend `width` wide: the
+/// first breakpoint the width falls below, otherwise one row.
+fn function_legend_layout_at(width: f32, cell_min_width: f32) -> FunctionLegendLayout {
+    function_legend_breakpoints(cell_min_width)
+        .into_iter()
+        .find(|(below_width, _)| width < *below_width)
+        .map_or(FunctionLegendLayout::OneRow, |(_, layout)| layout)
+}
+
 #[test]
-fn pane_function_legend_keeps_required_actions_at_narrow_width() {
-    let full_width = FUNCTION_BAR.len() as f32 * FUNCTION_LEGEND_CAPTION_MIN_WIDTH
-        + FUNCTION_LEGEND_HORIZONTAL_PADDING;
-    assert_eq!(function_legend_mode(full_width), FunctionLegendMode::Full);
+fn function_legend_cell_fits_keycap_gap_and_caption() {
+    // 2x6 cell padding + 20 key text + 2x(4 padding + 1 border) keycap chrome
+    // + 4 gap + 50 caption + 2 rounding slack.
+    assert_eq!(function_legend_cell_min_width(20.0, 50.0), 98.0);
+    // A wider caption widens the cell one for one.
+    assert_eq!(function_legend_cell_min_width(20.0, 60.0), 108.0);
+}
+
+#[test]
+fn function_legend_wraps_rows_instead_of_hiding_captions() {
+    // 100 px cells, 4 px between cells, 2x8 px bar padding:
+    // eight in a row need 8x100 + 7x4 + 16 = 844 px,
+    // four in a row need 4x100 + 3x4 + 16 = 428 px.
     assert_eq!(
-        function_legend_mode(full_width - 1.0),
-        FunctionLegendMode::Compact
+        function_legend_breakpoints(100.0),
+        [
+            (428.0, FunctionLegendLayout::FourRows),
+            (844.0, FunctionLegendLayout::TwoRows),
+        ]
     );
-    assert_eq!(function_legend_mode(200.0), FunctionLegendMode::Compact);
-    for key in ["F3", "F4", "F5", "F6"] {
-        assert!(FunctionLegendMode::Compact.shows_caption(key));
-    }
-    for key in ["F2", "F7", "F8", "F10"] {
-        assert!(!FunctionLegendMode::Compact.shows_caption(key));
+    assert_eq!(
+        function_legend_layout_at(1200.0, 100.0),
+        FunctionLegendLayout::OneRow
+    );
+    assert_eq!(
+        function_legend_layout_at(844.0, 100.0),
+        FunctionLegendLayout::OneRow
+    );
+    assert_eq!(
+        function_legend_layout_at(843.5, 100.0),
+        FunctionLegendLayout::TwoRows
+    );
+    assert_eq!(
+        function_legend_layout_at(428.0, 100.0),
+        FunctionLegendLayout::TwoRows
+    );
+    assert_eq!(
+        function_legend_layout_at(427.5, 100.0),
+        FunctionLegendLayout::FourRows
+    );
+    // Far below the four-row minimum the legend still keeps four rows.
+    assert_eq!(
+        function_legend_layout_at(120.0, 100.0),
+        FunctionLegendLayout::FourRows
+    );
+}
+
+#[test]
+fn reported_1024px_pane_keeps_one_row_of_short_captions() {
+    // The pane that hid F2/F7/F8/F10 was about 1024 px wide; one row holds
+    // cells up to (1024 - 7x4 - 16) / 8 = 122.5 px, well above what an
+    // eight-character caption next to an "F10" keycap needs at 12 px.
+    assert_eq!(
+        function_legend_layout_at(1024.0, 122.5),
+        FunctionLegendLayout::OneRow
+    );
+    assert_eq!(
+        function_legend_layout_at(1024.0, 123.0),
+        FunctionLegendLayout::TwoRows
+    );
+}
+
+#[test]
+fn every_function_legend_layout_fills_equal_rows() {
+    assert_eq!(FUNCTION_BAR.len(), 8);
+    for (layout, cells_per_row, rows) in [
+        (FunctionLegendLayout::OneRow, 8, 1),
+        (FunctionLegendLayout::TwoRows, 4, 2),
+        (FunctionLegendLayout::FourRows, 2, 4),
+    ] {
+        assert_eq!(layout.cells_per_row(), cells_per_row, "{layout:?}");
+        assert_eq!(
+            FUNCTION_BAR.chunks(layout.cells_per_row()).count(),
+            rows,
+            "{layout:?}"
+        );
     }
 }
 
 #[test]
-fn each_pane_owns_compact_function_legend() {
-    assert_eq!(function_legend_mode(400.0), FunctionLegendMode::Compact);
-    assert_eq!(function_legend_mode(200.0), FunctionLegendMode::Compact);
+fn function_bar_captions_are_single_short_words_in_every_catalog() {
+    let caption_ids = [
+        "fm-key-rename",
+        "fm-key-view",
+        "fm-key-edit",
+        "fm-key-copy",
+        "fm-key-move",
+        "fm-key-mkdir",
+        "fm-key-delete",
+        "fm-key-terminal",
+    ];
+    for (locale, catalog) in [
+        ("en", include_str!("../../i18n/en/warp.ftl")),
+        ("de", include_str!("../../i18n/de/warp.ftl")),
+    ] {
+        for id in caption_ids {
+            let prefix = format!("{id} = ");
+            let caption = catalog
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix.as_str()))
+                .unwrap_or_else(|| panic!("{locale} catalog lacks {id}"));
+            assert!(!caption.is_empty(), "{locale} {id} is empty");
+            assert!(
+                caption.chars().count() <= 8 && !caption.contains(char::is_whitespace),
+                "{locale} {id} = {caption:?} is not one short word"
+            );
+        }
+    }
 }
 
 #[test]
@@ -677,4 +773,155 @@ fn local_path_formatting_preserves_windows_verbatim_disk_and_unc_prefixes() {
         normalize_browser_path(remote, false),
         normalize_remote_path(remote)
     );
+}
+
+#[test]
+fn space_marks_whether_the_platform_spells_it_as_a_blank_or_a_name() {
+    // The platform layer reports the space bar as " " (only the keymap spells
+    // it "space"); the old `"space"`-only match never fired.
+    for key in [" ", "space"] {
+        assert!(matches!(
+            list_key_action(key, false, false),
+            Some(SftpBrowserAction::ToggleSelectCursor)
+        ));
+    }
+    // While the filter field has focus, Space and Escape belong to the text.
+    assert!(list_key_action(" ", false, true).is_none());
+    assert!(list_key_action("escape", false, true).is_none());
+    assert!(matches!(
+        list_key_action("escape", false, false),
+        Some(SftpBrowserAction::ClearMarks)
+    ));
+    assert!(matches!(
+        list_key_action("insert", false, false),
+        Some(SftpBrowserAction::MarkAndAdvance)
+    ));
+}
+
+#[test]
+fn shift_arrows_mark_while_plain_arrows_only_move() {
+    assert!(matches!(
+        list_key_action("down", true, false),
+        Some(SftpBrowserAction::MarkAndStep { down: true })
+    ));
+    assert!(matches!(
+        list_key_action("up", true, false),
+        Some(SftpBrowserAction::MarkAndStep { down: false })
+    ));
+    assert!(matches!(
+        list_key_action("down", false, false),
+        Some(SftpBrowserAction::CursorDown)
+    ));
+    assert!(matches!(
+        list_key_action("up", false, false),
+        Some(SftpBrowserAction::CursorUp)
+    ));
+}
+
+#[test]
+fn mark_all_is_cmd_or_ctrl_a_without_other_modifiers() {
+    let chord = |text: &str| warpui::keymap::Keystroke::parse(text).unwrap();
+    assert!(is_mark_all_chord(&chord("cmd-a")));
+    assert!(is_mark_all_chord(&chord("ctrl-a")));
+    assert!(
+        !is_mark_all_chord(&chord("a")),
+        "a plain `a` is not a chord"
+    );
+    assert!(!is_mark_all_chord(&chord("cmd-shift-A")));
+    assert!(!is_mark_all_chord(&chord("ctrl-alt-a")));
+    assert!(!is_mark_all_chord(&chord("cmd-b")));
+}
+
+#[test]
+fn modified_clicks_toggle_or_extend_and_plain_clicks_stay_plain() {
+    use super::super::file_list::{modified_click, ModifiedClick};
+    use warpui::event::ModifiersState;
+
+    let with = |cmd, ctrl, shift, alt| ModifiersState {
+        cmd,
+        ctrl,
+        shift,
+        alt,
+        ..Default::default()
+    };
+    assert_eq!(
+        modified_click(&with(true, false, false, false)),
+        Some(ModifiedClick::Toggle)
+    );
+    assert_eq!(
+        modified_click(&with(false, true, false, false)),
+        Some(ModifiedClick::Toggle)
+    );
+    assert_eq!(
+        modified_click(&with(false, false, true, false)),
+        Some(ModifiedClick::Range)
+    );
+    assert_eq!(
+        modified_click(&with(true, false, true, false)),
+        Some(ModifiedClick::Toggle),
+        "Cmd wins over Shift"
+    );
+    assert_eq!(modified_click(&with(false, false, false, false)), None);
+    assert_eq!(modified_click(&with(false, false, false, true)), None);
+}
+
+#[test]
+fn marked_rows_cursor_and_inactive_pane_stay_distinct() {
+    use super::super::file_list::row_look;
+
+    let appearance = Appearance::mock();
+    let theme = appearance.theme();
+    let plain = row_look(theme, false, false, true, false);
+    let marked = row_look(theme, true, false, true, false);
+    let cursor = row_look(theme, false, true, true, false);
+    let both = row_look(theme, true, true, true, false);
+    let inactive_marked = row_look(theme, true, false, false, false);
+    let inactive_cursor = row_look(theme, false, true, false, false);
+
+    // A mark is colour (accent-tinted text and fill) plus a bold name.
+    assert_eq!(plain.background, None);
+    assert!(marked.bold && !plain.bold && !cursor.bold);
+    assert_eq!(marked.name, internal_colors::accent_fg_strong(theme));
+    assert_eq!(
+        marked.detail, marked.name,
+        "the whole line carries the mark"
+    );
+    assert_eq!(
+        marked.background,
+        Some(internal_colors::accent_overlay_2(theme))
+    );
+    assert_ne!(marked.name, plain.name);
+
+    // The cursor has its own channel: the accent outline.
+    assert_eq!(cursor.outline, Some(theme.accent()));
+    assert_eq!(marked.outline, None);
+    assert_ne!(cursor.background, marked.background);
+    assert_eq!(cursor.name, plain.name);
+
+    // Cursor on a marked row shows both at once.
+    assert_eq!(both.outline, Some(theme.accent()));
+    assert_eq!(both.background, marked.background);
+    assert!(both.bold);
+
+    // An inactive pane dims, but keeps the marks distinguishable; its cursor
+    // turns into a neutral outline.
+    assert!(inactive_marked.bold);
+    assert_eq!(inactive_marked.name, marked.name);
+    assert_eq!(
+        inactive_marked.background,
+        Some(internal_colors::accent_overlay_1(theme))
+    );
+    assert_ne!(inactive_marked.background, marked.background);
+    assert_eq!(
+        inactive_cursor.outline,
+        Some(internal_colors::fg_overlay_3(theme))
+    );
+    assert_eq!(inactive_cursor.background, None);
+
+    // Hover only fills an otherwise plain row (spec A4).
+    assert_eq!(
+        row_look(theme, false, false, true, true).background,
+        Some(internal_colors::fg_overlay_1(theme))
+    );
+    assert_eq!(row_look(theme, true, false, true, true), marked);
 }

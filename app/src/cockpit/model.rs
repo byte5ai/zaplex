@@ -12,7 +12,20 @@
 //!
 //! The (blocking) disk scan runs on the background executor; results are applied back
 //! on the model's thread via the spawner round-trip.
+//!
+//! **Attention projection.** The folded tree ([`CockpitModel::raw_inventory`]) and
+//! account snapshot are what discovery saw. What every surface reads
+//! ([`CockpitModel::inventory`], [`CockpitModel::snapshot`]) is their
+//! projection: agents started outside Zaplex that Zaplex can neither focus,
+//! reattach nor resume are removed — from the tree and from the account rows —
+//! and openable rows are stamped with
+//! [`zaplex_cockpit::Attention`] when they show an open question/permission
+//! prompt or a finished turn the user has not seen ([`SeenTurns`]). The
+//! projection is rebuilt on every accepted scan, on terminal hook changes and
+//! when the focused agent pane of the active window changes (looking at a
+//! pane marks its turn as seen) — no rescan needed.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -20,16 +33,18 @@ use async_compat::CompatExt as _;
 use chrono::Utc;
 #[cfg(not(target_family = "wasm"))]
 use futures::{stream::FuturesUnordered, StreamExt};
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui::windowing::{StateEvent, WindowManager};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, WindowId};
 use watcher::HomeDirectoryWatcher;
 use zaplex_cockpit::fleet::sort_hosts;
 #[cfg(test)]
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
-    apply_oauth_usage, build_snapshot_with_cache, fold_inventory,
+    apply_oauth_usage, apply_session_verdicts, build_snapshot_with_cache, fold_inventory,
     mark_registry_bound_hosts_unverified, session_key, AccountOverrides, AgentInventoryStatus,
-    CockpitSnapshot, FleetTree, HostAvailability, PricingTable, Provider, RegisteredHost,
-    RemoteHost, ScanHealth, SessionSnapshot, TranscriptScanCache,
+    Attention, CockpitSnapshot, FleetTree, HostAvailability, PricingTable, Provider,
+    RegisteredHost, RemoteHost, ScanHealth, SeenTurns, SessionSnapshot, SessionVerdict,
+    TerminalLink, TranscriptScanCache,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
 // (and the whole remote-daemon layer it lives in) is `#[cfg(not(wasm))]`, and a
@@ -42,6 +57,7 @@ use zaplex_remote_session::types::{
     FEATURE_AGENT_PTY_BINDING_V2, FEATURE_MANAGED_AGENT_FLEET_V1,
 };
 
+use crate::cockpit::capabilities::{self, SessionReach};
 use crate::cockpit::fleet_details::ManagedFleetInventory;
 use crate::cockpit::oauth::{self, OauthCache};
 use crate::cockpit::settings::{CockpitSettings, CockpitSettingsChangedEvent};
@@ -50,6 +66,7 @@ use crate::remote_server::agent_session::proto_to_snapshot;
 use crate::remote_server::manager::{
     ConnectedDaemon, RemoteServerManager, RemoteServerManagerEvent,
 };
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 
 #[cfg(not(target_family = "wasm"))]
 fn retain_negotiated_agent_pty_routes(features: &[String], sessions: &mut [SessionSnapshot]) {
@@ -70,8 +87,8 @@ const REMOTE_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Emitted whenever the snapshot changes.
 pub enum CockpitEvent {
-    /// One or more sessions transitioned from working to WAITING — they need
-    /// the user. Carries "account-label — session/cwd" display strings.
+    /// One or more sessions started to need the user (an open prompt or a new
+    /// unseen finished turn). Carries "host — session/cwd" display strings.
     SessionsBecameWaiting(Vec<String>),
     Updated,
 }
@@ -227,14 +244,39 @@ fn reconcile_registry_read(
 }
 
 pub struct CockpitModel {
+    /// The account snapshot as discovered (every local live row included).
+    raw_snapshot: CockpitSnapshot,
+    /// The published account snapshot: [`Self::raw_snapshot`] without the
+    /// local live rows the projection hides, with attention stamped. Account
+    /// usage numbers (tokens, cost, limits) stay complete — they describe the
+    /// account and must keep matching the provider's own figures.
     snapshot: CockpitSnapshot,
     refresh_flight: RefreshSingleFlight,
-    /// The unified cross-host Agent-Inventory: local sessions folded together
-    /// with every connected daemon's sessions into one Host▸Project▸Session
-    /// tree. Rebuilt on every refresh; equals the local-only tree when no
-    /// daemon is connected. Read by the attention ambient-bit (`needs_me`) and
-    /// the Conductor UI (`inventory`).
+    /// The unified cross-host Agent-Inventory as discovered: local sessions
+    /// folded together with every connected daemon's sessions into one
+    /// Host▸Project▸Session tree. Rebuilt on every refresh; equals the
+    /// local-only tree when no daemon is connected. Carries no attention.
+    raw_inventory: FleetTree,
+    /// The published projection of [`Self::raw_inventory`]: external rows Zaplex
+    /// cannot open are gone and openable rows carry their attention verdict.
+    /// Read by the attention ambient-bit (`needs_me`), the Conductor UI, the
+    /// inbox and the jump (`inventory`).
     inventory: FleetTree,
+    /// Which finished turns the user has seen (in-memory, start-baselined).
+    seen_turns: SeenTurns,
+    /// Which Zaplex terminal each local live agent process runs in, read from
+    /// the environment it inherited (`ZAPLEX_SURFACE_ID`), keyed by
+    /// [`session_key`]. Proves Zaplex ownership and locates the pane without
+    /// any hook bridge. Recomputed off-thread on every local scan.
+    local_terminal_links: HashMap<String, TerminalLink>,
+    /// The agent terminal each window currently shows focused. Only the
+    /// active window's entry counts as "looking at it".
+    focused_terminals: HashMap<WindowId, EntityId>,
+    /// Whether each connected daemon (by `host_id`) offers a registry route for
+    /// reattaching, as resolved for the current discovery. Reset whenever the
+    /// discovered tree changes, so hook-driven republishing does not hit the
+    /// SSH registry on every agent event.
+    daemon_route_cache: HashMap<String, bool>,
     /// Daemon-owned managed PTYs retained by their exact host/session
     /// generation. Kept separate from conversations because a Claude Remote
     /// Control PTY may exist before an agent conversation is discoverable.
@@ -346,10 +388,35 @@ impl CockpitModel {
             },
         );
 
+        // Hook status (open prompts) and terminal lifetime change what is
+        // openable and what needs the user without any rescan.
+        ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), |me, event, ctx| {
+            // Rich-input toggles change neither reachability nor prompts.
+            if !matches!(
+                event,
+                CLIAgentSessionsModelEvent::InputSessionChanged { .. }
+            ) {
+                me.republish_attention(ctx);
+            }
+        });
+        // Switching windows (or returning to Zaplex) shows another focused pane.
+        ctx.subscribe_to_model(&WindowManager::handle(ctx), |me, event, ctx| {
+            let StateEvent::ValueChanged { current, previous } = event;
+            if current.active_window != previous.active_window {
+                me.republish_attention(ctx);
+            }
+        });
+
         let mut model = Self {
+            raw_snapshot: initial_snapshot(),
             snapshot: initial_snapshot(),
             refresh_flight: RefreshSingleFlight::default(),
+            raw_inventory: FleetTree::default(),
             inventory: FleetTree::default(),
+            seen_turns: SeenTurns::new(Utc::now()),
+            local_terminal_links: HashMap::new(),
+            focused_terminals: HashMap::new(),
+            daemon_route_cache: HashMap::new(),
             managed_fleet: ManagedFleetInventory::default(),
             pricing: PricingTable::default(),
             oauth_cache: OauthCache::default(),
@@ -498,12 +565,14 @@ impl CockpitModel {
         #[cfg(target_family = "wasm")]
         let remotes = Vec::new();
         let changed = reconcile_live_daemon_roots(
-            &mut self.inventory,
+            &mut self.raw_inventory,
             &mut self.managed_fleet,
             &self.local_label,
             &remotes,
         );
         if changed {
+            self.daemon_route_cache.clear();
+            self.inventory = self.project_attention(ctx);
             ctx.emit(CockpitEvent::Updated);
         }
         changed
@@ -574,6 +643,10 @@ impl CockpitModel {
                 }
                 let session_names = super::session_names::SessionNameStore::load();
                 session_names.apply_to_local_snapshot(&mut snapshot);
+                // Which local agents run in Zaplex terminals, from the
+                // environment their processes inherited — no hook needed.
+                // Off-thread: it reads process state.
+                let local_terminal_links = local_terminal_links(&snapshot);
 
                 // Cross-host fold: every connected daemon contributes one host
                 // root. Agent inventory enriches that root when available; an old
@@ -658,7 +731,7 @@ impl CockpitModel {
                             me.transcript_cache = inputs.transcript_cache;
                             return false;
                         }
-                        let mut next = me.inventory.clone();
+                        let mut next = me.raw_inventory.clone();
                         replace_inventory_roots(&mut next, inventory);
                         reconcile_registry_read(&mut next, &initial_registry, &initial_live_hosts);
                         if let RegistryRead::Current(registered) = initial_registry {
@@ -673,6 +746,7 @@ impl CockpitModel {
                             next,
                             managed_fleet,
                             local_label,
+                            local_terminal_links,
                             ctx,
                         );
                         true
@@ -708,7 +782,7 @@ impl CockpitModel {
                                 {
                                     return;
                                 }
-                                let mut next = me.inventory.clone();
+                                let mut next = me.raw_inventory.clone();
                                 replace_inventory_roots(&mut next, inventory);
                                 let mut fleet = me.managed_fleet.clone();
                                 fleet.replace_host(&host_id, managed_fleet);
@@ -776,7 +850,8 @@ impl CockpitModel {
         // `health.is_loaded()` matters at startup: a cockpit disabled from the very
         // first tick is blank but still `Pending` (its initial state), and returning
         // early there would leave every open pane showing "loading…" forever.
-        if is_blank(&self.snapshot, &self.inventory)
+        if is_blank(&self.snapshot, &self.raw_inventory)
+            && is_blank(&self.snapshot, &self.inventory)
             && self.managed_fleet.sessions().is_empty()
             && self.registry_hosts.is_none()
             && self.selected_account.is_none()
@@ -790,7 +865,11 @@ impl CockpitModel {
             // Disabled is a deliberate, authoritative "nothing" — not a load in flight.
             health: ScanHealth::Loaded,
         };
+        self.raw_snapshot = self.snapshot.clone();
+        self.local_terminal_links.clear();
+        self.raw_inventory = FleetTree::default();
         self.inventory = FleetTree::default();
+        self.daemon_route_cache.clear();
         self.managed_fleet = ManagedFleetInventory::default();
         self.transcript_cache = TranscriptScanCache::default();
         self.registry_hosts = None;
@@ -807,16 +886,23 @@ impl CockpitModel {
         inventory: FleetTree,
         managed_fleet: ManagedFleetInventory,
         local_label: String,
+        local_terminal_links: HashMap<String, TerminalLink>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.snapshot = snapshot;
+        self.raw_snapshot = snapshot;
+        self.local_terminal_links = local_terminal_links;
         self.transcript_cache = transcript_cache;
         self.overrides = overrides;
         self.local_label = local_label;
         // Drop a selection whose account no longer exists, so the highlight never
         // points at a vanished card.
         if let Some(sel) = &self.selected_account {
-            if !self.snapshot.accounts.iter().any(|a| &a.account.key == sel) {
+            if !self
+                .raw_snapshot
+                .accounts
+                .iter()
+                .any(|a| &a.account.key == sel)
+            {
                 self.selected_account = None;
             }
         }
@@ -829,12 +915,6 @@ impl CockpitModel {
         managed_fleet: ManagedFleetInventory,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Transition detection (claudeplex's most-loved signal): a session that
-        // was working (Active/Monitor) and is now Waiting needs the user NOW.
-        // Diffed off the unified inventory (old → new); see
-        // [`fleet_transitions_to_waiting`] for the identity-keying rationale.
-        let became_waiting = fleet_transitions_to_waiting(&self.inventory, &inventory);
-
         // A remote provider lifecycle hook runs on the daemon, not in this
         // client's local CLI-agent model. Complete launch-intent binding from
         // the exact capability-gated PTY identity carried by the accepted
@@ -874,12 +954,165 @@ impl CockpitModel {
             }
         }
 
-        self.inventory = inventory;
+        self.raw_inventory = inventory;
         self.managed_fleet = managed_fleet;
+        self.daemon_route_cache.clear();
+        let projected = self.project_attention(ctx);
+        // Transition detection (claudeplex's most-loved signal): a session that
+        // did not need the user and now does. Diffed off the published
+        // projection (old → new), so external rows never fire; see
+        // [`fleet_transitions_to_waiting`] for the identity-keying rationale.
+        let became_waiting = fleet_transitions_to_waiting(&self.inventory, &projected);
+        self.inventory = projected;
         ctx.emit(CockpitEvent::Updated);
         if !became_waiting.is_empty() {
             ctx.emit(CockpitEvent::SessionsBecameWaiting(became_waiting));
         }
+    }
+
+    /// Rebuild the published projection from the unchanged discovery and
+    /// publish it when anything a surface reads changed (a hook prompt, a
+    /// terminal opening/closing, the focused pane marking a turn as seen).
+    fn republish_attention(&mut self, ctx: &mut ModelContext<Self>) {
+        let projected = self.project_attention(ctx);
+        if projected == self.inventory {
+            return;
+        }
+        let became_waiting = fleet_transitions_to_waiting(&self.inventory, &projected);
+        self.inventory = projected;
+        ctx.emit(CockpitEvent::Updated);
+        if !became_waiting.is_empty() {
+            ctx.emit(CockpitEvent::SessionsBecameWaiting(became_waiting));
+        }
+    }
+
+    /// The published projection of [`Self::raw_inventory`] for the current app
+    /// state, also stamping the local account snapshot's live rows so the
+    /// dashboard and account tables present the same attention.
+    fn project_attention(&mut self, ctx: &AppContext) -> FleetTree {
+        let facts = attention_row_facts(
+            &self.raw_inventory,
+            &self.local_terminal_links,
+            &mut self.daemon_route_cache,
+            ctx,
+        );
+        // `None` while Zaplex is in the background: nothing is being looked at.
+        let viewed_terminal = ctx
+            .windows()
+            .state()
+            .active_window
+            .and_then(|window_id| self.focused_terminals.get(&window_id).copied());
+        let projected = project_inventory_attention(
+            &self.raw_inventory,
+            &facts,
+            viewed_terminal,
+            &mut self.seen_turns,
+        );
+        self.snapshot = published_snapshot(&self.raw_snapshot, &projected);
+        projected
+    }
+
+    /// The Zaplex terminal a local agent process inherited its environment
+    /// from, if that pane is still open. The attach path uses it to focus an
+    /// agent that runs in a Zaplex pane without any hook bridge.
+    pub fn linked_terminal(&self, key: &str, ctx: &AppContext) -> Option<EntityId> {
+        let surface_id = self.local_terminal_links.get(key)?.surface_id()?;
+        capabilities::terminal_for_surface(surface_id, ctx)
+    }
+
+    /// The complete discovered account snapshot for the versioned
+    /// machine-readable export (`zaplex cockpit snapshot --json`). Scripts read
+    /// the full local truth there, external agents included; the UI never
+    /// renders it (it reads [`Self::snapshot`]).
+    pub fn machine_snapshot(&self) -> &CockpitSnapshot {
+        &self.raw_snapshot
+    }
+
+    /// The complete discovered fleet for the machine-readable export, with
+    /// the UI's attention verdicts stamped on the rows that carry one, so the
+    /// export's attention list means exactly what the pulse counts.
+    pub fn machine_inventory(&self) -> FleetTree {
+        let attention: HashMap<String, Attention> = self
+            .inventory
+            .hosts
+            .iter()
+            .flat_map(|host| {
+                host.projects
+                    .iter()
+                    .flat_map(|project| &project.sessions)
+                    .filter_map(move |session| {
+                        session.attention.map(|attention| {
+                            (
+                                session_key(host.is_local, host.host_id.as_deref(), session),
+                                attention,
+                            )
+                        })
+                    })
+            })
+            .collect();
+        let mut tree = self.raw_inventory.clone();
+        for host in &mut tree.hosts {
+            let is_local = host.is_local;
+            let host_id = host.host_id.clone();
+            for session in host
+                .projects
+                .iter_mut()
+                .flat_map(|project| project.sessions.iter_mut())
+            {
+                session.attention = attention
+                    .get(&session_key(is_local, host_id.as_deref(), session))
+                    .copied();
+            }
+        }
+        zaplex_cockpit::recount_attention(&mut tree);
+        tree
+    }
+
+    /// The user opened this exact inventory session (click, jump, inbox):
+    /// record its current finished turn as seen.
+    pub fn mark_session_seen(&mut self, key: &str, ctx: &mut ModelContext<Self>) {
+        let session = self
+            .raw_inventory
+            .hosts
+            .iter()
+            .flat_map(|host| {
+                host.projects
+                    .iter()
+                    .flat_map(|project| project.sessions.iter())
+                    .map(move |session| (host, session))
+            })
+            .find(|(host, session)| {
+                session_key(host.is_local, host.host_id.as_deref(), session) == key
+            })
+            .map(|(_, session)| session.clone());
+        if let Some(session) = session {
+            if self.seen_turns.mark_seen(key, &session) {
+                self.republish_attention(ctx);
+            }
+        }
+    }
+
+    /// A window reports the agent terminal it shows focused (`None` when its
+    /// focused pane is not a terminal). Looking at an agent's pane in the
+    /// active window marks its finished turn as seen, now and whenever a turn
+    /// ends while it stays in view.
+    pub fn report_focused_terminal(
+        &mut self,
+        window_id: WindowId,
+        terminal_view_id: Option<EntityId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match terminal_view_id {
+            Some(terminal_view_id) => {
+                self.focused_terminals.insert(window_id, terminal_view_id);
+            }
+            None => {
+                self.focused_terminals.remove(&window_id);
+            }
+        }
+        self.focused_terminals
+            .retain(|window_id, _| ctx.window_ids().any(|open| open == *window_id));
+        self.republish_attention(ctx);
     }
 
     /// The unified cross-host Agent-Inventory tree (local + every connected
@@ -893,9 +1126,10 @@ impl CockpitModel {
         &self.managed_fleet
     }
 
-    /// The fleet-wide *needs-me* count — the total number of sessions in
-    /// [`SessionState::Waiting`] across every host. Read by the attention
-    /// ambient-bit / badge.
+    /// The fleet-wide *needs-me* count — the one number the title-bar pulse,
+    /// the Dock badge, the sidebar header and the inbox show: openable sessions
+    /// with an open question/permission prompt or a finished turn the user has
+    /// not seen yet, on available hosts.
     pub fn needs_me(&self) -> usize {
         self.inventory.needs_me
     }
@@ -1136,20 +1370,219 @@ fn reconcile_live_daemon_roots(
     changed
 }
 
-/// Detect working→Waiting transitions across the WHOLE fleet — local and every
-/// remote host — by diffing the previous inventory against the next one, and
-/// return the display string (`"{host} — {place}"`) for each session that just
-/// flipped to Waiting from Active/Monitor. Sessions first seen already-waiting
-/// don't fire (no old state).
+/// What the attention projection needs to know about one discovered row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RowFacts {
+    /// How a click would open it (the click path's own decision).
+    reach: SessionReach,
+    /// Launched or hosted by Zaplex (daemon PTY binding, exact launch
+    /// binding, a Zaplex terminal hook reporting this session id, or a local
+    /// process that inherited a Zaplex pane's surface id).
+    zaplex_owned: bool,
+    /// A local live agent whose process could not be inspected: no evidence
+    /// either way, so it is never hidden.
+    origin_unknown: bool,
+    /// The Zaplex terminal hook reports an open permission prompt/question.
+    hook_blocked: bool,
+}
+
+/// Inspect every local live agent process for the Zaplex pane it inherited
+/// its environment from: Claude by its registry pid (start identity
+/// re-checked against discovery), Codex through the rollout its process holds
+/// open. Keyed by [`session_key`]; `Unknown` where nothing can be told.
+fn local_terminal_links(snapshot: &CockpitSnapshot) -> HashMap<String, TerminalLink> {
+    let sessions: Vec<&SessionSnapshot> = snapshot
+        .accounts
+        .iter()
+        .flat_map(|account| account.sessions.iter())
+        .collect();
+    let codex_links = if sessions
+        .iter()
+        .any(|session| session.provider == Provider::Codex)
+    {
+        zaplex_cockpit::codex_sessions::live_rollout_terminal_links()
+    } else {
+        HashMap::new()
+    };
+    sessions
+        .into_iter()
+        .map(|session| {
+            let link = match session.provider {
+                Provider::Claude => zaplex_cockpit::terminal_link_for_pid(
+                    session.pid,
+                    session.process_fingerprint.as_deref(),
+                ),
+                Provider::Codex => codex_links
+                    .get(&session.session_id)
+                    .cloned()
+                    .unwrap_or(TerminalLink::Unknown),
+                Provider::Antigravity => TerminalLink::Unknown,
+            };
+            (session_key(true, None, session), link)
+        })
+        .collect()
+}
+
+/// Gather [`RowFacts`] for every discovered row, keyed by [`session_key`].
+/// `daemon_routes` caches the registry lookup per daemon `host_id`.
+fn attention_row_facts(
+    raw: &FleetTree,
+    local_links: &HashMap<String, TerminalLink>,
+    daemon_routes: &mut HashMap<String, bool>,
+    ctx: &AppContext,
+) -> HashMap<String, RowFacts> {
+    let hooks = CLIAgentSessionsModel::as_ref(ctx);
+    let mut facts = HashMap::new();
+    for host in &raw.hosts {
+        let host_id = host.host_id.as_deref();
+        for session in host.projects.iter().flat_map(|project| &project.sessions) {
+            let key = session_key(host.is_local, host_id, session);
+            // Local process evidence: which pane the agent was started in.
+            let link = host.is_local.then(|| local_links.get(&key)).flatten();
+            let linked_terminal = link
+                .and_then(TerminalLink::surface_id)
+                .and_then(|surface_id| capabilities::terminal_for_surface(surface_id, ctx));
+            // The exact hook-bound terminal wins; without hooks, the pane the
+            // process inherited its environment from is the same pane.
+            let terminal =
+                capabilities::terminal_for_inventory_session(session, host.is_local, host_id, ctx)
+                    .or(linked_terminal);
+            let daemon_route = !host.is_local
+                && terminal.is_none()
+                && capabilities::daemon_reattach_target(session).is_some()
+                && host_id.is_some_and(|host_id| {
+                    *daemon_routes.entry(host_id.to_string()).or_insert_with(|| {
+                        capabilities::daemon_reattach_route_available(Some(host_id), ctx)
+                    })
+                });
+            let reach = capabilities::session_reach(session, host.is_local, terminal, daemon_route);
+            facts.insert(
+                key,
+                RowFacts {
+                    reach,
+                    zaplex_owned: capabilities::zaplex_owned(
+                        session,
+                        link.is_some_and(|link| link.surface_id().is_some())
+                            || capabilities::zaplex_launch_or_terminal(
+                                session,
+                                host.is_local,
+                                host_id,
+                                ctx,
+                            ),
+                    ),
+                    origin_unknown: host.is_local
+                        && session.state != zaplex_cockpit::SessionState::Idle
+                        && !matches!(
+                            link,
+                            Some(TerminalLink::External | TerminalLink::Surface(_))
+                        ),
+                    hook_blocked: terminal
+                        .is_some_and(|terminal| hooks.terminal_needs_attention(terminal)),
+                },
+            );
+        }
+    }
+    facts
+}
+
+/// Project the discovered tree into what every surface shows (pure, so the
+/// owner decisions are testable without an app harness):
+///
+/// - a row is **visible** when Zaplex can open it now or launched it — an
+///   external agent it can neither focus, reattach nor resume disappears from
+///   the tree, the inbox and every count, while a Zaplex-owned row survives a
+///   reconnect;
+/// - the row hosted by `viewed_terminal` (the active window's focused agent
+///   pane) has its finished turn marked seen first;
+/// - only an **openable** row can need the user, so every counted row is a
+///   valid jump target: an open prompt always, a finished turn while unseen.
+fn project_inventory_attention(
+    raw: &FleetTree,
+    facts: &HashMap<String, RowFacts>,
+    viewed_terminal: Option<EntityId>,
+    seen_turns: &mut SeenTurns,
+) -> FleetTree {
+    if let Some(viewed_terminal) = viewed_terminal {
+        for host in &raw.hosts {
+            for session in host.projects.iter().flat_map(|project| &project.sessions) {
+                let key = session_key(host.is_local, host.host_id.as_deref(), session);
+                if facts
+                    .get(&key)
+                    .is_some_and(|facts| facts.reach.terminal() == Some(viewed_terminal))
+                {
+                    seen_turns.mark_seen(&key, session);
+                }
+            }
+        }
+    }
+    let mut projected = raw.clone();
+    apply_session_verdicts(&mut projected, |is_local, host_id, session| {
+        let key = session_key(is_local, host_id, session);
+        let Some(facts) = facts.get(&key) else {
+            // Rows without facts were never checked; fail closed.
+            return SessionVerdict {
+                visible: false,
+                attention: None,
+            };
+        };
+        SessionVerdict {
+            visible: capabilities::session_visible(
+                facts.reach,
+                facts.zaplex_owned,
+                facts.origin_unknown,
+            ),
+            attention: facts
+                .reach
+                .is_openable()
+                .then(|| seen_turns.attention(&key, session, facts.hook_blocked))
+                .flatten(),
+        }
+    });
+    let live: HashSet<String> = facts.keys().cloned().collect();
+    seen_turns.prune(&live);
+    projected
+}
+
+/// The account snapshot every surface reads: the discovered one, where each
+/// account's live rows are exactly the projection's local rows — a row the
+/// projection hid (an external agent) disappears from account tables, the
+/// dashboard, cards and the palette too — carrying the same attention. Usage
+/// numbers and dormant (resumable) rows are untouched.
+fn published_snapshot(raw: &CockpitSnapshot, projected: &FleetTree) -> CockpitSnapshot {
+    let local: HashMap<String, Option<Attention>> = projected
+        .hosts
+        .iter()
+        .filter(|host| host.is_local)
+        .flat_map(|host| host.projects.iter().flat_map(|project| &project.sessions))
+        .map(|session| (session_key(true, None, session), session.attention))
+        .collect();
+    let mut snapshot = raw.clone();
+    for account in &mut snapshot.accounts {
+        account.sessions.retain_mut(
+            |session| match local.get(&session_key(true, None, session)) {
+                Some(attention) => {
+                    session.attention = *attention;
+                    true
+                }
+                None => false,
+            },
+        );
+    }
+    snapshot
+}
+
+/// Detect sessions that started to need the user across the WHOLE fleet —
+/// local and every remote host — by diffing the previous published inventory
+/// against the next one, and return the display string (`"{host} — {place}"`)
+/// for each row that needs the user now but did not before. Sessions first
+/// seen already needing the user don't fire (no old state).
 ///
 /// Sessions are keyed by their complete [`session_key`], never the display
 /// `host` label or raw conversation id. The same id can exist on several hosts
 /// and can be copied between provider accounts; either collision could otherwise
 /// overwrite an old state and hide or misattribute a waiting transition.
 fn fleet_transitions_to_waiting(old: &FleetTree, new: &FleetTree) -> Vec<String> {
-    use std::collections::HashMap;
-    use zaplex_cockpit::SessionState;
-    let old_states: HashMap<String, SessionState> = old
+    let old_needs_you: HashMap<String, bool> = old
         .hosts
         .iter()
         .filter(|h| h.is_available())
@@ -1159,33 +1592,28 @@ fn fleet_transitions_to_waiting(old: &FleetTree, new: &FleetTree) -> Vec<String>
             h.projects
                 .iter()
                 .flat_map(|p| &p.sessions)
-                .map(move |s| (session_key(is_local, host_id.as_deref(), s), s.state))
+                .map(move |s| (session_key(is_local, host_id.as_deref(), s), s.needs_you()))
         })
         .collect();
     let mut became_waiting = Vec::new();
     for host in new.hosts.iter().filter(|host| host.is_available()) {
         for session in host.projects.iter().flat_map(|p| &p.sessions) {
-            if session.state != SessionState::Waiting {
+            if !session.needs_you() {
                 continue;
             }
-            match old_states.get(&session_key(
-                host.is_local,
-                host.host_id.as_deref(),
-                session,
-            )) {
-                Some(SessionState::Active) | Some(SessionState::Monitor) => {
-                    let place = if session.name.is_empty() {
-                        std::path::Path::new(&session.cwd)
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| session.cwd.clone())
-                    } else {
-                        session.name.clone()
-                    };
-                    became_waiting.push(format!("{} — {place}", host.host));
-                }
-                _ => {}
+            let key = session_key(host.is_local, host.host_id.as_deref(), session);
+            if old_needs_you.get(&key) != Some(&false) {
+                continue;
             }
+            let place = if session.name.is_empty() {
+                std::path::Path::new(&session.cwd)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| session.cwd.clone())
+            } else {
+                session.name.clone()
+            };
+            became_waiting.push(format!("{} — {place}", host.host));
         }
     }
     became_waiting
