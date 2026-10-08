@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="de">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidebar: KI-Sessions, KI-Konten und Baumdarstellung B+ (#504, #505)</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 24px; background: #15161a; color: #dcdcdc; font: 13px/1.35 -apple-system, system-ui, "Segoe UI", sans-serif; }
+  h1 { font-size: 22px; margin: 0 0 12px; }
+  h2 { font-size: 15px; margin: 28px 0 8px; }
+  p, li { max-width: 980px; line-height: 1.5; color: #b4b7bf; }
+  code { color: #e2e4ea; }
+  a { color: #8fb4ff; }
+  #spec ul { padding-left: 20px; }
+  .boards { display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start; }
+  .board { width: 300px; }
+  .caption { margin: 0 0 8px; font-size: 12px; color: #9ea1a8; }
+  .sidebar { background: #1c1d20; border-radius: 10px; padding: 8px 8px 12px; display: flex; flex-direction: column; gap: 10px; }
+  .toolbelt { display: flex; gap: 2px; height: 32px; align-items: center; padding: 0 4px; }
+  .tb { position: relative; width: 30px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: #8b8d92; display: grid; place-items: center; }
+  .tb.active { background: #2c2e33; color: #e6e6e6; }
+  .tb .mark { position: absolute; top: 3px; right: 4px; width: 6px; height: 6px; border-radius: 50%; background: #f5a524; }
+  .card { background: #222326; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; padding: 10px 0 8px; }
+  .zone { display: flex; justify-content: space-between; gap: 12px; padding: 0 14px 6px; font-size: 11px; letter-spacing: .06em; color: #8b8d92; }
+  .zone .att { display: flex; gap: 5px; align-items: center; color: #f5a524; }
+  .zone span { white-space: nowrap; }
+  .row { display: flex; align-items: flex-start; gap: 6px; margin: 0 6px; padding: 3px 8px 3px 4px; border-radius: 4px; }
+  .row.two { padding-top: 4px; padding-bottom: 5px; }
+  .row.focused { background: rgba(110,150,255,.16); }
+  .row.host { margin-top: 8px; }
+  .row.project { margin-top: 4px; }
+  .slot { flex: none; width: 14px; height: 18px; display: grid; place-items: center; color: #8b8d92; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot.host, .dot.work { background: #46c37b; }
+  .dot.host { width: 7px; height: 7px; }
+  .dot.wait { background: #f5a524; box-shadow: 0 0 0 3px rgba(245,165,36,.22); }
+  .dot.idle { border: 1.5px solid #7d8087; }
+  .text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 18px; }
+  .t-host { font-weight: 600; color: #ededed; }
+  .t-project { font-size: 12px; font-weight: 500; color: #9a9ca1; }
+  .t-active { font-weight: 500; color: #ececec; }
+  .t-quiet { color: #a3a5aa; }
+  .dim { color: #6b6d72; font-weight: 400; }
+  .gap { margin-left: 6px; }
+  .faint { color: #6b6d72; }
+  .sub { display: flex; align-items: center; gap: 5px; font-size: 11.5px; line-height: 15px; color: #8b8d92; white-space: nowrap; overflow: hidden; }
+  .acct { margin: 0 14px 10px; }
+  .acct .prov { display: flex; gap: 6px; align-items: center; color: #ececec; font-size: 14px; }
+  .acct .prov i { width: 12px; height: 12px; border-radius: 4px; background: #6e96ff; }
+  .acct .who { font-size: 11.5px; color: #8b8d92; margin: 2px 0 6px; }
+  .meter { display: grid; grid-template-columns: 44px 1fr 38px; gap: 6px; align-items: center; font-size: 12px; color: #8b8d92; margin-bottom: 4px; }
+  .meter b { height: 6px; border-radius: 3px; background: #33353a; position: relative; }
+  .meter b::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w); border-radius: 3px; background: #8b8d92; }
+</style>
+
+<h1>Sidebar: „KI-Sessions“, „KI-Konten“ und Baumdarstellung „B+“</h1>
+<p>Normative Ergänzung zu <a href="cockpit-sidebar-connections.html">cockpit-sidebar-connections.html</a> für #504 und #505. Für diese beiden Punkte hat sie Vorrang vor der Sidebar-Darstellung im interaktiven <a href="premium-workspace.html">Workspace-Mockup</a>. Beispieldaten sind anonymisiert; Farben illustrieren Theme-Rollen und sind nicht normativ. Die Fixture rendert keine WarpUI-Elemente und ersetzt keine native Abnahme.</p>
+
+<section id="spec">
+  <h2>Regeln</h2>
+  <ul>
+    <li><code>#spec V1</code> „KI-Sessions“ (Live-Baum) und „KI-Konten“ (Kontokarten) sind zwei eigene, beschriftete Einträge im vorhandenen horizontalen Toolbelt, direkt nebeneinander vor „Verbindungen“. Keine neue Symbolleiste, keine globalen Tabs.</li>
+    <li><code>#spec V2</code> Jede Ansicht nutzt die volle Sidebarhöhe mit eigenem Scrollbereich. Die Länge der Sessionliste beeinflusst die Kontenansicht nicht.</li>
+    <li><code>#spec V3</code> Ist eine andere Ansicht aktiv und wartet ein Agent auf den Nutzer, trägt der Eintrag „KI-Sessions“ eine statische amberne Marke, ohne Text und ohne Geometrieänderung.</li>
+    <li><code>#spec B1</code> Das Datenmodell bleibt <code>Host → Projekt → PTY-Session → Agent</code>; die folgenden Regeln betreffen nur die Darstellung.</li>
+    <li><code>#spec B2</code> Ein Projekt mit genau einer PTY-Session ist eine Zeile: Der Projektname führt und behält Vorrang, der eigene Titel der Session (Name, Branch, Worktree oder abweichendes Verzeichnis) folgt gedimmt mit Abstand und weicht zuerst. Ein Titel, der nur den Projektnamen wiederholt, entfällt.</li>
+    <li><code>#spec B3</code> Bei mehreren Sessions ist eine PTY-Session mit einem Agenten eine Zeile: Titel, darunter Provider-Icon, Provider und Modell. Ohne eigenen Titel ist der Agent die einzeilige Überschrift. Nur PTY-Sessions mit mehreren Agenten behalten Agentzeilen; ihre Zeile trägt kein Sammelsymbol.</li>
+    <li><code>#spec B4</code> Teilt ein Titel mit mindestens einem gleichrangigen Titel einen langen, an einem Trennzeichen endenden Präfix, wird dieser gekürzt und gedimmt; mindestens acht unterscheidende Zeichen bleiben sichtbar. Ein langer Titel behält sein kurzes letztes Segment und kürzt in der Mitte (<code>feat/checkout-re…-step-2</code>), sonst am Ende. Kann der sichtbare Titel kürzer sein, steht der volle im Tooltip. Titelteile, Provider und Modell trennen Abstand und Tonwert, nie Trennzeichen wie Mittelpunkte.</li>
+    <li><code>#spec B5</code> Jede Zeile reserviert die Chevron- und Symbolspalte; Titel einer Ebene teilen eine Textachse.</li>
+    <li><code>#spec B6</code> Titel ruhender Sessions nutzen die gedämpfte Textrolle; laufende und wartende die primäre. Eine zusammengelegte Zeile übernimmt den Tonwert ihrer Session. Amber bleibt allein „wartet auf Dich“.</li>
+    <li><code>#spec B7</code> Die Zeile des Agenten der fokussierten Pane trägt eine stabile Akzent-Hinterlegung über die ganze Zeile; verbirgt eine zugeklappte Zeile ihn, trägt diese die Hinterlegung. Hover vertieft nur die Farbe.</li>
+    <li><code>#spec B8</code> Gruppen trennen Abstände vor Host und Projekt, keine Linien oder Rahmen. Zähler erscheinen nur an zugeklappten Containern.</li>
+    <li><code>#spec B9</code> Baumzeilen öffnen beim Hover keine Vorschau. Aufgaben und Details stehen in der Konto-Pane.</li>
+  </ul>
+</section>
+
+<h2>Referenzansichten</h2>
+<div class="boards">
+  <div class="board">
+    <p class="caption">„KI-Sessions“ aktiv, Darstellung B+: zusammengelegte Projekte (notes, docs-site, zaplex), Mittelkürzung (webshop), gemeinsamer Präfix (ops-scripts)</p>
+    <div class="sidebar">
+      <div class="toolbelt">
+        <button class="tb active" aria-label="KI-Sessions"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg></button>
+        <button class="tb" aria-label="KI-Konten"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.5"/><path d="M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/></svg></button>
+        <button class="tb" aria-label="Verbindungen"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="4" rx="1"/><rect x="2" y="9" width="12" height="4" rx="1"/></svg></button>
+      </div>
+      <div class="card">
+        <div class="zone"><span>KI-SESSIONS&nbsp;&nbsp;9</span><span class="att"><span class="dot wait" style="width:7px;height:7px"></span>1</span></div>
+        <div class="row host"><span class="slot">⌄</span><span class="slot"><span class="dot host"></span></span><span class="text"><span class="title t-host">Mac</span></span></div>
+        <div class="row two project" style="padding-left:20px"><span class="slot"></span><span class="slot"><span class="dot work"></span></span><span class="text"><span class="title t-active">notes</span><span class="sub">⌘ Codex <span class="faint">gpt-6.1-sol</span></span></span></div>
+        <div class="row host"><span class="slot">⌄</span><span class="slot"><span class="dot host"></span></span><span class="text"><span class="title t-host">buildnode</span></span></div>
+        <div class="row two project" style="padding-left:20px"><span class="slot"></span><span class="slot"><span class="dot wait"></span></span><span class="text"><span class="title t-active">docs-site<span class="gap dim">main</span></span><span class="sub">✳ Claude <span class="faint">claude-opus-5-5</span></span></span></div>
+        <div class="row project" style="padding-left:20px"><span class="slot">⌄</span><span class="slot"></span><span class="text"><span class="title t-project">webshop</span></span></div>
+        <div class="row two focused" style="padding-left:36px"><span class="slot"></span><span class="slot"><span class="dot work"></span></span><span class="text"><span class="title t-active">main</span><span class="sub">✳ Claude <span class="faint">claude-opus-5-5</span></span></span></div>
+        <div class="row two" style="padding-left:36px"><span class="slot"></span><span class="slot"><span class="dot idle"></span></span><span class="text"><span class="title t-quiet">feat/checkout-re…-step-2</span><span class="sub">✳ Claude <span class="faint">claude-fable-5-1</span></span></span></div>
+        <div class="row project" style="padding-left:20px"><span class="slot">⌄</span><span class="slot"></span><span class="text"><span class="title t-project">ops-scripts</span></span></div>
+        <div class="row two" style="padding-left:36px"><span class="slot"></span><span class="slot"><span class="dot idle"></span></span><span class="text"><span class="title t-quiet"><span class="dim">nightly-sync-…</span>10-06-0300</span><span class="sub">✳ Claude <span class="faint">claude-sonnet-5-5</span></span></span></div>
+        <div class="row two" style="padding-left:36px"><span class="slot"></span><span class="slot"><span class="dot work"></span></span><span class="text"><span class="title t-active"><span class="dim">nightly-sync-…</span>10-06-0900</span><span class="sub">✳ Claude <span class="faint">claude-sonnet-5-5</span></span></span></div>
+        <div class="row two" style="padding-left:36px"><span class="slot"></span><span class="slot"><span class="dot idle"></span></span><span class="text"><span class="title t-quiet"><span class="dim">nightly-sync-…</span>10-06-1500</span><span class="sub">✳ Claude <span class="faint">claude-sonnet-5-5</span></span></span></div>
+        <div class="row project" style="padding-left:20px"><span class="slot">⌄</span><span class="slot"></span><span class="text"><span class="title t-project">zaplex<span class="gap dim">main</span></span></span></div>
+        <div class="row" style="padding-left:36px"><span class="slot"></span><span class="slot"><span class="dot work"></span></span><span class="text"><span class="title t-active">✳ Claude <span class="dim">claude-opus-5-5</span></span></span></div>
+        <div class="row" style="padding-left:36px"><span class="slot"></span><span class="slot"><span class="dot idle"></span></span><span class="text"><span class="title t-quiet">⌘ Codex <span class="dim">gpt-6.1-sol</span></span></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="board">
+    <p class="caption">„KI-Konten“ aktiv: Wartemarke am Sessions-Eintrag (V3)</p>
+    <div class="sidebar">
+      <div class="toolbelt">
+        <button class="tb" aria-label="KI-Sessions, ein Agent wartet"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg><span class="mark"></span></button>
+        <button class="tb active" aria-label="KI-Konten"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.5"/><path d="M3 13.5c.6-2.6 2.6-4 5-4s4.4 1.4 5 4"/></svg></button>
+        <button class="tb" aria-label="Verbindungen"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="4" rx="1"/><rect x="2" y="9" width="12" height="4" rx="1"/></svg></button>
+      </div>
+      <div class="card">
+        <div class="zone"><span>KI-KONTEN&nbsp;&nbsp;3</span><span>Alle Konten · heute ~3,42 $</span></div>
+        <div class="acct"><div class="prov"><i></i>Claude</div><div class="who">personal@example.invalid · Max</div>
+          <div class="meter"><span>5 h</span><b style="--w:4%"></b><span>4 %</span></div>
+          <div class="meter"><span>Woche</span><b style="--w:12%"></b><span>12 %</span></div></div>
+        <div class="acct"><div class="prov"><i></i>Claude</div><div class="who">team@example.invalid · Team</div>
+          <div class="meter"><span>5 h</span><b style="--w:44%"></b><span>44 %</span></div>
+          <div class="meter"><span>Woche</span><b style="--w:62%"></b><span>62 %</span></div></div>
+        <div class="acct"><div class="prov"><i></i>Codex</div><div class="who">team@example.invalid · Team</div>
+          <div class="meter"><span>5 h</span><b style="--w:26%"></b><span>26 %</span></div>
+          <div class="meter"><span>Woche</span><b style="--w:39%"></b><span>39 %</span></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+</html>

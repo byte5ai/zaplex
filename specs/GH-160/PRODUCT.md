@@ -32,7 +32,8 @@ The previous static illustrations are superseded, not alternative approved layou
 
 ## Non-goals
 
-- No new app-wide icon rail or navigation system.
+- No new app-wide icon rail or navigation system. Adding the „KI-Konten“ entry to the existing
+  horizontal toolbelt (#504) is not a new navigation system.
 - No provider level between host and project.
 - No second connection registry or account-override store.
 - No runtime dependency on either reference repository.
@@ -74,6 +75,26 @@ The previous static illustrations are superseded, not alternative approved layou
    container when that identity exists. Each agent leaf represents one Claude, Codex, or other
    supported agent conversation. Agent conversations without PTY metadata receive separate stable
    fallback session containers and are never merged by label alone.
+
+   **Display rule „B+“ (#505).** The tree shows this model without empty levels. A project with
+   exactly one PTY session is a single row: the project name leads and keeps priority, the
+   session's own title (name, branch, worktree, or distinct directory) follows dimmed after some
+   air and gives way first; a title that only repeats the project name is omitted. With one agent
+   that row carries the agent; with several, the agents follow it. In a project with several PTY
+   sessions, a session with one agent is one row: its title, then a second line with provider
+   icon, provider, and model; an untitled session there shows its agent as the one-line headline.
+   Only a PTY session with several agents keeps agent rows, and its row carries no aggregate
+   glyph. A title sharing a long, separator-bounded prefix with at least one sibling shows it
+   shortened and dimmed while at least eight distinguishing characters stay visible. A long title
+   keeps a short last segment and shortens in the middle (`feat/checkout-re…-step-2`); otherwise
+   it ends in an ellipsis. Whenever the visible title can be shorter, the full title is the
+   tooltip. Title parts, provider, and model are separated by air and tone, never by separator
+   glyphs such as a middle dot. Every row reserves the chevron and glyph columns, so titles of
+   one depth share a text axis. Idle session titles use the muted text role, and a merged row takes
+   the tone of its session. The row of the focused pane's agent keeps a stable accent tint; a
+   collapsed row that hides it carries the tint instead. Groups separate by spacing, not lines. Session rows
+   with a title are two lines; this supersedes the earlier single-line session row. Reference:
+   [`docs/ui/cockpit-sessions-tree.html`](../../docs/ui/cockpit-sessions-tree.html).
 
    The tree contains only agent sessions Zaplex can open, decided by the same reachability rule
    as a click: a Zaplex pane hosts the session, a remote live session has a reattachable
@@ -346,8 +367,12 @@ The previous static illustrations are superseded, not alternative approved layou
     roles only; no hard-coded colors or decorative pane borders are introduced. Both usage windows
     are stacked across the account-card width, and large account panes preserve existing session
     actions and cost/token provenance without repeating provider identity.
-    The live tree and account area scroll independently inside the existing Cockpit sidebar;
-    large session inventories must not push the account section out of view.
+    The live tree („KI-Sessions“) and the account cards („KI-Konten“) are two separate,
+    labelled entries of the existing horizontal sidebar toolbelt, each with the full sidebar
+    height and its own scroll state (#504). A session inventory of any length therefore never
+    pushes the accounts out of reach. While another view is active, the Sessions entry carries
+    the amber waiting mark when an agent needs the user. This supersedes the earlier
+    three-fifths height cap inside one Cockpit view.
 
 ## Verbindliche Bedienungs- und Refresh-Korrekturen
 

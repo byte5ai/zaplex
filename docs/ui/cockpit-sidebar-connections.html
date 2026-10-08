@@ -37,7 +37,7 @@
     <ul>
       <li>Einheitliche Typografie und Einrückung, durchgehende optisch abgesetzte Sidebar, keine dekorativen Farbränder.</li>
       <li>5-h- und Wochenverbrauch stehen untereinander; Konto-Klick fügt Details hinzu oder fokussiert sie.</li>
-      <li>Sessionbaum und Konten bleiben zwei unabhängig scrollbare Bereiche derselben Sidebar; viele Sessions verdrängen die Kontenüberschrift nicht aus der sichtbaren Fläche.</li>
+      <li>Sessionbaum („KI-Sessions“) und Konten („KI-Konten“) sind zwei eigene, beschriftete Einträge im vorhandenen Toolbelt, jeder mit voller Sidebarhöhe und eigenem Scrollbereich (#504). Ist eine andere Ansicht aktiv und wartet ein Agent, trägt der Sessions-Eintrag die amberne Wartemarke.</li>
       <li>Keine zusätzlichen Navigationslinks, kein unbezeichneter Konto-Pfeil, kein redundantes Pane-Schließen-Menü.</li>
       <li>Theme-Rollen sind verbindlich; konkrete Browser-Demofarben und Beispieldaten sind nicht normativ.</li>
     </ul>
@@ -47,7 +47,7 @@
         <ul>
           <li><code>#spec C1</code> Verbindungen ist das eigenständige Register für alle konfigurierten Hosts und deren Favoriten.</li>
           <li><code>#spec C2</code> Das Tab-Menü projiziert ausschließlich favorisierte Hosts; der Hostname verbindet einmal direkt in einem neuen Tab, ein separates stabiles <code>⋯</code> öffnet ein echtes seitliches Flyout mit sichtbar bleibendem Parent. Es speichert keine zweite Konfiguration.</li>
-          <li><code>#spec C3</code> Es entsteht keine neue vertikale Symbolleiste. Die vorhandene Sidebar-Navigation bleibt unverändert.</li>
+          <li><code>#spec C3</code> Es entsteht keine neue vertikale Symbolleiste. Die vorhandene horizontale Sidebar-Navigation bleibt das einzige Navigationsmittel; „KI-Sessions“, „KI-Konten“ und „Verbindungen“ sind darin eigene Einträge (#504).</li>
           <li><code>#spec C4</code> Resiliente Hosts haben dauerhaft sichtbare Aufklapp- und Refresh-Aktionen in festen Slots. Refresh öffnet bei Bedarf den Recovery-Bereich. Darunter liegt die „Zaplex-Sessions“-Recovery; Shellnamen sind keine Sessionidentität. Puffer-/RAM-Diagnostik gehört nur in explizite Verbindungsdetails und wird nach der tatsächlichen Messgröße benannt.</li>
           <li><code>#spec C5</code> Recovery-Abschnitte beginnen auf der Textachse des Hosts. Zaplex- und tmux/byobu-Sessions stehen eine Einrückung (16 px) darunter; ihre Metadaten beginnen auf derselben Achse wie der Sessiontitel.</li>
         </ul>
@@ -58,6 +58,9 @@
           <li><code>#spec T1</code> Hierarchie: Host → Projekt → PTY-Session → Agent.</li>
           <li><code>#spec T2</code> Lokal ist immer sichtbar; eine Remote-Daemon-Identität nur von ihrer ersten bis zur letzten offenen Verbindung. Aktueller und historischer Daemon desselben Registry-Hosts dürfen während Recovery getrennt erscheinen.</li>
           <li><code>#spec T3</code> Container starten aufgeklappt. Zähler erscheinen nur im zugeklappten Zustand.</li>
+          <li><code>#spec T5</code> Darstellung „B+“ (#505): Ein Projekt mit genau einer PTY-Session ist eine Zeile; der Projektname führt, der eigene Titel der Session folgt gedimmt mit Abstand und weicht zuerst. Bei mehreren Sessions ist eine PTY-Session mit einem Agenten eine Zeile mit Titel und darunter Provider-Icon, Provider und Modell; ohne eigenen Titel ist der Agent die einzeilige Überschrift. Nur PTY-Sessions mit mehreren Agenten behalten Agentzeilen, ohne Sammelsymbol. Referenz: <a href="cockpit-sessions-tree.html">cockpit-sessions-tree.html</a>.</li>
+          <li><code>#spec T6</code> Ein langer Präfix, den ein Titel mit mindestens einem gleichrangigen Titel teilt, wird gekürzt und gedimmt; mindestens acht unterscheidende Zeichen bleiben sichtbar. Ein langer Titel behält sein kurzes letztes Segment und kürzt in der Mitte. Kann der sichtbare Titel kürzer sein, steht der volle im Tooltip. Titelteile, Provider und Modell trennen Abstand und Tonwert, keine Trennzeichen wie Mittelpunkte.</li>
+          <li><code>#spec T7</code> Feste Chevron- und Symbolspalten: Titel einer Ebene teilen eine Textachse. Ruhende Sessions nutzen die gedämpfte Textrolle; die Zeile des Agenten der fokussierten Pane trägt eine stabile Akzent-Hinterlegung, eine zugeklappte Zeile, die ihn verbirgt, an seiner Stelle. Gruppen trennen Abstände, keine Linien. Baumzeilen öffnen beim Hover keine Vorschau.</li>
           <li><code>#spec T4</code> Der Baum zeigt nur Agent-Sessions, die Zaplex öffnen kann – nach derselben Erreichbarkeitsregel wie der Klick: eine Zaplex-Pane hostet die Session, eine Remote-Live-Session hat ein reattachbares Daemon-PTY mit Registry-Route, oder die Session ruht und wird fortgesetzt. Außerhalb von Zaplex gestartete Agents, die Zaplex so nicht öffnen kann, erscheinen nirgends: nicht im Baum, nicht im Zähler, nicht im Dock-Badge, nicht in der Inbox, nicht in Palette, Konto-Tabellen oder Dashboard; nur die Verbrauchszahlen des Kontos enthalten sie weiter. Zaplex-Zugehörigkeit hängt nicht an der optionalen Hook-Bridge: Ein lokaler Agent-Prozess, der die <code>ZAPLEX_SURFACE_ID</code> einer Zaplex-Pane geerbt hat, gehört zu dieser Pane, die auch sein Klickziel ist. Von Zaplex gestartete oder gehostete Sessions (Daemon-PTY-Bindung, exakte Launch-Bindung, Zaplex-Terminal-Hook, geerbte Pane-ID) bleiben auch während eines Reconnects sichtbar, zählen aber erst wieder, wenn ein Klick sie öffnen kann. Lässt sich der Prozess eines lokalen Agents nicht prüfen, wird er nie ausgeblendet.</li>
         </ul>
       </div>

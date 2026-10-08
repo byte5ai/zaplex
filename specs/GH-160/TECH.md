@@ -277,7 +277,24 @@ depend on pixels:
 - expanded containers hide counts; collapsed containers show a count;
 - a collapsed count turns amber if it hides waiting attention;
 - session containers have hierarchy only, not a duplicated aggregate state glyph;
-- agent leaves render state glyph, provider, and optional model only;
+- agent leaves render state glyph, provider, and optional model only; managed-fleet agents (#168)
+  add the compact `◆` marker, whose details stay in the account pane;
+- the B+ display rule (#505) is the pure projection `project_tree_rows`: a project with exactly
+  one PTY session becomes one row (`merged_label`: project name with `PartFit::Holds`, the
+  session title dimmed after `MERGED_TITLE_GAP`); a single-agent PTY session among several is one
+  leaf whose second line carries provider icon, provider, and model, and an untitled one shows
+  the agent as its headline; agent rows remain only for multi-agent PTYs. Titles are
+  `TreeLabel` parts: a separator-bounded prefix shared with at least one sibling is dimmed
+  (`shared_prefix_cuts` over pairwise `shared_prefix_cut`, at least `MIN_DISTINCT_TAIL_CHARS`
+  distinguishing characters), and a long title keeps its last segment fixed while the head
+  shrinks (`kept_suffix_start`, `MIDDLE_CLIP_MIN_CHARS`); every row title, project rows included,
+  carries its full text as tooltip, because any title can clip in a narrow sidebar. A directory
+  title is the directory's own name, never `project — directory`. Parts, provider, and model are separated by spacing, never by glyphs;
+- every row reserves the chevron and glyph columns; idle titles use the muted text role
+  (`title_tone`); the focused pane's session (workspace `ActiveSession::terminal_view_id` matched
+  through `terminal_for_inventory_session`) keeps a stable accent tint on its agent's row, or on
+  the collapsed row hiding it (`style::tree_row`); a merged project row takes its session's tone;
+- tree rows open no hover preview; the task peek remains only in the large account pane table.
 - no tree leaf renders state words, context percentage, cost, email, effort, or activity age;
 - the section header renders only an amber glyph and numeric count when attention exists.
 
@@ -452,10 +469,14 @@ Sidebar account cards stack the five-hour and weekly meters so each meter receiv
 available text width. Unknown and estimated values retain their semantic state and never render as
 measured zero. The Cockpit and Connections panels share existing layout constants/components for
 section headers, hierarchy indentation, row heights, flexible identity, and fixed action slots.
-The two Cockpit sections retain independent scroll state and bounded flexible height so a large
-session tree cannot displace the account section. The session area receives at most three fifths
-of available height; unused account space does not expand this cap. This preserves the existing
-navigation.
+The session tree (`ToolPanelView::Cockpit`, `CockpitPanel`) and the account cards
+(`ToolPanelView::CockpitAccounts`, `CockpitAccountsPanel`) are two entries of the existing
+left-panel toolbelt (#504). Each view owns the full sidebar height and one scroll state; both read
+the same `CockpitModel`. A persisted `LeftPanelDisplayedTab::Cockpit` restores the tree, as before.
+While another view is active and the fleet has waiting agents, the toolbelt draws a static amber
+mark on the Sessions entry (`sessions_entry_shows_attention`). The `w`-jump binding stays scoped to
+both sidebar views and the roomy pane. This replaces the earlier three-fifths height cap inside one
+Cockpit view.
 Native colors, borders, selection, hover, focus, status, and progress resolve exclusively through
 `appearance.theme()` and existing component themes; the HTML artifact defines role relationships,
 not literal color values. No provider-colored border or other decorative pane outline is added.

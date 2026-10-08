@@ -6,6 +6,7 @@
 - [Interaktiver Mockup in voller Breite](premium-workspace.html): derselbe Entwurf für Desktop und schmale Breiten.
 - [PRODUCT](../../specs/GH-160/PRODUCT.md) und [TECH](../../specs/GH-160/TECH.md): Verhalten und native Umsetzung.
 - [#459](https://github.com/byte5ai/zaplex/issues/459): Koordination und Abnahme; [PR #465](https://github.com/byte5ai/zaplex/pull/465): bereits integrierte Implementierung.
+- [Session-Baum und Sidebar-Ansichten](cockpit-sessions-tree.html): Toolbelt-Einträge „KI-Sessions“ und „KI-Konten“ (#504) und Baumdarstellung „B+“ (#505). Für diese beiden Punkte hat sie Vorrang vor der Sidebar-Darstellung im interaktiven Mockup.
 
 Die HTML-Dateien nach dem Checkout direkt im Browser öffnen. GitHub zeigt HTML als Quelltext,
 nicht als laufenden Mockup. Es ist kein Zaplex-Build erforderlich. Der Standalone-Export enthält
@@ -67,8 +68,10 @@ bereits vorhandene Implementierung. Sie erklärt diese **nicht** nachträglich f
 Der ursprüngliche Stand von PR #465 enthielt noch den redundanten Link
 `cockpit-shell-sessions-connections`. Die Korrektur entfernt ihn aus dem Produktcode;
 Verbindungen bleiben über die vorhandene Sidebar-Navigation erreichbar. Sessionbaum und
-Konten behalten ihre beiden Bereiche und scrollen unabhängig, damit ein großes Inventar
-die Kontenübersicht nicht aus dem sichtbaren Bereich verdrängt.
+Konten sind seit #504 zwei eigene Toolbelt-Einträge („KI-Sessions“, „KI-Konten“) mit voller
+Höhe und eigenem Scrollbereich. Der Mockup zeigt beide Karten noch in einer Ansicht; für die
+Sidebar gilt an dieser Stelle die Regel aus `#spec` und PRODUCT, nicht die Darstellung des
+Mockups.
 
 Der Referenz-Commit `bea818ce95f71fc103eebe2a7a5c687d9a55c361` bleibt der Ausgangspunkt.
 Die Entfernung einzelner Abweichungen ist keine native Gesamtabnahme. Den aktuellen

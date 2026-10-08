@@ -22,6 +22,7 @@
 
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::color::coloru_with_opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
@@ -96,6 +97,40 @@ pub fn hover_row(
         c = c.with_background(internal_colors::fg_overlay_1(theme));
     }
     c.finish()
+}
+
+/// Theme-accent tint (percent opacity) of the focused pane's session row.
+const FOCUSED_ROW_TINT: u8 = 18;
+/// The same tint while the pointer rests on that row — colour only.
+const FOCUSED_ROW_HOVER_TINT: u8 = 28;
+
+/// [`hover_row`] for a session-tree row that may be the session of the
+/// focused pane (#505): that row keeps a stable theme-accent tint, so "where
+/// am I" reads at a glance. Hover only deepens the tint; geometry is the same
+/// as every other row.
+pub fn tree_row(
+    line: Box<dyn Element>,
+    hovered: bool,
+    focused: bool,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    if !focused {
+        return hover_row(line, hovered, appearance);
+    }
+    let accent = appearance.theme().accent().into_solid();
+    let tint = if hovered {
+        FOCUSED_ROW_HOVER_TINT
+    } else {
+        FOCUSED_ROW_TINT
+    };
+    Container::new(line)
+        .with_padding_top(ROW_V_PADDING)
+        .with_padding_bottom(ROW_V_PADDING)
+        .with_padding_left(ROW_H_PADDING)
+        .with_padding_right(ROW_H_PADDING)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CONTROL_RADIUS)))
+        .with_background_color(coloru_with_opacity(accent, tint))
+        .finish()
 }
 
 /// A flat sidebar **zone-card**: `surface_1`, a hairline border, radius 12 and

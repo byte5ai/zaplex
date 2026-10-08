@@ -1,119 +1,5 @@
 use super::*;
-use pathfinder_geometry::vector::vec2f;
-use std::cell::RefCell;
-use std::rc::Rc;
-use warpui::platform::WindowStyle;
-use warpui::{App, Event, Presenter, WindowInvalidation};
 use zaplex_cockpit::TaskItem;
-
-use crate::test_util::settings::initialize_settings_for_tests;
-
-#[test]
-fn fleet_total_button_accepts_button_activation_keys_only() {
-    for key in ["enter", "numpadenter", " "] {
-        assert!(is_fleet_total_activation_keystroke(
-            &warpui::keymap::Keystroke {
-                key: key.to_string(),
-                ..Default::default()
-            }
-        ));
-    }
-    assert!(!is_fleet_total_activation_keystroke(
-        &warpui::keymap::Keystroke {
-            key: "right".to_string(),
-            ..Default::default()
-        }
-    ));
-    assert!(!is_fleet_total_activation_keystroke(
-        &warpui::keymap::Keystroke {
-            ctrl: true,
-            key: " ".to_string(),
-            ..Default::default()
-        }
-    ));
-}
-
-#[test]
-fn focused_fleet_total_button_handles_real_unmodified_keydown_forms_only() {
-    App::test((), |mut app| async move {
-        crate::i18n::init(Some("en"));
-        initialize_settings_for_tests(&mut app);
-        app.add_singleton_model(|_| Appearance::mock());
-        let (window_id, button) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            let button = FleetTotalButton::new(ctx);
-            ctx.focus_self();
-            button
-        });
-        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
-        let render = |app: &mut App| {
-            app.update(|ctx| {
-                presenter.borrow_mut().invalidate(
-                    WindowInvalidation {
-                        updated: ctx.view_ids_for_window(window_id).into_iter().collect(),
-                        ..Default::default()
-                    },
-                    ctx,
-                );
-                presenter
-                    .borrow_mut()
-                    .build_scene(vec2f(250.0, 80.0), 1.0, None, ctx);
-            });
-        };
-        let press = |app: &mut App, keystroke: warpui::keymap::Keystroke, chars: &str| {
-            app.update(|ctx| {
-                ctx.simulate_window_event(
-                    Event::KeyDown {
-                        keystroke,
-                        chars: chars.to_string(),
-                        details: warpui::event::KeyEventDetails::default(),
-                        is_composing: false,
-                    },
-                    window_id,
-                    presenter.clone(),
-                )
-            })
-        };
-
-        render(&mut app);
-        assert!(press(
-            &mut app,
-            warpui::keymap::Keystroke {
-                key: "enter".to_string(),
-                ..Default::default()
-            },
-            "\r",
-        ));
-        render(&mut app);
-        assert!(press(
-            &mut app,
-            warpui::keymap::Keystroke {
-                key: "numpadenter".to_string(),
-                ..Default::default()
-            },
-            "\r",
-        ));
-        render(&mut app);
-        assert!(press(
-            &mut app,
-            warpui::keymap::Keystroke {
-                key: " ".to_string(),
-                ..Default::default()
-            },
-            " ",
-        ));
-        render(&mut app);
-        let _ = press(
-            &mut app,
-            warpui::keymap::Keystroke {
-                shift: true,
-                key: "enter".to_string(),
-                ..Default::default()
-            },
-            "\r",
-        );
-        button.read(&app, |button, _| assert_eq!(button.activation_count, 3));
-    });
-}
 
 #[test]
 fn current_task_prefers_in_progress_step() {
@@ -402,4 +288,436 @@ fn empty_local_inventory_does_not_hide_scan_failures() {
         empty_inventory_message(AgentInventoryStatus::Pending, true),
         crate::t!("cockpit-host-inventory-pending"),
     );
+}
+
+fn tree_agent(
+    session_id: &str,
+    cwd: &str,
+    branch: Option<&str>,
+    state: SessionState,
+) -> SessionSnapshot {
+    SessionSnapshot {
+        session_id: session_id.into(),
+        cwd: cwd.into(),
+        name: String::new(),
+        state,
+        provider: Provider::Claude,
+        model: "claude-opus-5-5".into(),
+        effort: None,
+        ctx_tokens: 0,
+        project_root: "/work/proj".into(),
+        repo_root: "/work/proj".into(),
+        project_name: "proj".into(),
+        branch: branch.map(str::to_string),
+        worktree: None,
+        config_dir: None,
+        account_email: None,
+        account_id: None,
+        process_fingerprint: None,
+        pty_session_id: None,
+        pty_session_generation: None,
+        pty_foreground: false,
+        task_state: None,
+        last_activity: chrono::Utc::now(),
+        pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
+    }
+}
+
+fn in_one_pty(mut agent: SessionSnapshot) -> SessionSnapshot {
+    agent.pty_session_id = Some("pty-1".into());
+    agent.pty_session_generation = Some(1);
+    agent
+}
+
+/// `(depth, kind, label, focused)` of one projected row.
+fn row_summary(row: &TreeRow<'_>) -> (usize, &'static str, String, bool) {
+    match &row.kind {
+        TreeRowKind::Project { label, focused, .. } => {
+            (row.depth, "project", label.full.clone(), *focused)
+        }
+        TreeRowKind::SessionLeaf {
+            label,
+            agent,
+            focused,
+        } => (
+            row.depth,
+            "leaf",
+            label
+                .as_ref()
+                .map_or_else(|| format!("agent:{}", agent.session_id), |l| l.full.clone()),
+            *focused,
+        ),
+        TreeRowKind::SessionContainer { label, focused, .. } => (
+            row.depth,
+            "session",
+            label.as_ref().map_or_else(String::new, |l| l.full.clone()),
+            *focused,
+        ),
+        TreeRowKind::Agent { agent, focused } => {
+            (row.depth, "agent", agent.session_id.clone(), *focused)
+        }
+    }
+}
+
+fn local_project_rows(
+    project_name: &str,
+    agents: &[SessionSnapshot],
+    session_expanded: bool,
+    focused_id: Option<&str>,
+) -> Vec<(usize, &'static str, String, bool)> {
+    let rows = project_tree_rows(
+        project_name,
+        group_project_sessions(false, Some("host-a"), agents),
+        "host-a\u{1f}/work/proj".to_string(),
+        true,
+        |_| session_expanded,
+        |agent: &SessionSnapshot| Some(agent.session_id.as_str()) == focused_id,
+    );
+    rows.iter().map(row_summary).collect()
+}
+
+#[test]
+fn single_untitled_session_merges_into_project_row() {
+    let agents = [tree_agent("a", "/work/proj", None, SessionState::Active)];
+    assert_eq!(
+        local_project_rows("proj", &agents, true, None),
+        vec![(1, "leaf", "proj".to_string(), false)],
+        "one untitled session with one agent is a single project row"
+    );
+}
+
+#[test]
+fn tree_never_repeats_parent_label_in_child_row() {
+    let agents = [
+        tree_agent("a", "/work/proj", None, SessionState::Active),
+        tree_agent("b", "/work/proj", None, SessionState::Idle),
+    ];
+    let rows = local_project_rows("proj", &agents, true, None);
+    assert_eq!(rows[0], (1, "project", "proj".to_string(), false));
+    for (_, kind, label, _) in &rows[1..] {
+        assert_eq!(*kind, "leaf");
+        assert_ne!(label, "proj", "a child row never repeats its project label");
+    }
+    assert_eq!(rows.len(), 3);
+}
+
+#[test]
+fn multiple_agents_in_one_pty_render_child_rows() {
+    let agents = [
+        in_one_pty(tree_agent(
+            "a",
+            "/work/proj",
+            Some("main"),
+            SessionState::Active,
+        )),
+        in_one_pty(tree_agent(
+            "b",
+            "/work/proj",
+            Some("main"),
+            SessionState::Idle,
+        )),
+        tree_agent("c", "/work/proj", Some("feat/x"), SessionState::Idle),
+    ];
+    let rows = local_project_rows("proj", &agents, true, None);
+    assert_eq!(rows[0], (1, "project", "proj".to_string(), false));
+    let container = rows
+        .iter()
+        .position(|row| row.1 == "session")
+        .expect("the multi-agent PTY keeps its own row");
+    assert_eq!(rows[container], (2, "session", "main".to_string(), false));
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.0 == 3 && row.1 == "agent")
+            .count(),
+        2
+    );
+
+    let collapsed = local_project_rows("proj", &agents, false, None);
+    assert!(
+        collapsed.iter().all(|row| row.1 != "agent"),
+        "a collapsed multi-agent session hides its agent rows"
+    );
+
+    // A collapsed session hiding the focused agent carries the highlight
+    // itself; expanded, only the agent row does.
+    let collapsed_focused = local_project_rows("proj", &agents, false, Some("b"));
+    assert!(collapsed_focused
+        .iter()
+        .any(|row| row.1 == "session" && row.3));
+    let expanded_focused = local_project_rows("proj", &agents, true, Some("b"));
+    let marked: Vec<_> = expanded_focused.iter().filter(|row| row.3).collect();
+    assert_eq!(marked.len(), 1);
+    assert_eq!(marked[0].1, "agent");
+}
+
+#[test]
+fn single_multi_agent_session_merges_into_project_row() {
+    let agents = [
+        in_one_pty(tree_agent(
+            "a",
+            "/work/proj",
+            Some("main"),
+            SessionState::Active,
+        )),
+        in_one_pty(tree_agent(
+            "b",
+            "/work/proj",
+            Some("main"),
+            SessionState::Idle,
+        )),
+    ];
+    let rows = local_project_rows("proj", &agents, true, None);
+    assert_eq!(rows[0], (1, "project", "proj / main".to_string(), false));
+    assert_eq!(rows.len(), 3);
+    assert!(rows[1..].iter().all(|row| row.0 == 2 && row.1 == "agent"));
+}
+
+#[test]
+fn single_titled_session_merges_with_dimmed_title() {
+    let agents = [tree_agent(
+        "a",
+        "/work/proj",
+        Some("main"),
+        SessionState::Active,
+    )];
+    assert_eq!(
+        local_project_rows("proj", &agents, true, None),
+        vec![(1, "leaf", "proj / main".to_string(), false)]
+    );
+    let label = merged_label("proj", Some("main"));
+    assert_eq!(label.parts.len(), 2);
+    assert_eq!(
+        (
+            label.parts[0].text.as_str(),
+            label.parts[0].tone,
+            label.parts[0].fit
+        ),
+        ("proj", PartTone::Title, PartFit::Holds),
+        "the project name leads and keeps the larger share"
+    );
+    assert_eq!(
+        (
+            label.parts[1].text.as_str(),
+            label.parts[1].tone,
+            label.parts[1].gap_before
+        ),
+        ("main", PartTone::Dim, true),
+        "the session title follows dimmed after air, without a glyph"
+    );
+}
+
+#[test]
+fn long_titles_shorten_in_the_middle_and_keep_their_end() {
+    let label = TreeLabel::plain("feat/checkout-redesign-step-2");
+    let parts: Vec<_> = label
+        .parts
+        .iter()
+        .map(|part| (part.text.as_str(), part.fit))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            ("feat/checkout-redesign", PartFit::Shrinks),
+            ("-step-2", PartFit::Fixed),
+        ]
+    );
+
+    // Short titles, and long ones without a short last segment, end-clip.
+    assert_eq!(TreeLabel::plain("main").parts.len(), 1);
+    assert_eq!(
+        TreeLabel::plain("averyveryverylongbranchnamewithoutseparators")
+            .parts
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn single_agent_sessions_are_leaves_without_agent_rows() {
+    let agents = [
+        tree_agent("a", "/work/proj", Some("main"), SessionState::Active),
+        tree_agent("b", "/work/proj", Some("feat/x"), SessionState::Idle),
+    ];
+    let rows = local_project_rows("proj", &agents, true, None);
+    assert_eq!(rows.len(), 3);
+    assert!(rows[1..].iter().all(|row| row.0 == 2 && row.1 == "leaf"));
+}
+
+#[test]
+fn similar_session_names_show_distinguishing_suffix() {
+    let titles = [
+        "vault-curator-inbox-2026-10-06-0300",
+        "vault-curator-inbox-2026-10-06-0900",
+        "vault-curator-inbox-2026-10-06-1500",
+    ];
+    let cut = shared_prefix_cut(&titles);
+    let label = split_title(titles[0], cut);
+    let parts: Vec<_> = label
+        .parts
+        .iter()
+        .map(|part| (part.text.as_str(), part.tone, part.fit))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            ("vault-curator-…", PartTone::Dim, PartFit::Shrinks),
+            ("10-06-0300", PartTone::Title, PartFit::Fixed),
+        ]
+    );
+    assert_eq!(label.full, titles[0]);
+    for title in titles {
+        let tail = split_title(title, cut).parts.last().unwrap().text.clone();
+        assert!(tail.chars().count() >= MIN_DISTINCT_TAIL_CHARS);
+    }
+
+    // Short or unrelated names keep their whole title.
+    assert_eq!(shared_prefix_cut(&["feat/a", "feat/b"]), None);
+    assert_eq!(shared_prefix_cut(&["main", "main"]), None);
+    assert_eq!(shared_prefix_cut(&["main", "release"]), None);
+    assert_eq!(shared_prefix_cut(&["only-one-title-here"]), None);
+}
+
+#[test]
+fn idle_session_title_uses_muted_role() {
+    assert_eq!(title_tone(SessionState::Idle), TitleTone::Quiet);
+    assert_eq!(title_tone(SessionState::Active), TitleTone::Active);
+    assert_eq!(title_tone(SessionState::Monitor), TitleTone::Active);
+    assert_eq!(title_tone(SessionState::Waiting), TitleTone::Active);
+}
+
+#[test]
+fn focused_session_row_has_stable_highlight() {
+    let agents = [
+        tree_agent("a", "/work/proj", Some("main"), SessionState::Active),
+        tree_agent("b", "/work/proj", Some("feat/x"), SessionState::Idle),
+    ];
+    let rows = local_project_rows("proj", &agents, true, Some("b"));
+    let focused: Vec<_> = rows.iter().filter(|row| row.3).collect();
+    assert_eq!(
+        focused.len(),
+        1,
+        "exactly the focused pane's session is marked"
+    );
+    assert_eq!(focused[0].2, "feat/x");
+    assert!(local_project_rows("proj", &agents, true, None)
+        .iter()
+        .all(|row| !row.3));
+}
+
+#[test]
+fn prefix_dimming_ignores_unrelated_siblings() {
+    let titles = [
+        "main",
+        "vault-curator-inbox-2026-10-06-0300",
+        "vault-curator-inbox-2026-10-06-0900",
+    ];
+    let cuts = shared_prefix_cuts(&titles);
+    assert_eq!(
+        cuts[0], None,
+        "a title without a similar sibling stays whole"
+    );
+    assert_eq!(
+        split_title(titles[1], cuts[1]).parts.last().unwrap().text,
+        "10-06-0300"
+    );
+    assert_eq!(
+        split_title(titles[2], cuts[2]).parts.last().unwrap().text,
+        "10-06-0900"
+    );
+}
+
+#[test]
+fn directory_title_never_repeats_the_project_name() {
+    let agents = [tree_agent(
+        "a",
+        "/work/proj/tools",
+        None,
+        SessionState::Active,
+    )];
+    assert_eq!(
+        local_project_rows("proj", &agents, true, None),
+        vec![(1, "leaf", "proj / tools".to_string(), false)],
+        "a distinct directory is the session title on its own"
+    );
+}
+
+#[test]
+fn identical_titles_are_never_shortened() {
+    let title = "vault-curator-inbox-2026-10-06-0300";
+    assert_eq!(shared_prefix_cut(&[title, title]), None);
+    assert_eq!(
+        shared_prefix_cut(&["nightly-sync", "nightly-sync-2026-10-06"]),
+        None,
+        "a title that ends inside the shared part has nothing left to show"
+    );
+}
+
+#[test]
+fn session_name_repeating_the_project_falls_back_to_its_branch() {
+    let mut named = tree_agent("a", "/work/proj", Some("feat/x"), SessionState::Active);
+    named.name = "proj".into();
+    assert_eq!(session_title(&named, "proj").as_deref(), Some("feat/x"));
+}
+
+#[test]
+fn empty_working_directory_never_becomes_a_title() {
+    let agent = tree_agent("a", "", None, SessionState::Active);
+    assert_eq!(session_title(&agent, "proj"), None);
+    let blank = tree_agent("b", "   ", None, SessionState::Active);
+    assert_eq!(session_title(&blank, "proj"), None);
+}
+
+#[test]
+fn shared_prefix_keeps_at_least_eight_distinguishing_characters_fixed() {
+    let label = split_title("team-sync-feature-checkout-redesign-step-2", Some(10));
+    let parts: Vec<_> = label
+        .parts
+        .iter()
+        .map(|part| (part.text.as_str(), part.tone, part.fit))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            ("team-sync-", PartTone::Dim, PartFit::Shrinks),
+            ("feature-checkout", PartTone::Title, PartFit::Shrinks),
+            ("-redesign-step-2", PartTone::Title, PartFit::Fixed),
+        ]
+    );
+    let fixed = label.parts.last().unwrap().text.chars().count();
+    assert!(fixed >= MIN_DISTINCT_TAIL_CHARS);
+}
+
+#[test]
+fn merged_multi_agent_row_takes_the_session_tone() {
+    let agents = [
+        in_one_pty(tree_agent(
+            "a",
+            "/work/proj",
+            Some("main"),
+            SessionState::Active,
+        )),
+        in_one_pty(tree_agent(
+            "b",
+            "/work/proj",
+            Some("main"),
+            SessionState::Idle,
+        )),
+    ];
+    let rows = project_tree_rows(
+        "proj",
+        group_project_sessions(false, Some("host-a"), &agents),
+        "host-a\u{1f}/work/proj".to_string(),
+        true,
+        |_| true,
+        |_: &SessionSnapshot| false,
+    );
+    match &rows[0].kind {
+        TreeRowKind::Project { session_state, .. } => {
+            assert_eq!(*session_state, Some(SessionState::Active));
+        }
+        other => panic!("expected the merged project row, got {other:?}"),
+    }
 }

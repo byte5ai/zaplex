@@ -680,14 +680,17 @@ pub fn init(app: &mut AppContext) {
         ),
         // Conductor `w`-jump: cycle to the next Waiting agent across the whole
         // fleet and attach it. Scoped to the cockpit surfaces (the roomy pane and
-        // the sidebar panel) so plain `w` never clobbers word-motion elsewhere.
+        // the sidebar session and account views) so plain `w` never clobbers
+        // word-motion elsewhere.
         EditableBinding::new(
             "workspace:jump_to_next_waiting",
             BindingDescription::new(crate::t!("keybinding-desc-workspace-jump-to-next-waiting")),
             WorkspaceAction::JumpToNextWaiting,
         )
         .with_group(bindings::BindingGroup::Navigation.as_str())
-        .with_context_predicate(id!("CockpitPaneView") | id!("CockpitPanel"))
+        .with_context_predicate(
+            id!("CockpitPaneView") | id!("CockpitPanel") | id!("CockpitAccountsPanel"),
+        )
         .with_key_binding("w"),
         EditableBinding::new(
             "workspace:toggle_left_panel",
