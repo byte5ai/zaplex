@@ -663,6 +663,14 @@ fn session_name_repeating_the_project_falls_back_to_its_branch() {
 }
 
 #[test]
+fn empty_working_directory_never_becomes_a_title() {
+    let agent = tree_agent("a", "", None, SessionState::Active);
+    assert_eq!(session_title(&agent, "proj"), None);
+    let blank = tree_agent("b", "   ", None, SessionState::Active);
+    assert_eq!(session_title(&blank, "proj"), None);
+}
+
+#[test]
 fn shared_prefix_keeps_at_least_eight_distinguishing_characters_fixed() {
     let label = split_title("team-sync-feature-checkout-redesign-step-2", Some(10));
     let parts: Vec<_> = label

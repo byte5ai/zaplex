@@ -259,7 +259,7 @@ pub struct CockpitPanel {
     conductor_session_states: HashMap<String, MouseStateHandle>,
     expanded_sessions: HashMap<String, bool>,
     /// Tooltip hover state for a row title; keyed by agent key (leaf rows),
-    /// session key (multi-agent rows), or project key (project rows).
+    /// session key (multi-agent rows), project key, or host identity.
     conductor_title_states: HashMap<String, MouseStateHandle>,
 }
 
@@ -526,7 +526,7 @@ fn session_title(session: &SessionSnapshot, project_name: &str) -> Option<String
         (project_directory_label(project_name, &session.cwd) != project_name)
             .then(|| directory_name(&session.cwd))
     })
-    .filter(|title| title != project_name)
+    .filter(|title| !title.trim().is_empty() && title != project_name)
 }
 
 /// Where a separator-bounded prefix shared by all sibling titles ends. The cut
@@ -895,7 +895,10 @@ impl CockpitPanel {
         self.conductor_row_glyph_states
             .retain(|k, _| visible.contains(k));
         self.conductor_title_states.retain(|k, _| {
-            visible.contains(k) || session_keys.contains(k) || project_keys.contains(k)
+            visible.contains(k)
+                || session_keys.contains(k)
+                || project_keys.contains(k)
+                || host_keys.contains(k)
         });
         for key in routable {
             self.conductor_row_states.entry(key).or_default();
@@ -912,7 +915,10 @@ impl CockpitPanel {
         self.expanded_hosts.retain(|key, _| host_keys.contains(key));
         for key in host_keys {
             self.conductor_host_states.entry(key.clone()).or_default();
-            self.conductor_host_glyph_states.entry(key).or_default();
+            self.conductor_host_glyph_states
+                .entry(key.clone())
+                .or_default();
+            self.conductor_title_states.entry(key).or_default();
         }
         // Project-group header handles + collapse overrides, keyed by
         // `project_key` (host identity + repository root — never the label alone).
@@ -1038,6 +1044,7 @@ impl CockpitPanel {
         host: &HostNode,
         key: &str,
         expanded: bool,
+        focused: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
@@ -1081,7 +1088,21 @@ impl CockpitPanel {
                 appearance,
             ))
             .with_child(
-                Shrinkable::new(1.0, Self::identity_text(label, family, body, main)).finish(),
+                Shrinkable::new(
+                    1.0,
+                    appearance.ui_builder().overlay_tool_tip_on_element(
+                        label.clone(),
+                        self.conductor_title_states
+                            .get(key)
+                            .cloned()
+                            .unwrap_or_default(),
+                        Self::identity_text(label, family, body, main),
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomMiddle,
+                        vec2f(0.0, -4.0),
+                    ),
+                )
+                .finish(),
             );
         if let Some(count) = container_count_presentation(expanded, count, host.needs_me) {
             let color = if count.attention {
@@ -1099,7 +1120,7 @@ impl CockpitPanel {
             .unwrap_or_default();
         let key = key.to_string();
         Hoverable::new(handle, move |mouse| {
-            hover_row(row, mouse.is_hovered(), appearance)
+            tree_row(row, mouse.is_hovered(), focused, appearance)
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
@@ -1564,8 +1585,26 @@ impl CockpitPanel {
             let host_id = host.host_id.as_deref();
             let ident = host_ident(is_local, host_id);
             let host_expanded = self.expanded_hosts.get(&ident).copied().unwrap_or(true);
-            let mut host_row =
-                Container::new(self.render_host_header(host, &ident, host_expanded, appearance));
+            let is_focused = |agent: &SessionSnapshot| {
+                focused_terminal.is_some()
+                    && terminal_for_inventory_session(agent, is_local, host_id, app)
+                        == focused_terminal
+            };
+            // A collapsed host that hides the focused pane's agent carries
+            // its tint instead.
+            let host_focused = !host_expanded
+                && host
+                    .projects
+                    .iter()
+                    .flat_map(|project| project.sessions.iter())
+                    .any(|agent| is_focused(agent));
+            let mut host_row = Container::new(self.render_host_header(
+                host,
+                &ident,
+                host_expanded,
+                host_focused,
+                appearance,
+            ));
             if host_index > 0 {
                 host_row = host_row.with_margin_top(HOST_GROUP_GAP);
             }
@@ -1573,11 +1612,6 @@ impl CockpitPanel {
             if !host_expanded {
                 continue;
             }
-            let is_focused = |agent: &SessionSnapshot| {
-                focused_terminal.is_some()
-                    && terminal_for_inventory_session(agent, is_local, host_id, app)
-                        == focused_terminal
-            };
             for project in &host.projects {
                 let pkey = project_key(&ident, &project.root);
                 let project_expanded = self.expanded_projects.get(&pkey).copied().unwrap_or(true);
