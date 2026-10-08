@@ -292,7 +292,8 @@ depend on pixels:
   title is the directory's own name, never `project — directory`. Parts, provider, and model are separated by spacing, never by glyphs;
 - every row reserves the chevron and glyph columns; idle titles use the muted text role
   (`title_tone`); the focused pane's session (workspace `ActiveSession::terminal_view_id` matched
-  through `terminal_for_inventory_session`) keeps a stable accent tint (`style::tree_row`);
+  through `terminal_for_inventory_session`) keeps a stable accent tint on its agent's row, or on
+  the collapsed row hiding it (`style::tree_row`); a merged project row takes its session's tone;
 - tree rows open no hover preview; the task peek remains only in the large account pane table.
 - no tree leaf renders state words, context percentage, cost, email, effort, or activity age;
 - the section header renders only an amber glyph and numeric count when attention exists.

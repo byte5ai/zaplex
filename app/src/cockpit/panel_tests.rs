@@ -661,3 +661,55 @@ fn session_name_repeating_the_project_falls_back_to_its_branch() {
     named.name = "proj".into();
     assert_eq!(session_title(&named, "proj").as_deref(), Some("feat/x"));
 }
+
+#[test]
+fn shared_prefix_keeps_at_least_eight_distinguishing_characters_fixed() {
+    let label = split_title("team-sync-feature-checkout-redesign-step-2", Some(10));
+    let parts: Vec<_> = label
+        .parts
+        .iter()
+        .map(|part| (part.text.as_str(), part.tone, part.fit))
+        .collect();
+    assert_eq!(
+        parts,
+        vec![
+            ("team-sync-", PartTone::Dim, PartFit::Shrinks),
+            ("feature-checkout", PartTone::Title, PartFit::Shrinks),
+            ("-redesign-step-2", PartTone::Title, PartFit::Fixed),
+        ]
+    );
+    let fixed = label.parts.last().unwrap().text.chars().count();
+    assert!(fixed >= MIN_DISTINCT_TAIL_CHARS);
+}
+
+#[test]
+fn merged_multi_agent_row_takes_the_session_tone() {
+    let agents = [
+        in_one_pty(tree_agent(
+            "a",
+            "/work/proj",
+            Some("main"),
+            SessionState::Active,
+        )),
+        in_one_pty(tree_agent(
+            "b",
+            "/work/proj",
+            Some("main"),
+            SessionState::Idle,
+        )),
+    ];
+    let rows = project_tree_rows(
+        "proj",
+        group_project_sessions(false, Some("host-a"), &agents),
+        "host-a\u{1f}/work/proj".to_string(),
+        true,
+        |_| true,
+        |_: &SessionSnapshot| false,
+    );
+    match &rows[0].kind {
+        TreeRowKind::Project { session_state, .. } => {
+            assert_eq!(*session_state, Some(SessionState::Active));
+        }
+        other => panic!("expected the merged project row, got {other:?}"),
+    }
+}

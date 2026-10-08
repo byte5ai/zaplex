@@ -90,8 +90,9 @@ The previous static illustrations are superseded, not alternative approved layou
    it ends in an ellipsis. Whenever the visible title can be shorter, the full title is the
    tooltip. Title parts, provider, and model are separated by air and tone, never by separator
    glyphs such as a middle dot. Every row reserves the chevron and glyph columns, so titles of
-   one depth share a text axis. Idle session titles use the muted text role. The session of the
-   focused pane keeps a stable accent tint. Groups separate by spacing, not lines. Session rows
+   one depth share a text axis. Idle session titles use the muted text role, and a merged row takes
+   the tone of its session. The row of the focused pane's agent keeps a stable accent tint; a
+   collapsed row that hides it carries the tint instead. Groups separate by spacing, not lines. Session rows
    with a title are two lines; this supersedes the earlier single-line session row. Reference:
    [`docs/ui/cockpit-sessions-tree.html`](../../docs/ui/cockpit-sessions-tree.html).
 

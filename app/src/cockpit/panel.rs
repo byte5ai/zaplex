@@ -428,8 +428,14 @@ fn kept_suffix_start(text: &str) -> Option<usize> {
     if text.chars().count() <= MIDDLE_CLIP_MIN_CHARS {
         return None;
     }
+    kept_suffix(text, MIN_KEPT_SEGMENT_CHARS)
+}
+
+/// The separator where a kept end of at least `min_chars` (and at most
+/// [`MAX_KEPT_SEGMENT_CHARS`]) characters starts.
+fn kept_suffix(text: &str, min_chars: usize) -> Option<usize> {
     let mut start = text.rfind(is_title_separator)?;
-    while text[start..].chars().count() < MIN_KEPT_SEGMENT_CHARS {
+    while text[start..].chars().count() < min_chars {
         start = text[..start].rfind(is_title_separator)?;
     }
     (start > 0 && text[start..].chars().count() <= MAX_KEPT_SEGMENT_CHARS).then_some(start)
@@ -455,6 +461,9 @@ enum TreeRowKind<'a> {
     Project {
         key: String,
         label: TreeLabel,
+        /// The state of its only session when the project row is that
+        /// session (merged); its title then takes the session's tone.
+        session_state: Option<SessionState>,
         expanded: bool,
         count: usize,
         has_waiting: bool,
@@ -601,10 +610,20 @@ fn split_title(title: &str, cut: Option<usize>) -> TreeLabel {
         PartTone::Dim,
         PartFit::Shrinks,
     )];
-    if rest.chars().count() <= MAX_KEPT_SEGMENT_CHARS {
-        parts.push(label_part(rest, PartTone::Title, PartFit::Fixed));
-    } else {
-        parts.extend(middle_clipped(rest, PartTone::Title));
+    // The distinguishing rest keeps at least MIN_DISTINCT_TAIL_CHARS fixed:
+    // whole when short, otherwise its end, with only the middle shrinking.
+    match kept_suffix(rest, MIN_DISTINCT_TAIL_CHARS)
+        .filter(|_| rest.chars().count() > MAX_KEPT_SEGMENT_CHARS)
+    {
+        Some(start) => {
+            parts.push(label_part(
+                &rest[..start],
+                PartTone::Title,
+                PartFit::Shrinks,
+            ));
+            parts.push(label_part(&rest[start..], PartTone::Title, PartFit::Fixed));
+        }
+        None => parts.push(label_part(rest, PartTone::Title, PartFit::Fixed)),
     }
     TreeLabel {
         parts,
@@ -676,6 +695,7 @@ fn project_tree_rows<'a>(
             kind: TreeRowKind::Project {
                 key: project_key,
                 label,
+                session_state: Some(only.state),
                 expanded: project_expanded,
                 count: only.agents.len(),
                 has_waiting: only.needs_me > 0,
@@ -701,6 +721,7 @@ fn project_tree_rows<'a>(
         kind: TreeRowKind::Project {
             key: project_key,
             label: TreeLabel::plain(project_name),
+            session_state: None,
             expanded: project_expanded,
             count: sessions.len(),
             has_waiting: sessions.iter().any(|session| session.needs_me > 0),
@@ -1410,6 +1431,7 @@ impl CockpitPanel {
             TreeRowKind::Project {
                 key,
                 label,
+                session_state,
                 expanded,
                 count,
                 has_waiting,
@@ -1417,6 +1439,7 @@ impl CockpitPanel {
             } => self.render_project_header(
                 key,
                 label,
+                *session_state,
                 *count,
                 *has_waiting,
                 *expanded,
@@ -1750,6 +1773,7 @@ impl CockpitPanel {
         &self,
         pkey: &str,
         label: &TreeLabel,
+        session_state: Option<SessionState>,
         count: usize,
         has_waiting: bool,
         expanded: bool,
@@ -1788,7 +1812,13 @@ impl CockpitPanel {
         let pkey_owned = pkey.to_string();
         let label = label.clone();
         Hoverable::new(handle, move |mouse| {
-            let name_color = if mouse.is_hovered() { main_c } else { muted_c };
+            // A project row reads as a muted group label; a merged row is its
+            // only session and takes that session's title tone instead.
+            let name_color = match session_state.map(title_tone) {
+                _ if mouse.is_hovered() => main_c,
+                Some(TitleTone::Active) => main_c,
+                Some(TitleTone::Quiet) | None => muted_c,
+            };
             let mut row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_spacing(6.0)
