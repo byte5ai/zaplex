@@ -258,8 +258,8 @@ pub struct CockpitPanel {
     /// Hover/click state and expansion overrides for the PTY Session level.
     conductor_session_states: HashMap<String, MouseStateHandle>,
     expanded_sessions: HashMap<String, bool>,
-    /// Tooltip hover state for a title whose shared prefix is shortened; keyed
-    /// by agent key (leaf rows) or session key (multi-agent rows).
+    /// Tooltip hover state for a row title; keyed by agent key (leaf rows),
+    /// session key (multi-agent rows), or project key (project rows).
     conductor_title_states: HashMap<String, MouseStateHandle>,
 }
 
@@ -273,29 +273,15 @@ fn project_key(host_ident: &str, project_root: &str) -> String {
     format!("{host_ident}\u{1f}{project_root}")
 }
 
-/// The branch-first label that identifies a session in the redesigned sidebar
-/// (spec §2.2): the session's own registry name if it has one, else its git
-/// branch, else its linked-worktree name, else the project + cwd basename. The
-/// **model is never** the identity — several parallel Opus agents differ by
-/// worktree/branch, not model.
-fn session_identity_label(session: &SessionSnapshot, project_name: &str) -> String {
-    if !session.name.is_empty() {
-        return session.name.clone();
-    }
-    if let Some(branch) = session.branch.as_deref().filter(|b| !b.is_empty()) {
-        return branch.to_string();
-    }
-    if let Some(worktree) = session.worktree.as_deref().filter(|w| !w.is_empty()) {
-        return worktree.to_string();
-    }
-    project_directory_label(project_name, &session.cwd)
+fn directory_name(cwd: &str) -> String {
+    Path::new(cwd)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| cwd.to_string())
 }
 
 fn project_directory_label(project_name: &str, cwd: &str) -> String {
-    let dir = Path::new(cwd)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| cwd.to_string());
+    let dir = directory_name(cwd);
     if project_name == dir.as_str() {
         project_name.to_string()
     } else if !project_name.is_empty() {
@@ -425,12 +411,6 @@ impl TreeLabel {
             full: text.to_string(),
         }
     }
-
-    /// Whether the visible title can differ from `full`, which then becomes
-    /// the tooltip.
-    fn can_shorten(&self) -> bool {
-        self.parts.len() > 1 || self.full.chars().count() > MIDDLE_CLIP_MIN_CHARS
-    }
 }
 
 fn label_part(text: &str, tone: PartTone, fit: PartFit) -> LabelPart {
@@ -517,11 +497,27 @@ fn is_title_separator(c: char) -> bool {
     matches!(c, '-' | '_' | '/' | '.' | ' ')
 }
 
-/// The title a session shows below its project (#505): its own identity, or
-/// `None` when that identity would only repeat the project's name.
+/// The branch-first title of a session in the tree (spec §2.2, #505): its own
+/// registry name, else its git branch, else its linked-worktree name, else its
+/// directory where that differs from the project. The **model is never** the
+/// identity — parallel agents on one model differ by worktree/branch. `None`
+/// when nothing beyond the project's name identifies the session; the title
+/// never repeats the project name.
 fn session_title(session: &SessionSnapshot, project_name: &str) -> Option<String> {
-    let label = session_identity_label(session, project_name);
-    (!label.trim().is_empty() && label != project_name).then_some(label)
+    let own = [
+        Some(session.name.as_str()),
+        session.branch.as_deref(),
+        session.worktree.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| !value.trim().is_empty())
+    .map(str::to_string);
+    let title = own.or_else(|| {
+        (project_directory_label(project_name, &session.cwd) != project_name)
+            .then(|| directory_name(&session.cwd))
+    })?;
+    (title != project_name).then_some(title)
 }
 
 /// Where a separator-bounded prefix shared by all sibling titles ends. The cut
@@ -872,8 +868,9 @@ impl CockpitPanel {
             .retain(|k, _| routable.contains(k));
         self.conductor_row_glyph_states
             .retain(|k, _| visible.contains(k));
-        self.conductor_title_states
-            .retain(|k, _| visible.contains(k) || session_keys.contains(k));
+        self.conductor_title_states.retain(|k, _| {
+            visible.contains(k) || session_keys.contains(k) || project_keys.contains(k)
+        });
         for key in routable {
             self.conductor_row_states.entry(key).or_default();
         }
@@ -900,7 +897,10 @@ impl CockpitPanel {
         self.expanded_projects
             .retain(|k, _| project_keys.contains(k));
         for key in project_keys {
-            self.conductor_project_states.entry(key).or_default();
+            self.conductor_project_states
+                .entry(key.clone())
+                .or_default();
+            self.conductor_title_states.entry(key).or_default();
         }
         self.conductor_session_states
             .retain(|key, _| session_keys.contains(key));
@@ -1155,8 +1155,8 @@ impl CockpitPanel {
         line.finish()
     }
 
-    /// A row title; when the visible title can be shorter than the full one,
-    /// the full title is the tooltip.
+    /// A row title with the full title as tooltip: any title can end up
+    /// shorter than its text in a narrow sidebar.
     fn tree_label(
         &self,
         label: &TreeLabel,
@@ -1166,9 +1166,6 @@ impl CockpitPanel {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let line = Self::label_parts(label, size, color, appearance);
-        if !label.can_shorten() {
-            return line;
-        }
         appearance.ui_builder().overlay_tool_tip_on_element(
             label.full.clone(),
             self.conductor_title_states
@@ -1778,6 +1775,11 @@ impl CockpitPanel {
             .get(pkey)
             .cloned()
             .unwrap_or_default();
+        let title_tooltip = self
+            .conductor_title_states
+            .get(pkey)
+            .cloned()
+            .unwrap_or_default();
         let pkey_owned = pkey.to_string();
         let label = label.clone();
         Hoverable::new(handle, move |mouse| {
@@ -1795,8 +1797,18 @@ impl CockpitPanel {
                 // the same text axis as the rows of its depth (#505).
                 .with_child(Self::empty_slot())
                 .with_child(
-                    Shrinkable::new(1.0, Self::label_parts(&label, body, name_color, appearance))
-                        .finish(),
+                    Shrinkable::new(
+                        1.0,
+                        appearance.ui_builder().overlay_tool_tip_on_element(
+                            label.full.clone(),
+                            title_tooltip,
+                            Self::label_parts(&label, body, name_color, appearance),
+                            ParentAnchor::TopMiddle,
+                            ChildAnchor::BottomMiddle,
+                            vec2f(0.0, -4.0),
+                        ),
+                    )
+                    .finish(),
                 );
             if let Some(count) = count {
                 let count_color = if count.attention {

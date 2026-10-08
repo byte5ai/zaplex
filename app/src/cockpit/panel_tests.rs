@@ -524,11 +524,9 @@ fn long_titles_shorten_in_the_middle_and_keep_their_end() {
             ("-step-2", PartFit::Fixed),
         ]
     );
-    assert!(label.can_shorten());
 
     // Short titles, and long ones without a short last segment, end-clip.
     assert_eq!(TreeLabel::plain("main").parts.len(), 1);
-    assert!(!TreeLabel::plain("main").can_shorten());
     assert_eq!(
         TreeLabel::plain("averyveryverylongbranchnamewithoutseparators")
             .parts
@@ -628,5 +626,20 @@ fn prefix_dimming_ignores_unrelated_siblings() {
     assert_eq!(
         split_title(titles[2], cuts[2]).parts.last().unwrap().text,
         "10-06-0900"
+    );
+}
+
+#[test]
+fn directory_title_never_repeats_the_project_name() {
+    let agents = [tree_agent(
+        "a",
+        "/work/proj/tools",
+        None,
+        SessionState::Active,
+    )];
+    assert_eq!(
+        local_project_rows("proj", &agents, true, None),
+        vec![(1, "leaf", "proj / tools".to_string(), false)],
+        "a distinct directory is the session title on its own"
     );
 }

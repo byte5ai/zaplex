@@ -277,7 +277,8 @@ depend on pixels:
 - expanded containers hide counts; collapsed containers show a count;
 - a collapsed count turns amber if it hides waiting attention;
 - session containers have hierarchy only, not a duplicated aggregate state glyph;
-- agent leaves render state glyph, provider, and optional model only;
+- agent leaves render state glyph, provider, and optional model only; managed-fleet agents (#168)
+  add the compact `◆` marker, whose details stay in the account pane;
 - the B+ display rule (#505) is the pure projection `project_tree_rows`: a project with exactly
   one PTY session becomes one row (`merged_label`: project name with `PartFit::Holds`, the
   session title dimmed after `MERGED_TITLE_GAP`); a single-agent PTY session among several is one
@@ -286,8 +287,9 @@ depend on pixels:
   `TreeLabel` parts: a separator-bounded prefix shared with at least one sibling is dimmed
   (`shared_prefix_cuts` over pairwise `shared_prefix_cut`, at least `MIN_DISTINCT_TAIL_CHARS`
   distinguishing characters), and a long title keeps its last segment fixed while the head
-  shrinks (`kept_suffix_start`, `MIDDLE_CLIP_MIN_CHARS`); `TreeLabel::can_shorten` attaches the
-  full title as tooltip. Parts, provider, and model are separated by spacing, never by glyphs;
+  shrinks (`kept_suffix_start`, `MIDDLE_CLIP_MIN_CHARS`); every row title, project rows included,
+  carries its full text as tooltip, because any title can clip in a narrow sidebar. A directory
+  title is the directory's own name, never `project — directory`. Parts, provider, and model are separated by spacing, never by glyphs;
 - every row reserves the chevron and glyph columns; idle titles use the muted text role
   (`title_tone`); the focused pane's session (workspace `ActiveSession::terminal_view_id` matched
   through `terminal_for_inventory_session`) keeps a stable accent tint (`style::tree_row`);
