@@ -85,7 +85,7 @@ PLANNED_TEST_ALIASES = {
     "does_not_run_on_session_opened_or_init_shell":
         "startup_command_does_not_run_on_session_opened_or_init_shell",
     "each_pane_owns_optional_compact_function_legend":
-        "each_pane_owns_optional_compact_function_legend_in_real_layout",
+        "each_pane_owns_its_function_legend_in_real_layout",
     "empty_host_is_rejected_everywhere": "empty_host_is_rejected_by_save_test_and_connect",
     "empty_path_maps_explicitly_home":
         "empty_remote_launch_directory_maps_explicitly_to_home",
@@ -138,7 +138,7 @@ PLANNED_TEST_ALIASES = {
     "pending_buffer_never_evicts_unacknowledged_startup":
         "pending_buffer_never_evicts_unacknowledged_startup_command",
     "pane_function_legend_drops_captions_before_overlap":
-        "pane_function_legend_keeps_required_actions_at_narrow_width",
+        "function_legend_wraps_rows_instead_of_hiding_captions",
     "project_session_and_launch_favorites_survive_menu_migration":
         "favorite_menu_migration_preserves_non_host_favorite_data",
     "pwsh_body_is_idempotent": "pwsh_bootstrap_body_is_delivered_idempotently",
