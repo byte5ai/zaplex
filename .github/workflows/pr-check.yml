@@ -529,7 +529,12 @@ jobs:
           protected_favorite_store_disables_stale_removal
           closing_new_session_menu_restores_focus_only_when_the_menu_owned_it
           empty_titles_use_known_cwd_and_retain_the_full_path
-          unknown_cwd_uses_an_honest_short_session_id_fallback
+          unknown_cwd_keeps_the_session_id_out_of_the_visible_title
+          connections_row_uses_pane_identity_for_locally_open_session
+          connections_row_marks_locally_open_session
+          sessions_open_here_come_first_and_the_rest_follow_by_most_recent_attach
+          last_opened_time_is_reported_in_coarse_honest_steps
+          inventory_rows_resolve_the_exact_daemon_pty_claim_identity
           normalized_agent_titles_are_preserved_with_known_cwd_in_the_tooltip
           stale_daemon_adoption_cannot_resolve_a_different_inventory_row
           test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled

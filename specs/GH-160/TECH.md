@@ -45,6 +45,21 @@ no state to the host row itself. The ordinary recovery list contains no buffer/R
 runtime diagnostics remain available in explicit connection details and use their real measurement
 name; an output/replay buffer must not be presented as total host RAM.
 
+Whether a listed native session is open in this window comes from the existing app-wide PTY claim
+registry (`app_state::daemon_pty_claim`), read only. Each inventory row maps to the claim identity
+the daemon terminal records when it claims its PTY: authenticated daemon host id, exact runtime
+filename and server version, PTY id and generation. A claim counts as open here only when it is
+bound to a live terminal view in the panel's window; provisional reservations and terminals in
+other windows do not. `SshManagerPanel::sync_local_session_panes` projects those claims to the
+owning pane's resolved title and tooltip, re-runs on inventory completion and remote-session
+lifecycle events, and subscribes to `PaneConfigurationEvent::TitleUpdated` of the owning panes so a
+directory change retitles the row. One ordering function (`ordered_daemon_sessions`) feeds both
+rendering and keyboard navigation: open-here sessions by title, then the rest by
+`last_attached_epoch_millis`. The open-here mark occupies the fixed 16 px indentation slot, so
+marked and unmarked rows keep one text axis; the open action keeps its slot and only its tooltip
+changes to “Show tab”. Other rows render the daemon identity plus a metadata line with the last
+attach time; the fallback identity is `Host · Terminal` with the session id in the tooltip only.
+
 The tab `+` menu in `app/src/workspace/view.rs` continues to query `FavoritesStore` and resolve its
 stable references against the SSH registry. Its first level lists favorite hosts only; the
 remaining registered hosts form the "More hosts" submenu of the shared launch menu

@@ -1797,7 +1797,7 @@ fn empty_titles_use_known_cwd_and_retain_the_full_path() {
 }
 
 #[test]
-fn unknown_cwd_uses_an_honest_short_session_id_fallback() {
+fn unknown_cwd_keeps_the_session_id_out_of_the_visible_title() {
     crate::i18n::init(Some("en"));
     for cwd in ["", "  "] {
         let session = SessionInfo {
@@ -1806,12 +1806,298 @@ fn unknown_cwd_uses_an_honest_short_session_id_fallback() {
             ..Default::default()
         };
         let identity = daemon_session_identity("devhost", &session);
+        assert_eq!(identity.short, "devhost · Terminal");
         assert_eq!(
-            identity.short,
-            "devhost · Session · \u{2068}12345678\u{2069}"
+            identity.full,
+            "devhost · Terminal\nSession ID: \u{2068}12345678-abcdef\u{2069}"
         );
-        assert_eq!(identity.full, identity.short);
     }
+}
+
+#[test]
+fn connections_row_uses_pane_identity_for_locally_open_session() {
+    crate::i18n::init(Some("en"));
+    let session = SessionInfo {
+        session_id: "12345678-abcdef".to_string(),
+        title: "Codex · release checks".to_string(),
+        cwd: "/srv/launch-directory".to_string(),
+        last_attached_epoch_millis: 1_000,
+        ..Default::default()
+    };
+    let pane = LocalSessionPane {
+        title: "devhost · api".to_string(),
+        tooltip: "devhost · /srv/services/api".to_string(),
+    };
+
+    let open_here = daemon_session_row("devhost", &session, Some(&pane), 7_200_000);
+    assert_eq!(open_here.identity.short, "devhost · api");
+    assert_eq!(
+        open_here.identity.full,
+        "devhost · /srv/services/api\nOpen in this window"
+    );
+    assert_eq!(open_here.metadata, None);
+    assert!(open_here.open_here);
+
+    let elsewhere = daemon_session_row("devhost", &session, None, 7_200_000);
+    assert_eq!(elsewhere.identity.short, "Codex · release checks");
+    assert_eq!(
+        elsewhere.metadata.as_deref(),
+        Some("last opened 1 hour ago")
+    );
+    assert!(!elsewhere.open_here);
+}
+
+#[test]
+fn sessions_open_here_come_first_and_the_rest_follow_by_most_recent_attach() {
+    let routed = |id: &str, last_attached_epoch_millis: u64| RoutedDaemonSession {
+        session: SessionInfo {
+            session_id: id.to_string(),
+            generation: 1,
+            last_attached_epoch_millis,
+            ..Default::default()
+        },
+        route: None,
+        host_id: None,
+        daemon_runtime: None,
+    };
+    let sessions = vec![
+        routed("never-attached", 0),
+        routed("older", 1_000),
+        routed("open-beta", 0),
+        routed("newer", 5_000),
+        routed("open-alpha", 9_000),
+    ];
+    let pane = |title: &str| LocalSessionPane {
+        title: title.to_string(),
+        tooltip: title.to_string(),
+    };
+    let local = HashMap::from([
+        (
+            session_row_key("devhost", &sessions[2].session, None),
+            pane("devhost · beta"),
+        ),
+        (
+            session_row_key("devhost", &sessions[4].session, None),
+            pane("devhost · Alpha"),
+        ),
+    ]);
+
+    let order: Vec<&str> = ordered_daemon_sessions("devhost", &sessions, &local)
+        .into_iter()
+        .map(|(_, routed)| routed.session.session_id.as_str())
+        .collect();
+
+    assert_eq!(
+        order,
+        [
+            "open-alpha",
+            "open-beta",
+            "newer",
+            "older",
+            "never-attached"
+        ]
+    );
+}
+
+#[test]
+fn last_opened_time_is_reported_in_coarse_honest_steps() {
+    crate::i18n::init(Some("en"));
+    let now = 30 * 86_400_000;
+    assert_eq!(last_opened_label(0, now), None);
+    assert_eq!(
+        last_opened_label(now - 59_000, now).as_deref(),
+        Some("last opened just now")
+    );
+    assert_eq!(
+        last_opened_label(now - 60_000, now).as_deref(),
+        Some("last opened 1 minute ago")
+    );
+    assert_eq!(
+        last_opened_label(now - 59 * 60_000, now).as_deref(),
+        Some("last opened \u{2068}59\u{2069} minutes ago")
+    );
+    assert_eq!(
+        last_opened_label(now - 3 * 3_600_000, now).as_deref(),
+        Some("last opened \u{2068}3\u{2069} hours ago")
+    );
+    assert_eq!(
+        last_opened_label(now - 2 * 86_400_000, now).as_deref(),
+        Some("last opened \u{2068}2\u{2069} days ago")
+    );
+    // A daemon clock ahead of the client never yields a future time.
+    assert_eq!(
+        last_opened_label(now + 60_000, now).as_deref(),
+        Some("last opened just now")
+    );
+}
+
+#[test]
+fn inventory_rows_resolve_the_exact_daemon_pty_claim_identity() {
+    let runtime = remote_server::transport::DaemonRuntimeRoute::new(
+        "server-v1.0.29.sock".to_string(),
+        "v1.0.29".to_string(),
+    )
+    .unwrap();
+    let routed = RoutedDaemonSession {
+        session: SessionInfo {
+            session_id: "pty-1".to_string(),
+            generation: 7,
+            ..Default::default()
+        },
+        route: None,
+        host_id: Some("daemon-a".to_string()),
+        daemon_runtime: Some(runtime),
+    };
+
+    assert_eq!(
+        daemon_pty_identity(&routed),
+        Some(DaemonPtyIdentity {
+            daemon_host_id: "daemon-a".to_string(),
+            runtime_filename: "server-v1.0.29.sock".to_string(),
+            server_version: "v1.0.29".to_string(),
+            pty_session_id: "pty-1".to_string(),
+            pty_generation: 7,
+        })
+    );
+    // Without the authenticated handshake identity no claim can match.
+    for host_id in [None, Some(String::new())] {
+        assert_eq!(
+            daemon_pty_identity(&RoutedDaemonSession {
+                host_id,
+                ..routed.clone()
+            }),
+            None
+        );
+    }
+}
+
+#[test]
+fn connections_row_marks_locally_open_session() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_singleton_model(FavoritesStore::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+
+        // The daemon happens to list the session open here last.
+        let sessions = [
+            SessionInfo {
+                session_id: "detached-pty".into(),
+                cwd: "/srv/worker".into(),
+                last_attached_epoch_millis: 1,
+                generation: 1,
+                ..Default::default()
+            },
+            SessionInfo {
+                session_id: "open-pty".into(),
+                generation: 2,
+                ..Default::default()
+            },
+        ];
+        let keys: Vec<String> = sessions
+            .iter()
+            .map(|session| session_row_key("fixture-host", session, None))
+            .collect();
+        let open_key = keys[1].clone();
+        let (window_id, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut panel = SshManagerPanel::new(ctx);
+            panel.set_nodes_for_test(vec![server("fixture-host", None, "build-node", 0)], ctx);
+            panel.resilient_hosts.insert("fixture-host".into());
+            panel.sessions_expanded.insert("fixture-host".into());
+            let generation = panel.begin_session_fetch("fixture-host").unwrap();
+            panel.complete_session_fetch(
+                "fixture-host",
+                generation,
+                Ok(
+                    crate::remote_server::session_inventory::HostSessionInventory {
+                        sessions: sessions
+                            .into_iter()
+                            .map(|session| RoutedDaemonSession {
+                                session,
+                                route: None,
+                                host_id: None,
+                                daemon_runtime: None,
+                            })
+                            .collect(),
+                        ..Default::default()
+                    },
+                ),
+                ctx,
+            );
+            // The claim projection needs a live terminal; supply its result.
+            panel.local_session_panes.insert(
+                open_key.clone(),
+                LocalSessionPane {
+                    title: "build-node · api".into(),
+                    tooltip: "build-node · /srv/api".into(),
+                },
+            );
+            panel.sync_session_open_actions("fixture-host", ctx);
+            panel
+        });
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let invalidation = WindowInvalidation {
+            updated: app.read(|ctx| ctx.view_ids_for_window(window_id).into_iter().collect()),
+            ..Default::default()
+        };
+        app.update(|ctx| {
+            presenter.borrow_mut().invalidate(invalidation, ctx);
+            presenter
+                .borrow_mut()
+                .build_scene(vec2f(320.0, 800.0), 1.0, None, ctx);
+        });
+        let position = |key: &str, part: &str| {
+            presenter
+                .borrow()
+                .position_cache()
+                .get_position(&format!("ssh-manager-session:{key}:{part}"))
+        };
+        let open_title = position(&keys[1], "title").expect("open-here title");
+        let detached_title = position(&keys[0], "title").expect("detached title");
+        assert!(
+            open_title.max_y() <= detached_title.min_y(),
+            "the session open here is listed first"
+        );
+        assert!(
+            (open_title.min_x() - detached_title.min_x()).abs() < 0.5,
+            "marked and unmarked rows share one text axis"
+        );
+        let mark = position(&keys[1], "open-here").expect("open-here mark");
+        let open_row = position(&keys[1], "row").expect("open-here row");
+        assert!(
+            mark.min_x() >= open_row.min_x()
+                && mark.max_x() <= open_title.min_x() + 0.5
+                && mark.min_y() >= open_row.min_y()
+                && mark.max_y() <= open_row.max_y(),
+            "the mark sits in its own row, before the title"
+        );
+        assert!(position(&keys[0], "open-here").is_none());
+        assert!(position(&keys[1], "metadata").is_none());
+        assert!(
+            position(&keys[0], "metadata").is_some(),
+            "a session not open here keeps its metadata line"
+        );
+
+        panel.read(&app, |panel, _| {
+            let order: Vec<FocusedRow> = panel
+                .session_navigation_rows("fixture-host")
+                .into_iter()
+                .map(|(row, _)| row)
+                .collect();
+            assert_eq!(
+                order,
+                vec![
+                    FocusedRow::Session(keys[1].clone()),
+                    FocusedRow::Session(keys[0].clone())
+                ],
+                "keyboard order must follow the visible order"
+            );
+            assert!(panel.session_open_actions[&keys[1]].0);
+            assert!(!panel.session_open_actions[&keys[0]].0);
+        });
+    });
 }
 
 #[test]

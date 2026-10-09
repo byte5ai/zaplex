@@ -62,6 +62,17 @@ The previous static illustrations are superseded, not alternative approved layou
    explicit connection details under their measured name; an output buffer is never labelled as
    total host RAM.
 
+   A session that a pane in this window holds shows exactly that pane's title (the pane and tab
+   identity of #33) and an accent mark in the fixed indentation slot before the title, with “Open
+   in this window” in its tooltip and accessible name; clicking it shows that tab. Every other
+   session (detached, orphaned, or open in another window or on another device) shows the identity
+   the daemon reports, with a fixed metadata line below it. That line carries only what the daemon
+   reports truthfully today: the time of its last attach (“last opened …”). Detached-since and
+   expiry belong in the same line once #508 and #510 provide them. Sessions open here come first,
+   ordered by title; the others follow by most recent attach, and keyboard navigation uses the same
+   order. Without any pane or daemon identity the row reads `Host · Terminal` like a pane without a
+   known directory; the session id appears only in the tooltip, never in the visible title (#509).
+
 3. **Favorites project into the tab `+` menu.** The menu reads stable host references from the
    Connections registry. Its first level shows favorite hosts only; every other registered host
    appears only in the "More hosts" submenu (#32). Clicking the host label connects exactly
