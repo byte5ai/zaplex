@@ -657,3 +657,20 @@ or kdialog: without a dialog provider the diagnostic remains on stderr/in the lo
 still exits safely. Native visibility is therefore not guaranteed on such installations.
 This change covers database initialization failures; existing read-state and writer-start
 degradation paths are unchanged.
+
+## Pane-Identität im Dateimanager-Modus und bei Hostwechsel (#461)
+
+Alle Pane-Titel laufen über `terminal::view::terminal_identity(host, cwd, fallback)`; die Signatur bleibt unverändert, weitere Konsumenten (Sessionliste unter Verbindungen) nutzen sie weiter.
+
+**Dateimanager.** `SftpBrowserView` bindet beim Erzeugen wie eine Terminal-Pane ein Hostlabel in `PaneConfiguration::terminal_identity_host`: lokal `cockpit-spawn-card-host-local`, remote `SshServerInfo.host` des Registry-Knotens (dasselbe Feld, das `bind_ssh_pane_node` für Terminal-Panes bindet), ersatzweise der Knotenname, sonst `terminal-remote-session-label`. Nach jeder installierten Verzeichnisliste setzt `update_pane_identity` die Identität aus Hostlabel und `current_path` über `PaneConfiguration::set_terminal_identity`. Lokal schreibt sie das Home-Verzeichnis wie das Terminal als `~` (`user_friendly_path`); das entfernte Home kennt der Dateimanager nicht, remote bleibt der Pfad absolut. Die Kopfzeile liest den aufgelösten Titel der Konfiguration, damit die Kollisionsauflösung sichtbar bleibt. `PaneGroup::refresh_terminal_titles` nimmt sichtbare Dateimanager-Panes mit ihrer eigenen Identität auf. Als Suffix-Schlüssel dient bei einer temporären Ersetzung die persistente Session der verdeckten Terminal-Pane; ein eigenständiger Dateimanager hat keine persistente Session und nutzt seine Pane-ID, sein Suffix ist daher nur innerhalb eines Laufs stabil. Die Schlüssel `fm-title-sftp` und `sftp-local-file-manager-title` entfallen. Die volle Host-/Pfadangabe bleibt über die Breadcrumb-Leiste erreichbar; die Standard-Kopfzeile hat keinen Tooltip-Platz.
+
+**Hostwechsel.** `TerminalView::identity_host_and_directory` (`terminal/view/pane_impl.rs`) leitet Host und Verzeichnis aus vorhandenen Signalen ab, ohne eigenen Detektor:
+
+1. Keine aktive gebootstrappte Session, oder eine klassische SSH-Pane, deren eigene Verbindung noch nicht bootstrappte (`classic_ssh_root_session_id` und `remote_input_session_id` leer): gebundenes Label bzw. `Lokal`.
+2. Langlaufender Vordergrundbefehl, den `parse_interactive_ssh_command` (Zaplexify-Erkennung, Alias aufgelöst) als interaktives SSH erkennt: `terminal-remote-session-label` ohne Verzeichnis.
+3. Aktive Session ist die eigene Shell der Pane, nach derselben Prüfung wie die Verzeichnisübergabe des Dateimanagers (`file_manager_session_matches_target`): Daemon-Wurzel, `classic_ssh_root_session_id` bzw. lokale Shell ohne Subshell. Dann gilt das gebundene Label bzw. `Lokal`.
+4. Sonst lokale Session: `Lokal`; Remote-Session: ihr beim Bootstrap gemeldeter `hostname` (leer: `terminal-remote-session-label`). Hostnamen werden nicht auf das gebundene Label abgebildet, weil verschiedene Maschinen denselben Hostnamen tragen können.
+
+Auslöser sind die vorhandenen Stellen: Session-Bootstrap, Beginn und Ende langlaufender Blöcke und die Precmd-Metadaten. Diese lösen jetzt auch bei Sessionwechsel mit gleichem Verzeichnis aus.
+
+Tests: `pane_identity_follows_the_shell_across_a_manual_ssh_hop_and_exit`, `bound_host_names_only_the_panes_own_shell` (Terminal-View) und `file_manager_mode_keeps_the_host_and_directory_identity` (Workspace) laufen im gebündelten ci-batch über `pr-check.yml`.

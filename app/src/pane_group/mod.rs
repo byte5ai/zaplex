@@ -7045,10 +7045,25 @@ impl PaneGroup {
             .into_iter()
             .filter_map(|pane_id| {
                 let owner = self.panes.pane_configuration_owner(pane_id);
-                let terminal = self.downcast_pane_by_id::<TerminalPane>(owner)?;
-                let configuration = terminal.pane_configuration();
+                let terminal = self.downcast_pane_by_id::<TerminalPane>(owner);
+                // A file manager shows its own `host · directory`. Over a terminal
+                // it keeps that terminal's persistent session as its suffix key;
+                // a standalone one has no persistent session, only its pane.
+                let (configuration, session) = match self.downcast_pane_by_id::<SftpPane>(pane_id) {
+                    Some(file_manager) => (
+                        file_manager.pane_configuration(),
+                        terminal.map_or_else(
+                            || pane_id.to_string().into_bytes(),
+                            TerminalPane::session_uuid,
+                        ),
+                    ),
+                    None => {
+                        let terminal = terminal?;
+                        (terminal.pane_configuration(), terminal.session_uuid())
+                    }
+                };
                 let (short, full) = configuration.as_ref(ctx).terminal_identity()?.clone();
-                Some((configuration, (terminal.session_uuid(), short, full)))
+                Some((configuration, (session, short, full)))
             })
             .collect();
         let identities: Vec<_> = terminals

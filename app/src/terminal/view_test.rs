@@ -143,6 +143,141 @@ fn cli_agent_summary_does_not_replace_terminal_host_identity() {
     });
 }
 
+/// Delivers a real precmd metadata event and returns the pane title it leaves.
+fn pane_title_after_prompt(
+    app: &mut App,
+    terminal: &ViewHandle<TerminalView>,
+    session: SessionId,
+    directory: &str,
+) -> String {
+    let directory = directory.to_string();
+    terminal.update(&mut *app, |view, ctx| {
+        let block_index = view.model.lock().block_list().active_block().index();
+        view.model_event_dispatcher().update(ctx, |_, ctx| {
+            ctx.emit(ModelEvent::BlockMetadataReceived(
+                crate::terminal::event::BlockMetadataReceivedEvent {
+                    block_metadata: BlockMetadata::new(Some(session), Some(directory)),
+                    block_index,
+                    is_after_in_band_command: false,
+                    is_done_bootstrapping: false,
+                },
+            ));
+        });
+    });
+    terminal.read(&*app, |view, ctx| {
+        view.pane_configuration.as_ref(ctx).title().to_owned()
+    })
+}
+
+#[test]
+fn pane_identity_follows_the_shell_across_a_manual_ssh_hop_and_exit() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let local = SessionId::from(9201u64);
+        let hop = SessionId::from(9202u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(SessionInfo::new_for_test().with_id(local));
+                sessions.register_session_for_test(
+                    SessionInfo::new_for_test()
+                        .with_id(hop)
+                        .with_session_type(BootstrapSessionType::ZaplexifiedRemote)
+                        .with_hostname("worknode".to_string()),
+                );
+            });
+        });
+
+        assert_eq!(
+            pane_title_after_prompt(&mut app, &terminal, local, "/srv/api"),
+            "Local · api"
+        );
+        // Same directory string, another shell: the hop alone must rename the pane.
+        assert_eq!(
+            pane_title_after_prompt(&mut app, &terminal, hop, "/srv/api"),
+            "worknode · api"
+        );
+        assert_eq!(
+            pane_title_after_prompt(&mut app, &terminal, local, "/srv/api"),
+            "Local · api"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            // An ssh whose remote shell never bootstraps reports no host and no
+            // directory; the pane must not keep claiming the local one.
+            view.model
+                .lock()
+                .simulate_long_running_block("ssh build.example.test", "");
+            view.maybe_emit_terminal_view_state_changed_for_long_running_block(ctx);
+            assert_eq!(
+                view.pane_configuration.as_ref(ctx).title(),
+                "Remote session · Terminal"
+            );
+
+            view.model.lock().finish_block();
+            view.update_pane_configuration(ctx);
+            assert_eq!(view.pane_configuration.as_ref(ctx).title(), "Local · api");
+        });
+    });
+}
+
+#[test]
+fn bound_host_names_only_the_panes_own_shell() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let local = SessionId::from(9301u64);
+        let root = SessionId::from(9302u64);
+        let hop = SessionId::from(9303u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.register_session_for_test(SessionInfo::new_for_test().with_id(local));
+                for (id, hostname) in [(root, "ip-10-0-0-5"), (hop, "worknode")] {
+                    sessions.register_session_for_test(
+                        SessionInfo::new_for_test()
+                            .with_id(id)
+                            .with_session_type(BootstrapSessionType::ZaplexifiedRemote)
+                            .with_hostname(hostname.to_string()),
+                    );
+                }
+            });
+            view.pane_configuration.update(ctx, |configuration, ctx| {
+                configuration
+                    .set_terminal_identity_host(Some("build.example.test".to_string()), ctx);
+            });
+        });
+
+        // Until the pane's own ssh bootstraps, its local shell carries that connection.
+        assert_eq!(
+            pane_title_after_prompt(&mut app, &terminal, local, "/home/dev"),
+            "build.example.test · dev"
+        );
+        terminal.update(&mut app, |view, _| {
+            view.classic_ssh_root_session_id = Some(root);
+        });
+        // The pane's own shell keeps the bound label, not its raw hostname.
+        assert_eq!(
+            pane_title_after_prompt(&mut app, &terminal, root, "/srv/api"),
+            "build.example.test · api"
+        );
+        assert_eq!(
+            pane_title_after_prompt(&mut app, &terminal, hop, "/srv/api"),
+            "worknode · api"
+        );
+        assert_eq!(
+            pane_title_after_prompt(&mut app, &terminal, root, "/srv/api"),
+            "build.example.test · api"
+        );
+        // `exit` out of the pane's own ssh leaves the local shell.
+        assert_eq!(
+            pane_title_after_prompt(&mut app, &terminal, local, "/home/dev"),
+            "Local · dev"
+        );
+    });
+}
+
 #[test]
 fn classic_ssh_phase_updates_are_allowed_only_while_unbound() {
     let daemon_session = warp_core::SessionId::from(41u64);

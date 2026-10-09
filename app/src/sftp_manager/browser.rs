@@ -16,6 +16,7 @@ use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
+use crate::terminal::view::terminal_identity;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 use instant::Instant;
@@ -1074,26 +1075,36 @@ pub struct SftpBrowserView {
     pick_resolved: bool,
 }
 
-/// The display name of an SSH registry node, for the tab title.
+/// The host label of an SSH registry node, for the pane and tab title.
 ///
-/// Read from the registry rather than carried in: the browser is opened from
-/// several places, and a name threaded through each of them is a name that can
-/// be threaded through wrong. `None` when the node is gone or the registry can't
-/// be read — the caller then shows a generic title instead of an empty one.
-fn host_name_for_node(node_id: &str) -> Option<String> {
+/// Terminal panes on a node are labelled with its SSH host, so the file manager
+/// uses the same field and both read as the same machine; the node's display
+/// name only stands in when no host is configured. Read from the registry
+/// rather than carried in: the browser is opened from several places, and a
+/// name threaded through each of them is a name that can be threaded through
+/// wrong. `None` when the node is gone or the registry can't be read — the
+/// caller then shows a generic label instead of an empty one.
+fn host_label_for_node(node_id: &str) -> Option<String> {
     if node_id.is_empty() {
         return None;
     }
-    warp_ssh_manager::with_conn(|c| Ok(warp_ssh_manager::SshRepository::list_nodes(c)?))
-        .ok()?
-        .into_iter()
-        .find(|n| n.id == node_id)
-        // A blank name is not a title. The editor rejects one, but the
-        // repository takes any string, so an entry written another way could
-        // hand back "" — and `Some("")` would beat the fallback and leave an
-        // empty tab.
-        .map(|n| n.name)
-        .filter(|n| !n.trim().is_empty())
+    warp_ssh_manager::with_conn(|c| {
+        if let Some(server) = SshRepository::get_server(c, node_id)? {
+            if !server.host.trim().is_empty() {
+                return Ok(Some(server.host));
+            }
+        }
+        Ok(SshRepository::list_nodes(c)?
+            .into_iter()
+            .find(|n| n.id == node_id)
+            .map(|n| n.name))
+    })
+    .ok()
+    .flatten()
+    // A blank name is not a label. The editor rejects one, but the repository
+    // takes any string, so an entry written another way could hand back "" —
+    // and `Some("")` would beat the fallback and leave an empty host.
+    .filter(|label| !label.trim().is_empty())
 }
 
 impl SftpBrowserView {
@@ -1123,20 +1134,52 @@ impl SftpBrowserView {
             .retain(|path, _| visible.contains(path));
     }
 
+    /// Bind the host this pane browses, like a terminal pane's bound host.
+    fn set_identity_host(&self, host: String, ctx: &mut ViewContext<Self>) {
+        self.pane_configuration.update(ctx, |configuration, ctx| {
+            configuration.set_terminal_identity_host(Some(host), ctx);
+        });
+        self.update_pane_identity(ctx);
+    }
+
+    /// Name this pane like a terminal pane on the same host, `host · directory`,
+    /// through the shared terminal identity rule: two file managers in a
+    /// multi-host tab stay distinguishable, and the pane group disambiguates
+    /// real collisions the same way it does for terminals.
+    fn update_pane_identity(&self, ctx: &mut ViewContext<Self>) {
+        let path = self.current_path.display().to_string();
+        // Write the directory like a local terminal does (`~` for home), so both
+        // modes of a pane name it alike. A remote home is not known here.
+        let home = self.node_id.is_empty().then(dirs::home_dir).flatten();
+        let path =
+            warp_util::path::user_friendly_path(&path, home.as_deref().and_then(Path::to_str))
+                .into_owned();
+        self.pane_configuration.update(ctx, |configuration, ctx| {
+            let host = configuration
+                .terminal_identity_host()
+                .unwrap_or_default()
+                .to_owned();
+            let identity =
+                terminal_identity(&host, Some(&path), &crate::t!("sftp-file-manager-title"));
+            configuration.set_terminal_identity(identity.short, identity.full, ctx);
+        });
+    }
+
     /// Create a new SFTP browser view, opened at `start_path` (the remote
     /// shell's cwd) when known, else the host root `/`.
     pub fn new(node_id: String, start_path: Option<PathBuf>, ctx: &mut ViewContext<Self>) -> Self {
-        // The tab keeps saying which HOST this is; that it happens to be showing
-        // files rather than a shell is the pane's own obvious business (spec v3
-        // FM). Titling it "File Manager" dropped the host entirely — with two
-        // browsers open you could not tell which machine either was on, which is
-        // the one thing a tab title has to answer here.
+        // The pane and tab keep saying which HOST this is; that it happens to be
+        // showing files rather than a shell is the pane's own obvious business
+        // (spec v3 FM). Titling it "File Manager" dropped the host entirely — with
+        // two browsers open you could not tell which machine either was on, which
+        // is the one thing a title has to answer here.
         //
         // A host whose registry entry has gone (deleted while open) falls back to
-        // the generic title rather than a blank tab.
-        let title = host_name_for_node(&node_id)
-            .unwrap_or_else(|| crate::t!("sftp-file-manager-title").to_string());
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(title));
+        // the generic remote label rather than a blank host.
+        let host = host_label_for_node(&node_id)
+            .unwrap_or_else(|| crate::t!("terminal-remote-session-label").to_string());
+        let pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("sftp-file-manager-title")));
         let rename_editor = make_editor(&crate::t!("fm-rename-placeholder"), ctx);
         let new_folder_editor = make_editor(&crate::t!("fm-folder-name-placeholder"), ctx);
         let search_editor = make_editor(&crate::t!("fm-search-placeholder"), ctx);
@@ -1232,6 +1275,7 @@ impl SftpBrowserView {
             pick_resolved: false,
         };
         me.sync_breadcrumb_mouse_handles();
+        me.set_identity_host(host, ctx);
 
         // Subscribe to rename editor events
         let rename_editor_handle = me.rename_editor.clone();
@@ -1344,8 +1388,8 @@ impl SftpBrowserView {
         // `None` start_path: `new_local` sets `current_path`/`path_history` from
         // its own `start_path` below, so `new`'s value would be overwritten.
         let mut me = Self::new(String::new(), None, ctx);
-        me.pane_configuration = ctx
-            .add_model(|_ctx| PaneConfiguration::new(crate::t!("sftp-local-file-manager-title")));
+        me.pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("sftp-file-manager-title")));
         let backend = Arc::new(
             crate::sftp_manager::sftp_backend::InMemorySftpBackend::for_local_filesystem(),
         ) as Arc<dyn SftpBackend>;
@@ -1356,6 +1400,8 @@ impl SftpBrowserView {
         me.path_history = vec![start_path];
         me.history_index = 0;
         me.sync_breadcrumb_mouse_handles();
+        // Same host label as a local terminal pane.
+        me.set_identity_host(crate::t!("cockpit-spawn-card-host-local").to_string(), ctx);
         me.refresh_dir(ctx);
         me
     }
@@ -1433,11 +1479,7 @@ impl SftpBrowserView {
             }
             Err(_) => {}
         }
-        let path = self.current_path.display();
-        let title = crate::t!("fm-title-sftp", path = path.to_string());
-        self.pane_configuration.update(ctx, |config, ctx| {
-            config.set_title(title, ctx);
-        });
+        self.update_pane_identity(ctx);
         self.publish_to_registry(ctx);
         ctx.notify();
     }
@@ -1935,11 +1977,7 @@ impl SftpBrowserView {
         };
 
         if installed {
-            let path = self.current_path.display();
-            let title = crate::t!("fm-title-sftp", path = path.to_string());
-            self.pane_configuration.update(ctx, |config, ctx| {
-                config.set_title(title, ctx);
-            });
+            self.update_pane_identity(ctx);
             self.publish_to_registry(ctx);
         }
         if navigation_commit_needs_snapshot(commits_navigation, installed) {
@@ -7115,11 +7153,10 @@ impl BackingView for SftpBrowserView {
     fn render_header_content(
         &self,
         _ctx: &view::HeaderRenderContext<'_>,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> view::HeaderContent {
-        let path = self.current_path.display();
-        let title = crate::t!("fm-title-sftp", path = path.to_string());
-        view::HeaderContent::simple(title)
+        // The configured title carries the pane group's collision disambiguation.
+        view::HeaderContent::simple(self.pane_configuration.as_ref(app).title().to_owned())
     }
 
     /// Set the focus handle

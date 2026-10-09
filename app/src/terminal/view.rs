@@ -11101,6 +11101,13 @@ impl TerminalView {
                     .as_ref()
                     .and_then(BlockMetadata::current_working_directory)
                     != block_metadata.current_working_directory();
+                // A manual `ssh` hop or an `exit` back moves the prompt to another
+                // shell session, possibly with the same directory string.
+                let session_changed = self
+                    .active_block_metadata
+                    .as_ref()
+                    .and_then(BlockMetadata::session_id)
+                    != block_metadata.session_id();
 
                 if let Some(prev_block_metadata) = self.active_block_metadata.take() {
                     // Only send event to save app state when the block is post bootstrap
@@ -11251,9 +11258,9 @@ impl TerminalView {
                     ctx.notify();
                 });
 
-                // The precmd metadata is the first signal of a `cd`; the pane identity
-                // must not wait for an OSC title or the next block.
-                if working_directory_changed {
+                // The precmd metadata is the first signal of a `cd` or a host change;
+                // the pane identity must not wait for an OSC title or the next block.
+                if working_directory_changed || session_changed {
                     self.update_pane_configuration(ctx);
                 }
             }

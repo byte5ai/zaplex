@@ -16,10 +16,12 @@ use crate::pane_group::pane::view::header::components::{
 };
 use crate::pane_group::pane::PaneStack;
 use crate::pane_group::{pane::view, pane::view::PaneHeaderAction, BackingView, SplitPaneState};
+use crate::terminal::model::session::Session;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::shared_session::participant_avatar_view::render_participants_and_role_elements;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
 use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::ssh::util::parse_interactive_ssh_command;
 use crate::terminal::TerminalManager;
 use crate::terminal::TerminalView;
 use crate::ui_components::blended_colors;
@@ -93,15 +95,10 @@ impl TerminalView {
 
     /// Keep automatic terminal chrome tied to its host and directory.
     pub(crate) fn update_pane_configuration(&mut self, ctx: &mut ViewContext<Self>) {
-        let identity_host = self
-            .pane_configuration
-            .as_ref(ctx)
-            .terminal_identity_host()
-            .map(str::to_owned)
-            .unwrap_or_else(|| crate::t!("cockpit-spawn-card-host-local").to_string());
+        let (identity_host, working_directory) = self.identity_host_and_directory(ctx);
         let identity = super::tab_metadata::terminal_identity(
             &identity_host,
-            self.display_working_directory(ctx).as_deref(),
+            working_directory.as_deref(),
             &crate::t!("workspace-new-session-terminal"),
         );
         // OSC titles and agent summaries describe activity, not pane identity.
@@ -115,6 +112,71 @@ impl TerminalView {
             pane_config.notify_header_content_changed(ctx);
         });
         self.update_agent_view_pane_header(ctx);
+    }
+
+    /// The host and directory the pane identity names.
+    ///
+    /// Zaplex binds a host label when it opens or restores a remote pane. That
+    /// label holds while the active shell is provably the pane's own shell on
+    /// that host, by the same proof the file manager uses before it hands a
+    /// directory back. A manual `ssh` hop or an `exit` back moves the prompt to
+    /// another bootstrapped session, which names its own host.
+    fn identity_host_and_directory(&self, ctx: &AppContext) -> (String, Option<String>) {
+        let local_host = || crate::t!("cockpit-spawn-card-host-local").to_string();
+        let bound_host = self
+            .pane_configuration
+            .as_ref(ctx)
+            .terminal_identity_host()
+            .map(str::to_owned);
+        let directory = self.display_working_directory(ctx);
+        // Until this pane's own classic ssh connection bootstraps, its local
+        // shell only carries that connection; the bound host is what Zaplex knows.
+        let awaiting_own_ssh = bound_host.is_some()
+            && self.remote_input_session_id.is_none()
+            && self.classic_ssh_root_session_id.is_none();
+        let Some(session) = self
+            .active_block_session_id()
+            .and_then(|id| self.sessions.as_ref(ctx).get(id))
+            .filter(|_| !awaiting_own_ssh)
+        else {
+            return (bound_host.unwrap_or_else(local_host), directory);
+        };
+        if self.is_running_unbootstrapped_ssh(&session) {
+            // No shell integration reports where this ssh landed: name neither a
+            // host nor the directory it was started from.
+            return (crate::t!("terminal-remote-session-label").to_string(), None);
+        }
+        if self.file_manager_session_matches_target(bound_host.is_none(), ctx) {
+            return (bound_host.unwrap_or_else(local_host), directory);
+        }
+        if session.is_local() {
+            return (local_host(), directory);
+        }
+        let hostname = session.hostname().trim();
+        let host = if hostname.is_empty() {
+            crate::t!("terminal-remote-session-label").to_string()
+        } else {
+            hostname.to_owned()
+        };
+        (host, directory)
+    }
+
+    /// Whether the foreground command is an interactive ssh whose remote shell
+    /// has not bootstrapped, by the detection that offers Zaplexify (aliases
+    /// expanded). Once the remote shell bootstraps, its own session takes over.
+    fn is_running_unbootstrapped_ssh(&self, session: &Session) -> bool {
+        if !self.is_long_running() {
+            return false;
+        }
+        let command = self
+            .model
+            .lock()
+            .block_list()
+            .active_block()
+            .command_to_string();
+        let expanded = super::command_first_word_and_suffix(&command)
+            .and_then(|(word, rest)| Some(format!("{}{rest}", session.alias_value(word)?)));
+        parse_interactive_ssh_command(expanded.as_deref().unwrap_or(&command)).is_some()
     }
 
     /// Updates the pane header's shareable object based on agent view state.
