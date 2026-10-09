@@ -6707,6 +6707,72 @@ fn file_manager_round_trip_does_not_revalidate_an_old_split_target() {
     });
 }
 
+fn pane_title(group: &PaneGroup, pane_id: PaneId, ctx: &AppContext) -> String {
+    group
+        .pane_by_id(pane_id)
+        .unwrap()
+        .pane_configuration()
+        .as_ref(ctx)
+        .title()
+        .to_owned()
+}
+
+#[test]
+fn file_manager_mode_keeps_the_host_and_directory_identity() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("one").join("api");
+        let second = root.path().join("two").join("api");
+        for directory in [&first, &second] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = workspace.active_tab_pane_group().clone();
+            group.update(ctx, |group, ctx| {
+                let shell = group.focused_pane_id(ctx);
+                let neighbor: PaneId = group
+                    .add_terminal_pane_ignoring_default_session_mode(Direction::Right, None, ctx)
+                    .into();
+
+                group.open_file_manager_in_place(
+                    shell,
+                    crate::pane_group::FileManagerTarget::Local {
+                        start_path: first.clone(),
+                    },
+                    ctx,
+                );
+                let first_manager = group.focused_pane_id(ctx);
+                assert_eq!(pane_title(group, first_manager, ctx), "Local · api");
+                assert_eq!(group.display_title(ctx), "Local · api");
+
+                // A second file manager on the same host and basename is a real
+                // collision: both expose their full path, the tab follows focus.
+                group.open_file_manager_in_place(
+                    neighbor,
+                    crate::pane_group::FileManagerTarget::Local {
+                        start_path: second.clone(),
+                    },
+                    ctx,
+                );
+                let second_manager = group.focused_pane_id(ctx);
+                let first_full = format!("Local · {}", first.display());
+                let second_full = format!("Local · {}", second.display());
+                assert_eq!(pane_title(group, first_manager, ctx), first_full);
+                assert_eq!(pane_title(group, second_manager, ctx), second_full);
+                assert_eq!(group.display_title(ctx), second_full);
+
+                // Leaving file manager mode ends the collision.
+                group.close_pane(second_manager, ctx);
+                assert_eq!(pane_title(group, first_manager, ctx), "Local · api");
+            });
+        });
+    });
+}
+
 #[test]
 fn hiding_and_showing_a_neighbor_invalidates_captured_split_layouts() {
     App::test((), |mut app| async move {

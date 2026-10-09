@@ -449,6 +449,9 @@ jobs:
           stale_connection_retry_does_not_restart_an_in_flight_or_connected_browser
           running_command_keeps_host_identity_in_pane_chrome
           cli_agent_summary_does_not_replace_terminal_host_identity
+          pane_identity_follows_the_shell_across_a_manual_ssh_hop_and_exit
+          bound_host_names_only_the_panes_own_shell
+          file_manager_mode_keeps_the_host_and_directory_identity
           confirm_payload_carries_local_selection
           confirm_payload_routes_remote_launch_to_node_id
           confirm_payload_none_when_nothing_installed
