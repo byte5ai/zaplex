@@ -954,7 +954,15 @@ fn transfer_targets_name_the_user_the_connection_authenticates_as() {
         .unwrap()
         .unwrap();
 
-    let (name, detail) = registry_host_identity(&mut conn, &server);
-    assert_eq!(name, "edge");
-    assert_eq!(detail, "deploy@edge.example.com:2222");
+    assert_eq!(
+        registry_login_identity(&mut conn, &server),
+        "deploy@edge.example.com:2222"
+    );
+    // Like the pane header: the SSH host, the node's name only without one.
+    assert_eq!(server_host_label(&mut conn, &server), "edge.example.com");
+    let without_host = SshServerInfo {
+        host: String::new(),
+        ..server
+    };
+    assert_eq!(server_host_label(&mut conn, &without_host), "edge");
 }

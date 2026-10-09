@@ -517,10 +517,11 @@ pub fn file_manager_layout() -> TestStep {
                 return AssertionOutcome::failure("Actual local fixture files are not visible in both panes".into());
             }
             // Each pane is the other's sole visible counterpart, so each footer
-            // names the other pane's directory before F5/F6 run.
+            // names the other pane's directory before F5/F6 run. Each fixture
+            // directory has a unique name; a home prefix may read as `~`.
             let directories = browsers
                 .iter()
-                .map(|browser| browser.read(app, |view, _| view.current_path.display().to_string()))
+                .map(|browser| browser.read(app, |view, _| view.current_path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()))
                 .collect::<Vec<_>>();
             for (index, browser) in browsers.iter().enumerate() {
                 let text = browser.read(app, |view, ctx| view.transfer_target_text(ctx));

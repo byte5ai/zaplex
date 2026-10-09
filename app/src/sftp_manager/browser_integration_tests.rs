@@ -5466,7 +5466,9 @@ fn transfer_targets_name_the_host_not_the_registry_id() {
                 "registry id leaked: {}",
                 row.label
             );
-            assert!(row.label.contains(&crate::t!("fm-label-remote-host")));
+            assert!(row
+                .label
+                .contains(&crate::t!("terminal-remote-session-label")));
             assert!(row.label.contains("/right"));
         }
     });

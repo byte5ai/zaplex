@@ -1030,12 +1030,13 @@ pub struct SftpBrowserView {
     /// Process-unique id for the cross-pane file-manager registry (F5/F6
     /// copy/move target discovery).
     fm_id: u64,
-    /// How transfer targets name this pane's host. Resolved at creation and
-    /// on each established connection, which also starts a new route epoch, so
-    /// a descriptor never changes under a pending transfer.
+    /// The host label transfer targets show, the same one the pane header
+    /// shows. Resolved at creation and on each established connection, which
+    /// also starts a new route epoch, so a descriptor never changes under a
+    /// pending transfer.
     host: String,
     /// Connection identity that tells this host apart from another host with
-    /// the same display name.
+    /// the same host label.
     host_detail: Option<String>,
     /// The pane the user explicitly chose as transfer target (by stable pane
     /// id). While set it replaces the visible-peer default; once that pane has
@@ -1153,43 +1154,43 @@ fn host_label_for_node(node_id: &str) -> Option<String> {
     .filter(|label| !label.trim().is_empty())
 }
 
-/// How transfer targets name a pane's host until its first connection: the
-/// registry identity of its server (or "local"). Never the registry id, which
-/// is internal.
-fn pane_host_identity(node_id: &str) -> (String, Option<String>) {
+/// The connection identity transfer targets show for a pane until its first
+/// connection. `None` for local panes or without a registry server.
+fn registry_connection_identity(node_id: &str) -> Option<String> {
     if node_id.is_empty() {
-        return (crate::t!("fm-label-local"), None);
+        return None;
     }
-    let identity = warp_ssh_manager::with_conn(|c| {
-        Ok(SshRepository::get_server(c, node_id)?.map(|server| registry_host_identity(c, &server)))
-    });
-    match identity {
-        Ok(Some((name, detail))) => (name, Some(detail)),
-        Ok(None) | Err(_) => (crate::t!("fm-label-remote-host"), None),
-    }
+    warp_ssh_manager::with_conn(|c| {
+        Ok(
+            SshRepository::get_server(c, node_id)?
+                .map(|server| registry_login_identity(c, &server)),
+        )
+    })
+    .ok()
+    .flatten()
 }
 
-/// The identity transfer targets show for a registry server: its display name
-/// (a localized fallback when blank or missing) and `user@host[:port]` with
-/// the user the connection actually authenticates as, which a OneKey
-/// credential supplies itself.
-fn registry_host_identity(conn: &mut SqliteConnection, server: &SshServerInfo) -> (String, String) {
+/// `user@host[:port]` of a registry server, with the user the connection
+/// authenticates as; a OneKey credential supplies its own.
+fn registry_login_identity(conn: &mut SqliteConnection, server: &SshServerInfo) -> String {
     let username = SshRepository::resolve_server_auth(conn, server)
         .map_or_else(|_| server.username.clone(), |auth| auth.username);
-    (
-        registry_host_name(conn, &server.node_id),
-        connection_identity(&username, &server.host, server.port),
-    )
+    connection_identity(&username, &server.host, server.port)
 }
 
-/// A registry node's display name, or a localized fallback when blank or missing.
-fn registry_host_name(conn: &mut SqliteConnection, node_id: &str) -> String {
+/// The host label of a pane on `server`, read from the same server snapshot as
+/// its connection: the SSH host, else the node's display name, like
+/// [`host_label_for_node`].
+fn server_host_label(conn: &mut SqliteConnection, server: &SshServerInfo) -> String {
+    if !server.host.trim().is_empty() {
+        return server.host.clone();
+    }
     SshRepository::list_nodes(conn)
         .ok()
-        .and_then(|nodes| nodes.into_iter().find(|node| node.id == node_id))
+        .and_then(|nodes| nodes.into_iter().find(|node| node.id == server.node_id))
         .map(|node| node.name)
         .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| crate::t!("fm-label-remote-host"))
+        .unwrap_or_else(|| crate::t!("terminal-remote-session-label"))
 }
 
 /// `user@host`, with the port only when it is not the SSH default.
@@ -1282,7 +1283,7 @@ impl SftpBrowserView {
         let rename_editor = make_editor(&crate::t!("fm-rename-placeholder"), ctx);
         let new_folder_editor = make_editor(&crate::t!("fm-folder-name-placeholder"), ctx);
         let search_editor = make_editor(&crate::t!("fm-search-placeholder"), ctx);
-        let (host, host_detail) = pane_host_identity(&node_id);
+        let host_detail = registry_connection_identity(&node_id);
 
         let mut me = Self {
             node_id,
@@ -1347,7 +1348,7 @@ impl SftpBrowserView {
                 .map(|_| MouseStateHandle::default())
                 .collect(),
             fm_id: super::fm_registry::next_fm_id(),
-            host,
+            host: host.clone(),
             host_detail,
             chosen_target: None,
             transfer_target_btn: MouseStateHandle::default(),
@@ -1508,7 +1509,9 @@ impl SftpBrowserView {
         me.history_index = 0;
         me.sync_breadcrumb_mouse_handles();
         // Same host label as a local terminal pane.
-        me.set_identity_host(crate::t!("cockpit-spawn-card-host-local").to_string(), ctx);
+        let local = crate::t!("cockpit-spawn-card-host-local").to_string();
+        me.host = local.clone();
+        me.set_identity_host(local, ctx);
         me.refresh_dir(ctx);
         me
     }
@@ -1701,10 +1704,9 @@ impl SftpBrowserView {
                         // Name the connection as it was actually opened: the server
                         // snapshot it used and the user it authenticated as, so a
                         // retry after a registry edit never shows the old host.
-                        let name = warp_ssh_manager::with_conn(|c| {
-                            Ok(registry_host_name(c, &server.node_id))
-                        })
-                        .unwrap_or_else(|_| crate::t!("fm-label-remote-host"));
+                        let name =
+                            warp_ssh_manager::with_conn(|c| Ok(server_host_label(c, &server)))
+                                .unwrap_or_else(|_| crate::t!("terminal-remote-session-label"));
                         let host_identity = (
                             name,
                             connection_identity(&username, &server.host, server.port),
@@ -1731,8 +1733,10 @@ impl SftpBrowserView {
                                 // Installed together with the new route epoch, so
                                 // no pending transfer snapshot survives the change.
                                 let (host, host_detail) = prepared.host_identity;
-                                me.host = host;
+                                me.host = host.clone();
                                 me.host_detail = Some(host_detail);
+                                // The pane header names the same connected host.
+                                me.set_identity_host(host, ctx);
                                 let backend = Arc::new(LiveSftpBackend::new_with_safe_file_slot(
                                     prepared.sftp,
                                     me.safe_file_client.clone(),

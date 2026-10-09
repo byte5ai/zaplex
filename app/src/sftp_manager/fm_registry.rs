@@ -47,7 +47,7 @@ pub enum FmPaneMode {
 pub struct FmPaneDescriptor {
     /// Stable, process-unique id of the pane.
     pub id: u64,
-    /// Display name of the pane's host: its registry name, or "local".
+    /// The pane's host label, as its pane header shows it.
     pub host: String,
     /// Connection identity (`user@host:port`). Shown only to tell apart two
     /// hosts that share a display name; never a routing input.
@@ -69,17 +69,23 @@ pub struct FmPaneDescriptor {
 impl FmPaneDescriptor {
     /// `host · path`: where this pane browses, as the user reads it.
     pub fn label(&self) -> String {
-        location_label(&self.host, &self.current_path)
+        location_label(&self.host, &self.fs, &self.current_path)
     }
 }
 
-fn location_label(host: &str, path: &Path) -> String {
-    format!("{host} · {}", path.display())
+fn location_label(host: &str, fs: &FsNamespace, path: &Path) -> String {
+    // Like the pane header: a local home reads `~`; a remote home is not known.
+    let home = matches!(fs, FsNamespace::Local)
+        .then(dirs::home_dir)
+        .flatten();
+    let path = path.display().to_string();
+    let path = warp_util::path::user_friendly_path(&path, home.as_deref().and_then(Path::to_str));
+    format!("{host} · {path}")
 }
 
 /// Labels for panes listed together (target picker, target footer).
 ///
-/// A label reads `host · path`. Two different hosts that share a display name
+/// A label reads `host · path`. Two different hosts that share a host label
 /// also name their connection identity. Panes that still read the same browse
 /// the same directory and are told apart by their stable pane id.
 pub fn display_labels(panes: &[FmPaneDescriptor]) -> Vec<String> {
@@ -90,9 +96,11 @@ pub fn display_labels(panes: &[FmPaneDescriptor]) -> Vec<String> {
                 .iter()
                 .any(|other| other.fs != pane.fs && other.host == pane.host);
             match pane.host_detail.as_deref() {
-                Some(detail) if shares_host_name => {
-                    location_label(&format!("{} ({detail})", pane.host), &pane.current_path)
-                }
+                Some(detail) if shares_host_name => location_label(
+                    &format!("{} ({detail})", pane.host),
+                    &pane.fs,
+                    &pane.current_path,
+                ),
                 _ => pane.label(),
             }
         })

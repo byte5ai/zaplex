@@ -348,9 +348,10 @@ The previous static illustrations are superseded, not alternative approved layou
     and overwrite protections remain unchanged.
     Every File Manager pane shows its target above the function bar before F5/F6 run, as
     `Host · directory` (German UI: `Ziel: …`), or a prompt to choose one when F5/F6 would have to
-    ask. Clicking it opens the target picker. Labels name the host, never an internal registry id; two hosts sharing a display
-    name also show their connection (`user@host`), and two panes on the same directory differ by
-    their pane reference. The picker lists the source's own tab first, marks the current target,
+    ask. Clicking it opens the target picker. Labels name host and directory exactly as the pane
+    headers do, never an internal registry id; two different hosts with the same label also show
+    their connection (`user@host`), and two panes on the same directory differ by their pane
+    reference. The picker lists the source's own tab first, marks the current target,
     and names the source for F5/F6. A target picked explicitly follows its pane, including that
     pane's current directory, and F5/F6 use it without asking. Once that pane is closed or has left
     File Manager mode, the footer and F5/F6 ask again; they never fall back to another pane.
