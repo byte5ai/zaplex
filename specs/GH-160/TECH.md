@@ -562,10 +562,10 @@ tree and three-level hierarchy as superseded by GH-160.
 |---|---|
 | 1–3 Connections/favorites/menu | SSH row projection tests; stable-favorite identity; direct-connect vs `⋯` propagation; parent/flyout mouse, keyboard, focus-return, safe-triangle, and edge-placement tests |
 | 4, 8–10, 14 tree identity and grouping | `conductor_tests.rs` (jump targets only counted rows), presentation-descriptor tests, exact route assertions |
-| 5–7 host lifecycle/inventory | `fleet_tests.rs` and `model_tests.rs` for local empty, first/last connection, unsupported/unavailable, stale generation |
+| 5–7 host lifecycle/inventory | `fleet_tests.rs` and `model_tests.rs` for local empty, first/last connection, unsupported/unavailable, stale generation, and which manager events invalidate in-flight scans (`remote_refresh`) |
 | 11–13 glyphs/pulse | pure state/pulse geometry tests plus static source/UI-spec checks, including reduced motion; attention verdicts and the seen ledger in `fleet_tests.rs`, the projection (external exclusion, reconnect, viewing, startup baseline) in `model_tests.rs`, reachability in `capabilities_tests.rs`, wire fields in `agent_session_tests.rs` |
 | 15–17 identity/meters/waiting row | pure identity and row-style tests plus HTML visual states |
-| 18–22 discovery/history | Claude/Codex root fixtures and `sessions_tests.rs` legacy/current/dormant cases |
+| 18–22 discovery/history | Claude/Codex root fixtures and `sessions_tests.rs` legacy/current/dormant cases; the live-tree source `local_tree_sessions` in `model_tests.rs` |
 | 23–24 parity audit | three timestamped SHA ledgers and evidence matrix in `REFERENCE_AUDIT.md` |
 | 25 responsive/accessibility | normal/narrow HTML states, semantic labels, keyboard/focus review |
 | 26 machine snapshot | CLI schema fixtures, stable-id/collision tests, degraded/null semantics, IPC capability test |

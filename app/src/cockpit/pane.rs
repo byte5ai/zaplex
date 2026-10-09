@@ -1222,10 +1222,10 @@ impl CockpitPaneView {
     }
 
     /// The fleet card's reset-countdown line: `5h ↻ <t> · Wo ↻ <t>` — absent
-    /// windows drop out, `None` when
-    /// neither is known. Labels are the same short meter vocabulary as
-    /// [`Self::heat_bar`]'s, so the line reads against the meters above it
-    /// (audit P0.4: bare times with no label read as debug output).
+    /// windows drop out, `None` when neither is known. Labels are the same
+    /// short meter vocabulary as [`Self::heat_bar`]'s, so the line reads
+    /// against the meters above it (audit P0.4: bare times with no label read
+    /// as debug output).
     fn reset_line(acct: &AccountUsage, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
         let label_5h = crate::t!("cockpit-meter-5h");
         let label_week = crate::t!("cockpit-meter-week");
