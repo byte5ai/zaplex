@@ -25,12 +25,6 @@ fn initial_scan_state_is_loading_not_empty() {
 
 #[test]
 fn stale_inventory_cannot_readd_disconnected_host() {
-    assert!(should_apply_refresh_result(2, 2));
-    assert!(
-        !should_apply_refresh_result(2, 1),
-        "a scan requested before the current generation must be ignored"
-    );
-
     let local = HostNode {
         host: "local".to_string(),
         is_local: true,
@@ -42,30 +36,108 @@ fn stale_inventory_cannot_readd_disconnected_host() {
         needs_me: 0,
     };
     let remote = remote_host(
-        "devhost",
-        "host-dev",
-        session("dev-session", zaplex_cockpit::SessionState::Active),
+        "remote",
+        "host-remote",
+        session("remote-session", zaplex_cockpit::SessionState::Active),
     );
-    let stale_result = FleetTree {
+    // A full scan starts while the remote host is still connected.
+    let mut flight = RefreshSingleFlight::default();
+    assert!(flight.request());
+    let in_flight = flight.generation;
+    let mut visible = FleetTree {
         hosts: vec![local, remote],
         needs_me: 0,
     };
-    let mut visible = stale_result.clone();
 
+    // The final session to that host closes before the scan returns. The
+    // disconnect is a topology change, which the model answers by invalidating
+    // the running generation and dropping the root synchronously.
+    let disconnect = RemoteServerManagerEvent::HostDisconnected {
+        host_id: warp_core::HostId::new("host-remote".to_string()),
+    };
+    assert_eq!(remote_refresh(&disconnect), RemoteRefresh::Topology);
+    flight.invalidate();
     assert!(reconcile_live_daemon_roots(
         &mut visible,
         &mut ManagedFleetInventory::default(),
         "local",
         &[],
     ));
-    let current_generation = 2;
-    let stale_generation = 1;
-    if should_apply_refresh_result(current_generation, stale_generation) {
-        visible = stale_result;
-    }
 
+    // The late scan result belongs to the old topology and is discarded.
+    assert!(
+        !should_apply_refresh_result(flight.generation, in_flight),
+        "a scan started before the disconnect must be ignored"
+    );
     assert_eq!(visible.hosts.len(), 1);
     assert!(visible.hosts[0].is_local);
+}
+
+#[test]
+fn connection_changes_invalidate_inflight_scans_but_inventory_changes_do_not() {
+    let host_id = || warp_core::HostId::new("host-remote".to_string());
+    assert_eq!(
+        remote_refresh(&RemoteServerManagerEvent::HostConnected { host_id: host_id() }),
+        RemoteRefresh::Topology,
+        "a newly connected host must not be hidden by an older scan"
+    );
+    assert_eq!(
+        remote_refresh(&RemoteServerManagerEvent::HostDisconnected { host_id: host_id() }),
+        RemoteRefresh::Topology,
+    );
+    assert_eq!(
+        remote_refresh(&RemoteServerManagerEvent::SessionInventoryChanged { host_id: host_id() }),
+        RemoteRefresh::Inventory,
+        "a managed Stop/Restart refreshes without discarding the running scan"
+    );
+}
+
+#[test]
+fn dormant_account_history_never_enters_local_tree() {
+    let live = raw_row("live", zaplex_cockpit::SessionState::Active);
+    let dormant = raw_row("dormant", zaplex_cockpit::SessionState::Idle);
+    let account = zaplex_cockpit::AccountUsage {
+        account: zaplex_cockpit::Account {
+            provider: Provider::Claude,
+            key: "claude".to_string(),
+            config_dir: PathBuf::from("/accounts/claude"),
+            label: "Claude".to_string(),
+            provider_account_id: None,
+            email: None,
+            org: None,
+            role: None,
+            plan_tier: None,
+            is_default: true,
+        },
+        block5h: zaplex_cockpit::WindowTotals::default(),
+        today: zaplex_cockpit::WindowTotals::default(),
+        today_by_session: Default::default(),
+        week: zaplex_cockpit::WindowTotals::default(),
+        reset5h: None,
+        reset_week: None,
+        heat: 0.0,
+        heat_week: 0.0,
+        heat_opus: None,
+        heat_sonnet: None,
+        sessions: vec![live],
+        idle_sessions: vec![dormant],
+        status: zaplex_cockpit::AccountStatus::Live,
+        provenance: zaplex_cockpit::UsageProvenance::Estimate,
+    };
+    let resumable = raw_row("antigravity-resume", zaplex_cockpit::SessionState::Idle);
+
+    let local = local_tree_sessions(std::slice::from_ref(&account), vec![resumable]);
+
+    let ids: Vec<&str> = local
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["live", "antigravity-resume"],
+        "dormant Claude/Codex history stays in the account detail, not the live tree"
+    );
+    assert_eq!(account.idle_sessions.len(), 1, "the history itself is kept");
 }
 
 #[test]
