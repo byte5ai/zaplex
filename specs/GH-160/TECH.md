@@ -60,6 +60,23 @@ marked and unmarked rows keep one text axis; the open action keeps its slot and 
 changes to “Show tab”. Other rows render the daemon identity plus a metadata line with the last
 attach time; the fallback identity is `Host · Terminal` with the session id in the tooltip only.
 
+Live PTY metadata (#509) is the additive `SessionInfo.live` (`SessionLiveMetadata { cwd,
+foreground_command }`) behind the capability `session-live-metadata-v1`, advertised only by Linux
+daemons. `remote_server::session_live` reads it while answering `ListSessions`: field 8 (`tpgid`)
+of the session shell's `/proc/<pid>/stat` names the PTY's foreground process group (the shell is a
+session leader with the PTY as controlling terminal); a group from another kernel session is
+ignored. The job's process is the group leader, or, once a pipeline's leader has exited, the
+newest remaining member of that group and session. The directory is that process's
+`/proc/<pid>/cwd`, else the shell's. The command is the first word of `argv[0]` (process titles
+rewritten by the program carry arguments), or the script's name for a known interpreter (`node`,
+`python`, …), else `comm`. A script counts only as a path or a file with a script extension;
+inline code (`-c`, `-e`, `--eval`, …), module names and option operands fall back to the
+interpreter's name. Arguments never leave the host. At an idle prompt the command is empty. The
+client drops
+`live` from daemons without the capability (`discard_unsupported_live_metadata`), and title
+enrichment no longer copies the directory name into the title: the row derives `Host · directory`
+from the live directory, falling back to the launch directory, like a pane does.
+
 The tab `+` menu in `app/src/workspace/view.rs` continues to query `FavoritesStore` and resolve its
 stable references against the SSH registry. Its first level lists favorite hosts only; the
 remaining registered hosts form the "More hosts" submenu of the shared launch menu

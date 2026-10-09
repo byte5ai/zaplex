@@ -6860,6 +6860,13 @@ impl ServerModel {
                     (None, Some(project)) => project,
                     (None, None) => String::new(),
                 };
+                #[cfg(target_os = "linux")]
+                let live = Some(super::session_live::read_session_live_metadata(
+                    &super::session_live::RealPtyProcfs,
+                    session.child.id(),
+                ));
+                #[cfg(not(target_os = "linux"))]
+                let live = None;
                 (
                     SessionInfo {
                         session_id: id.clone(),
@@ -6876,6 +6883,7 @@ impl ServerModel {
                             .as_ref()
                             .map(|managed| managed_session_info(managed, session.generation)),
                         process_memory: None,
+                        live,
                     },
                     session
                         .managed

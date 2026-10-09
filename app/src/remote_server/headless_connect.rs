@@ -36,6 +36,7 @@ use warp_ssh_manager::{
 use warpui::r#async::{executor::Background, FutureExt as _};
 use zaplex_remote_session::types::{
     has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SESSION_HOST,
+    FEATURE_SESSION_LIVE_METADATA_V1,
 };
 
 use super::session_inventory::{
@@ -136,6 +137,17 @@ fn supports_session_host(response: &InitializeResponse) -> bool {
     has_feature(&response.features, FEATURE_SESSION_HOST)
 }
 
+/// Live PTY metadata is trusted only from daemons that advertise it; from any
+/// other daemon the field is dropped instead of shown.
+fn discard_unsupported_live_metadata(daemon: &mut SessionList, initialize: &InitializeResponse) {
+    if has_feature(&initialize.features, FEATURE_SESSION_LIVE_METADATA_V1) {
+        return;
+    }
+    for session in &mut daemon.sessions {
+        session.live = None;
+    }
+}
+
 fn parse_release_daemon_version(version: &str) -> Option<semver::Version> {
     let version = version.strip_prefix('v').unwrap_or(version);
     let mut parsed = semver::Version::parse(version).ok().or_else(|| {
@@ -198,6 +210,9 @@ fn agent_session_display_title(session: &AgentSessionInfo) -> String {
         .unwrap_or_else(|| provider.to_string())
 }
 
+/// The title carries only the foreground agent's identity. Without one it
+/// stays empty, so the row derives `Host · directory` from the session's
+/// directory like a pane does.
 fn enrich_daemon_session_titles(daemon: &mut SessionList, agents: &AgentSessionList) {
     for session in &mut daemon.sessions {
         let agent = agents.sessions.iter().find(|agent| {
@@ -205,12 +220,7 @@ fn enrich_daemon_session_titles(daemon: &mut SessionList, agents: &AgentSessionL
                 && agent.pty_session_id == session.session_id
                 && agent.pty_session_generation == session.generation
         });
-        session.title = agent.map(agent_session_display_title).unwrap_or_else(|| {
-            std::path::Path::new(&session.cwd)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        });
+        session.title = agent.map(agent_session_display_title).unwrap_or_default();
     }
 }
 
@@ -731,6 +741,7 @@ async fn query_daemon_inventory(
     )
     .await?;
     let observed_at = Instant::now();
+    discard_unsupported_live_metadata(&mut daemon, &initialize);
     if supports_agent_inventory(&initialize) {
         match inventory_before_deadline(
             async {

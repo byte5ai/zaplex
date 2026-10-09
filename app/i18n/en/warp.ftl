@@ -3007,6 +3007,7 @@ workspace-left-panel-ssh-manager-sessions-needs-key = Zaplex sessions need key-b
 workspace-left-panel-ssh-manager-session-id = Session ID: { $id }
 workspace-left-panel-ssh-manager-session-open-here = Open in this window
 workspace-left-panel-ssh-manager-session-show-tab = Show tab
+workspace-left-panel-ssh-manager-session-metadata = { $command } · { $opened }
 workspace-left-panel-ssh-manager-session-last-opened-now = last opened just now
 workspace-left-panel-ssh-manager-session-last-opened-minutes = { $count ->
         [one] last opened 1 minute ago

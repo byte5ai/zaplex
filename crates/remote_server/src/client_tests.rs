@@ -1163,6 +1163,7 @@ async fn list_sessions_round_trip() {
                     generation: 7,
                     managed: None,
                     process_memory: None,
+                    live: None,
                 },
                 SessionInfo {
                     session_id: "s2".to_string(),
@@ -1174,6 +1175,7 @@ async fn list_sessions_round_trip() {
                     generation: 8,
                     managed: None,
                     process_memory: None,
+                    live: None,
                 },
             ],
             host_ring_cap_bytes: 256 * 1024 * 1024,

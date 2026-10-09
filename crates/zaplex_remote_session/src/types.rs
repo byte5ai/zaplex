@@ -164,6 +164,12 @@ pub const FEATURE_MANAGED_OPEN_ATTACH_V1: &str = "managed-open-attach-v1";
 /// refusal, so a client that cannot render the notice is never silently cut off.
 pub const FEATURE_SESSION_TAKEOVER_V1: &str = "session-takeover-v1";
 
+/// Versioned capability for live PTY metadata in `ListSessions`: the
+/// foreground process's working directory and executable name, read from
+/// `/proc` when the daemon answers. Only Linux daemons can read it; clients
+/// ignore `SessionInfo.live` from daemons that do not advertise this.
+pub const FEATURE_SESSION_LIVE_METADATA_V1: &str = "session-live-metadata-v1";
+
 /// `SessionNotice.kind` pushed to a connection whose session attachment was
 /// taken over by a newer, generation-checked attach.
 pub const SESSION_NOTICE_ATTACH_TAKEN_OVER: &str = "attach-taken-over";
@@ -249,6 +255,7 @@ pub fn supported_features() -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
         features.push(FEATURE_MANAGED_OPEN_ATTACH_V1.to_string());
+        features.push(FEATURE_SESSION_LIVE_METADATA_V1.to_string());
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
@@ -286,6 +293,7 @@ pub fn supported_client_features() -> Vec<String> {
         FEATURE_MANAGED_AGENT_FLEET_V1.to_string(),
         FEATURE_MANAGED_OPEN_ATTACH_V1.to_string(),
         FEATURE_SESSION_TAKEOVER_V1.to_string(),
+        FEATURE_SESSION_LIVE_METADATA_V1.to_string(),
     ]
 }
 

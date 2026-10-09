@@ -65,9 +65,12 @@ The previous static illustrations are superseded, not alternative approved layou
    A session that a pane in this window holds shows exactly that pane's title (the pane and tab
    identity of #33) and an accent mark in the fixed indentation slot before the title, with “Open
    in this window” in its tooltip; clicking it shows that tab. Every other
-   session (detached, orphaned, or open in another window or on another device) shows the identity
-   the daemon reports, with a fixed metadata line below it. That line carries only what the daemon
-   reports truthfully today: the time of its last attach (“last opened …”). Detached-since and
+   session (detached, orphaned, or open in another window or on another device) shows
+   `Host · project` from the current directory the daemon reads live, or the agent identity, with
+   a fixed metadata line below it: the foreground command (program name only, never arguments;
+   omitted next to an agent identity and at an idle prompt) and the time of its last attach (“last
+   opened …”). Live facts come only from daemons advertising `session-live-metadata-v1` (Linux);
+   older daemons fall back to the directory the session was opened in. Detached-since and
    expiry belong in the same line once #508 and #510 provide them. Sessions open here come first,
    ordered by title; the others follow by most recent attach, and keyboard navigation uses the same
    order. Without any pane or daemon identity the row reads `Host · Terminal` like a pane without a
