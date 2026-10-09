@@ -238,6 +238,8 @@ pub struct CockpitPanel {
     /// Tooltip hover state for each agent status glyph. Kept separate from the
     /// clickable row handle so only the glyph owns this tooltip.
     conductor_row_glyph_states: HashMap<String, MouseStateHandle>,
+    /// Tooltip hover state for the managed-fleet marker of an agent row.
+    conductor_managed_marker_states: HashMap<String, MouseStateHandle>,
     /// Hover/click state per connected host root, keyed by stable host identity.
     conductor_host_states: HashMap<String, MouseStateHandle>,
     /// Tooltip hover state for each host summary glyph.
@@ -818,6 +820,7 @@ impl CockpitPanel {
             session_scroll_state: ClippedScrollStateHandle::default(),
             conductor_row_states: HashMap::new(),
             conductor_row_glyph_states: HashMap::new(),
+            conductor_managed_marker_states: HashMap::new(),
             conductor_host_states: HashMap::new(),
             conductor_host_glyph_states: HashMap::new(),
             expanded_hosts: HashMap::new(),
@@ -894,6 +897,8 @@ impl CockpitPanel {
             .retain(|k, _| routable.contains(k));
         self.conductor_row_glyph_states
             .retain(|k, _| visible.contains(k));
+        self.conductor_managed_marker_states
+            .retain(|k, _| visible.contains(k));
         self.conductor_title_states.retain(|k, _| {
             visible.contains(k)
                 || session_keys.contains(k)
@@ -905,6 +910,9 @@ impl CockpitPanel {
         }
         for key in visible {
             self.conductor_title_states.entry(key.clone()).or_default();
+            self.conductor_managed_marker_states
+                .entry(key.clone())
+                .or_default();
             self.conductor_row_glyph_states.entry(key).or_default();
         }
         // Connected host handles and explicit expansion overrides.
@@ -1229,10 +1237,11 @@ impl CockpitPanel {
     /// Provider icon, provider and model of one agent, separated by air, not
     /// by a glyph. As a row's headline (`headline = Some(color)`) the provider
     /// takes the title tone; as the second line under a session title the
-    /// provider is muted and the model quieter still.
+    /// provider is muted and the model quieter still. A managed-fleet agent
+    /// (#168) ends with the `◆` marker, explained by its tooltip.
     fn agent_identity_line(
         agent: &SessionSnapshot,
-        is_managed: bool,
+        managed_marker: Option<MouseStateHandle>,
         headline: Option<ColorU>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
@@ -1278,10 +1287,18 @@ impl CockpitPanel {
             ),
             None => line,
         };
-        let line = if is_managed {
-            line.with_child(Self::text("◆".to_string(), family, footnote, muted))
-        } else {
-            line
+        let line = match managed_marker {
+            Some(tooltip_state) => {
+                line.with_child(appearance.ui_builder().overlay_tool_tip_on_element(
+                    crate::t!("cockpit-tree-managed-agent"),
+                    tooltip_state,
+                    Self::text("◆".to_string(), family, footnote, muted),
+                    ParentAnchor::TopMiddle,
+                    ChildAnchor::BottomMiddle,
+                    vec2f(0.0, -4.0),
+                ))
+            }
+            None => line,
         };
         line.finish()
     }
@@ -1309,9 +1326,15 @@ impl CockpitPanel {
             TitleTone::Active => theme.main_text_color(theme.surface_1()).into_solid(),
             TitleTone::Quiet => theme.sub_text_color(theme.surface_1()).into_solid(),
         };
-        let is_managed = managed_fleet
+        let managed_marker = managed_fleet
             .matching_agent_session(host_id, agent)
-            .is_some();
+            .is_some()
+            .then(|| {
+                self.conductor_managed_marker_states
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_default()
+            });
         let text = match label {
             Some(label) => Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -1319,10 +1342,13 @@ impl CockpitPanel {
                 .with_spacing(1.0)
                 .with_child(self.tree_label(label, &key, body, tone_color, appearance))
                 .with_child(Self::agent_identity_line(
-                    agent, is_managed, None, appearance,
+                    agent,
+                    managed_marker,
+                    None,
+                    appearance,
                 ))
                 .finish(),
-            None => Self::agent_identity_line(agent, is_managed, Some(tone_color), appearance),
+            None => Self::agent_identity_line(agent, managed_marker, Some(tone_color), appearance),
         };
         let line = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)

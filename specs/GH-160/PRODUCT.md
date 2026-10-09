@@ -63,7 +63,8 @@ The previous static illustrations are superseded, not alternative approved layou
    total host RAM.
 
 3. **Favorites project into the tab `+` menu.** The menu reads stable host references from the
-   Connections registry and shows favorite hosts only. Clicking the host label connects exactly
+   Connections registry. Its first level shows favorite hosts only; every other registered host
+   appears only in the "More hosts" submenu (#32). Clicking the host label connects exactly
    once in a new tab. A separate stable `⋯` action opens a real side flyout while the parent menu
    stays visible; the flyout contains New Agent, Edit Connection, and Remove from Favorites. It
    never expands actions between rows, and clicking `⋯` never starts a connection. Editing a
@@ -84,11 +85,13 @@ The previous static illustrations are superseded, not alternative approved layou
    sessions, a session with one agent is one row: its title, then a second line with provider
    icon, provider, and model; an untitled session there shows its agent as the one-line headline.
    Only a PTY session with several agents keeps agent rows, and its row carries no aggregate
-   glyph. A title sharing a long, separator-bounded prefix with at least one sibling shows it
-   shortened and dimmed while at least eight distinguishing characters stay visible. A long title
-   keeps a short last segment and shortens in the middle (`feat/checkout-re…-step-2`); otherwise
-   it ends in an ellipsis. Whenever the visible title can be shorter, the full title is the
-   tooltip. Title parts, provider, and model are separated by air and tone, never by separator
+   glyph. A managed-fleet agent (#168) ends its provider/model line with a `◆` marker whose
+   localized tooltip explains it; details stay in the account pane. A title sharing a long,
+   separator-bounded prefix with at least one sibling shows it shortened and dimmed while at
+   least eight distinguishing characters stay visible. A long title keeps a short last segment
+   and shortens in the middle (`feat/checkout-re…-step-2`); otherwise it ends in an ellipsis.
+   Whenever the visible title can be shorter, the full title is the tooltip. Title parts,
+   provider, and model are separated by air and tone, never by separator
    glyphs such as a middle dot. Every row reserves the chevron and glyph columns, so titles of
    one depth share a text axis. Idle session titles use the muted text role, and a merged row takes
    the tone of its session. The row of the focused pane's agent keeps a stable accent tint; a
@@ -181,8 +184,9 @@ The previous static illustrations are superseded, not alternative approved layou
     provider strip does not repeat the same heading above the card.
 
 16. **Account cards retain both subscription windows.** Each sidebar account card shows the
-    five-hour and weekly usage meters. The large pane may add reset times, tokens, and cost
-    provenance without duplicating the identity heading.
+    five-hour and weekly usage meters. The large pane stacks the same two meters and shows each
+    window's reset time directly under its own meter; it may add tokens and cost provenance
+    without duplicating the identity heading.
 
 17. **Sessions needing the user are emphasized across the detail row.** In large Claude and Codex
     session tables, a session waiting on you (#12) receives a subtle amber-tinted background across the full,

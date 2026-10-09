@@ -46,7 +46,9 @@ runtime diagnostics remain available in explicit connection details and use thei
 name; an output/replay buffer must not be presented as total host RAM.
 
 The tab `+` menu in `app/src/workspace/view.rs` continues to query `FavoritesStore` and resolve its
-stable references against the SSH registry. The host-label hit target directly dispatches the
+stable references against the SSH registry. Its first level lists favorite hosts only; the
+remaining registered hosts form the "More hosts" submenu of the shared launch menu
+(`docs/ui/pane-launch-and-tab-join.html`). The host-label hit target directly dispatches the
 existing new-tab connection action exactly once. A separate stable `⋯` target opens a side flyout
 for New Agent, Edit Connection, and Remove from Favorites; the parent remains visible and no child
 rows are inserted into its layout. The flyout reuses the existing menu/overlay, focus-return,
@@ -278,7 +280,8 @@ depend on pixels:
 - a collapsed count turns amber if it hides waiting attention;
 - session containers have hierarchy only, not a duplicated aggregate state glyph;
 - agent leaves render state glyph, provider, and optional model only; managed-fleet agents (#168)
-  add the compact `◆` marker, whose details stay in the account pane;
+  add the compact `◆` marker with the localized tooltip `cockpit-tree-managed-agent` (its own
+  `MouseStateHandle` per agent key, like the state glyph); details stay in the account pane;
 - the B+ display rule (#505) is the pure projection `project_tree_rows`: a project with exactly
   one PTY session becomes one row (`merged_label`: project name with `PartFit::Holds`, the
   session title dimmed after `MERGED_TITLE_GAP`); a single-agent PTY session among several is one
@@ -459,7 +462,9 @@ Introduce or reuse one pure identity presentation helper in the Cockpit view lay
 
 The sidebar cards retain both five-hour and weekly meters. The large pane may retain detailed
 reset, token, price, and provenance facts, but removes a separate provider strip that duplicates
-the card headline.
+the card headline. In `render_account_detail` each meter carries its own reset countdown directly
+beneath it, indented to the track edge (`METER_LABEL_WIDTH + METER_LABEL_GAP`); the fleet dashboard
+card keeps its single combined reset line (`reset_line`).
 
 In the large session table, waiting rows receive a subtle whole-row amber background using existing
 semantic theme colors with low opacity. Row geometry and columns remain unchanged, and the Status

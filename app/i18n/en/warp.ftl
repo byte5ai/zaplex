@@ -3028,6 +3028,7 @@ cockpit-task-peek-no-plan = No structured task plan
 cockpit-task-peek-state-waiting = Waiting on you
 cockpit-task-peek-state-working = Working
 cockpit-task-peek-state-idle = Idle
+cockpit-tree-managed-agent = Managed agent – details in the account view
 menu-tab-pin = Pin tab
 menu-tab-unpin = Unpin tab
 theme-editor-open = Open theme editor
