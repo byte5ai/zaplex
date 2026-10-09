@@ -48,7 +48,8 @@ use zaplex_remote_session::types::{
 
 use super::context_menu::ContextMenuState;
 use super::fm_registry::{
-    plan_transfer, FileManagerRegistry, FmPaneDescriptor, FmPaneMode, FsNamespace, TransferKind,
+    display_labels, plan_transfer, FileManagerRegistry, FmPaneDescriptor, FmPaneMode, FsNamespace,
+    TransferKind, TransferTargets,
 };
 use super::keynav::{apply_cursor_move, clamp_cursor, CursorMove};
 use super::sftp_backend::{LiveSftpBackend, SafeFileClientSlot, SftpBackend};
@@ -56,7 +57,7 @@ use super::sftp_ops;
 use super::sftp_ops::normalize_remote_path;
 use super::types::{
     ConnectionState, Dialog, EntryIdentity, EntryReference, FileEntry, FileEntryType,
-    TransferDirection, TransferState, TransferTask,
+    TargetPickerRow, TransferDirection, TransferState, TransferTask,
 };
 
 /// The function-key bar: `(key label, action)`. Rendered as a footer and
@@ -517,6 +518,9 @@ pub enum SftpBrowserAction {
     /// Open the destination picker for a move (Shift-F6), even when a visible
     /// peer would otherwise be selected automatically.
     ChooseMoveTarget,
+    /// Open the destination picker without an operation (target footer): the
+    /// picked pane becomes this pane's transfer target.
+    ChooseTransferTarget,
     /// Close the file manager (F10), reverting the pane to its terminal.
     CloseFileManager,
     /// Resolve a copy/move conflict: overwrite this target (`all` = the rest too).
@@ -527,8 +531,9 @@ pub enum SftpBrowserAction {
     RenameConflict { all: bool },
     /// Resolve a copy/move conflict only when the source is provably newer.
     NewerOnlyConflict { all: bool },
-    /// Destination picker: copy/move into the candidate pane at this index
-    /// (index into `pending_target_pick.candidates`).
+    /// Destination picker: copy/move into the candidate pane at this index, or
+    /// make it the transfer target when no operation is pending (index into
+    /// `pending_target_pick.candidates`).
     PickCopyMoveTarget(usize),
     /// Resolve the cross-connection overwrite prompt: `overwrite` transfers the
     /// conflicting files (overwriting), otherwise they are skipped.
@@ -726,14 +731,20 @@ impl Drop for QuarantinedDirSource {
     }
 }
 
-/// F5/F6 with more than one other file-manager pane open: the sources and the
-/// candidate target panes, held while the target-picker dialog is up so the
-/// user's choice can be routed once they pick one.
+/// The candidate target panes, held while the target-picker dialog is up so
+/// the user's choice can be routed once they pick one.
 struct PendingTargetPick {
+    /// The copy/move waiting for its destination; `None` when the picker only
+    /// chooses this pane's transfer target.
+    operation: Option<PendingTransferOperation>,
+    candidates: Vec<FmPaneDescriptor>,
+}
+
+/// A captured F5/F6 operation whose destination is still being chosen.
+struct PendingTransferOperation {
     sources: Vec<PathBuf>,
     source: TransferSourceSnapshot,
     is_move: bool,
-    candidates: Vec<FmPaneDescriptor>,
 }
 
 #[derive(Clone)]
@@ -841,6 +852,26 @@ fn action_for_symlink_target(
         // link here therefore means the backend could not resolve its target;
         // do not guess that it is a directory.
         FileEntryType::Other | FileEntryType::Symlink => ResolvedSymlinkAction::Unsupported,
+    }
+}
+
+/// The target picker's source line: what the pending operation transfers and
+/// from which pane location.
+fn transfer_source_summary(operation: &PendingTransferOperation) -> String {
+    let from = operation.source.pane.label();
+    match operation.sources.as_slice() {
+        [single] => {
+            let name = single.file_name().map_or_else(
+                || single.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            crate::t!("fm-dlg-picker-source-one", name = name, source = from)
+        }
+        many => crate::t!(
+            "fm-dlg-picker-source-many",
+            count = many.len(),
+            source = from
+        ),
     }
 }
 
@@ -997,6 +1028,18 @@ pub struct SftpBrowserView {
     /// Process-unique id for the cross-pane file-manager registry (F5/F6
     /// copy/move target discovery).
     fm_id: u64,
+    /// How transfer targets name this pane's host, resolved once at creation
+    /// so a descriptor never changes under a pending transfer.
+    host: String,
+    /// Connection identity that tells this host apart from another host with
+    /// the same display name.
+    host_detail: Option<String>,
+    /// The pane the user explicitly chose as transfer target (by stable pane
+    /// id). While set it replaces the visible-peer default; once that pane has
+    /// gone, F5/F6 ask again instead of falling back to another pane.
+    chosen_target: Option<u64>,
+    /// Hover/click state of the transfer-target footer.
+    transfer_target_btn: MouseStateHandle,
     /// Changes whenever the backing transport/daemon route is replaced.
     route_epoch: u64,
     /// Owning pane group. Peers in this group are visible beside this pane;
@@ -1107,6 +1150,35 @@ fn host_label_for_node(node_id: &str) -> Option<String> {
     .filter(|label| !label.trim().is_empty())
 }
 
+/// How transfer targets name a pane's host: the registry display name (or
+/// "local"), plus the connection identity that tells apart two registry hosts
+/// sharing a name. Never the registry id, which is internal.
+fn pane_host_identity(node_id: &str) -> (String, Option<String>) {
+    if node_id.is_empty() {
+        return (crate::t!("fm-label-local"), None);
+    }
+    let name = host_name_for_node(node_id).unwrap_or_else(|| crate::t!("fm-label-remote-host"));
+    let detail = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, node_id)?))
+        .ok()
+        .flatten()
+        .map(|server| connection_identity(&server.username, &server.host, server.port));
+    (name, detail)
+}
+
+/// `user@host`, with the port only when it is not the SSH default.
+fn connection_identity(username: &str, host: &str, port: u16) -> String {
+    let authority = if port == 22 {
+        host.to_string()
+    } else {
+        format!("{host}:{port}")
+    };
+    if username.is_empty() {
+        authority
+    } else {
+        format!("{username}@{authority}")
+    }
+}
+
 impl SftpBrowserView {
     fn layout_position_id(&self, part: &str) -> String {
         format!("sftp_layout:{}:{part}", self.fm_id)
@@ -1183,6 +1255,7 @@ impl SftpBrowserView {
         let rename_editor = make_editor(&crate::t!("fm-rename-placeholder"), ctx);
         let new_folder_editor = make_editor(&crate::t!("fm-folder-name-placeholder"), ctx);
         let search_editor = make_editor(&crate::t!("fm-search-placeholder"), ctx);
+        let (host, host_detail) = pane_host_identity(&node_id);
 
         let mut me = Self {
             node_id,
@@ -1247,6 +1320,10 @@ impl SftpBrowserView {
                 .map(|_| MouseStateHandle::default())
                 .collect(),
             fm_id: super::fm_registry::next_fm_id(),
+            host,
+            host_detail,
+            chosen_target: None,
+            transfer_target_btn: MouseStateHandle::default(),
             route_epoch: 1,
             pane_group_id: None,
             pending_copy_move: None,
@@ -1302,6 +1379,9 @@ impl SftpBrowserView {
             },
         );
         me.schedule_transfer_progress_poll(ctx);
+
+        // The transfer-target footer shows another pane's live location.
+        ctx.observe(&FileManagerRegistry::handle(ctx), |_, _, ctx| ctx.notify());
 
         ctx.subscribe_to_model(
             &RemoteServerManager::handle(ctx),
@@ -2517,16 +2597,6 @@ impl SftpBrowserView {
         }
     }
 
-    /// Human label for the destination picker, kept live with the current dir.
-    fn fm_label(&self) -> String {
-        let where_ = if self.node_id.is_empty() {
-            crate::t!("fm-label-local")
-        } else {
-            self.node_id.clone()
-        };
-        format!("{where_}:{}", self.current_path.display())
-    }
-
     /// Only a successfully connected browser directory may be returned to its shell.
     pub(crate) fn shell_directory_on_close(&self) -> Option<PathBuf> {
         // The header close button tears the connection down before the pane
@@ -2547,7 +2617,8 @@ impl SftpBrowserView {
         }
         Some(FmPaneDescriptor {
             id: self.fm_id,
-            label: self.fm_label(),
+            host: self.host.clone(),
+            host_detail: self.host_detail.clone(),
             fs: self.fs_namespace(),
             current_path: self.current_path.clone(),
             route_epoch: self.route_epoch,
@@ -2572,16 +2643,20 @@ impl SftpBrowserView {
             return;
         };
         let id = self.fm_id;
-        FileManagerRegistry::handle(ctx).update(ctx, move |reg, _| {
+        FileManagerRegistry::handle(ctx).update(ctx, move |reg, ctx| {
             reg.upsert(descriptor);
             reg.set_backend(id, backend);
+            ctx.notify();
         });
     }
 
     /// Remove this pane from the registry (on close).
     fn deregister_from_registry(&self, ctx: &mut ViewContext<Self>) {
         let id = self.fm_id;
-        FileManagerRegistry::handle(ctx).update(ctx, move |reg, _| reg.remove(id));
+        FileManagerRegistry::handle(ctx).update(ctx, move |reg, ctx| {
+            reg.remove(id);
+            ctx.notify();
+        });
     }
 
     /// Keep target visibility tied to pane-group ownership rather than focus.
@@ -2661,9 +2736,10 @@ impl SftpBrowserView {
     }
 
     /// F5/F6: copy (or move) the operation's sources into another file-manager
-    /// pane. Chooses the sole visible peer automatically (the MC two-panel
-    /// case), unless the caller explicitly requests the complete target picker.
-    /// All transfer topologies route through the safe transfer engine.
+    /// pane. Uses the pane's current transfer target — the explicitly chosen
+    /// pane, else the sole visible peer (the MC two-panel case) — unless the
+    /// caller explicitly requests the complete target picker. All transfer
+    /// topologies route through the safe transfer engine.
     fn copy_or_move_to_other_pane(
         &mut self,
         is_move: bool,
@@ -2688,51 +2764,92 @@ impl SftpBrowserView {
             return;
         };
 
-        let self_id = self.fm_id;
-        let targets = FileManagerRegistry::as_ref(ctx).transfer_targets(self_id);
+        let targets = FileManagerRegistry::as_ref(ctx).transfer_targets(self.fm_id);
         if !choose_target {
-            if let Some(target) = targets.default {
+            if let Some(target) = targets.current(self.chosen_target).cloned() {
                 self.route_copy_move(&sources, source, &target, is_move, ctx);
                 return;
             }
         }
-        match targets.selectable.as_slice() {
-            [] => {
-                let msg = if is_move {
-                    crate::t!("fm-toast-open-second-pane-move")
-                } else {
-                    crate::t!("fm-toast-open-second-pane-copy")
-                };
-                self.show_error_toast(msg, ctx);
-            }
-            _ => self.open_target_picker(sources, source, targets.selectable, is_move, ctx),
+        if targets.selectable.is_empty() {
+            let msg = if is_move {
+                crate::t!("fm-toast-open-second-pane-move")
+            } else {
+                crate::t!("fm-toast-open-second-pane-copy")
+            };
+            self.show_error_toast(msg, ctx);
+            return;
         }
-    }
-
-    /// Open the destination picker (F5/F6 with more than one other pane open):
-    /// stash the sources + candidates and show a dialog listing every candidate
-    /// pane as `host:/path`. The chosen row routes through [`Self::route_copy_move`].
-    fn open_target_picker(
-        &mut self,
-        sources: Vec<PathBuf>,
-        source: TransferSourceSnapshot,
-        candidates: Vec<FmPaneDescriptor>,
-        is_move: bool,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let labels: Vec<String> = candidates.iter().map(|c| c.label.clone()).collect();
-        self.target_pick_btn_states = candidates
-            .iter()
-            .map(|_| MouseStateHandle::default())
-            .collect();
-        self.pending_target_pick = Some(PendingTargetPick {
+        let operation = PendingTransferOperation {
             sources,
             source,
             is_move,
+        };
+        self.open_target_picker(Some(operation), targets, ctx);
+    }
+
+    /// The target footer: choose this pane's transfer target without running
+    /// an operation. An open dialog keeps its pending state; the footer never
+    /// replaces it.
+    fn choose_transfer_target(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.dialog.is_some() {
+            return;
+        }
+        let targets = FileManagerRegistry::as_ref(ctx).transfer_targets(self.fm_id);
+        if targets.selectable.is_empty() {
+            self.show_error_toast(crate::t!("fm-toast-no-target-pane"), ctx);
+            return;
+        }
+        self.open_target_picker(None, targets, ctx);
+    }
+
+    /// Open the destination picker: stash the candidates (and the pending
+    /// operation, if any) and list every candidate pane as `host · path`, the
+    /// source's own tab first. The chosen row routes through
+    /// [`Self::route_copy_move`] or becomes the pane's transfer target.
+    fn open_target_picker(
+        &mut self,
+        operation: Option<PendingTransferOperation>,
+        targets: TransferTargets,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let current = targets.current(self.chosen_target).map(|pane| pane.id);
+        let source_group = self.pane_group_id;
+        let mut candidates = targets.selectable;
+        candidates.sort_by_key(|pane| (pane.pane_group_id != source_group, pane.id));
+        let rows = candidates
+            .iter()
+            .zip(display_labels(&candidates))
+            .map(|(pane, label)| TargetPickerRow {
+                label,
+                other_tab: pane.pane_group_id != source_group,
+                selected: Some(pane.id) == current,
+            })
+            .collect::<Vec<_>>();
+        let source = operation.as_ref().map(transfer_source_summary);
+        self.target_pick_btn_states = rows.iter().map(|_| MouseStateHandle::default()).collect();
+        self.dialog = Some(Dialog::CopyMoveTargetPicker {
+            is_move: operation.as_ref().map(|operation| operation.is_move),
+            source,
+            rows,
+        });
+        self.pending_target_pick = Some(PendingTargetPick {
+            operation,
             candidates,
         });
-        self.dialog = Some(Dialog::CopyMoveTargetPicker { is_move, labels });
         ctx.notify();
+    }
+
+    /// Make `candidate` this pane's transfer target. The choice follows the
+    /// pane, not its directory, so the footer keeps showing where that pane
+    /// currently is; a pane that has gone cannot be chosen.
+    fn adopt_transfer_target(&mut self, candidate: &FmPaneDescriptor, ctx: &mut ViewContext<Self>) {
+        if FileManagerRegistry::as_ref(ctx).is_open(candidate.id) {
+            self.chosen_target = Some(candidate.id);
+            ctx.notify();
+        } else {
+            self.reject_stale_transfer(ctx);
+        }
     }
 
     /// Route a chosen copy/move into `target` by filesystem: same fs → a direct
@@ -2788,7 +2905,7 @@ impl SftpBrowserView {
             return;
         };
         let target_dir = target.current_path.clone();
-        let target_label = target.label.clone();
+        let target_label = target.label();
         let mut started = 0usize;
         for source in sources {
             let Some(name) = source.file_name() else {
@@ -3079,7 +3196,7 @@ impl SftpBrowserView {
         }
 
         let probe_backend = backend.clone();
-        let target_label = guard.target.label.clone();
+        let target_label = guard.target.label();
         let _ = self.run_blocking(
             ctx,
             move || {
@@ -3399,7 +3516,7 @@ impl SftpBrowserView {
                 // Recursively copy/move the directory across the connection: the
                 // tree is enumerated + created off-thread, then a transfer is
                 // spawned per file (move deletes the source once all files land).
-                let label = format!("{} → {}", name.to_string_lossy(), guard.target.label);
+                let label = format!("{} → {}", name.to_string_lossy(), guard.target.label());
                 self.spawn_dir_transfer(
                     source.clone(),
                     dest,
@@ -3428,7 +3545,7 @@ impl SftpBrowserView {
         }
         self.selected.clear();
 
-        let target_label = guard.target.label.clone();
+        let target_label = guard.target.label();
         if file_plans.is_empty() {
             self.finish_cross_connection_preparation(
                 Vec::new(),
@@ -4678,6 +4795,77 @@ impl SftpBrowserView {
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
             .with_background(theme.surface_2())
             .finish()
+    }
+
+    /// `Ziel: host · path` for this pane's current transfer target, labelled
+    /// as the picker lists it; a prompt to choose one when F5/F6 would ask.
+    pub(crate) fn transfer_target_text(&self, app: &AppContext) -> String {
+        let targets = FileManagerRegistry::as_ref(app).transfer_targets(self.fm_id);
+        let Some(current) = targets.current(self.chosen_target) else {
+            return crate::t!("fm-target-footer-choose");
+        };
+        let label = targets
+            .selectable
+            .iter()
+            .zip(display_labels(&targets.selectable))
+            .find_map(|(pane, label)| (pane.id == current.id).then_some(label))
+            .unwrap_or_else(|| current.label());
+        crate::t!("fm-target-footer", target = label)
+    }
+
+    /// The footer line naming where F5/F6 go before they run. A click opens
+    /// the target picker. Long locations end in an ellipsis and never widen
+    /// the pane.
+    fn render_transfer_target(
+        &self,
+        app: &AppContext,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let size = appearance.ui_font_size();
+        let rest_color = theme.sub_text_color(theme.background());
+        let hover_color = theme.main_text_color(theme.background());
+        let text = self.transfer_target_text(app);
+        Hoverable::new(self.transfer_target_btn.clone(), move |mouse| {
+            // Hover changes color only, never layout.
+            let color = if mouse.is_hovered() {
+                hover_color
+            } else {
+                rest_color
+            };
+            let row = Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(4.0)
+                .with_constrain_horizontal_bounds_to_parent(true)
+                .with_child(
+                    Shrinkable::new(
+                        1.0,
+                        Text::new_inline(text.clone(), family, size)
+                            .with_color(color.into())
+                            .with_clip(ClipConfig::ellipsis())
+                            .finish(),
+                    )
+                    .finish(),
+                )
+                .with_child(
+                    ConstrainedBox::new(Icon::ChevronDown.to_warpui_icon(color).finish())
+                        .with_width(12.0)
+                        .with_height(12.0)
+                        .finish(),
+                );
+            Container::new(Clipped::new(row.finish()).finish())
+                .with_padding_left(PANEL_PADDING)
+                .with_padding_right(PANEL_PADDING)
+                .with_padding_top(4.0)
+                .with_padding_bottom(4.0)
+                .with_border(Border::top(1.0).with_border_fill(theme.split_pane_border_color()))
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(SftpBrowserAction::ChooseTransferTarget))
+        .finish()
     }
 
     /// The function legend in one, two, or four rows, chosen from the cell
@@ -6541,6 +6729,7 @@ impl TypedActionView for SftpBrowserView {
                 self.copy_or_move_to_other_pane(false, true, ctx)
             }
             SftpBrowserAction::ChooseMoveTarget => self.copy_or_move_to_other_pane(true, true, ctx),
+            SftpBrowserAction::ChooseTransferTarget => self.choose_transfer_target(ctx),
             SftpBrowserAction::PickCurrentDir => {
                 // Only the originating card may consume this one-shot result.
                 let Some(pick_id) = self.pick_mode.filter(|_| !self.pick_resolved) else {
@@ -6590,13 +6779,26 @@ impl TypedActionView for SftpBrowserView {
                 self.dialog = None;
                 if let Some(pick) = self.pending_target_pick.take() {
                     if let Some(candidate) = pick.candidates.get(index).cloned() {
-                        self.route_copy_move(
-                            &pick.sources,
-                            pick.source,
-                            &candidate,
-                            pick.is_move,
-                            ctx,
-                        );
+                        match pick.operation {
+                            Some(operation) => {
+                                // Remember the pick only while it is still the
+                                // pane location the user saw.
+                                if FileManagerRegistry::as_ref(ctx)
+                                    .resolve_snapshot(&candidate)
+                                    .is_some()
+                                {
+                                    self.chosen_target = Some(candidate.id);
+                                }
+                                self.route_copy_move(
+                                    &operation.sources,
+                                    operation.source,
+                                    &candidate,
+                                    operation.is_move,
+                                    ctx,
+                                );
+                            }
+                            None => self.adopt_transfer_target(&candidate, ctx),
+                        }
                     }
                 }
                 ctx.notify();
@@ -6913,6 +7115,13 @@ impl View for SftpBrowserView {
                 col.add_child(save_layout_position(status, &status_position_id));
             }
         }
+
+        // 5c. Where F5/F6 go, visible before they run.
+        let target_position_id = self.layout_position_id("transfer-target");
+        col.add_child(save_layout_position(
+            self.render_transfer_target(app, appearance),
+            &target_position_id,
+        ));
 
         // 6. MC-style function-key footer. It belongs to this browser view,
         // never to a shared pane-group container. Every key keeps its caption;

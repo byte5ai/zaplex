@@ -535,7 +535,19 @@ geometry.
 `fm_registry.rs` remains the inventory for eligible pane destinations. Copy/Move captures and shows
 the source identity and either the sole valid counterpart or an explicit selected target. A target
 coordinate contains stable pane/session identity, exact host/daemon route, generation, mode, and
-path; the tab title and a presumed tab host are never routing inputs. Candidates may live in other
+path; the tab title and a presumed tab host are never routing inputs.
+Each descriptor also carries the host's display name (registry name, `local`, or a localized
+unknown-host fallback) and its connection identity, both resolved once when the browser is created
+so a pending transfer never sees its descriptor change. `display_labels` renders `host · path`,
+adds the connection identity only when two different filesystems share a display name, and the
+stable pane id only when labels still collide. The browser keeps an explicit `chosen_target` pane
+id. `TransferTargets::current` returns that pane while it is registered, otherwise none, and the
+sole visible peer only when nothing was chosen. A chosen pane that left the registry therefore
+never falls back to another pane. The footer above the function bar shows this current target
+(layout id `transfer-target`) and opens the picker without an operation. Picker rows put the
+source's own pane group first, mark the current target, and show the source line for F5/F6.
+Registry updates notify observers, so every footer follows other panes' directory changes and
+closures live. Candidates may live in other
 tabs. Immediately before transfer, `browser.rs`, `file_list.rs`, and `transfer_queue.rs` re-resolve
 and validate source/target identity, mode, CWD, generation, and transport. Any stale coordinate
 returns to target selection or a visible safe failure. Same-filesystem conflict confirmation
@@ -592,7 +604,7 @@ tree and three-level hierarchy as superseded by GH-160.
 | 33 identity/title | host/CWD/collision fixtures; custom-title precedence/removal; per-tab focus and account-pane cases |
 | 34–35 geometry/drag/restore | pane-tree full-area and nested split tests; move-not-clone identity assertions; invalid drop; close/focus callback; pending cross-window tab gate through Ready/failure and final managed acknowledgement, including temporary replacement/Undo Close; persistence round trip with mixed modes/hosts |
 | 36 account-pane placement | add-or-focus per-tab tests; no replacement; same account in separate tabs; labelled aggregate action |
-| 37–39 File Manager/transfers | mode round trip; always-captioned, wrapping, focus-gated function bar; exact cross-host target and stale-target tests; local↔local, local↔remote, remote A↔remote B, N=2/N=3, other-tab target |
+| 37–39 File Manager/transfers | mode round trip; always-captioned, wrapping, focus-gated function bar; exact cross-host target and stale-target tests; local↔local, local↔remote, remote A↔remote B, N=2/N=3, other-tab target; host-not-registry-id labels, same-name and same-directory disambiguation, target footer that follows the chosen pane, no fallback once the chosen pane has gone, long target inside its pane |
 | 40 parent navigation | identity-based local/remote sorted/filtered/delayed fixtures; root, removed/hidden child, cancel/failure |
 | 41 readiness/reconnect | transport/attach/replay/ready/corrupt transitions; cross-platform corrupt and retry/cancel fail-closed restore with sibling retention, daemon-backed replacement, and no inert actions; route/PTY/generation match; input gating/no hidden queue; missing-claim rejection before open/attach success; bounded logical-open waiters and Abort/disconnect cleanup; managed capability rejection before Accepted/InFlight lookup while capable retry classification remains idempotent; delayed-preflight cancellation after both ACK windows; accepted-hit/conflict ordering under project mutation; first-ACK existing-managed attach; same-host multi-account bulk launch attempts; late-claim owner-preservation/focus/no-second-identity; localized terminal and managed-open failure; real Same-SHA client/daemon smoke |
 | 42 shared visual language | source checks for theme/component reuse; normal/narrow HTML states; native light/dark/contrast screenshots with long identities and mixed panes |

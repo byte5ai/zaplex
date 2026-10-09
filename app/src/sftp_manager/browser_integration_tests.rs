@@ -4169,11 +4169,14 @@ fn file_pane_body_consumes_remaining_height_above_footer() {
 
         let root = position(&presenter, &layout_id(&view, &app, "pane-root"));
         let body = position(&presenter, &layout_id(&view, &app, "body"));
-        let (footer, _, _) = function_legend(&presenter, &view, &app);
+        let target = position(&presenter, &layout_id(&view, &app, "transfer-target"));
+        let (legend, _, _) = function_legend(&presenter, &view, &app);
 
         assert!(body.height() > 0.0);
-        assert_approximately_equal(body.max_y(), footer.min_y());
-        assert_approximately_equal(footer.max_y(), root.max_y() - 2.0);
+        assert!(target.height() > 0.0);
+        assert_approximately_equal(body.max_y(), target.min_y());
+        assert_approximately_equal(target.max_y(), legend.min_y());
+        assert_approximately_equal(legend.max_y(), root.max_y() - 2.0);
     });
 }
 
@@ -4864,10 +4867,14 @@ fn shift_f5_keeps_hidden_tab_targets_reachable() {
         });
 
         source.read(&app, |view, _| match &view.dialog {
-            Some(Dialog::CopyMoveTargetPicker { labels, is_move }) => {
-                assert_eq!(labels.len(), 2);
-                assert!(!is_move);
-                assert!(labels.iter().any(|label| label.ends_with(":/hidden")));
+            Some(Dialog::CopyMoveTargetPicker { rows, is_move, .. }) => {
+                assert_eq!(rows.len(), 2);
+                assert_eq!(*is_move, Some(false));
+                assert!(
+                    rows.iter()
+                        .any(|row| row.other_tab && row.label.ends_with("/hidden")),
+                    "the hidden-tab pane is offered under the other tabs: {rows:?}"
+                );
             }
             _ => panic!("expected the target picker dialog"),
         });
@@ -5048,9 +5055,9 @@ fn test_f5_with_multiple_panes_opens_target_picker() {
             v.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
         });
         view_a.read(&app, |v, _| match &v.dialog {
-            Some(Dialog::CopyMoveTargetPicker { labels, is_move }) => {
-                assert_eq!(labels.len(), 2, "two candidate panes offered");
-                assert!(!*is_move, "F5 is a copy");
+            Some(Dialog::CopyMoveTargetPicker { rows, is_move, .. }) => {
+                assert_eq!(rows.len(), 2, "two candidate panes offered");
+                assert_eq!(*is_move, Some(false), "F5 is a copy");
             }
             _ => panic!("expected the target picker dialog"),
         });
@@ -5230,6 +5237,282 @@ fn test_target_picker_cancel_copies_nothing() {
         assert!(
             !root.join("third/foo.txt").exists(),
             "cancel copies nothing"
+        );
+    });
+}
+
+/// Picker rows of `view`'s open target picker, or a panic naming the dialog.
+fn target_picker_rows(
+    view: &ViewHandle<SftpBrowserView>,
+    app: &App,
+) -> (
+    Option<bool>,
+    Option<String>,
+    Vec<super::types::TargetPickerRow>,
+) {
+    view.read(app, |view, _| match &view.dialog {
+        Some(Dialog::CopyMoveTargetPicker {
+            is_move,
+            source,
+            rows,
+        }) => (*is_move, source.clone(), rows.clone()),
+        other => panic!("expected the target picker, got {other:?}"),
+    })
+}
+
+/// A target chosen in the footer is a pane, not a directory: F5 then copies
+/// into that pane's current directory without asking, even though two peers
+/// are visible, and the picker marks it as the current target.
+#[test]
+fn chosen_transfer_target_follows_its_pane_and_f5_uses_it_without_asking() {
+    warpui::App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/foo.txt", b"hello"),
+            ("right/.keep", b""),
+            ("third/sub/.keep", b""),
+        ]);
+        let root = temp.path().to_path_buf();
+        let [source, _right, third] = ["/left", "/right", "/third"].map(|dir| {
+            let (_, view) = create_view(&mut app);
+            view.update(&mut app, |view, ctx| {
+                let backend =
+                    Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+                view.set_backend_for_test(backend, PathBuf::from(dir), ctx);
+            });
+            view
+        });
+
+        source.read(&app, |view, ctx| {
+            assert_eq!(
+                view.transfer_target_text(ctx),
+                crate::t!("fm-target-footer-choose"),
+                "two visible peers leave no implicit target"
+            );
+        });
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ChooseTransferTarget, ctx);
+        });
+        let (is_move, picker_source, rows) = target_picker_rows(&source, &app);
+        assert_eq!(is_move, None, "choosing a target runs no operation");
+        assert_eq!(picker_source, None);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| !row.selected), "nothing chosen yet");
+        let third_row = rows
+            .iter()
+            .position(|row| row.label.ends_with("/third"))
+            .expect("the third pane is offered");
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::PickCopyMoveTarget(third_row), ctx);
+        });
+        assert!(
+            !root.join("third/foo.txt").exists(),
+            "choosing copies nothing"
+        );
+
+        third.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::NavigateTo(PathBuf::from("/third/sub")),
+                ctx,
+            );
+        });
+        source.read(&app, |view, ctx| {
+            let text = view.transfer_target_text(ctx);
+            assert!(
+                text.contains("/third/sub"),
+                "the footer names the chosen pane's current directory: {text}"
+            );
+        });
+
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        source.read(&app, |view, _| {
+            assert!(
+                view.dialog.is_none(),
+                "F5 asks nothing once a target is chosen"
+            );
+        });
+        assert_eq!(
+            std::fs::read(root.join("third/sub/foo.txt")).unwrap(),
+            b"hello"
+        );
+        assert!(!root.join("third/foo.txt").exists());
+        assert!(!root.join("right/foo.txt").exists());
+
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ChooseCopyTarget, ctx);
+        });
+        let (_, _, rows) = target_picker_rows(&source, &app);
+        let selected = rows.iter().filter(|row| row.selected).collect::<Vec<_>>();
+        assert_eq!(
+            selected.len(),
+            1,
+            "exactly the chosen pane is marked: {rows:?}"
+        );
+        assert!(selected[0].label.ends_with("/third/sub"));
+    });
+}
+
+/// A chosen target that has gone is never replaced by the visible peer: the
+/// footer asks again, and F5 opens the picker, naming its source, instead of
+/// copying anywhere.
+#[test]
+fn f5_asks_again_instead_of_falling_back_when_the_chosen_target_has_gone() {
+    warpui::App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/foo.txt", b"hello"),
+            ("visible/.keep", b""),
+            ("hidden/.keep", b""),
+        ]);
+        let root = temp.path().to_path_buf();
+        let backend = || Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+
+        let (_, source) = create_view(&mut app);
+        source.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend(), PathBuf::from("/left"), ctx);
+        });
+        let (_, visible) = create_view(&mut app);
+        visible.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(backend(), PathBuf::from("/visible"), ctx);
+        });
+        let (_, hidden) = create_view(&mut app);
+        hidden.update(&mut app, |view, ctx| {
+            view.set_pane_group_id(Some(warpui::EntityId::from_usize(1)), ctx);
+            view.set_backend_for_test(backend(), PathBuf::from("/hidden"), ctx);
+        });
+
+        source.read(&app, |view, ctx| {
+            let text = view.transfer_target_text(ctx);
+            assert!(
+                text.contains("/visible"),
+                "the sole visible peer is the default: {text}"
+            );
+        });
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ChooseTransferTarget, ctx);
+        });
+        let (_, _, rows) = target_picker_rows(&source, &app);
+        let hidden_row = rows
+            .iter()
+            .position(|row| row.other_tab && row.label.ends_with("/hidden"))
+            .expect("the other tab's pane is offered");
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::PickCopyMoveTarget(hidden_row), ctx);
+        });
+        source.read(&app, |view, ctx| {
+            let text = view.transfer_target_text(ctx);
+            assert!(text.contains("/hidden"), "the explicit choice wins: {text}");
+        });
+
+        hidden.update(&mut app, |view, ctx| view.set_pane_group_id(None, ctx));
+        source.read(&app, |view, ctx| {
+            assert_eq!(
+                view.transfer_target_text(ctx),
+                crate::t!("fm-target-footer-choose")
+            );
+        });
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx);
+        });
+        let (is_move, picker_source, rows) = target_picker_rows(&source, &app);
+        assert_eq!(is_move, Some(false));
+        assert!(
+            picker_source.is_some_and(|line| line.contains("foo.txt") && line.contains("/left")),
+            "the picker names what is copied from where"
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].label.ends_with("/visible"));
+        assert!(!root.join("visible/foo.txt").exists(), "no fallback copy");
+        assert!(!root.join("hidden/foo.txt").exists());
+    });
+}
+
+/// Transfer targets name the host, never its internal registry id, and two
+/// panes on the same host and directory still read differently.
+#[test]
+fn transfer_targets_name_the_host_not_the_registry_id() {
+    warpui::App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("left/foo.txt", b"hello"), ("right/.keep", b"")]);
+        let root = temp.path().to_path_buf();
+        let node_id = "registry-node-7f3a";
+        let [source, _first_target, _second_target] = ["/left", "/right", "/right"].map(|dir| {
+            let (_, view) = create_view_with_node(&mut app, node_id);
+            view.update(&mut app, |view, ctx| {
+                let backend =
+                    Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+                view.set_backend_for_test(backend, PathBuf::from(dir), ctx);
+            });
+            view
+        });
+
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::ChooseCopyTarget, ctx);
+        });
+        let (_, _, rows) = target_picker_rows(&source, &app);
+        assert_eq!(rows.len(), 2);
+        assert_ne!(
+            rows[0].label, rows[1].label,
+            "same host and directory: {rows:?}"
+        );
+        for row in &rows {
+            assert!(
+                !row.label.contains(node_id),
+                "registry id leaked: {}",
+                row.label
+            );
+            assert!(row.label.contains(&crate::t!("fm-label-remote-host")));
+            assert!(row.label.contains("/right"));
+        }
+    });
+}
+
+/// A long target location ends inside the footer; it never widens its pane at
+/// the expense of the neighbour.
+#[test]
+fn long_transfer_target_stays_within_its_pane() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_app(&mut app);
+        let (window_id, _, left, right, _left_temp, right_temp) =
+            create_dual_connected_view(&mut app);
+        let segment = "a-directory-name-far-too-long-for-a-narrow-split-pane";
+        let long = PathBuf::from("/").join(segment).join(segment).join(segment);
+        std::fs::create_dir_all(right_temp.path().join(long.strip_prefix("/").unwrap())).unwrap();
+        for view in [&left, &right] {
+            view.update(&mut app, |view, ctx| {
+                view.set_pane_group_id(Some(warpui::EntityId::from_usize(7)), ctx);
+            });
+        }
+        right.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::NavigateTo(long.clone()), ctx);
+        });
+        left.read(&app, |view, ctx| {
+            assert!(view.transfer_target_text(ctx).contains(segment));
+        });
+
+        let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(600.0, 800.0));
+        let left_root = position(&presenter, &layout_id(&left, &app, "pane-root"));
+        let right_root = position(&presenter, &layout_id(&right, &app, "pane-root"));
+        let target = position(&presenter, &layout_id(&left, &app, "transfer-target"));
+        assert!(target.width() > 0.0 && target.height() > 0.0);
+        assert!(
+            target.min_x() >= left_root.min_x() - 0.5,
+            "{target:?} in {left_root:?}"
+        );
+        assert!(
+            target.max_x() <= left_root.max_x() + 0.5,
+            "{target:?} in {left_root:?}"
+        );
+        assert!(left_root.max_x() <= right_root.min_x() + 0.5);
+        assert!(
+            right_root.width() + 1.0 >= left_root.width() && right_root.max_x() <= 600.5,
+            "the neighbour keeps its share: {left_root:?} {right_root:?}"
         );
     });
 }

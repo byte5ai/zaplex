@@ -21,7 +21,9 @@ use warpui::ViewHandle;
 
 use crate::editor::EditorView;
 use crate::sftp_manager::browser::SftpBrowserAction;
-use crate::sftp_manager::types::{format_size, Dialog, FileEntry, TransferDirection};
+use crate::sftp_manager::types::{
+    format_size, Dialog, FileEntry, TargetPickerRow, TransferDirection,
+};
 
 /// Maximum dialog width.
 const DIALOG_MAX_WIDTH: f32 = 360.0;
@@ -551,9 +553,10 @@ fn render_copy_move_conflict(
 }
 
 /// One selectable row of the target picker: a full-width button showing a
-/// candidate pane's `host:/path`, dispatching `PickCopyMoveTarget(index)`.
+/// candidate pane's `host · path`, dispatching `PickCopyMoveTarget(index)`.
+/// The pane's current transfer target carries a check mark.
 fn render_target_row(
-    label: &str,
+    row: &TargetPickerRow,
     index: usize,
     appearance: &Appearance,
     mouse_state: MouseStateHandle,
@@ -563,7 +566,9 @@ fn render_target_row(
     let ui_font_size = appearance.ui_font_size();
     let text_color = theme.active_ui_text_color();
     let bg = theme.surface_2();
-    let label_owned = label.to_string();
+    let check_color = theme.accent();
+    let label_owned = row.label.clone();
+    let selected = row.selected;
 
     Hoverable::new(mouse_state, move |_| {
         let text_el = Shrinkable::new(
@@ -573,16 +578,28 @@ fn render_target_row(
                 .finish(),
         )
         .finish();
-        let row = Flex::row()
+        let mut line = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_child(text_el)
-            .finish();
-        Container::new(ConstrainedBox::new(row).with_height(BUTTON_HEIGHT).finish())
-            .with_background(bg)
-            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-            .finish()
+            .with_spacing(6.0)
+            .with_child(text_el);
+        if selected {
+            line = line.with_child(
+                ConstrainedBox::new(Icon::Check.to_warpui_icon(check_color).finish())
+                    .with_width(14.0)
+                    .with_height(14.0)
+                    .finish(),
+            );
+        }
+        Container::new(
+            ConstrainedBox::new(line.finish())
+                .with_height(BUTTON_HEIGHT)
+                .finish(),
+        )
+        .with_background(bg)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
+        .finish()
     })
     .with_cursor(Cursor::PointingHand)
     .on_click(move |ctx, _, _| {
@@ -591,13 +608,15 @@ fn render_target_row(
     .finish()
 }
 
-/// Destination picker (F5/F6 with more than one other pane open): a titled
-/// dialog listing every candidate pane as a full-width row; picking one routes
-/// the copy/move, Cancel/X aborts. `row_btn_states` holds one mouse-state
-/// handle per label, in the same order.
+/// Destination picker: a titled dialog naming the pending operation's source
+/// and listing every candidate pane as a full-width row, the source's own tab
+/// first. Picking one routes the copy/move (or, without an operation, makes it
+/// the pane's transfer target); Cancel/X aborts. `row_btn_states` holds one
+/// mouse-state handle per row, in the same order.
 fn render_target_picker(
-    is_move: bool,
-    labels: &[String],
+    is_move: Option<bool>,
+    source: Option<&str>,
+    rows: &[TargetPickerRow],
     appearance: &Appearance,
     cancel_btn_state: MouseStateHandle,
     close_btn_state: MouseStateHandle,
@@ -608,33 +627,63 @@ fn render_target_picker(
     let ui_font = appearance.ui_font_family();
     let ui_font_size = appearance.ui_font_size();
 
-    let verb = if is_move {
-        crate::t!("fm-verb-move")
-    } else {
-        crate::t!("fm-verb-copy")
+    let title = match is_move {
+        Some(is_move) => {
+            let verb = if is_move {
+                crate::t!("fm-verb-move")
+            } else {
+                crate::t!("fm-verb-copy")
+            };
+            crate::t!("fm-dlg-picker-title", verb = verb)
+        }
+        None => crate::t!("fm-dlg-picker-title-target"),
     };
-    let title_bar = render_title_bar(
-        &crate::t!("fm-dlg-picker-title", verb = verb),
-        appearance,
-        close_btn_state,
+    let title_bar = render_title_bar(&title, appearance, close_btn_state);
+
+    let mut content = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+        .with_spacing(12.0)
+        .with_child(title_bar);
+    if let Some(source) = source {
+        content = content.with_child(
+            Text::new(source.to_string(), ui_font, ui_font_size)
+                .with_color(theme.active_ui_text_color().into())
+                .finish(),
+        );
+    }
+    content = content.with_child(
+        Shrinkable::new(
+            1.0,
+            Text::new(crate::t!("fm-dlg-picker-body"), ui_font, ui_font_size)
+                .with_color(sub_color.into())
+                .finish(),
+        )
+        .finish(),
     );
 
-    let desc_el = Shrinkable::new(
-        1.0,
-        Text::new(crate::t!("fm-dlg-picker-body"), ui_font, ui_font_size)
-            .with_color(sub_color.into())
-            .finish(),
-    )
-    .finish();
-
-    let mut rows = Flex::column()
+    // Tab headings only matter once a candidate lives in another tab.
+    let grouped = rows.iter().any(|row| row.other_tab);
+    let mut list = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
         .with_spacing(6.0);
-    for (index, label) in labels.iter().enumerate() {
+    let mut heading_for: Option<bool> = None;
+    for (index, row) in rows.iter().enumerate() {
+        if grouped && heading_for != Some(row.other_tab) {
+            heading_for = Some(row.other_tab);
+            let heading = if row.other_tab {
+                crate::t!("fm-dlg-picker-other-tabs")
+            } else {
+                crate::t!("fm-dlg-picker-this-tab")
+            };
+            list = list.with_child(
+                Text::new(heading, ui_font, ui_font_size)
+                    .with_color(sub_color.into())
+                    .finish(),
+            );
+        }
         let state = row_btn_states.get(index).cloned().unwrap_or_default();
-        rows = rows.with_child(render_target_row(label, index, appearance, state));
+        list = list.with_child(render_target_row(row, index, appearance, state));
     }
-    let rows = rows.finish();
 
     let buttons = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -643,12 +692,8 @@ fn render_target_picker(
         .with_child(render_cancel_button(appearance, cancel_btn_state))
         .finish();
 
-    let content = Flex::column()
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_spacing(12.0)
-        .with_child(title_bar)
-        .with_child(desc_el)
-        .with_child(rows)
+    let content = content
+        .with_child(list.finish())
         .with_child(buttons)
         .finish();
 
@@ -1141,9 +1186,14 @@ pub fn render_dialog(
     target_pick_btn_states: &[MouseStateHandle],
 ) -> Box<dyn Element> {
     match dialog {
-        Dialog::CopyMoveTargetPicker { is_move, labels } => render_target_picker(
+        Dialog::CopyMoveTargetPicker {
+            is_move,
+            source,
+            rows,
+        } => render_target_picker(
             *is_move,
-            labels,
+            source.as_deref(),
+            rows,
             appearance,
             cancel_btn_state,
             close_btn_state,

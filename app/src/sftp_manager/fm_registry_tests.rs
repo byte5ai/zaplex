@@ -3,7 +3,8 @@ use super::*;
 fn desc(id: u64, fs: FsNamespace, path: &str) -> FmPaneDescriptor {
     FmPaneDescriptor {
         id,
-        label: format!("pane{id}"),
+        host: "buildnode".into(),
+        host_detail: None,
         fs,
         current_path: PathBuf::from(path),
         route_epoch: 1,
@@ -273,4 +274,79 @@ fn equal_paths_on_different_hosts_are_distinct_target_coordinates() {
     reg.upsert(host_b.clone());
     assert_eq!(reg.resolve_snapshot(&host_a), Some(host_a));
     assert_eq!(reg.resolve_snapshot(&host_b), Some(host_b));
+}
+
+#[test]
+fn chosen_target_wins_and_never_falls_back_once_it_has_gone() {
+    let mut reg = FileManagerRegistry::new();
+    let group = EntityId::from_usize(1);
+    reg.upsert(desc_in_group(10, FsNamespace::Local, "/source", group));
+    reg.upsert(desc_in_group(20, FsNamespace::Local, "/visible", group));
+    reg.upsert(desc_in_group(
+        30,
+        FsNamespace::Local,
+        "/elsewhere",
+        EntityId::from_usize(2),
+    ));
+
+    let targets = reg.transfer_targets(10);
+    assert_eq!(targets.current(None).map(|pane| pane.id), Some(20));
+    assert_eq!(targets.current(Some(30)).map(|pane| pane.id), Some(30));
+
+    reg.remove(30);
+    let targets = reg.transfer_targets(10);
+    assert_eq!(targets.default.as_ref().map(|pane| pane.id), Some(20));
+    assert!(
+        targets.current(Some(30)).is_none(),
+        "a chosen pane that has gone must not fall back to the visible peer"
+    );
+}
+
+fn remote(id: u64, node: &str, host: &str, detail: &str, path: &str) -> FmPaneDescriptor {
+    FmPaneDescriptor {
+        host: host.into(),
+        host_detail: Some(detail.into()),
+        ..desc(id, FsNamespace::Remote(node.into()), path)
+    }
+}
+
+#[test]
+fn display_labels_name_host_and_path_and_keep_different_hosts_apart() {
+    crate::i18n::init(Some("en"));
+    let labels = display_labels(&[
+        remote(1, "node-1", "buildnode", "dev@192.0.2.10", "/srv"),
+        remote(2, "node-2", "worknode", "dev@192.0.2.20", "/srv"),
+    ]);
+    assert_ne!(labels[0], labels[1]);
+    assert!(labels[0].contains("buildnode") && labels[0].contains("/srv"));
+    assert!(labels[1].contains("worknode") && labels[1].contains("/srv"));
+    assert!(
+        labels.iter().all(|label| !label.contains("192.0.2.")),
+        "distinct host names need no connection identity: {labels:?}"
+    );
+
+    // Two registry hosts sharing a display name are different filesystems:
+    // their labels name the connection that tells them apart.
+    let labels = display_labels(&[
+        remote(1, "node-1", "worknode", "dev@192.0.2.10", "/srv"),
+        remote(2, "node-2", "worknode", "dev@192.0.2.20", "/srv"),
+    ]);
+    assert_ne!(labels[0], labels[1]);
+    assert!(labels[0].contains("dev@192.0.2.10"), "{labels:?}");
+    assert!(labels[1].contains("dev@192.0.2.20"), "{labels:?}");
+}
+
+#[test]
+fn display_labels_tell_apart_panes_on_the_same_directory() {
+    crate::i18n::init(Some("en"));
+    let labels = display_labels(&[
+        remote(3, "node-1", "worknode", "dev@192.0.2.10", "/srv"),
+        remote(7, "node-1", "worknode", "dev@192.0.2.10", "/srv"),
+        remote(9, "node-1", "worknode", "dev@192.0.2.10", "/var"),
+    ]);
+    assert_ne!(labels[0], labels[1], "{labels:?}");
+    assert!(labels[..2]
+        .iter()
+        .all(|label| label.contains("worknode · /srv")));
+    assert_eq!(labels[2], "worknode · /var", "unique labels stay plain");
 }

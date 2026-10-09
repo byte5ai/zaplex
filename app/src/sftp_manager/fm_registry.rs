@@ -7,7 +7,7 @@
 //! startup and in the file-manager test harnesses.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -47,9 +47,11 @@ pub enum FmPaneMode {
 pub struct FmPaneDescriptor {
     /// Stable, process-unique id of the pane.
     pub id: u64,
-    /// Human label for the destination picker, e.g. `local:/home/u` or
-    /// `host:/var/www` (kept live with the pane's current directory).
-    pub label: String,
+    /// Display name of the pane's host: its registry name, or "local".
+    pub host: String,
+    /// Connection identity (`user@host:port`). Shown only to tell apart two
+    /// hosts that share a display name; never a routing input.
+    pub host_detail: Option<String>,
     /// The filesystem this pane browses (for same-namespace matching).
     pub fs: FsNamespace,
     /// The pane's current directory — the copy/move destination.
@@ -64,6 +66,50 @@ pub struct FmPaneDescriptor {
     pub pane_group_id: Option<EntityId>,
 }
 
+impl FmPaneDescriptor {
+    /// `host · path`: where this pane browses, as the user reads it.
+    pub fn label(&self) -> String {
+        location_label(&self.host, &self.current_path)
+    }
+}
+
+fn location_label(host: &str, path: &Path) -> String {
+    format!("{host} · {}", path.display())
+}
+
+/// Labels for panes listed together (target picker, target footer).
+///
+/// A label reads `host · path`. Two different hosts that share a display name
+/// also name their connection identity. Panes that still read the same browse
+/// the same directory and are told apart by their stable pane id.
+pub fn display_labels(panes: &[FmPaneDescriptor]) -> Vec<String> {
+    let labels = panes
+        .iter()
+        .map(|pane| {
+            let shares_host_name = panes
+                .iter()
+                .any(|other| other.fs != pane.fs && other.host == pane.host);
+            match pane.host_detail.as_deref() {
+                Some(detail) if shares_host_name => {
+                    location_label(&format!("{} ({detail})", pane.host), &pane.current_path)
+                }
+                _ => pane.label(),
+            }
+        })
+        .collect::<Vec<_>>();
+    labels
+        .iter()
+        .zip(panes)
+        .map(|(label, pane)| {
+            if labels.iter().filter(|other| *other == label).count() > 1 {
+                crate::t!("fm-target-pane-ref", label = label.clone(), pane = pane.id)
+            } else {
+                label.clone()
+            }
+        })
+        .collect()
+}
+
 /// Candidate destinations for an F5/F6 operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransferTargets {
@@ -71,6 +117,19 @@ pub struct TransferTargets {
     pub default: Option<FmPaneDescriptor>,
     /// Every other open pane, including panes in inactive tabs.
     pub selectable: Vec<FmPaneDescriptor>,
+}
+
+impl TransferTargets {
+    /// The destination F5/F6 uses without asking. An explicitly chosen pane
+    /// wins while it is open; once it has gone there is no target until the
+    /// user chooses again, never a silent fallback to another pane. Without a
+    /// choice, the sole visible peer is the default.
+    pub fn current(&self, chosen: Option<u64>) -> Option<&FmPaneDescriptor> {
+        match chosen {
+            Some(id) => self.selectable.iter().find(|pane| pane.id == id),
+            None => self.default.as_ref(),
+        }
+    }
 }
 
 /// How a copy/move between two panes must be carried out, decided purely from
@@ -164,6 +223,13 @@ impl FileManagerRegistry {
             .iter()
             .filter(|p| p.mode == FmPaneMode::FileManager && &p.fs == fs)
             .find_map(|p| self.backends.get(&p.id).cloned())
+    }
+
+    /// Whether the pane with this id is currently an open file-manager pane.
+    pub fn is_open(&self, id: u64) -> bool {
+        self.panes
+            .iter()
+            .any(|pane| pane.id == id && pane.mode == FmPaneMode::FileManager)
     }
 
     /// Remove a pane (on close). A no-op if it was never registered. Drops the
