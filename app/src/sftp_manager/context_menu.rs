@@ -216,6 +216,7 @@ pub fn render_context_menu(
             | SftpBrowserAction::MoveToOtherPane
             | SftpBrowserAction::ChooseCopyTarget
             | SftpBrowserAction::ChooseMoveTarget
+            | SftpBrowserAction::ChooseTransferTarget
             | SftpBrowserAction::CloseFileManager
             | SftpBrowserAction::OverwriteConflict { .. }
             | SftpBrowserAction::SkipConflict { .. }

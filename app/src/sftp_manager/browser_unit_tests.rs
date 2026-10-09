@@ -925,3 +925,44 @@ fn marked_rows_cursor_and_inactive_pane_stay_distinct() {
     );
     assert_eq!(row_look(theme, true, false, true, true), marked);
 }
+
+#[test]
+fn transfer_targets_name_the_user_the_connection_authenticates_as() {
+    use diesel::Connection as _;
+    use diesel_migrations::MigrationHarness as _;
+    use warp_ssh_manager::{AuthType, OneKeyCredentialKind};
+
+    let mut conn = SqliteConnection::establish(":memory:").unwrap();
+    conn.run_pending_migrations(persistence::MIGRATIONS)
+        .unwrap();
+    let credential = SshRepository::create_onekey_credential(
+        &mut conn,
+        "shared-key",
+        "deploy",
+        OneKeyCredentialKind::Key,
+        Some("/home/deploy/.ssh/id_ed25519"),
+    )
+    .unwrap();
+    let mut info = SshServerInfo::new_default(String::new());
+    info.host = "edge.example.com".into();
+    info.port = 2222;
+    info.auth_type = AuthType::OneKey;
+    info.username = "ignored-local-user".into();
+    info.credential_id = Some(credential.id);
+    let node = SshRepository::create_server(&mut conn, None, "edge", &info).unwrap();
+    let server = SshRepository::get_server(&mut conn, &node.id)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        registry_login_identity(&mut conn, &server),
+        "deploy@edge.example.com:2222"
+    );
+    // Like the pane header: the SSH host, the node's name only without one.
+    assert_eq!(server_host_label(&mut conn, &server), "edge.example.com");
+    let without_host = SshServerInfo {
+        host: String::new(),
+        ..server
+    };
+    assert_eq!(server_host_label(&mut conn, &without_host), "edge");
+}

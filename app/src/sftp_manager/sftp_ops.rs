@@ -308,11 +308,18 @@ fn create_unique_remote_transfer_file(
     )))
 }
 
+/// An established SFTP session and the user it authenticated as.
+pub struct AuthenticatedSftpSession {
+    pub session: SftpSession,
+    /// The login user actually used; a OneKey credential supplies its own.
+    pub username: String,
+}
+
 /// Establish SFTP connection using server configuration
 pub fn connect_from_server(
     server: &SshServerInfo,
     secret_store: &dyn SshSecretStore,
-) -> Result<SftpSession, SftpOpsError> {
+) -> Result<AuthenticatedSftpSession, SftpOpsError> {
     connect_from_server_with_confirmation(server, secret_store, None)
 }
 
@@ -321,7 +328,7 @@ pub fn connect_from_server_confirmed(
     server: &SshServerInfo,
     secret_store: &dyn SshSecretStore,
     confirmation: &HostKeyConfirmation,
-) -> Result<SftpSession, SftpOpsError> {
+) -> Result<AuthenticatedSftpSession, SftpOpsError> {
     connect_from_server_with_confirmation(server, secret_store, Some(confirmation))
 }
 
@@ -329,7 +336,7 @@ fn connect_from_server_with_confirmation(
     server: &SshServerInfo,
     secret_store: &dyn SshSecretStore,
     confirmation: Option<&HostKeyConfirmation>,
-) -> Result<SftpSession, SftpOpsError> {
+) -> Result<AuthenticatedSftpSession, SftpOpsError> {
     let resolved_auth = resolve_sftp_auth(server)?;
     let auth = build_auth_method(server, &resolved_auth, secret_store)?;
     // A daemon connection keeps its confirmed host key in its own managed file,
@@ -351,31 +358,34 @@ fn connect_from_server_with_confirmation(
         confirmation,
         &additional_known_hosts,
     );
-    result.map_err(|error| match error {
-        zap_sftp::SftpError::UnknownHostKey {
-            fingerprint_sha256,
-            key_type,
-        } => SftpOpsError::UnknownHostKey {
-            host: server.host.clone(),
-            port: server.port,
-            fingerprint_sha256,
-            key_type,
-        },
-        zap_sftp::SftpError::HostKeyMismatch {
-            fingerprint_sha256,
-            key_type,
-        } => SftpOpsError::ChangedHostKey {
-            host: server.host.clone(),
-            port: server.port,
-            fingerprint_sha256,
-            key_type,
-        },
-        zap_sftp::SftpError::ConnectionFailed(_)
-        | zap_sftp::SftpError::Timeout
-        | zap_sftp::SftpError::Io(_)
-        | zap_sftp::SftpError::Ssh2(_) => SftpOpsError::Transport(error.to_string()),
-        error => error.into(),
-    })
+    let username = resolved_auth.username;
+    result
+        .map(|session| AuthenticatedSftpSession { session, username })
+        .map_err(|error| match error {
+            zap_sftp::SftpError::UnknownHostKey {
+                fingerprint_sha256,
+                key_type,
+            } => SftpOpsError::UnknownHostKey {
+                host: server.host.clone(),
+                port: server.port,
+                fingerprint_sha256,
+                key_type,
+            },
+            zap_sftp::SftpError::HostKeyMismatch {
+                fingerprint_sha256,
+                key_type,
+            } => SftpOpsError::ChangedHostKey {
+                host: server.host.clone(),
+                port: server.port,
+                fingerprint_sha256,
+                key_type,
+            },
+            zap_sftp::SftpError::ConnectionFailed(_)
+            | zap_sftp::SftpError::Timeout
+            | zap_sftp::SftpError::Io(_)
+            | zap_sftp::SftpError::Ssh2(_) => SftpOpsError::Transport(error.to_string()),
+            error => error.into(),
+        })
 }
 
 fn resolve_sftp_auth(server: &SshServerInfo) -> Result<ResolvedSshAuth, SftpOpsError> {

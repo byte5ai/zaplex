@@ -474,26 +474,40 @@ fn fm_position(app: &App, index: usize, part: &str) -> String {
 }
 
 pub fn file_manager_layout() -> TestStep {
-    TestStep::new("Check both native file-manager legends and file rows")
-        .add_named_assertion("Every function key stays on one line within its own pane", |app, window_id| {
+    TestStep::new("Check both native file-manager legends, transfer targets and file rows")
+        .add_named_assertion("Every function key and the transfer target stay within their own pane", |app, window_id| {
             for index in 0..2 {
                 let Some(root) = bounds(app, window_id, &fm_position(app, index, "pane-root")) else {
                 return AssertionOutcome::failure("File manager has not painted".into());
             };
-                let compact = bounds(app, window_id, &fm_position(app, index, "legend-compact"));
-                let legend = compact
-                    .or_else(|| bounds(app, window_id, &fm_position(app, index, "legend-full")));
-                let Some(legend) = legend else {
+                // A narrow pane wraps the legend into two or four rows of equal cells.
+                let legend = ["legend-rows-1", "legend-rows-2", "legend-rows-4"]
+                    .into_iter()
+                    .find_map(|part| bounds(app, window_id, &fm_position(app, index, part)).map(|legend| (part, legend)));
+                let Some((layout, legend)) = legend else {
                 return AssertionOutcome::failure("Function legend has not painted".into());
             };
+                let Some(target) = bounds(app, window_id, &fm_position(app, index, "transfer-target")) else {
+                return AssertionOutcome::failure(format!("Transfer target has not painted in pane {index}"));
+            };
+                if !contains(root, target) || target.max_y() > legend.min_y() + 1. {
+                    return AssertionOutcome::failure(format!("Transfer target escapes its pane or overlaps the legend: index={index}, pane={root:?}, target={target:?}, legend={legend:?}"));
+                }
                 let mut previous: Option<RectF> = None;
                 for key in ["F2", "F3", "F4", "F5", "F6", "F7", "F8", "F10"] {
                     let Some(cell) = bounds(app, window_id, &fm_position(app, index, &format!("function-{key}"))) else {
                 return AssertionOutcome::failure(format!("Missing {key} in pane {index}"));
             };
-                    if !contains(root, legend) || !contains(legend, cell) || previous.is_some_and(|prior| prior.max_x() > cell.min_x() + 1. || (prior.center().y() - cell.center().y()).abs() > 1.) {
+                    let overlaps = previous.is_some_and(|prior| {
+                        if (prior.center().y() - cell.center().y()).abs() <= 1. {
+                            prior.max_x() > cell.min_x() + 1.
+                        } else {
+                            cell.min_y() < prior.max_y() - 1.
+                        }
+                    });
+                    if !contains(root, legend) || !contains(legend, cell) || overlaps {
                         let window = app.window_bounds(&window_id);
-                        return AssertionOutcome::failure(format!("Function bar overlaps or wraps: index={index}, key={key}, compact={}, window={window:?}, pane={root:?}, legend={legend:?}, cell={cell:?}, previous={previous:?}", compact.is_some()));
+                        return AssertionOutcome::failure(format!("Function bar overlaps or escapes its pane: index={index}, key={key}, layout={layout}, window={window:?}, pane={root:?}, legend={legend:?}, cell={cell:?}, previous={previous:?}"));
                     }
                     previous = Some(cell);
                 }
@@ -501,6 +515,19 @@ pub fn file_manager_layout() -> TestStep {
             let browsers = app.views_of_type::<crate::sftp_manager::browser::SftpBrowserView>(window_id).expect("file-manager views");
             if browsers.len() != 2 || browsers.iter().any(|browser| !browser.read(app, |view, _| view.entries().iter().any(|entry| entry.name == "acceptance-file.txt"))) {
                 return AssertionOutcome::failure("Actual local fixture files are not visible in both panes".into());
+            }
+            // Each pane is the other's sole visible counterpart, so each footer
+            // names the other pane's directory before F5/F6 run. Each fixture
+            // directory has a unique name; a home prefix may read as `~`.
+            let directories = browsers
+                .iter()
+                .map(|browser| browser.read(app, |view, _| view.current_path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()))
+                .collect::<Vec<_>>();
+            for (index, browser) in browsers.iter().enumerate() {
+                let text = browser.read(app, |view, ctx| view.transfer_target_text(ctx));
+                if !text.contains(&directories[1 - index]) {
+                    return AssertionOutcome::failure(format!("Transfer target of pane {index} does not name the other pane: {text:?}"));
+                }
             }
             AssertionOutcome::Success
         })

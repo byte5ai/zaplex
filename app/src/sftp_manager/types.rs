@@ -195,6 +195,17 @@ impl TransferTask {
     }
 }
 
+/// One candidate of the transfer target picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetPickerRow {
+    /// `host · path`, disambiguated among the listed candidates.
+    pub label: String,
+    /// The pane lives in another tab than the source pane.
+    pub other_tab: bool,
+    /// The pane is the source's current transfer target.
+    pub selected: bool,
+}
+
 /// Dialog type
 #[derive(Debug, Clone)]
 pub enum Dialog {
@@ -249,15 +260,18 @@ pub enum Dialog {
         /// Move vs copy (wording only).
         is_move: bool,
     },
-    /// F5/F6 with more than one other file-manager pane open: let the user pick
-    /// which pane to copy/move into. The candidate descriptors (with ids, for
-    /// routing) live on the view in `pending_target_pick`; this carries only the
-    /// display labels (`host:/path`, one per candidate, in the same order).
+    /// Choose the pane to copy/move into: F5/F6 without a single unambiguous
+    /// destination, Shift-F5/F6, or the target footer. The candidate
+    /// descriptors (with ids, for routing) live on the view in
+    /// `pending_target_pick`; this carries only what is displayed.
     CopyMoveTargetPicker {
-        /// Move vs copy (wording only).
-        is_move: bool,
-        /// `host:/path` label per candidate pane, in `pending_target_pick` order.
-        labels: Vec<String>,
+        /// Move vs copy of the pending operation; `None` when the picker only
+        /// chooses the pane's transfer target (wording only).
+        is_move: Option<bool>,
+        /// What the pending operation transfers and from where.
+        source: Option<String>,
+        /// One row per candidate pane, in `pending_target_pick` order.
+        rows: Vec<TargetPickerRow>,
     },
     /// A cross-connection copy/move found files that already exist on the
     /// destination: ask once whether to overwrite them all or skip them (the
