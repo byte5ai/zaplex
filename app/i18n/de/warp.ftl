@@ -751,6 +751,7 @@ cockpit-task-peek-no-plan = Kein strukturierter Aufgabenplan
 cockpit-task-peek-state-waiting = Wartet auf Dich
 cockpit-task-peek-state-working = Arbeitet
 cockpit-task-peek-state-idle = Inaktiv
+cockpit-tree-managed-agent = Verwalteter Agent – Details in der Kontoansicht
 menu-tab-pin = Tab anheften
 menu-tab-unpin = Tab lösen
 theme-editor-open = Theme-Editor öffnen

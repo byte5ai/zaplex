@@ -456,15 +456,41 @@ fn tree_hierarchy_is_host_project_pty_agent() {
     let mut replacement = session("replacement", "/p/project", SessionState::Idle, 30);
     replacement.pty_session_id = Some("pty-1".to_string());
     replacement.pty_session_generation = Some(5);
+    let other_project = session("other", "/p/other", SessionState::Idle, 40);
+    let elsewhere = session("elsewhere", "/p/project", SessionState::Active, 50);
 
-    let agents = [claude, codex, replacement];
-    let sessions = group_project_sessions(true, None, &agents);
+    let tree = build_fleet_tree(vec![
+        host("alpha", vec![claude, codex, replacement, other_project]),
+        remote_host("beta", "beta-id", vec![elsewhere]),
+    ]);
 
+    // Host: every host is its own root, even for an identical repository path.
+    assert_eq!(tree.hosts.len(), 2);
+    let alpha = tree.hosts.iter().find(|host| host.host == "alpha").unwrap();
+    let beta = tree.hosts.iter().find(|host| host.host == "beta").unwrap();
+    assert_eq!(beta.projects.len(), 1);
+    assert_eq!(beta.projects[0].sessions[0].session_id, "elsewhere");
+
+    // Project: one node per repository root of that host.
+    assert_eq!(alpha.projects.len(), 2);
+    let project = alpha
+        .projects
+        .iter()
+        .find(|project| project.root == "/p/project")
+        .unwrap();
+    assert_eq!(project.sessions.len(), 3);
+
+    // PTY session → Agent: agents of one PTY generation share one session;
+    // a new generation of the same PTY is a new session.
+    let sessions =
+        group_project_sessions(alpha.is_local, alpha.host_id.as_deref(), &project.sessions);
     assert_eq!(sessions.len(), 2, "a new PTY generation is a new session");
     assert_eq!(sessions[0].agents.len(), 2);
     assert_eq!(sessions[0].state, SessionState::Waiting);
     assert_eq!(sessions[0].needs_me, 1);
     assert_eq!(sessions[0].agents[0].session_id, "codex");
+    assert_eq!(sessions[1].agents.len(), 1);
+    assert_eq!(sessions[1].agents[0].session_id, "replacement");
 }
 
 #[test]

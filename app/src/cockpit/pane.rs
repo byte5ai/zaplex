@@ -120,6 +120,10 @@ const ALIAS_EDITOR_WIDTH: f32 = 220.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_SPACING: f32 = 8.0;
 const HEAT_BAR_HEIGHT: f32 = 8.0;
+/// Width of a meter's short window label and the gap before its track; a
+/// reset line under the meter starts at the track's edge.
+const METER_LABEL_WIDTH: f32 = 24.0;
+const METER_LABEL_GAP: f32 = 8.0;
 /// Fixed column width for the cost/token matrix cells.
 const MATRIX_COL_WIDTH: f32 = 110.0;
 
@@ -1217,11 +1221,11 @@ impl CockpitPaneView {
         self.account_key.as_deref()
     }
 
-    /// The ONE reset-countdown line, shared by the fleet card and the account
-    /// detail: `5h ↻ <t> · Wo ↻ <t>` — absent windows drop out, `None` when
-    /// neither is known. Labels are the same short meter vocabulary as
-    /// [`Self::heat_bar`]'s, so the line reads against the meters above it
-    /// (audit P0.4: bare times with no label read as debug output).
+    /// The fleet card's reset-countdown line: `5h ↻ <t> · Wo ↻ <t>` — absent
+    /// windows drop out, `None` when neither is known. Labels are the same
+    /// short meter vocabulary as [`Self::heat_bar`]'s, so the line reads
+    /// against the meters above it (audit P0.4: bare times with no label read
+    /// as debug output).
     fn reset_line(acct: &AccountUsage, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
         let label_5h = crate::t!("cockpit-meter-5h");
         let label_week = crate::t!("cockpit-meter-week");
@@ -1328,10 +1332,10 @@ impl CockpitPaneView {
 
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(8.0)
+            .with_spacing(METER_LABEL_GAP)
             .with_child(
                 ConstrainedBox::new(Self::text(label.to_string(), family, size, muted))
-                    .with_width(24.0)
+                    .with_width(METER_LABEL_WIDTH)
                     .finish(),
             )
             .with_child(track)
@@ -2986,24 +2990,40 @@ impl CockpitPaneView {
         // The two meters. `heat_bar` carries the one theme-role utilisation rule.
         // Meter labels are the short vocabulary („5h"/„Wo"), same as the fleet
         // card — the long column titles clipped inside the label cell (audit
-        // P0.3); they belong to the figures matrix below.
-        col = col.with_child(self.heat_bar(
-            &crate::t!("cockpit-meter-5h"),
-            acct.heat,
-            acct.provenance,
-            appearance,
-        ));
-        col = col.with_child(self.heat_bar(
-            &crate::t!("cockpit-meter-week"),
-            acct.heat_week,
-            acct.provenance,
-            appearance,
-        ));
-        // ONE reset line under both meters, in the fleet card's format
-        // (`5h ↻ … · Wo ↻ …`) — bare times with no label read as debug output
-        // (audit P0.4).
-        if let Some(reset_line) = Self::reset_line(acct, now) {
-            col = col.with_child(Self::text(reset_line, family, body, faint));
+        // P0.3); they belong to the figures matrix below. Each limit keeps its
+        // own reset directly under its meter, starting at the track's edge, so
+        // the window label above names it (#160 UI addendum).
+        let meters = [
+            (crate::t!("cockpit-meter-5h"), acct.heat, acct.reset5h),
+            (
+                crate::t!("cockpit-meter-week"),
+                acct.heat_week,
+                acct.reset_week,
+            ),
+        ];
+        for (label, fraction, reset) in meters {
+            let mut quota = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_spacing(2.0)
+                .with_child(self.heat_bar(&label, fraction, acct.provenance, appearance));
+            let reset = format_reset(reset, now);
+            if !reset.is_empty() {
+                quota = quota.with_child(
+                    Container::new(Self::text(format!("↻ {reset}"), family, body, faint))
+                        .with_padding_left(METER_LABEL_WIDTH + METER_LABEL_GAP)
+                        .finish(),
+                );
+            }
+            col = col.with_child(quota.finish());
+        }
+        // 7-day per-model sublimits (Max plans) when the usage endpoint reports
+        // them — often the binding limit, so the account detail lists them like
+        // the fleet card does.
+        for (label, sublimit) in [("opus", acct.heat_opus), ("sonnet", acct.heat_sonnet)] {
+            if let Some(fraction) = sublimit {
+                col = col.with_child(self.heat_bar(label, fraction, acct.provenance, appearance));
+            }
         }
 
         // Three windows × ($ / tokens). "Today" is the LOCAL day (F2).

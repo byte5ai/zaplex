@@ -287,6 +287,48 @@ Cargo-, Mutations- und Zwei-Host-Ergebnisse liefern. Der frühere grüne statisc
 `088efe3f1` ist kein Nachweis für die danach hinzugekommenen Änderungen. GH-160/GH-169 bleiben bis
 zur vollständigen verlinkten Abnahme offen.
 
+## Stage 9 — Abgleich nach Sidebar-Trennung und Baumdarstellung B+
+
+Referenzen synchronisiert: **2026-10-09T16:21:43Z**. Beide Referenz-Repositories wurden frisch
+gefetcht und ausschließlich per Fast-forward aktualisiert; beide waren bereits aktuell. Ihre
+sauberen `main`-Trees entsprechen `origin/main`, und `git ls-remote` bestätigt dieselben
+Default-Branch-SHAs. Beide sind gegenüber Stage 8 unverändert.
+
+| Repository / Baum | Branch | Stand |
+|---|---|---|
+| Zaplex | `origin/main` | `0ba54c049eff50a904a3b67842abe6b85fa06d10` |
+| Zaplex Arbeitsstand dieses Audits | `fix/160-cockpit-restluecken`, Basis `0ba54c049` | plus Änderungen dieser Stage |
+| `claudeplex` | `origin/main` | `8c2041ff68d97463aed7aeb01da0f16b708b8e22` |
+| `claudeplex-desktop` | `origin/main` | `8c0aad0a944a8f5b6a26636d0827db57ca22d0f3` |
+
+Da die Referenzen stillstehen, vergleicht diese Stage die Zaplex-Änderungen seit Stage 8
+(`8375611` bis `0ba54c049`, vor allem #504/#505 über PR #529 und die Aufmerksamkeitslogik aus
+`88a67df69`) erneut mit dem Referenzcode.
+
+| Bereich | Referenzverhalten | Zaplex | Einordnung | Nachweis |
+|---|---|---|---|---|
+| Konten und gepinnte Wurzeln | TUI vereinigt Standard-, Nachbar-, Prozess- und Environment-Wurzeln (`src/discover.ts`). | Seit Stage 8 unverändert; nur die Testisolation von Prozesswurzeln wurde ergänzt. | Parität für Claude, Erweiterung für Codex. | `claude_tests.rs`, `codex_tests.rs`; Matrixszenarien mit `pinned` und `multiple`. |
+| Claude-/Codex-Sessions | Registry, lebender Prozess und Transkript werden verbunden (TUI `src/collect.ts:560-599`). | Codex-Rollouts liefern zusätzlich die Turn-ID der letzten Runde (`88a67df69`). | Parität, für Codex Erweiterung. | `codex_sessions_tests.rs`, `sessions_tests.rs`. |
+| Live, ruhend, fortsetzbar | Ruhende Historie wird unabhängig von der Registry gesucht (TUI `src/collect.ts:685-718`). | Unverändert. Die lokale Baumquelle ist jetzt die reine Funktion `local_tree_sessions`; ruhende Claude-/Codex-Historie bleibt in der Kontoansicht. | Parität. | `dormant_history_never_enters_live_tree`, neu `dormant_account_history_never_enters_local_tree`; Fortsetzen über `only_a_dormant_session_can_be_resumed`. |
+| Status und Aufmerksamkeit | TUI markiert Zustandswechsel erst nach der ersten Beobachtung (`src/tracker.ts:32-72`); Desktop sortiert Wartende nach oben. | Gezählt werden offene Rückfragen und ungesehene beendete Runden; „gesehen“ hängt an Session plus Turn-ID, Runden vor App-Start zählen nicht. Außerhalb von Zaplex gestartete, nicht öffenbare Agents erscheinen nicht in der UI, ihre Kosten zählen weiter. | Bewusste Abweichung nach PRODUCT §4/§12/§13 und `#spec S2`, `S3`, `T4`. | `model_tests.rs` (Attention-Projektion), `capabilities_tests.rs`. |
+| Verbrauch und Kostenherkunft | Desktop liest das OAuth-Token aus `.credentials.json`, auf macOS nur für das Standardkonto aus dem Schlüsselbund, sonst Schätzung mit Markierung (`electron/usage.ts:38-58`). | Identische Tokenquelle (`app/src/cockpit/oauth.rs`), Schätzungen tragen `~`, die Legende nennt den Stichtag der Listenpreise. | Parität. Die Beobachtung aus #459, dass auf einem Mac alle Konten geschätzt waren, lässt sich hier nicht nachstellen; gepinnte Konten ohne eigene Credentials-Datei fallen in beiden Produkten auf die Schätzung zurück. | `oauth_tests.rs`; `cockpit-pane-provenance-legend`. |
+| Kontoidentität und Kontoansicht | Desktop `AccountDetail` zeigt 5-h-, Wochen-, Opus- und Sonnet-Balken sowie den 5-h-Reset (`src/views/AccountDetail.tsx:40-64`). | Provider als Überschrift, Konto und Plan darunter; jede Reset-Angabe steht unter ihrem Balken. **Regression behoben:** Die Opus-/Sonnet-Teillimits fehlten in der Pane eines einzelnen Kontos und standen nur in der Flottenkarte. | Fix in dieser Stage, Reset je Balken geht über die Referenz hinaus. | `pane.rs::render_account_detail`; `#spec I1`, `I2`. |
+| Sidebar-Aufteilung | Desktop wechselt pro Aktivität zwischen `AccountsSidebar` und `AgentsSidebar` (`src/shell/Shell.tsx:20-31`). | Seit #504 zwei eigene Einträge „KI-Sessions“ und „KI-Konten“ im vorhandenen Toolbelt; die 3/5-Höhe ist entfallen. | Parität wiederhergestellt, ohne neue Navigationsleiste. | `toolbelt_has_separate_sessions_and_accounts_views`, `waiting_signal_visible_on_sessions_entry_while_accounts_active`, neu `persisted_cockpit_selection_maps_to_sessions_view`. |
+| Baumdarstellung | TUI zeigt Host, Ordner und Session ohne PTY-Ebene (`src/index.ts:432-519`). | #505 Darstellung B+ auf dem unveränderten Modell `Host → Projekt → PTY-Session → Agent`. Die Marke `◆` verwalteter Agents hatte keinen Tooltip; jetzt lokalisiert erklärt. | Bewusste Erweiterung; Tooltip-Lücke behoben. | `project_tree_rows`-Tests in `panel_tests.rs`, erweitert `tree_hierarchy_is_host_project_pty_agent`; `#spec T5`–`T8`. |
+| Favoriten, Verbindungen, Start | Keine Host-Favoriten; TUI startet mit gepinntem Konto und Ordner, Desktop wählt das freieste Konto. | Gemeinsames Startmenü für Tab und Pane mit „Weitere Hosts“ (#522), Hostname verbindet direkt, `⋯` öffnet das Flyout (#463). | Zaplex-spezifisch, keine Regression. | `connections_registry_drives_favorite_launch_menu`; `pane-launch-and-tab-join.html`. |
+
+Weitere Befunde dieser Stage betreffen die Prüfkette, nicht die Referenzparität: Der letzte
+ci-batch auf `b813a4759` scheiterte am statischen Guard `check-compact-row-actions` (das Muster
+erkannte den in #529 ergänzten Tooltip um den Hosttitel nicht) und auf macOS an einem nur unter
+`cfg(test)` definierten Aufruf aus #521. Beides ist im Arbeitsstand korrigiert. Statische Prüfungen
+dieser Stage: `cockpit-parity-audit validate` (107 benannte Tests, neun Szenarien) und `self-test`
+(28 Fälle) bestanden; der Guard wurde ohne ripgrep nachgebildet und besteht. Kompilierung, Clippy,
+Rust-Tests, Mutationen und Screenshots sind nicht gelaufen; sie stehen im nächsten gebündelten
+ci-batch aus.
+
+Offene Punkte in eigenen Issues: Remote-Inventur an der 10-s-Frist (#507), Verbindungen-Grammatik
+und Sessionzeilen (#455, #509), Pane- und Dateimanager-Titel (#461), Transferziele (#464).
+
 ## Repeat procedure
 
 1. Fetch all three remotes and record default branch, exact revision, and audit time.

@@ -64,7 +64,8 @@ if ! rg --quiet 'ActionButton::new\("", PaneHeaderTheme\)' app/src/ui_components
     fail=1
 fi
 
-if ! rg --quiet --multiline --pcre2 'Shrinkable::new\(\s*1\.0,\s*Self::identity_text\(\s*label,' app/src/cockpit/panel.rs; then
+# The full-title tooltip may wrap the identity; the flexible slot must still own it.
+if ! rg --quiet --multiline --pcre2 'Shrinkable::new\(\s*1\.0,\s*(?:appearance\.ui_builder\(\)\.overlay_tool_tip_on_element\((?:[^;()]|\([^()]*\))*?)?Self::identity_text\(\s*label,' app/src/cockpit/panel.rs; then
     echo "cockpit host identity must own the flexible row width" >&2
     fail=1
 fi

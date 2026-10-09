@@ -41,9 +41,9 @@ use zaplex_cockpit::fleet::sort_hosts;
 use zaplex_cockpit::HostNode;
 use zaplex_cockpit::{
     apply_oauth_usage, apply_session_verdicts, build_snapshot_with_cache, fold_inventory,
-    mark_registry_bound_hosts_unverified, session_key, AccountOverrides, AgentInventoryStatus,
-    Attention, CockpitSnapshot, FleetTree, HostAvailability, PricingTable, Provider,
-    RegisteredHost, RemoteHost, ScanHealth, SeenTurns, SessionSnapshot, SessionVerdict,
+    mark_registry_bound_hosts_unverified, session_key, AccountOverrides, AccountUsage,
+    AgentInventoryStatus, Attention, CockpitSnapshot, FleetTree, HostAvailability, PricingTable,
+    Provider, RegisteredHost, RemoteHost, ScanHealth, SeenTurns, SessionSnapshot, SessionVerdict,
     TerminalLink, TranscriptScanCache,
 };
 // Cross-host daemon fold is a native-only concern: the `agent_session` module
@@ -111,6 +111,67 @@ fn initial_snapshot() -> CockpitSnapshot {
 
 fn should_apply_refresh_result(current_generation: u64, completed_generation: u64) -> bool {
     current_generation == completed_generation
+}
+
+/// What a remote-manager event means for the Cockpit refresh pipeline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteRefresh {
+    /// The set of open connections changed. Scans already in flight describe
+    /// the old topology, so their results must not be applied (#160: a late
+    /// inventory must not re-add a disconnected host).
+    Topology,
+    /// Session inventory may have changed on an unchanged topology.
+    Inventory,
+    /// Neither connections nor session inventory changed.
+    Ignore,
+}
+
+fn remote_refresh(event: &RemoteServerManagerEvent) -> RemoteRefresh {
+    match event {
+        RemoteServerManagerEvent::HostConnected { .. }
+        | RemoteServerManagerEvent::SessionConnected { .. }
+        | RemoteServerManagerEvent::SessionDisconnected { .. }
+        | RemoteServerManagerEvent::SessionReconnected { .. }
+        | RemoteServerManagerEvent::SessionDeregistered { .. }
+        | RemoteServerManagerEvent::HostDisconnected { .. } => RemoteRefresh::Topology,
+        RemoteServerManagerEvent::SessionExited { .. }
+        | RemoteServerManagerEvent::SessionOpened { .. }
+        | RemoteServerManagerEvent::SessionInventoryChanged { .. } => RemoteRefresh::Inventory,
+        RemoteServerManagerEvent::SessionConnecting { .. }
+        | RemoteServerManagerEvent::SessionConnectionFailed { .. }
+        | RemoteServerManagerEvent::NavigatedToDirectory { .. }
+        | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
+        | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
+        | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
+        | RemoteServerManagerEvent::BufferUpdated { .. }
+        | RemoteServerManagerEvent::SetupStateChanged { .. }
+        | RemoteServerManagerEvent::BinaryCheckComplete { .. }
+        | RemoteServerManagerEvent::BinaryInstallComplete { .. }
+        | RemoteServerManagerEvent::ClientRequestFailed { .. }
+        | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
+        | RemoteServerManagerEvent::SessionOutput { .. }
+        | RemoteServerManagerEvent::SessionNotice { .. }
+        | RemoteServerManagerEvent::ManagedLaunchOpened { .. }
+        | RemoteServerManagerEvent::ManagedLaunchFailed { .. } => RemoteRefresh::Ignore,
+    }
+}
+
+/// The local contribution to the live tree: every live account session plus
+/// Antigravity's per-workspace resume registry. Antigravity is deliberately
+/// Idle: its disk state proves a resumable conversation, not a running
+/// process. Claude/Codex dormant history (`AccountUsage::idle_sessions`)
+/// remains on its account-detail surfaces and never enters the tree; adding
+/// it here would turn provider enablement into a broad Conductor behavior
+/// change.
+fn local_tree_sessions(
+    accounts: &[AccountUsage],
+    antigravity: Vec<SessionSnapshot>,
+) -> Vec<SessionSnapshot> {
+    accounts
+        .iter()
+        .flat_map(|account| account.sessions.iter().cloned())
+        .chain(antigravity)
+        .collect()
 }
 
 /// Actor-local single-flight state for full cockpit builds. Ordinary requests
@@ -354,39 +415,16 @@ impl CockpitModel {
         ctx.subscribe_to_model(&HomeDirectoryWatcher::handle(ctx), |me, _event, ctx| {
             me.spawn_refresh(ctx);
         });
-        ctx.subscribe_to_model(
-            &RemoteServerManager::handle(ctx),
-            |me, event, ctx| match event {
-                RemoteServerManagerEvent::HostConnected { .. }
-                | RemoteServerManagerEvent::SessionConnected { .. }
-                | RemoteServerManagerEvent::SessionDisconnected { .. }
-                | RemoteServerManagerEvent::SessionReconnected { .. }
-                | RemoteServerManagerEvent::SessionDeregistered { .. }
-                | RemoteServerManagerEvent::HostDisconnected { .. } => {
+        ctx.subscribe_to_model(&RemoteServerManager::handle(ctx), |me, event, ctx| {
+            match remote_refresh(event) {
+                RemoteRefresh::Topology => {
                     me.refresh_flight.invalidate();
                     me.spawn_refresh(ctx);
                 }
-                RemoteServerManagerEvent::SessionExited { .. }
-                | RemoteServerManagerEvent::SessionOpened { .. }
-                | RemoteServerManagerEvent::SessionInventoryChanged { .. } => me.spawn_refresh(ctx),
-                RemoteServerManagerEvent::SessionConnecting { .. }
-                | RemoteServerManagerEvent::SessionConnectionFailed { .. }
-                | RemoteServerManagerEvent::NavigatedToDirectory { .. }
-                | RemoteServerManagerEvent::RepoMetadataSnapshot { .. }
-                | RemoteServerManagerEvent::RepoMetadataUpdated { .. }
-                | RemoteServerManagerEvent::RepoMetadataDirectoryLoaded { .. }
-                | RemoteServerManagerEvent::BufferUpdated { .. }
-                | RemoteServerManagerEvent::SetupStateChanged { .. }
-                | RemoteServerManagerEvent::BinaryCheckComplete { .. }
-                | RemoteServerManagerEvent::BinaryInstallComplete { .. }
-                | RemoteServerManagerEvent::ClientRequestFailed { .. }
-                | RemoteServerManagerEvent::ServerMessageDecodingError { .. }
-                | RemoteServerManagerEvent::SessionOutput { .. }
-                | RemoteServerManagerEvent::SessionNotice { .. } => {}
-                RemoteServerManagerEvent::ManagedLaunchOpened { .. }
-                | RemoteServerManagerEvent::ManagedLaunchFailed { .. } => {}
-            },
-        );
+                RemoteRefresh::Inventory => me.spawn_refresh(ctx),
+                RemoteRefresh::Ignore => {}
+            }
+        });
 
         // Hook status (open prompts) and terminal lifetime change what is
         // openable and what needs the user without any rescan.
@@ -666,25 +704,13 @@ impl CockpitModel {
                             .map(|node_id| (node_id, daemon.host_id.clone()))
                     })
                     .collect();
-                // Local contribution: every live account session plus
-                // Antigravity's per-workspace resume registry. Antigravity is
-                // deliberately Idle: its disk state proves a resumable
-                // conversation, not a running process. Claude/Codex dormant
-                // histories remain on their existing account-detail surfaces;
-                // adding all of them here would turn provider enablement into a
-                // broad Conductor behavior change.
                 let antigravity = zaplex_cockpit::antigravity_idle_sessions(
                     &inputs.home,
                     scan_now,
                     zaplex_cockpit::IDLE_MAX_AGE,
                     zaplex_cockpit::IDLE_SESSION_LIMIT,
                 );
-                let local: Vec<SessionSnapshot> = snapshot
-                    .accounts
-                    .iter()
-                    .flat_map(|account| account.sessions.iter().cloned())
-                    .chain(antigravity)
-                    .collect();
+                let local = local_tree_sessions(&snapshot.accounts, antigravity);
                 let local_label = inputs.local_label.clone();
                 let mut inventory = fold_inventory(inputs.local_label, local, Vec::new());
                 apply_local_scan_health(&mut inventory, &snapshot.health);
