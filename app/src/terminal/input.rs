@@ -5100,7 +5100,6 @@ impl Input {
         ctx.notify();
     }
 
-    #[cfg(test)]
     pub(crate) fn ordinary_command_input_is_ready(&self) -> bool {
         self.ordinary_command_input_ready
     }
