@@ -2,7 +2,7 @@
 <html lang="de">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Verbindungen – schmale Sessionzeilen (#455)</title>
+<title>Verbindungen – schmale Sessionzeilen (#455, #509)</title>
 <style>
   * { box-sizing: border-box; }
   body { margin: 24px; background: #0e1420; color: #d9dce5; font: 14px/1.2 system-ui, sans-serif; }
@@ -18,7 +18,8 @@
   .open { width: 22px; flex-basis: 22px; }
   .section { margin-bottom: 2px; padding: 5px 8px 5px 36px; font-size: 12px; overflow-wrap: anywhere; }
   .muted, .metadata { color: #98a2b3; }
-  .session { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 52px; margin-bottom: 2px; border-radius: 4px; }
+  .session { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 36px; margin-bottom: 2px; border-radius: 4px; }
+  .mark { width: 16px; flex: 0 0 16px; margin-right: -8px; padding-left: 4px; color: #a89cef; }
   .session:hover { background: #ffffff08; }
   .details { flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
   button:focus-visible, [data-navigation-row]:focus-visible { outline: 1px solid #a89cef; outline-offset: -1px; }
@@ -29,21 +30,23 @@
   .error { color: #f39191; }
 </style>
 <h1>Verbindungen: Sessionzeilen bei 250, 320 und 480 px</h1>
-<p>Anonymisierte HTML-Layout-Fixture zu #455 und #456 nach dem aktuellen GH-160/#459-Vertrag. Sie illustriert die ruhige Zeilenaufteilung ohne Puffer-/RAM-Diagnostik, die Einrückung und Umbrüche. Sie rendert keine WarpUI-Elemente und ersetzt daher weder den nativen Presenter-Test noch eine Abnahme auf macOS. Kein App-Build erforderlich.</p>
+<p>Anonymisierte HTML-Layout-Fixture zu #455, #456 und #509 nach dem aktuellen GH-160/#459-Vertrag. Sie illustriert die ruhige Zeilenaufteilung ohne Puffer-/RAM-Diagnostik, die Einrückung und Umbrüche. Die erste Zaplex-Session ist in diesem Fenster offen: Sie trägt den Titel ihrer Pane und die Akzent-Marke in der Einrückungsspalte (<code>#spec C6</code>). Die übrigen zeigen ihre Daemon-Identität; eine davon mit dem Metadaten-Slot „zuletzt geöffnet“, die letzte ohne jede Identität als „Host · Terminal“ mit der Session-ID nur im Tooltip (<code>#spec C7</code>). Sie rendert keine WarpUI-Elemente und ersetzt daher weder den nativen Presenter-Test noch eine Abnahme auf macOS. Kein App-Build erforderlich.</p>
 <div class="matrix" id="matrix"></div>
 <p>Beim Aktualisieren bleiben die zuletzt geladenen Zeilen an derselben Position; das Aktualisieren-Icon zeigt den laufenden Abruf mit lokalisiertem Tooltip. Die Aufklapp-Aktion ist direkt am Host sichtbar. Beide Sessionarten öffnen per Titel oder Terminal-Icon. Pfeil auf/ab navigieren, Enter öffnet, links/rechts klappt ein/aus und Cmd/Ctrl-R aktualisiert. Schlägt die Abfrage fehl, erscheint der Fehler anstelle der alten Zeilen. Alle Bezeichnungen und Identitäten in dieser Fixture sind erfunden.</p>
 <script>
   const copy = {
     de: {
-      group: "Zaplex-Sessions", fallback: "Session · 87654321",
-      long: "Eine sehr lange Sessionidentität zur Überprüfung des Seitenleistenlayouts",
+      group: "Zaplex-Sessions", fallback: "build-node-production-europe · Terminal", sessionId: "Session-ID: 87654321-0000-4000-8000-000000000000",
+      here: "build-node-production-europe · api-gateway", herePath: "build-node-production-europe · /srv/services/api-gateway", openHere: "In diesem Fenster offen", showTab: "Tab anzeigen",
+      long: "Eine sehr lange Sessionidentität zur Überprüfung des Seitenleistenlayouts", lastOpened: "zuletzt geöffnet vor 3 Stunden",
       muxGroup: "Bestehende tmux-/byobu-Sessions", mux: "Lang benannte byobu-Sitzung zur Layoutprüfung",
       metadata: "byobu (tmux) · 12 Fenster · 2 Clients", open: "Session im Terminal öffnen",
       refreshing: "Sessions werden aktualisiert…", refresh: "Sessions aktualisieren", expand: "Sessions anzeigen", collapse: "Sessions ausblenden", favorite: "Zu Favoriten hinzufügen", connected: "Verbindung trennen"
     },
     en: {
-      group: "Zaplex sessions", fallback: "Session · 87654321",
-      long: "A very long session identity for checking the narrow sidebar layout",
+      group: "Zaplex sessions", fallback: "build-node-production-europe · Terminal", sessionId: "Session ID: 87654321-0000-4000-8000-000000000000",
+      here: "build-node-production-europe · api-gateway", herePath: "build-node-production-europe · /srv/services/api-gateway", openHere: "Open in this window", showTab: "Show tab",
+      long: "A very long session identity for checking the narrow sidebar layout", lastOpened: "last opened 3 hours ago",
       muxGroup: "Existing tmux/byobu sessions", mux: "A long named byobu session for checking the layout",
       metadata: "byobu (tmux) · 12 windows · 2 clients", open: "Open session in terminal",
       refreshing: "Refreshing sessions…", refresh: "Refresh sessions", expand: "Show sessions", collapse: "Hide sessions", favorite: "Add to favorites", connected: "Disconnect"
@@ -58,10 +61,11 @@
         <div class="panel" data-width="${width}">
           <div class="host" tabindex="0" data-navigation-row><button class="disclosure" title="${c.collapse}" aria-label="${c.collapse}" aria-expanded="true">⌄</button><span class="host-name">build-node-production-europe</span><span title="Persistente Sessions">ϟ</span><span class="host-actions"><button class="refresh" title="${width === 320 ? c.refreshing : c.refresh}" aria-label="${c.refresh}" aria-busy="${width === 320}">${width === 320 ? "◌" : "↻"}</button><button title="${c.favorite}" aria-label="${c.favorite}">☆</button><button title="${c.connected}" aria-label="${c.connected}">⌁</button></span></div><div class="inventory">
           <div class="section">${c.group}</div>
-          <div class="session" tabindex="-1" data-navigation-row><button class="details" title="${c.open}"><div class="title">${c.long}</div></button><button class="open" title="${c.open}" aria-label="${c.open}">&gt;_</button></div>
-          <div class="session" tabindex="-1" data-navigation-row><button class="details" title="${c.open}"><div class="title fallback">${c.fallback}</div></button><button class="open" title="${c.open}" aria-label="${c.open}">&gt;_</button></div>
+          <div class="session here" tabindex="-1" data-navigation-row><span class="mark" aria-hidden="true">•</span><button class="details" title="${c.herePath}&#10;${c.openHere}" aria-label="${c.here}, ${c.openHere}"><div class="title">${c.here}</div></button><button class="open" title="${c.showTab}" aria-label="${c.showTab}">&gt;_</button></div>
+          <div class="session" tabindex="-1" data-navigation-row><span class="mark"></span><button class="details" title="${c.long}"><div class="title">${c.long}</div><div class="metadata">${c.lastOpened}</div></button><button class="open" title="${c.open}" aria-label="${c.open}">&gt;_</button></div>
+          <div class="session" tabindex="-1" data-navigation-row><span class="mark"></span><button class="details" title="${c.fallback}&#10;${c.sessionId}"><div class="title fallback">${c.fallback}</div></button><button class="open" title="${c.open}" aria-label="${c.open}">&gt;_</button></div>
           <div class="section">${c.muxGroup}</div>
-          <div class="session" tabindex="-1" data-navigation-row><button class="details" title="${c.open}"><div class="title">${c.mux}</div><div class="metadata">${c.metadata}</div></button><button class="open" title="${c.open}" aria-label="${c.open}">&gt;_</button></div>
+          <div class="session" tabindex="-1" data-navigation-row><span class="mark"></span><button class="details" title="${c.open}"><div class="title">${c.mux}</div><div class="metadata">${c.metadata}</div></button><button class="open" title="${c.open}" aria-label="${c.open}">&gt;_</button></div>
         </div></div>`;
       document.querySelector("#matrix").appendChild(fixture);
       const disclosure = fixture.querySelector(".disclosure");
@@ -118,7 +122,11 @@
       }
     }
     const fallback = panel.querySelector(".fallback");
-    checks.push(fallback.scrollWidth <= fallback.clientWidth);
+    checks.push(!/[0-9a-f]{8}/.test(fallback.textContent));
+    const here = panel.querySelector(".here");
+    const mark = here.querySelector(".mark").getBoundingClientRect();
+    checks.push(mark.right <= here.querySelector(".title").getBoundingClientRect().left);
+    checks.push(here === panel.querySelector(".session"));
   }
   document.documentElement.dataset.fixtureChecks = checks.every(Boolean) ? "passed" : "failed";
   document.documentElement.dataset.fixtureAssertions = checks.length;

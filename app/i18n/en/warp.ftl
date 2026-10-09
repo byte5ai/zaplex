@@ -3004,7 +3004,22 @@ workspace-left-panel-ssh-manager-sessions-loading = Loading sessions…
 workspace-left-panel-ssh-manager-sessions-empty = No Zaplex sessions
 workspace-left-panel-ssh-manager-sessions-not-persistent = Set "Session persistence" to Persistent to use this
 workspace-left-panel-ssh-manager-sessions-needs-key = Zaplex sessions need key-based authentication
-workspace-left-panel-ssh-manager-session-fallback = Session · { $id }
+workspace-left-panel-ssh-manager-session-id = Session ID: { $id }
+workspace-left-panel-ssh-manager-session-open-here = Open in this window
+workspace-left-panel-ssh-manager-session-show-tab = Show tab
+workspace-left-panel-ssh-manager-session-last-opened-now = last opened just now
+workspace-left-panel-ssh-manager-session-last-opened-minutes = { $count ->
+        [one] last opened 1 minute ago
+       *[other] last opened { $count } minutes ago
+    }
+workspace-left-panel-ssh-manager-session-last-opened-hours = { $count ->
+        [one] last opened 1 hour ago
+       *[other] last opened { $count } hours ago
+    }
+workspace-left-panel-ssh-manager-session-last-opened-days = { $count ->
+        [one] last opened 1 day ago
+       *[other] last opened { $count } days ago
+    }
 workspace-left-panel-ssh-manager-session-host-missing = This host no longer exists in Connections
 workspace-left-panel-ssh-manager-session-open-error = Could not open this session: { $detail }
 workspace-left-panel-ssh-manager-sessions-refreshing = Refreshing sessions…

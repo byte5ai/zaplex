@@ -651,6 +651,15 @@ pub fn seed_session_inventory() -> TestStep {
                     ring_bytes: 1_048_576,
                     ..Default::default()
                 },
+                SessionInfo {
+                    session_id: "fixture-last-opened".into(),
+                    cwd: "/srv/projects/detached-worker".into(),
+                    last_attached_epoch_millis: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+                        .saturating_sub(3 * 3_600_000),
+                    ..Default::default()
+                },
             ]
             .into_iter()
             .map(|session| RoutedDaemonSession {
@@ -725,9 +734,11 @@ pub fn session_layout() -> TestStep {
                             "Session {index} identity/action collision: {row:?}, {title:?}, {open:?}"
                         ));
                     }
+                    // Rows 0 and 1 were never attached; row 2 shows its last
+                    // attach, and the multiplexer rows their window/client counts.
                     if (index < 2) == position("metadata").is_some() {
                         return AssertionOutcome::failure(format!(
-                            "Session {index}: only mux window/client counts may have metadata"
+                            "Session {index}: unexpected metadata line presence"
                         ));
                     }
                 }

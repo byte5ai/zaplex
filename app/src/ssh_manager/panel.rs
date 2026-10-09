@@ -35,8 +35,8 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::units::Pixels;
 use warpui::{
-    AppContext, BlurContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
-    View, ViewContext, ViewHandle,
+    AppContext, BlurContext, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
+    TypedActionView, View, ViewContext, ViewHandle, WeakModelHandle, WindowId,
 };
 
 use warp_ssh_manager::{
@@ -54,12 +54,15 @@ use warp_core::HostId;
 use settings::Setting;
 use zaplex_cockpit::{Favorite, FavoriteKind};
 
+use crate::app_state::{daemon_pty_claim, DaemonPtyIdentity};
 use crate::cockpit::favorites::FavoritesStore;
 use crate::cockpit::tailscale::TailscaleHost;
 use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
+use crate::pane_group::{PaneConfiguration, PaneConfigurationEvent};
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
+use crate::remote_server::session_inventory::RoutedDaemonSession;
 use crate::settings::SshSettings;
 use crate::ssh_manager::candidates::{CandidateRow, CandidatesViewModel};
 use crate::ssh_manager::{
@@ -201,7 +204,7 @@ fn session_row_key(
 fn sync_session_row_states(
     states: &mut HashMap<String, MouseStateHandle>,
     node_id: &str,
-    sessions: &[crate::remote_server::session_inventory::RoutedDaemonSession],
+    sessions: &[RoutedDaemonSession],
     multiplexers: &[MultiplexerSessionInfo],
 ) {
     let prefix = format!("{node_id}:");
@@ -233,12 +236,12 @@ fn connected_hosts_by_registry_node(
     grouped
 }
 
+/// Identity of a daemon session that is not open in this window. The visible
+/// title never shows the raw session id: without daemon metadata the row uses
+/// the host/Terminal fallback of a pane without a known directory, and the
+/// full id stays in the tooltip.
 fn daemon_session_identity(host: &str, session: &SessionInfo) -> TerminalIdentity {
-    let short_id: String = session.session_id.chars().take(8).collect();
-    let fallback = crate::t!(
-        "workspace-left-panel-ssh-manager-session-fallback",
-        id = short_id
-    );
+    let fallback = crate::t!("workspace-new-session-terminal");
     let mut identity = terminal_identity(host, Some(&session.cwd), &fallback);
     if !session.title.trim().is_empty() {
         identity.full = if session.cwd.trim().is_empty() {
@@ -247,8 +250,166 @@ fn daemon_session_identity(host: &str, session: &SessionInfo) -> TerminalIdentit
             format!("{}\n{}", session.title, identity.full)
         };
         identity.short = session.title.clone();
+    } else if session.cwd.trim().is_empty() {
+        identity.full = format!(
+            "{}\n{}",
+            identity.full,
+            crate::t!(
+                "workspace-left-panel-ssh-manager-session-id",
+                id = session.session_id.clone()
+            )
+        );
     }
     identity
+}
+
+/// Pane identity of a daemon session that is open in this window, read from
+/// the pane holding the session's PTY claim. The row therefore shows exactly
+/// the title of that pane and of its tab.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocalSessionPane {
+    title: String,
+    tooltip: String,
+}
+
+/// Presentation of one native session row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DaemonSessionRow {
+    identity: TerminalIdentity,
+    metadata: Option<String>,
+    open_here: bool,
+}
+
+fn daemon_session_row(
+    host: &str,
+    session: &SessionInfo,
+    local: Option<&LocalSessionPane>,
+    now_epoch_millis: u64,
+) -> DaemonSessionRow {
+    match local {
+        Some(pane) => {
+            // A pane without a title yet keeps the daemon identity.
+            let identity = if pane.title.trim().is_empty() {
+                daemon_session_identity(host, session)
+            } else {
+                TerminalIdentity {
+                    short: pane.title.clone(),
+                    full: pane.tooltip.clone(),
+                }
+            };
+            DaemonSessionRow {
+                identity: TerminalIdentity {
+                    full: format!(
+                        "{}\n{}",
+                        identity.full,
+                        crate::t!("workspace-left-panel-ssh-manager-session-open-here")
+                    ),
+                    ..identity
+                },
+                metadata: None,
+                open_here: true,
+            }
+        }
+        None => DaemonSessionRow {
+            identity: daemon_session_identity(host, session),
+            metadata: last_opened_label(session.last_attached_epoch_millis, now_epoch_millis),
+            open_here: false,
+        },
+    }
+}
+
+/// The daemon's last-attach time is the only activity signal it reports. It
+/// is neither the detach time nor an expiry (#508), so it is named as what it
+/// is.
+fn last_opened_label(last_attached_epoch_millis: u64, now_epoch_millis: u64) -> Option<String> {
+    if last_attached_epoch_millis == 0 {
+        return None;
+    }
+    let minutes = now_epoch_millis.saturating_sub(last_attached_epoch_millis) / 60_000;
+    let hours = minutes / 60;
+    let days = hours / 24;
+    Some(if minutes == 0 {
+        crate::t!("workspace-left-panel-ssh-manager-session-last-opened-now")
+    } else if hours == 0 {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-last-opened-minutes",
+            count = minutes
+        )
+    } else if days == 0 {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-last-opened-hours",
+            count = hours
+        )
+    } else {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-last-opened-days",
+            count = days
+        )
+    })
+}
+
+/// Display and keyboard order of one host's native sessions. The daemon lists
+/// them in no stable order. Sessions open in this window come first, by pane
+/// title; the others follow by their most recent attach.
+fn ordered_daemon_sessions<'a>(
+    node_id: &str,
+    sessions: &'a [RoutedDaemonSession],
+    local: &HashMap<String, LocalSessionPane>,
+) -> Vec<(String, &'a RoutedDaemonSession)> {
+    let mut rows: Vec<_> = sessions
+        .iter()
+        .map(|routed| {
+            (
+                session_row_key(node_id, &routed.session, routed.route.as_ref()),
+                routed,
+            )
+        })
+        .collect();
+    rows.sort_by(|(left_key, left), (right_key, right)| {
+        match (local.get(left_key), local.get(right_key)) {
+            (Some(left_pane), Some(right_pane)) => left_pane
+                .title
+                .to_lowercase()
+                .cmp(&right_pane.title.to_lowercase()),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => right
+                .session
+                .last_attached_epoch_millis
+                .cmp(&left.session.last_attached_epoch_millis),
+        }
+        .then_with(|| left_key.cmp(right_key))
+    });
+    rows
+}
+
+/// The exact claim identity of an inventory row: the authenticated daemon host
+/// id and runtime plus PTY id and generation, as recorded by the daemon
+/// terminal that claims the PTY.
+fn daemon_pty_identity(routed: &RoutedDaemonSession) -> Option<DaemonPtyIdentity> {
+    let host_id = routed.host_id.as_deref().filter(|id| !id.is_empty())?;
+    let runtime = routed.daemon_runtime.as_ref()?;
+    Some(DaemonPtyIdentity {
+        daemon_host_id: host_id.to_string(),
+        runtime_filename: runtime.runtime_filename().to_string(),
+        server_version: runtime.server_version().to_string(),
+        pty_session_id: routed.session.session_id.clone(),
+        pty_generation: routed.session.generation,
+    })
+}
+
+/// The pane configuration of the terminal in `window_id` that holds the claim
+/// for `identity`. A provisional claim without a bound terminal, or a terminal
+/// in another window, does not make the session open here.
+fn local_session_pane_configuration(
+    identity: &DaemonPtyIdentity,
+    window_id: WindowId,
+    app: &AppContext,
+) -> Option<ModelHandle<PaneConfiguration>> {
+    let owner = daemon_pty_claim(identity, app)?;
+    let terminal_view = owner.terminal_view.as_ref()?.upgrade(app)?;
+    (terminal_view.window_id(app) == window_id)
+        .then(|| terminal_view.as_ref(app).pane_configuration().clone())
 }
 
 fn session_row_details(
@@ -657,8 +818,13 @@ pub struct SshManagerPanel {
     /// Hover/click state per session row, scoped by host, daemon runtime, PTY
     /// identity, and generation.
     session_row_states: HashMap<String, MouseStateHandle>,
-    /// Fixed-width open actions for both daemon and tmux/byobu sessions.
-    session_open_actions: HashMap<String, CompactRowAction>,
+    /// Fixed-width open actions for both daemon and tmux/byobu sessions. The
+    /// flag records whether the action shows an existing tab in this window.
+    session_open_actions: HashMap<String, (bool, CompactRowAction)>,
+    /// Native session rows open in this window, keyed like their row state.
+    local_session_panes: HashMap<String, LocalSessionPane>,
+    /// Pane configurations whose title changes refresh `local_session_panes`.
+    observed_pane_configurations: HashMap<EntityId, WeakModelHandle<PaneConfiguration>>,
     /// Shared scroll position for the add-host block and saved host tree.
     content_scroll_state: ClippedScrollStateHandle,
     tailscale_discovery_in_flight: bool,
@@ -758,6 +924,8 @@ impl SshManagerPanel {
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
             session_open_actions: HashMap::new(),
+            local_session_panes: HashMap::new(),
+            observed_pane_configurations: HashMap::new(),
             content_scroll_state: ClippedScrollStateHandle::default(),
             tailscale_discovery_in_flight: false,
             command_factory,
@@ -791,6 +959,7 @@ impl SshManagerPanel {
                     | RemoteServerManagerEvent::SessionOpened { .. }
                     | RemoteServerManagerEvent::SessionInventoryChanged { .. }
             ) {
+                me.sync_local_session_panes(ctx);
                 me.sync_connected_hosts(ctx);
                 ctx.notify();
             }
@@ -1534,6 +1703,7 @@ impl SshManagerPanel {
         self.sessions_error.clear();
         self.session_row_states.clear();
         self.session_open_actions.clear();
+        self.local_session_panes.clear();
     }
 
     fn begin_session_fetch(&mut self, id: &str) -> Option<u64> {
@@ -1571,6 +1741,7 @@ impl SshManagerPanel {
                     );
                     self.host_session_inventories
                         .insert(id.to_string(), inventory);
+                    self.sync_local_session_panes(ctx);
                     self.sync_session_open_actions(id, ctx);
                 }
                 Err(error) => {
@@ -1745,16 +1916,86 @@ impl SshManagerPanel {
         self.session_open_actions
             .retain(|key, _| !key.starts_with(&prefix) || keys.contains(key));
         for key in keys {
-            self.session_open_actions
-                .entry(key.clone())
-                .or_insert_with(|| {
-                    CompactRowAction::new(
-                        crate::ui_components::icons::Icon::Terminal,
-                        crate::t!("workspace-left-panel-ssh-manager-multiplexer-open"),
-                        SshManagerPanelAction::OpenSessionRow(key),
-                        ctx,
-                    )
-                });
+            let open_here = self.local_session_panes.contains_key(&key);
+            if self
+                .session_open_actions
+                .get(&key)
+                .is_some_and(|(action_open_here, _)| *action_open_here == open_here)
+            {
+                continue;
+            }
+            // Opening a session that is already open here shows its tab; any
+            // other session opens in a new tab.
+            let action = CompactRowAction::new(
+                crate::ui_components::icons::Icon::Terminal,
+                if open_here {
+                    crate::t!("workspace-left-panel-ssh-manager-session-show-tab")
+                } else {
+                    crate::t!("workspace-left-panel-ssh-manager-multiplexer-open")
+                },
+                SshManagerPanelAction::OpenSessionRow(key.clone()),
+                ctx,
+            );
+            self.session_open_actions.insert(key, (open_here, action));
+        }
+    }
+
+    /// Recomputes which listed native sessions are open in this window and
+    /// with which pane title. The claim registry is the source: it maps each
+    /// daemon PTY to the terminal holding it. Title changes of those panes
+    /// re-run this projection; moving a tab to another window or closing it
+    /// into Undo Close is picked up by the next lifecycle event or refresh.
+    fn sync_local_session_panes(&mut self, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        let mut local = HashMap::new();
+        let mut configurations = Vec::new();
+        for (node_id, inventory) in &self.host_session_inventories {
+            for routed in &inventory.sessions {
+                let Some(configuration) = daemon_pty_identity(routed).and_then(|identity| {
+                    local_session_pane_configuration(&identity, window_id, ctx)
+                }) else {
+                    continue;
+                };
+                let pane = configuration.as_ref(ctx);
+                let title = pane.title().to_string();
+                let tooltip = pane.title_tooltip().unwrap_or(title.as_str()).to_string();
+                local.insert(
+                    session_row_key(node_id, &routed.session, routed.route.as_ref()),
+                    LocalSessionPane { title, tooltip },
+                );
+                configurations.push(configuration);
+            }
+        }
+        self.observed_pane_configurations
+            .retain(|_, configuration| configuration.upgrade(ctx).is_some());
+        for configuration in configurations {
+            if self
+                .observed_pane_configurations
+                .contains_key(&configuration.id())
+            {
+                continue;
+            }
+            self.observed_pane_configurations
+                .insert(configuration.id(), configuration.downgrade());
+            ctx.subscribe_to_model(&configuration, |me, _, event, ctx| {
+                // A tooltip-only change emits just `HeaderContentChanged`.
+                if matches!(
+                    event,
+                    PaneConfigurationEvent::TitleUpdated
+                        | PaneConfigurationEvent::HeaderContentChanged
+                ) {
+                    me.sync_local_session_panes(ctx);
+                    ctx.notify();
+                }
+            });
+        }
+        if local == self.local_session_panes {
+            return;
+        }
+        self.local_session_panes = local;
+        let node_ids: Vec<String> = self.host_session_inventories.keys().cloned().collect();
+        for node_id in node_ids {
+            self.sync_session_open_actions(&node_id, ctx);
         }
     }
 
@@ -1782,22 +2023,21 @@ impl SshManagerPanel {
         let Some(inventory) = self.host_session_inventories.get(node_id) else {
             return Vec::new();
         };
-        let mut rows: Vec<_> = inventory
-            .sessions
-            .iter()
-            .map(|routed| {
-                let session = &routed.session;
-                (
-                    FocusedRow::Session(session_row_key(node_id, session, routed.route.as_ref())),
-                    SshManagerPanelAction::AdoptSession {
-                        node_id: node_id.to_string(),
-                        pty_session_id: session.session_id.clone(),
-                        pty_generation: session.generation,
-                        daemon_route: routed.route.clone(),
-                    },
-                )
-            })
-            .collect();
+        let mut rows: Vec<_> =
+            ordered_daemon_sessions(node_id, &inventory.sessions, &self.local_session_panes)
+                .into_iter()
+                .map(|(key, routed)| {
+                    (
+                        FocusedRow::Session(key),
+                        SshManagerPanelAction::AdoptSession {
+                            node_id: node_id.to_string(),
+                            pty_session_id: routed.session.session_id.clone(),
+                            pty_generation: routed.session.generation,
+                            daemon_route: routed.route.clone(),
+                        },
+                    )
+                })
+                .collect();
         rows.extend(inventory.multiplexers.sessions.iter().map(|session| {
             (
                 FocusedRow::Session(multiplexer_row_key(node_id, session)),
@@ -2959,6 +3199,7 @@ impl SshManagerPanel {
         key: &str,
         identity: TerminalIdentity,
         metadata: Option<String>,
+        open_here: bool,
         indent: f32,
         appearance: &warp_core::ui::appearance::Appearance,
     ) -> Box<dyn Element> {
@@ -3008,7 +3249,7 @@ impl SshManagerPanel {
             ctx.dispatch_typed_action(SshManagerPanelAction::OpenSessionRow(row_key.clone()))
         })
         .finish();
-        let open = self.session_open_actions.get(key).map(|action| {
+        let open = self.session_open_actions.get(key).map(|(_, action)| {
             SavePosition::new(
                 Container::new(action.render())
                     .with_horizontal_padding(1.0)
@@ -3018,10 +3259,42 @@ impl SshManagerPanel {
             .for_single_frame()
             .finish()
         });
-        let row = compose_session_row_targets(primary, open);
+        // The open-here mark hangs in the fixed indentation slot before the
+        // title, so marked and unmarked rows share one text axis. Its meaning
+        // is named in the row tooltip.
+        let mark: Box<dyn Element> = if open_here {
+            SavePosition::new(
+                Container::new(
+                    Text::new_inline(
+                        "\u{2022}".to_string(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_body(),
+                    )
+                    .with_color(theme.accent().into_solid())
+                    .finish(),
+                )
+                .with_padding_left(ITEM_PADDING_HORIZONTAL / 2.0)
+                .finish(),
+                &format!("ssh-manager-session:{key}:open-here"),
+            )
+            .for_single_frame()
+            .finish()
+        } else {
+            Empty::new().finish()
+        };
+        let row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                ConstrainedBox::new(mark)
+                    .with_width(FOLDER_DEPTH_INDENT)
+                    .finish(),
+            )
+            .with_child(Shrinkable::new(1.0, compose_session_row_targets(primary, open)).finish())
+            .finish();
         SavePosition::new(
             Container::new(row)
-                .with_padding_left(indent)
+                .with_padding_left(indent - FOLDER_DEPTH_INDENT)
                 .with_padding_right(ITEM_PADDING_HORIZONTAL)
                 .with_margin_bottom(ITEM_MARGIN_BOTTOM)
                 .finish(),
@@ -3099,13 +3372,23 @@ impl SshManagerPanel {
             .map(|inventory| inventory.sessions.as_slice())
             .filter(|sessions| !sessions.is_empty())
         {
-            for routed_session in sessions {
-                let session = &routed_session.session;
-                let key = session_row_key(&node.id, session, routed_session.route.as_ref());
+            let now_epoch_millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_millis() as u64);
+            for (key, routed) in
+                ordered_daemon_sessions(&node.id, sessions, &self.local_session_panes)
+            {
+                let row = daemon_session_row(
+                    &node.name,
+                    &routed.session,
+                    self.local_session_panes.get(&key),
+                    now_epoch_millis,
+                );
                 rows.push(self.render_session_row(
                     &key,
-                    daemon_session_identity(&node.name, session),
-                    None,
+                    row.identity,
+                    row.metadata,
+                    row.open_here,
                     session_indent,
                     appearance,
                 ));
@@ -3156,6 +3439,7 @@ impl SshManagerPanel {
                             short: title,
                         },
                         Some(metadata),
+                        false,
                         session_indent,
                         appearance,
                     ));
