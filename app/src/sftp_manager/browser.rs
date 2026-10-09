@@ -1174,18 +1174,22 @@ fn pane_host_identity(node_id: &str) -> (String, Option<String>) {
 /// the user the connection actually authenticates as, which a OneKey
 /// credential supplies itself.
 fn registry_host_identity(conn: &mut SqliteConnection, server: &SshServerInfo) -> (String, String) {
-    let name = SshRepository::list_nodes(conn)
-        .ok()
-        .and_then(|nodes| nodes.into_iter().find(|node| node.id == server.node_id))
-        .map(|node| node.name)
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| crate::t!("fm-label-remote-host"));
     let username = SshRepository::resolve_server_auth(conn, server)
         .map_or_else(|_| server.username.clone(), |auth| auth.username);
     (
-        name,
+        registry_host_name(conn, &server.node_id),
         connection_identity(&username, &server.host, server.port),
     )
+}
+
+/// A registry node's display name, or a localized fallback when blank or missing.
+fn registry_host_name(conn: &mut SqliteConnection, node_id: &str) -> String {
+    SshRepository::list_nodes(conn)
+        .ok()
+        .and_then(|nodes| nodes.into_iter().find(|node| node.id == node_id))
+        .map(|node| node.name)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| crate::t!("fm-label-remote-host"))
 }
 
 /// `user@host`, with the port only when it is not the SSH default.
@@ -1673,7 +1677,7 @@ impl SftpBrowserView {
                 self.connect_handle = self.run_blocking(
                     ctx,
                     move || {
-                        let session = match confirmation {
+                        let connection = match confirmation {
                             Some(confirmation) => sftp_ops::connect_from_server_confirmed(
                                 &server,
                                 &secret_store,
@@ -1682,6 +1686,7 @@ impl SftpBrowserView {
                             None => sftp_ops::connect_from_server(&server, &secret_store),
                         }
                         .map_err(PrepareSftpConnectionError::Connect)?;
+                        let sftp_ops::AuthenticatedSftpSession { session, username } = connection;
                         let sftp = session.sftp().map_err(|error| {
                             PrepareSftpConnectionError::SftpChannel(
                                 super::sftp_ops::SftpOpsError::from(error),
@@ -1693,17 +1698,17 @@ impl SftpBrowserView {
                                     .ok()
                                     .map(|home| normalize_remote_path(&home))
                             });
-                        // Name the connection as it was actually opened, so a
+                        // Name the connection as it was actually opened: the server
+                        // snapshot it used and the user it authenticated as, so a
                         // retry after a registry edit never shows the old host.
-                        let host_identity = warp_ssh_manager::with_conn(|c| {
-                            Ok(registry_host_identity(c, &server))
+                        let name = warp_ssh_manager::with_conn(|c| {
+                            Ok(registry_host_name(c, &server.node_id))
                         })
-                        .unwrap_or_else(|_| {
-                            (
-                                crate::t!("fm-label-remote-host"),
-                                connection_identity(&server.username, &server.host, server.port),
-                            )
-                        });
+                        .unwrap_or_else(|_| crate::t!("fm-label-remote-host"));
+                        let host_identity = (
+                            name,
+                            connection_identity(&username, &server.host, server.port),
+                        );
                         Ok(PreparedSftpConnection {
                             session,
                             sftp,
