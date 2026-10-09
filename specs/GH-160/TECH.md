@@ -65,9 +65,14 @@ foreground_command }`) behind the capability `session-live-metadata-v1`, adverti
 daemons. `remote_server::session_live` reads it while answering `ListSessions`: field 8 (`tpgid`)
 of the session shell's `/proc/<pid>/stat` names the PTY's foreground process group (the shell is a
 session leader with the PTY as controlling terminal); a group from another kernel session is
-ignored. The directory is that process's `/proc/<pid>/cwd`, else the shell's. The command is the
-base name of `argv[0]`, or of the script for a known interpreter (`node`, `python`, …), else
-`comm`; arguments never leave the host. At an idle prompt the command is empty. The client drops
+ignored. The job's process is the group leader, or, once a pipeline's leader has exited, the
+newest remaining member of that group and session. The directory is that process's
+`/proc/<pid>/cwd`, else the shell's. The command is the first word of `argv[0]` (process titles
+rewritten by the program carry arguments), or the script's name for a known interpreter (`node`,
+`python`, …), else `comm`. A script counts only as a path or a file with a script extension;
+inline code (`-c`, `-e`, `--eval`, …), module names and option operands fall back to the
+interpreter's name. Arguments never leave the host. At an idle prompt the command is empty. The
+client drops
 `live` from daemons without the capability (`discard_unsupported_live_metadata`), and title
 enrichment no longer copies the directory name into the title: the row derives `Host · directory`
 from the live directory, falling back to the launch directory, like a pane does.
