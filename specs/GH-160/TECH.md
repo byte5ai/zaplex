@@ -537,10 +537,13 @@ the source identity and either the sole valid counterpart or an explicit selecte
 coordinate contains stable pane/session identity, exact host/daemon route, generation, mode, and
 path; the tab title and a presumed tab host are never routing inputs.
 Each descriptor also carries the host's display name (registry name, `local`, or a localized
-unknown-host fallback) and its connection identity, both resolved once when the browser is created
-so a pending transfer never sees its descriptor change. `display_labels` renders `host · path`,
-adds the connection identity only when two different filesystems share a display name, and the
-stable pane id only when labels still collide. The browser keeps an explicit `chosen_target` pane
+unknown-host fallback) and its connection identity (`user@host[:port]` with the user the connection
+authenticates as; a OneKey credential supplies its own). Both are resolved when the browser is
+created and again on every established connection, together with the new route epoch, so a pending
+transfer never sees its descriptor change. `FileManagerRegistry::labels` applies `display_labels`
+to every open File Manager pane, the source included: `host · path`, plus the connection identity
+only when two different filesystems share a display name, plus the stable pane id only when labels
+still collide. Footer, picker rows, and the picker's source line use these same labels. The browser keeps an explicit `chosen_target` pane
 id. `TransferTargets::current` returns that pane while it is registered, otherwise none, and the
 sole visible peer only when nothing was chosen. A chosen pane that left the registry therefore
 never falls back to another pane. The footer above the function bar shows this current target

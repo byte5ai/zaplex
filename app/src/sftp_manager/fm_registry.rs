@@ -225,6 +225,23 @@ impl FileManagerRegistry {
             .find_map(|p| self.backends.get(&p.id).cloned())
     }
 
+    /// [`display_labels`] over every open file-manager pane, keyed by pane id.
+    /// The source pane takes part, so a target that shares only its host name
+    /// or directory with the source still reads differently from it.
+    pub fn labels(&self) -> HashMap<u64, String> {
+        let panes = self
+            .panes
+            .iter()
+            .filter(|pane| pane.mode == FmPaneMode::FileManager)
+            .cloned()
+            .collect::<Vec<_>>();
+        panes
+            .iter()
+            .map(|pane| pane.id)
+            .zip(display_labels(&panes))
+            .collect()
+    }
+
     /// Whether the pane with this id is currently an open file-manager pane.
     pub fn is_open(&self, id: u64) -> bool {
         self.panes

@@ -19,12 +19,13 @@ use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEven
 use crate::terminal::view::terminal_identity;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
+use diesel::sqlite::SqliteConnection;
 use instant::Instant;
 use pathfinder_geometry::vector::Vector2F;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
-use warp_ssh_manager::{KeychainSecretStore, SshRepository};
+use warp_ssh_manager::{KeychainSecretStore, SshRepository, SshServerInfo};
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DispatchEventResult, Element,
@@ -48,8 +49,8 @@ use zaplex_remote_session::types::{
 
 use super::context_menu::ContextMenuState;
 use super::fm_registry::{
-    display_labels, plan_transfer, FileManagerRegistry, FmPaneDescriptor, FmPaneMode, FsNamespace,
-    TransferKind, TransferTargets,
+    plan_transfer, FileManagerRegistry, FmPaneDescriptor, FmPaneMode, FsNamespace, TransferKind,
+    TransferTargets,
 };
 use super::keynav::{apply_cursor_move, clamp_cursor, CursorMove};
 use super::sftp_backend::{LiveSftpBackend, SafeFileClientSlot, SftpBackend};
@@ -797,6 +798,8 @@ struct PreparedSftpConnection {
     session: zap_sftp::SftpSession,
     sftp: zap_sftp::Sftp,
     initial_path: PathBuf,
+    /// Display name and `user@host[:port]` of the connection actually opened.
+    host_identity: (String, String),
 }
 
 #[derive(Debug)]
@@ -856,9 +859,8 @@ fn action_for_symlink_target(
 }
 
 /// The target picker's source line: what the pending operation transfers and
-/// from which pane location.
-fn transfer_source_summary(operation: &PendingTransferOperation) -> String {
-    let from = operation.source.pane.label();
+/// from which pane location (`from`, labelled like the targets).
+fn transfer_source_summary(operation: &PendingTransferOperation, from: String) -> String {
     match operation.sources.as_slice() {
         [single] => {
             let name = single.file_name().map_or_else(
@@ -1028,8 +1030,9 @@ pub struct SftpBrowserView {
     /// Process-unique id for the cross-pane file-manager registry (F5/F6
     /// copy/move target discovery).
     fm_id: u64,
-    /// How transfer targets name this pane's host, resolved once at creation
-    /// so a descriptor never changes under a pending transfer.
+    /// How transfer targets name this pane's host. Resolved at creation and
+    /// on each established connection, which also starts a new route epoch, so
+    /// a descriptor never changes under a pending transfer.
     host: String,
     /// Connection identity that tells this host apart from another host with
     /// the same display name.
@@ -1150,19 +1153,39 @@ fn host_label_for_node(node_id: &str) -> Option<String> {
     .filter(|label| !label.trim().is_empty())
 }
 
-/// How transfer targets name a pane's host: the registry display name (or
-/// "local"), plus the connection identity that tells apart two registry hosts
-/// sharing a name. Never the registry id, which is internal.
+/// How transfer targets name a pane's host until its first connection: the
+/// registry identity of its server (or "local"). Never the registry id, which
+/// is internal.
 fn pane_host_identity(node_id: &str) -> (String, Option<String>) {
     if node_id.is_empty() {
         return (crate::t!("fm-label-local"), None);
     }
-    let name = host_name_for_node(node_id).unwrap_or_else(|| crate::t!("fm-label-remote-host"));
-    let detail = warp_ssh_manager::with_conn(|c| Ok(SshRepository::get_server(c, node_id)?))
+    let identity = warp_ssh_manager::with_conn(|c| {
+        Ok(SshRepository::get_server(c, node_id)?.map(|server| registry_host_identity(c, &server)))
+    });
+    match identity {
+        Ok(Some((name, detail))) => (name, Some(detail)),
+        Ok(None) | Err(_) => (crate::t!("fm-label-remote-host"), None),
+    }
+}
+
+/// The identity transfer targets show for a registry server: its display name
+/// (a localized fallback when blank or missing) and `user@host[:port]` with
+/// the user the connection actually authenticates as, which a OneKey
+/// credential supplies itself.
+fn registry_host_identity(conn: &mut SqliteConnection, server: &SshServerInfo) -> (String, String) {
+    let name = SshRepository::list_nodes(conn)
         .ok()
-        .flatten()
-        .map(|server| connection_identity(&server.username, &server.host, server.port));
-    (name, detail)
+        .and_then(|nodes| nodes.into_iter().find(|node| node.id == server.node_id))
+        .map(|node| node.name)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| crate::t!("fm-label-remote-host"));
+    let username = SshRepository::resolve_server_auth(conn, server)
+        .map_or_else(|_| server.username.clone(), |auth| auth.username);
+    (
+        name,
+        connection_identity(&username, &server.host, server.port),
+    )
 }
 
 /// `user@host`, with the port only when it is not the SSH default.
@@ -1670,10 +1693,22 @@ impl SftpBrowserView {
                                     .ok()
                                     .map(|home| normalize_remote_path(&home))
                             });
+                        // Name the connection as it was actually opened, so a
+                        // retry after a registry edit never shows the old host.
+                        let host_identity = warp_ssh_manager::with_conn(|c| {
+                            Ok(registry_host_identity(c, &server))
+                        })
+                        .unwrap_or_else(|_| {
+                            (
+                                crate::t!("fm-label-remote-host"),
+                                connection_identity(&server.username, &server.host, server.port),
+                            )
+                        });
                         Ok(PreparedSftpConnection {
                             session,
                             sftp,
                             initial_path,
+                            host_identity,
                         })
                     },
                     move |me, result, ctx| {
@@ -1688,6 +1723,11 @@ impl SftpBrowserView {
                         match result {
                             Ok(Ok(prepared)) => {
                                 me.refresh_safe_file_client(ctx);
+                                // Installed together with the new route epoch, so
+                                // no pending transfer snapshot survives the change.
+                                let (host, host_detail) = prepared.host_identity;
+                                me.host = host;
+                                me.host_detail = Some(host_detail);
                                 let backend = Arc::new(LiveSftpBackend::new_with_safe_file_slot(
                                     prepared.sftp,
                                     me.safe_file_client.clone(),
@@ -2815,18 +2855,26 @@ impl SftpBrowserView {
     ) {
         let current = targets.current(self.chosen_target).map(|pane| pane.id);
         let source_group = self.pane_group_id;
+        let labels = FileManagerRegistry::as_ref(ctx).labels();
+        let label_of = |pane: &FmPaneDescriptor| {
+            labels
+                .get(&pane.id)
+                .cloned()
+                .unwrap_or_else(|| pane.label())
+        };
         let mut candidates = targets.selectable;
         candidates.sort_by_key(|pane| (pane.pane_group_id != source_group, pane.id));
         let rows = candidates
             .iter()
-            .zip(display_labels(&candidates))
-            .map(|(pane, label)| TargetPickerRow {
-                label,
+            .map(|pane| TargetPickerRow {
+                label: label_of(pane),
                 other_tab: pane.pane_group_id != source_group,
                 selected: Some(pane.id) == current,
             })
             .collect::<Vec<_>>();
-        let source = operation.as_ref().map(transfer_source_summary);
+        let source = operation
+            .as_ref()
+            .map(|operation| transfer_source_summary(operation, label_of(&operation.source.pane)));
         self.target_pick_btn_states = rows.iter().map(|_| MouseStateHandle::default()).collect();
         self.dialog = Some(Dialog::CopyMoveTargetPicker {
             is_move: operation.as_ref().map(|operation| operation.is_move),
@@ -4804,11 +4852,9 @@ impl SftpBrowserView {
         let Some(current) = targets.current(self.chosen_target) else {
             return crate::t!("fm-target-footer-choose");
         };
-        let label = targets
-            .selectable
-            .iter()
-            .zip(display_labels(&targets.selectable))
-            .find_map(|(pane, label)| (pane.id == current.id).then_some(label))
+        let label = FileManagerRegistry::as_ref(app)
+            .labels()
+            .remove(&current.id)
             .unwrap_or_else(|| current.label());
         crate::t!("fm-target-footer", target = label)
     }
@@ -4842,7 +4888,7 @@ impl SftpBrowserView {
                 .with_child(
                     Shrinkable::new(
                         1.0,
-                        Text::new_inline(text.clone(), family, size)
+                        Text::new_inline(text, family, size)
                             .with_color(color.into())
                             .with_clip(ClipConfig::ellipsis())
                             .finish(),

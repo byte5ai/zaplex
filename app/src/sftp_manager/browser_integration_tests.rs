@@ -5472,6 +5472,36 @@ fn transfer_targets_name_the_host_not_the_registry_id() {
     });
 }
 
+/// Two panes on different hosts that read the same (same name, same
+/// directory): each footer names a target that reads differently from the
+/// pane itself.
+#[test]
+fn same_named_hosts_on_equal_paths_read_differently_in_the_footer() {
+    warpui::App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[("srv/.keep", b"")]);
+        let root = temp.path().to_path_buf();
+        let [first, second] = ["registry-node-first", "registry-node-second"].map(|node_id| {
+            let (_, view) = create_view_with_node(&mut app, node_id);
+            view.update(&mut app, |view, ctx| {
+                let backend =
+                    Arc::new(InMemorySftpBackend::new(root.clone())) as Arc<dyn SftpBackend>;
+                view.set_backend_for_test(backend, PathBuf::from("/srv"), ctx);
+            });
+            view
+        });
+
+        let first_target = first.read(&app, |view, ctx| view.transfer_target_text(ctx));
+        let second_target = second.read(&app, |view, ctx| view.transfer_target_text(ctx));
+        assert!(first_target.contains("/srv") && second_target.contains("/srv"));
+        assert_ne!(
+            first_target, second_target,
+            "the two hosts must not read as the same directory"
+        );
+    });
+}
+
 /// A long target location ends inside the footer; it never widens its pane at
 /// the expense of the neighbour.
 #[test]

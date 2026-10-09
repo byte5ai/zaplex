@@ -350,3 +350,18 @@ fn display_labels_tell_apart_panes_on_the_same_directory() {
         .all(|label| label.contains("worknode · /srv")));
     assert_eq!(labels[2], "worknode · /var", "unique labels stay plain");
 }
+
+#[test]
+fn labels_tell_a_target_apart_from_a_same_named_source_host() {
+    crate::i18n::init(Some("en"));
+    // The usual two-pane case: each pane is the other's only candidate, so the
+    // collision only shows when the source takes part in the labelling.
+    let mut reg = FileManagerRegistry::new();
+    reg.upsert(remote(1, "node-1", "worknode", "dev@192.0.2.10", "/srv"));
+    reg.upsert(remote(2, "node-2", "worknode", "dev@192.0.2.20", "/srv"));
+
+    let labels = reg.labels();
+    assert_ne!(labels[&1], labels[&2]);
+    assert!(labels[&1].contains("dev@192.0.2.10"), "{labels:?}");
+    assert!(labels[&2].contains("dev@192.0.2.20"), "{labels:?}");
+}
