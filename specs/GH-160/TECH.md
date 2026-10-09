@@ -463,8 +463,9 @@ Introduce or reuse one pure identity presentation helper in the Cockpit view lay
 The sidebar cards retain both five-hour and weekly meters. The large pane may retain detailed
 reset, token, price, and provenance facts, but removes a separate provider strip that duplicates
 the card headline. In `render_account_detail` each meter carries its own reset countdown directly
-beneath it, indented to the track edge (`METER_LABEL_WIDTH + METER_LABEL_GAP`); the fleet dashboard
-card keeps its single combined reset line (`reset_line`).
+beneath it, indented to the track edge (`METER_LABEL_WIDTH + METER_LABEL_GAP`), followed by the
+reported Opus/Sonnet sublimits (`heat_opus`, `heat_sonnet`) as in the fleet dashboard card, which
+keeps its single combined reset line (`reset_line`).
 
 In the large session table, waiting rows receive a subtle whole-row amber background using existing
 semantic theme colors with low opacity. Row geometry and columns remain unchanged, and the Status

@@ -3017,6 +3017,14 @@ impl CockpitPaneView {
             }
             col = col.with_child(quota.finish());
         }
+        // 7-day per-model sublimits (Max plans) when the usage endpoint reports
+        // them — often the binding limit, so the account detail lists them like
+        // the fleet card does.
+        for (label, sublimit) in [("opus", acct.heat_opus), ("sonnet", acct.heat_sonnet)] {
+            if let Some(fraction) = sublimit {
+                col = col.with_child(self.heat_bar(label, fraction, acct.provenance, appearance));
+            }
+        }
 
         // Three windows × ($ / tokens). "Today" is the LOCAL day (F2).
         let figure = |label: String, totals: &WindowTotals| -> Box<dyn Element> {

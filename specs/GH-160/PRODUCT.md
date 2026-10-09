@@ -185,8 +185,9 @@ The previous static illustrations are superseded, not alternative approved layou
 
 16. **Account cards retain both subscription windows.** Each sidebar account card shows the
     five-hour and weekly usage meters. The large pane stacks the same two meters and shows each
-    window's reset time directly under its own meter; it may add tokens and cost provenance
-    without duplicating the identity heading.
+    window's reset time directly under its own meter, followed by the weekly Opus/Sonnet
+    sublimits when the provider reports them; it may add tokens and cost provenance without
+    duplicating the identity heading.
 
 17. **Sessions needing the user are emphasized across the detail row.** In large Claude and Codex
     session tables, a session waiting on you (#12) receives a subtle amber-tinted background across the full,
