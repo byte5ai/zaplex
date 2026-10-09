@@ -1148,6 +1148,12 @@ impl SftpBrowserView {
     /// real collisions the same way it does for terminals.
     fn update_pane_identity(&self, ctx: &mut ViewContext<Self>) {
         let path = self.current_path.display().to_string();
+        // Write the directory like a local terminal does (`~` for home), so both
+        // modes of a pane name it alike. A remote home is not known here.
+        let home = self.node_id.is_empty().then(dirs::home_dir).flatten();
+        let path =
+            warp_util::path::user_friendly_path(&path, home.as_deref().and_then(Path::to_str))
+                .into_owned();
         self.pane_configuration.update(ctx, |configuration, ctx| {
             let host = configuration
                 .terminal_identity_host()

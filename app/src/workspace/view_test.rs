@@ -6768,6 +6768,17 @@ fn file_manager_mode_keeps_the_host_and_directory_identity() {
                 // Leaving file manager mode ends the collision.
                 group.close_pane(second_manager, ctx);
                 assert_eq!(pane_title(group, first_manager, ctx), "Local · api");
+
+                // The home directory reads `~`, as it does in a local terminal.
+                group.open_file_manager_in_place(
+                    neighbor,
+                    crate::pane_group::FileManagerTarget::Local {
+                        start_path: dirs::home_dir().expect("the test runner has a home directory"),
+                    },
+                    ctx,
+                );
+                let home_manager = group.focused_pane_id(ctx);
+                assert_eq!(pane_title(group, home_manager, ctx), "Local · ~");
             });
         });
     });
