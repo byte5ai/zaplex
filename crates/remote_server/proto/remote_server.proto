@@ -1067,6 +1067,20 @@ message SessionInfo {
   uint64 generation = 7;
   ManagedSessionInfo managed = 8;
   MemoryMeasurement process_memory = 9;
+  // Set only by daemons advertising "session-live-metadata-v1". Clients must
+  // ignore it from any other daemon.
+  SessionLiveMetadata live = 10;
+}
+
+// Point-in-time facts the daemon reads from the PTY while answering
+// ListSessions. Capability: "session-live-metadata-v1" (Linux daemons).
+message SessionLiveMetadata {
+  // Absolute working directory of the PTY's foreground process, or of its
+  // shell when the foreground process cannot be read. Empty when unknown.
+  string cwd = 1;
+  // Executable name of the foreground job when it is not the session shell
+  // itself. Never contains arguments. Empty at an idle prompt or when unknown.
+  string foreground_command = 2;
 }
 
 // Daemon → client: result of ListSessions.

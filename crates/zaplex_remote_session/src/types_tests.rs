@@ -87,6 +87,24 @@ fn supported_features_advertises_managed_agent_fleet_on_linux() {
     ));
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn supported_features_advertises_live_session_metadata_on_linux() {
+    assert!(has_feature(
+        &supported_features(),
+        FEATURE_SESSION_LIVE_METADATA_V1
+    ));
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn supported_features_omits_live_session_metadata_without_proc() {
+    assert!(!has_feature(
+        &supported_features(),
+        FEATURE_SESSION_LIVE_METADATA_V1
+    ));
+}
+
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn supported_features_omits_managed_agent_fleet_when_unsupported() {

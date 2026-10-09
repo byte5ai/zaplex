@@ -387,6 +387,7 @@ jobs:
         run: |
           cargo test --locked -p warp --lib -- \
             remote_server::headless_connect::tests \
+            remote_server::session_live::tests \
             terminal::daemon_tty::event_loop::tests \
             provisional_daemon_adoption_cleanup_covers_connection_and_tab
           cargo test --locked -p remote_server --lib client::tests
@@ -535,6 +536,8 @@ jobs:
           sessions_open_here_come_first_and_the_rest_follow_by_most_recent_attach
           last_opened_time_is_reported_in_coarse_honest_steps
           inventory_rows_resolve_the_exact_daemon_pty_claim_identity
+          detached_session_row_uses_daemon_live_cwd_and_foreground_command
+          old_daemon_without_live_metadata_falls_back_honestly
           normalized_agent_titles_are_preserved_with_known_cwd_in_the_tooltip
           stale_daemon_adoption_cannot_resolve_a_different_inventory_row
           test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled

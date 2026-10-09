@@ -220,7 +220,38 @@ fn unmatched_agent_inventory_never_preserves_a_shell_title() {
 
     enrich_daemon_session_titles(&mut daemon, &AgentSessionList::default());
 
-    assert_eq!(daemon.sessions[0].title, "project");
+    // The directory stays the identity source; the title is left empty.
+    assert!(daemon.sessions[0].title.is_empty());
+    assert_eq!(daemon.sessions[0].cwd, "/srv/project");
+}
+
+#[test]
+fn live_metadata_is_ignored_without_the_capability() {
+    let listed = || SessionList {
+        sessions: vec![remote_server::proto::SessionInfo {
+            session_id: "pty-1".to_string(),
+            live: Some(remote_server::proto::SessionLiveMetadata {
+                cwd: "/srv/project".to_string(),
+                foreground_command: "claude".to_string(),
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut old_daemon = listed();
+    discard_unsupported_live_metadata(&mut old_daemon, &InitializeResponse::default());
+    assert_eq!(old_daemon.sessions[0].live, None);
+
+    let mut capable_daemon = listed();
+    discard_unsupported_live_metadata(
+        &mut capable_daemon,
+        &InitializeResponse {
+            features: vec![FEATURE_SESSION_LIVE_METADATA_V1.to_string()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(capable_daemon.sessions[0].live, listed().sessions[0].live);
 }
 
 #[test]

@@ -1856,6 +1856,72 @@ fn connections_row_uses_pane_identity_for_locally_open_session() {
 }
 
 #[test]
+fn detached_session_row_uses_daemon_live_cwd_and_foreground_command() {
+    crate::i18n::init(Some("en"));
+    let now = 30 * 86_400_000;
+    let mut session = SessionInfo {
+        session_id: "12345678-abcdef".to_string(),
+        cwd: "/srv/launch-directory".to_string(),
+        last_attached_epoch_millis: now - 3 * 3_600_000,
+        live: Some(remote_server::proto::SessionLiveMetadata {
+            cwd: "/srv/projects/api".to_string(),
+            foreground_command: "claude".to_string(),
+        }),
+        ..Default::default()
+    };
+
+    let row = daemon_session_row("devhost", &session, None, now);
+    assert_eq!(row.identity.short, "devhost · api");
+    assert_eq!(row.identity.full, "devhost · /srv/projects/api");
+    assert_eq!(
+        row.metadata.as_deref(),
+        Some("\u{2068}claude\u{2069} · \u{2068}last opened \u{2068}3\u{2069} hours ago\u{2069}")
+    );
+
+    // An agent title already names the foreground program.
+    session.title = "Claude · release checks".to_string();
+    let row = daemon_session_row("devhost", &session, None, now);
+    assert_eq!(row.identity.short, "Claude · release checks");
+    assert_eq!(
+        row.metadata.as_deref(),
+        Some("last opened \u{2068}3\u{2069} hours ago")
+    );
+
+    // A never-attached session still shows its command in the metadata line.
+    session.title.clear();
+    session.last_attached_epoch_millis = 0;
+    let row = daemon_session_row("devhost", &session, None, now);
+    assert_eq!(row.metadata.as_deref(), Some("claude"));
+}
+
+#[test]
+fn old_daemon_without_live_metadata_falls_back_honestly() {
+    crate::i18n::init(Some("en"));
+    let mut session = SessionInfo {
+        session_id: "12345678-abcdef".to_string(),
+        cwd: "/srv/launch-directory".to_string(),
+        ..Default::default()
+    };
+
+    // An old daemon reports only the directory the session was opened in.
+    let row = daemon_session_row("devhost", &session, None, 0);
+    assert_eq!(row.identity.short, "devhost · launch-directory");
+    assert_eq!(row.metadata, None);
+
+    // An unreadable live directory keeps that launch directory.
+    session.live = Some(remote_server::proto::SessionLiveMetadata::default());
+    let row = daemon_session_row("devhost", &session, None, 0);
+    assert_eq!(row.identity.short, "devhost · launch-directory");
+    assert_eq!(row.metadata, None);
+
+    // Without any directory the row says so instead of inventing one.
+    session.cwd.clear();
+    let row = daemon_session_row("devhost", &session, None, 0);
+    assert_eq!(row.identity.short, "devhost · Terminal");
+    assert!(!row.identity.short.contains("12345678"));
+}
+
+#[test]
 fn sessions_open_here_come_first_and_the_rest_follow_by_most_recent_attach() {
     let routed = |id: &str, last_attached_epoch_millis: u64| RoutedDaemonSession {
         session: SessionInfo {

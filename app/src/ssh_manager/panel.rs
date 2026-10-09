@@ -236,21 +236,33 @@ fn connected_hosts_by_registry_node(
     grouped
 }
 
+/// The session's current directory: the daemon's live reading when it has
+/// one, otherwise the directory the session was opened in.
+fn session_directory(session: &SessionInfo) -> &str {
+    session
+        .live
+        .as_ref()
+        .map(|live| live.cwd.trim())
+        .filter(|cwd| !cwd.is_empty())
+        .unwrap_or(session.cwd.as_str())
+}
+
 /// Identity of a daemon session that is not open in this window. The visible
 /// title never shows the raw session id: without daemon metadata the row uses
 /// the host/Terminal fallback of a pane without a known directory, and the
 /// full id stays in the tooltip.
 fn daemon_session_identity(host: &str, session: &SessionInfo) -> TerminalIdentity {
     let fallback = crate::t!("workspace-new-session-terminal");
-    let mut identity = terminal_identity(host, Some(&session.cwd), &fallback);
+    let cwd = session_directory(session);
+    let mut identity = terminal_identity(host, Some(cwd), &fallback);
     if !session.title.trim().is_empty() {
-        identity.full = if session.cwd.trim().is_empty() {
+        identity.full = if cwd.trim().is_empty() {
             session.title.clone()
         } else {
             format!("{}\n{}", session.title, identity.full)
         };
         identity.short = session.title.clone();
-    } else if session.cwd.trim().is_empty() {
+    } else if cwd.trim().is_empty() {
         identity.full = format!(
             "{}\n{}",
             identity.full,
@@ -312,9 +324,30 @@ fn daemon_session_row(
         }
         None => DaemonSessionRow {
             identity: daemon_session_identity(host, session),
-            metadata: last_opened_label(session.last_attached_epoch_millis, now_epoch_millis),
+            metadata: session_metadata(session, now_epoch_millis),
             open_here: false,
         },
+    }
+}
+
+/// The fixed metadata line of a session not open here: the daemon-reported
+/// foreground command, then the last attach. An agent title already names the
+/// foreground program, so the command is not repeated next to it.
+fn session_metadata(session: &SessionInfo, now_epoch_millis: u64) -> Option<String> {
+    let command = session
+        .live
+        .as_ref()
+        .map(|live| live.foreground_command.trim())
+        .filter(|command| !command.is_empty() && session.title.trim().is_empty());
+    let opened = last_opened_label(session.last_attached_epoch_millis, now_epoch_millis);
+    match (command, opened) {
+        (Some(command), Some(opened)) => Some(crate::t!(
+            "workspace-left-panel-ssh-manager-session-metadata",
+            command = command.to_string(),
+            opened = opened
+        )),
+        (Some(command), None) => Some(command.to_string()),
+        (None, opened) => opened,
     }
 }
 

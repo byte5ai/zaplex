@@ -731,6 +731,7 @@ workspace-left-panel-ssh-manager-sessions-not-persistent = „Session-Persistenz
 workspace-left-panel-ssh-manager-session-id = Session-ID: { $id }
 workspace-left-panel-ssh-manager-session-open-here = In diesem Fenster offen
 workspace-left-panel-ssh-manager-session-show-tab = Tab anzeigen
+workspace-left-panel-ssh-manager-session-metadata = { $command } · { $opened }
 workspace-left-panel-ssh-manager-session-last-opened-now = zuletzt geöffnet gerade eben
 workspace-left-panel-ssh-manager-session-last-opened-minutes = { $count ->
         [one] zuletzt geöffnet vor 1 Minute

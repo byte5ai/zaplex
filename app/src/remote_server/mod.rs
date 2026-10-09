@@ -27,6 +27,8 @@ pub mod server_model;
 #[cfg(unix)]
 pub mod session_host;
 pub mod session_inventory;
+#[cfg(target_os = "linux")]
+pub mod session_live;
 #[cfg(not(target_family = "wasm"))]
 pub mod ssh_transport;
 #[cfg(not(target_family = "wasm"))]
