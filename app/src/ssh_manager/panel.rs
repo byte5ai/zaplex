@@ -287,18 +287,29 @@ fn daemon_session_row(
     now_epoch_millis: u64,
 ) -> DaemonSessionRow {
     match local {
-        Some(pane) => DaemonSessionRow {
-            identity: TerminalIdentity {
-                short: pane.title.clone(),
-                full: format!(
-                    "{}\n{}",
-                    pane.tooltip,
-                    crate::t!("workspace-left-panel-ssh-manager-session-open-here")
-                ),
-            },
-            metadata: None,
-            open_here: true,
-        },
+        Some(pane) => {
+            // A pane without a title yet keeps the daemon identity.
+            let identity = if pane.title.trim().is_empty() {
+                daemon_session_identity(host, session)
+            } else {
+                TerminalIdentity {
+                    short: pane.title.clone(),
+                    full: pane.tooltip.clone(),
+                }
+            };
+            DaemonSessionRow {
+                identity: TerminalIdentity {
+                    full: format!(
+                        "{}\n{}",
+                        identity.full,
+                        crate::t!("workspace-left-panel-ssh-manager-session-open-here")
+                    ),
+                    ..identity
+                },
+                metadata: None,
+                open_here: true,
+            }
+        }
         None => DaemonSessionRow {
             identity: daemon_session_identity(host, session),
             metadata: last_opened_label(session.last_attached_epoch_millis, now_epoch_millis),
@@ -1915,14 +1926,13 @@ impl SshManagerPanel {
             }
             // Opening a session that is already open here shows its tab; any
             // other session opens in a new tab.
-            let tooltip = if open_here {
-                crate::t!("workspace-left-panel-ssh-manager-session-show-tab")
-            } else {
-                crate::t!("workspace-left-panel-ssh-manager-multiplexer-open")
-            };
             let action = CompactRowAction::new(
                 crate::ui_components::icons::Icon::Terminal,
-                tooltip,
+                if open_here {
+                    crate::t!("workspace-left-panel-ssh-manager-session-show-tab")
+                } else {
+                    crate::t!("workspace-left-panel-ssh-manager-multiplexer-open")
+                },
                 SshManagerPanelAction::OpenSessionRow(key.clone()),
                 ctx,
             );
@@ -1933,7 +1943,8 @@ impl SshManagerPanel {
     /// Recomputes which listed native sessions are open in this window and
     /// with which pane title. The claim registry is the source: it maps each
     /// daemon PTY to the terminal holding it. Title changes of those panes
-    /// re-run this projection.
+    /// re-run this projection; moving a tab to another window or closing it
+    /// into Undo Close is picked up by the next lifecycle event or refresh.
     fn sync_local_session_panes(&mut self, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         let mut local = HashMap::new();
@@ -1967,7 +1978,12 @@ impl SshManagerPanel {
             self.observed_pane_configurations
                 .insert(configuration.id(), configuration.downgrade());
             ctx.subscribe_to_model(&configuration, |me, _, event, ctx| {
-                if matches!(event, PaneConfigurationEvent::TitleUpdated) {
+                // A tooltip-only change emits just `HeaderContentChanged`.
+                if matches!(
+                    event,
+                    PaneConfigurationEvent::TitleUpdated
+                        | PaneConfigurationEvent::HeaderContentChanged
+                ) {
                     me.sync_local_session_panes(ctx);
                     ctx.notify();
                 }

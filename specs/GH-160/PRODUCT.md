@@ -64,7 +64,7 @@ The previous static illustrations are superseded, not alternative approved layou
 
    A session that a pane in this window holds shows exactly that pane's title (the pane and tab
    identity of #33) and an accent mark in the fixed indentation slot before the title, with “Open
-   in this window” in its tooltip and accessible name; clicking it shows that tab. Every other
+   in this window” in its tooltip; clicking it shows that tab. Every other
    session (detached, orphaned, or open in another window or on another device) shows the identity
    the daemon reports, with a fixed metadata line below it. That line carries only what the daemon
    reports truthfully today: the time of its last attach (“last opened …”). Detached-since and

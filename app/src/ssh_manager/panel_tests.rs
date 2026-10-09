@@ -1838,6 +1838,14 @@ fn connections_row_uses_pane_identity_for_locally_open_session() {
     assert_eq!(open_here.metadata, None);
     assert!(open_here.open_here);
 
+    let untitled_pane = LocalSessionPane {
+        title: " ".to_string(),
+        tooltip: String::new(),
+    };
+    let untitled = daemon_session_row("devhost", &session, Some(&untitled_pane), 7_200_000);
+    assert_eq!(untitled.identity.short, "Codex · release checks");
+    assert!(untitled.open_here);
+
     let elsewhere = daemon_session_row("devhost", &session, None, 7_200_000);
     assert_eq!(elsewhere.identity.short, "Codex · release checks");
     assert_eq!(
