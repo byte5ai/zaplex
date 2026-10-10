@@ -681,7 +681,7 @@ fn project_tree_rows<'a>(
     if let [only] = sessions.as_slice() {
         let label = merged_label(project_name, titles[0].as_deref());
         if let [agent] = only.agents.as_slice() {
-            let agent: &'a SessionSnapshot = *agent;
+            let agent: &'a SessionSnapshot = agent;
             rows.push(TreeRow {
                 depth: 1,
                 kind: TreeRowKind::SessionLeaf {
@@ -701,7 +701,7 @@ fn project_tree_rows<'a>(
                 expanded: project_expanded,
                 count: only.agents.len(),
                 has_waiting: only.needs_me > 0,
-                focused: !project_expanded && only.agents.iter().any(|agent| is_focused(*agent)),
+                focused: !project_expanded && only.agents.iter().any(|agent| is_focused(agent)),
             },
         });
         if project_expanded {
@@ -731,7 +731,7 @@ fn project_tree_rows<'a>(
                 && sessions
                     .iter()
                     .flat_map(|session| session.agents.iter())
-                    .any(|agent| is_focused(*agent)),
+                    .any(|agent| is_focused(agent)),
         },
     });
     if !project_expanded {
@@ -744,7 +744,7 @@ fn project_tree_rows<'a>(
             .as_deref()
             .map(|title| split_title(title, cuts.next().flatten()));
         if let [agent] = session.agents.as_slice() {
-            let agent: &'a SessionSnapshot = *agent;
+            let agent: &'a SessionSnapshot = agent;
             rows.push(TreeRow {
                 depth: 2,
                 kind: TreeRowKind::SessionLeaf {
@@ -765,7 +765,7 @@ fn project_tree_rows<'a>(
                 expanded,
                 count: session.agents.len(),
                 needs_me: session.needs_me,
-                focused: !expanded && session.agents.iter().any(|agent| is_focused(*agent)),
+                focused: !expanded && session.agents.iter().any(|agent| is_focused(agent)),
             },
         });
         if expanded {
@@ -1623,7 +1623,7 @@ impl CockpitPanel {
                     .projects
                     .iter()
                     .flat_map(|project| project.sessions.iter())
-                    .any(|agent| is_focused(agent));
+                    .any(&is_focused);
             let mut host_row = Container::new(self.render_host_header(
                 host,
                 &ident,
@@ -1647,7 +1647,7 @@ impl CockpitPanel {
                     pkey,
                     project_expanded,
                     |key| self.expanded_sessions.get(key).copied().unwrap_or(true),
-                    &is_focused,
+                    is_focused,
                 );
                 for row in &rows {
                     col = col.with_child(self.render_tree_row(
@@ -1993,6 +1993,7 @@ impl Entity for CockpitPanel {
 
 /// Sidebar actions (routed back into the view by the action system).
 #[derive(Clone, Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum CockpitPanelAction {
     /// Collapse/expand a connected host root. Absent means expanded.
     ToggleHost(String),

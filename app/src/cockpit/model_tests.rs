@@ -903,13 +903,19 @@ fn model_refresh_ticks_preserve_active_scan_and_disable_invalidates_it() {
         let model = app.add_model(|ctx| {
             CockpitModel::subscribe_to_settings(ctx);
             CockpitModel {
+                raw_snapshot: initial_snapshot(),
                 snapshot: initial_snapshot(),
                 refresh_flight: RefreshSingleFlight {
                     generation: 7,
                     running: true,
                     rerun_requested: false,
                 },
+                raw_inventory: fold_inventory("laptop", Vec::new(), Vec::new()),
                 inventory: fold_inventory("laptop", Vec::new(), Vec::new()),
+                seen_turns: SeenTurns::new(Utc::now()),
+                local_terminal_links: HashMap::new(),
+                focused_terminals: HashMap::new(),
+                daemon_route_cache: HashMap::new(),
                 managed_fleet: ManagedFleetInventory::default(),
                 pricing: PricingTable::default(),
                 oauth_cache: OauthCache::default(),
