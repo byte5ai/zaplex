@@ -760,6 +760,17 @@ struct TransferRouteGuard {
     target: FmPaneDescriptor,
 }
 
+impl TransferRouteGuard {
+    /// Stop requiring `source` to stay listed once the batch is done with it:
+    /// a submitted move removes it from the listing on completion, and that
+    /// must not make the remaining items of the same batch look stale.
+    fn release_source(&mut self, source: &Path) {
+        self.source
+            .entries
+            .retain(|identity| identity.path.as_path() != source);
+    }
+}
+
 /// One conflicting cross-connection file transfer, held (with the paths already
 /// oriented for its direction) while the overwrite prompt is up.
 struct CrossConnConflictFile {
@@ -3368,7 +3379,9 @@ impl SftpBrowserView {
                 }
                 Step::Skip => {
                     if let Some(p) = self.pending_copy_move.as_mut() {
-                        p.ops.pop_front();
+                        if let Some(op) = p.ops.pop_front() {
+                            p.guard.release_source(&op.source);
+                        }
                         p.skipped += 1;
                     }
                 }
@@ -3383,7 +3396,9 @@ impl SftpBrowserView {
                 }
                 Step::ProbeError(message) => {
                     if let Some(pending) = self.pending_copy_move.as_mut() {
-                        pending.ops.pop_front();
+                        if let Some(op) = pending.ops.pop_front() {
+                            pending.guard.release_source(&op.source);
+                        }
                     }
                     self.show_error_toast(
                         crate::t!("fm-toast-transfer-failed", err = message),
@@ -3437,6 +3452,7 @@ impl SftpBrowserView {
         );
         if let Some(pending) = self.pending_copy_move.as_mut() {
             pending.queued += 1;
+            pending.guard.release_source(&op.source);
         }
     }
 
@@ -3477,6 +3493,7 @@ impl SftpBrowserView {
                 super::transfer_job::ConflictDecision::Skip => {
                     if let Some(pending) = self.pending_copy_move.as_mut() {
                         pending.skipped += 1;
+                        pending.guard.release_source(&op.source);
                     }
                 }
                 super::transfer_job::ConflictDecision::Overwrite

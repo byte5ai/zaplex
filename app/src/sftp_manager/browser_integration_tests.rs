@@ -7697,6 +7697,46 @@ fn f5_and_f6_transfer_marked_folders_and_files() {
     });
 }
 
+/// A finished move removes its source from the listing; that must not make
+/// the rest of the same batch look stale. `a.txt` moves first, then `b.txt`
+/// still reaches its conflict prompt instead of the batch being dropped.
+#[test]
+fn f6_batch_reaches_conflict_prompt_after_an_earlier_item_moved() {
+    warpui::App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (view_a, _view_b, temp) = create_two_panes_sharing_fs(
+            &mut app,
+            &[
+                ("left/a.txt", b"A"),
+                ("left/b.txt", b"B2"),
+                ("right/b.txt", b"B1"),
+            ],
+        );
+        let root = temp.path().to_path_buf();
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::MarkAll, ctx);
+            assert_eq!(v.marked_counts(), (0, 2));
+            v.handle_action(&SftpBrowserAction::MoveToOtherPane, ctx);
+        });
+        view_a.read(&app, |v, _| {
+            assert!(
+                matches!(v.dialog, Some(Dialog::CopyMoveConflict { .. })),
+                "the conflicting item still gets its prompt"
+            );
+        });
+        assert_eq!(std::fs::read(root.join("right/a.txt")).unwrap(), b"A");
+        assert!(!root.join("left/a.txt").exists(), "the first item moved");
+
+        view_a.update(&mut app, |v, ctx| {
+            v.handle_action(&SftpBrowserAction::SkipConflict { all: false }, ctx);
+        });
+        view_a.read(&app, |v, _| assert!(v.dialog.is_none()));
+        assert_eq!(std::fs::read(root.join("left/b.txt")).unwrap(), b"B2");
+        assert_eq!(std::fs::read(root.join("right/b.txt")).unwrap(), b"B1");
+    });
+}
+
 /// Marks belong to the directory they were made in: entering a folder starts
 /// with none, and marks made there are dropped again on the way back up.
 #[test]
