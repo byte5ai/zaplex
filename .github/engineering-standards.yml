@@ -3,6 +3,7 @@
 # Schema: siehe <org>/engineering-standards (byte5ai, iret77, high5-ventures).
 
 status: applied          # applied | exempt
+tier: solo               # team | solo — fehlt das Feld, gilt team
 source: byte5ai/engineering-standards
 decided_on: 2026-06-24
 reviewed_on: 2026-06-24
