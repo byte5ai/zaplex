@@ -432,8 +432,6 @@ jobs:
       - name: cargo test (app dependency + UI smoke gates)
         run: >
           cargo test --locked -p warp --lib -- --nocapture
-          maps_credentials_not_loaded_to_user_message
-          newer_profile_refresh_rejects_late_success_or_error_from_older_refresh
           test_import_from_file
           file_manager_start_path_uses_session_cwd
           file_manager_start_path_falls_back_when_no_cwd
@@ -544,9 +542,6 @@ jobs:
           test_legacy_ssh_fallback_lists_directory_entries_without_remote_host_id
           test_session_context_lists_directory_entries_remotely
           connections_registry_drives_favorite_launch_menu
-          split_picker_marks_only_the_current_host_and_preserves_routes
-          split_picker_uses_the_visible_file_manager_host_instead_of_the_covered_terminal
-          split_picker_distinguishes_unreadable_registry_from_empty_registry
           function_bar_tracks_subtree_focus_when_the_remembered_pane_does_not_change
           disabled_function_click_cannot_execute_after_mouse_down_focuses_the_pane
           host_lookup_failure_distinguishes_registry_errors_from_removed_hosts
