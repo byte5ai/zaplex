@@ -137,30 +137,29 @@ fn session_attrs_context_pct_uses_model_window() {
 }
 
 #[test]
-fn session_attr_line_composes_and_omits_empty_pieces() {
-    assert_eq!(
-        session_attr_line(
-            "claude-opus-4-8",
-            Some("high"),
-            420_000,
-            SessionState::Waiting
-        ),
-        // Waiting carries its own glyph (◉), so state reads by shape, not colour alone.
-        "Opus·High · 42% ctx · ◉ waiting"
-    );
-    // Unknown model + no context yet → just the state clause.
-    assert_eq!(
-        session_attr_line("", None, 0, SessionState::Active),
-        "● working"
-    );
-}
-
-#[test]
 fn glyph_vocabulary_is_working_waiting_idle() {
     assert_eq!(session_glyph(SessionState::Active), GLYPH_WORKING);
     assert_eq!(session_glyph(SessionState::Monitor), GLYPH_WORKING);
     assert_eq!(session_glyph(SessionState::Waiting), GLYPH_WAITING);
     assert_eq!(session_glyph(SessionState::Idle), GLYPH_IDLE);
+    // The table's status word follows the glyph: two states share a word
+    // exactly when they share a glyph, so a row never says "working" beside
+    // a waiting mark.
+    let states = [
+        SessionState::Active,
+        SessionState::Monitor,
+        SessionState::Waiting,
+        SessionState::Idle,
+    ];
+    for a in states {
+        for b in states {
+            assert_eq!(
+                state_word(a) == state_word(b),
+                session_glyph(a) == session_glyph(b),
+                "{a:?} / {b:?}"
+            );
+        }
+    }
 }
 
 #[test]

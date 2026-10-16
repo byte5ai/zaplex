@@ -62,16 +62,23 @@ fn title_case(s: &str) -> String {
     }
 }
 
-/// Human word for a session state, used in the one-line attribute summary.
-/// The state's word, for surfaces that spell it out beside the glyph (the
-/// session table's Status column). One source, like [`session_glyph`] is for the
-/// shape — a second `match` elsewhere is how a row ends up saying "working" next
-/// to a waiting mark.
-pub fn state_word(state: SessionState) -> &'static str {
+/// The word a surface spells beside a status glyph (the session table's Status
+/// column). The app renders it in the user's language.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateWord {
+    Waiting,
+    Working,
+    Idle,
+}
+
+/// The state's word, for surfaces that spell it out beside the glyph. One
+/// source, like [`session_glyph`] is for the shape — a second `match` elsewhere
+/// is how a row ends up saying "working" next to a waiting mark.
+pub fn state_word(state: SessionState) -> StateWord {
     match state {
-        SessionState::Waiting => "waiting",
-        SessionState::Active | SessionState::Monitor => "working",
-        SessionState::Idle => "idle",
+        SessionState::Waiting => StateWord::Waiting,
+        SessionState::Active | SessionState::Monitor => StateWord::Working,
+        SessionState::Idle => StateWord::Idle,
     }
 }
 
@@ -148,29 +155,6 @@ pub fn session_attrs(
         ctx_fill,
         glyph: session_glyph(state),
     }
-}
-
-/// The canonical one-line attribute summary — e.g. `"Opus·High · 42% ctx · ✋
-/// waiting"`. The string form of [`session_attrs`], used for tests / tooltips /
-/// accessibility; the view renders the same fields as individually-colored
-/// spans. Empty pieces (unknown model, no context yet) are omitted so the line
-/// never carries a placeholder.
-pub fn session_attr_line(
-    model: &str,
-    effort: Option<&str>,
-    ctx_tokens: u64,
-    state: SessionState,
-) -> String {
-    let attrs = session_attrs(model, effort, ctx_tokens, state);
-    let mut parts: Vec<String> = Vec::new();
-    if !attrs.model_effort.is_empty() {
-        parts.push(attrs.model_effort);
-    }
-    if let Some(pct) = attrs.ctx_pct {
-        parts.push(format!("{pct}% ctx"));
-    }
-    parts.push(format!("{} {}", attrs.glyph, state_word(state)));
-    parts.join(" · ")
 }
 
 /// Agent-sessions on a single host (across all its projects).

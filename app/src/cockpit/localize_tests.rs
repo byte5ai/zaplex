@@ -1,4 +1,33 @@
+use fluent::{FluentArgs, FluentBundle, FluentResource};
+use unic_langid::LanguageIdentifier;
+
 use super::*;
+
+/// Renders one message of the German catalog the way the app does, without
+/// the bidi isolates. The global loader holds one locale per process, so
+/// German text is read from the catalog itself.
+fn german(id: &str, args: Option<&FluentArgs>) -> String {
+    // Unrelated entries the parser rejects only drop out; a broken message
+    // under test then fails below as missing.
+    let resource = FluentResource::try_new(include_str!("../../i18n/de/warp.ftl").to_owned())
+        .unwrap_or_else(|(resource, _)| resource);
+    let german: LanguageIdentifier = "de".parse().expect("valid language identifier");
+    let mut bundle = FluentBundle::new(vec![german]);
+    bundle.set_use_isolating(false);
+    bundle
+        .add_resource(resource)
+        .expect("the German catalog has unique message ids");
+    let pattern = bundle
+        .get_message(id)
+        .and_then(|message| message.value())
+        .unwrap_or_else(|| panic!("the German catalog has no value for {id}"));
+    let mut errors = Vec::new();
+    let text = bundle
+        .format_pattern(pattern, args, &mut errors)
+        .into_owned();
+    assert!(errors.is_empty(), "formatting {id} failed: {errors:?}");
+    text
+}
 
 #[test]
 fn amounts_round_to_whole_cents() {
@@ -52,4 +81,49 @@ fn unpriced_label_is_localized() {
     assert!(unpriced_models_text(&unpriced)
         .expect("an unpriced sum names its models")
         .contains("gpt-5.5"));
+}
+
+/// Each value reaches its own message with its numbers in the right slots: a
+/// swapped argument or unit would misstate a countdown by hours or days.
+#[test]
+fn countdowns_ages_and_states_are_spelled_from_the_catalog() {
+    crate::i18n::init(Some("en"));
+    assert_eq!(
+        reset_text(ResetCountdown::HoursMinutes {
+            hours: 2,
+            minutes: 13
+        }),
+        "\u{2068}2\u{2069}h\u{2068}13\u{2069}m"
+    );
+    assert_eq!(
+        reset_text(ResetCountdown::DaysHours { days: 4, hours: 1 }),
+        "\u{2068}4\u{2069}d\u{2068}1\u{2069}h"
+    );
+    assert_eq!(age_text(RelativeAge::Hours(3)), "\u{2068}3\u{2069}h");
+    assert_eq!(age_text(RelativeAge::Days(2)), "\u{2068}2\u{2069}d");
+    let words = [
+        state_text(StateWord::Waiting),
+        state_text(StateWord::Working),
+        state_text(StateWord::Idle),
+    ];
+    assert!(
+        words[0] != words[1] && words[1] != words[2] && words[0] != words[2],
+        "every state keeps its own word: {words:?}"
+    );
+}
+
+/// #516: the session table's status word is the same German word as its
+/// filter chip in the same table (one name per state).
+#[test]
+fn german_status_words_match_the_table_filters() {
+    for (state, filter) in [
+        (
+            "cockpit-table-state-waiting",
+            "cockpit-table-filter-waiting",
+        ),
+        ("cockpit-table-state-working", "cockpit-table-filter-active"),
+        ("cockpit-table-state-idle", "cockpit-table-filter-idle"),
+    ] {
+        assert_eq!(german(state, None), german(filter, None), "{state}");
+    }
 }

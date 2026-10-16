@@ -93,6 +93,16 @@ cockpit-cost-partly-unpriced = teilweise ohne Preis
 cockpit-cost-unpriced-models = Ohne Listenpreis: { $models }
 cockpit-cost-source = Kosten: Schätzung nach API-Listenpreisen, Stand { $date }
 cockpit-fleet-cost-summary = heute { $today } · 5{"\u00A0"}h { $block } · Woche { $week }
+cockpit-fleet-accounts = { $count ->
+    [one] { $count } Konto
+   *[other] { $count } Konten
+}
+cockpit-fleet-working = ▶ { $count } aktiv
+cockpit-fleet-waiting = ✋ { $count } { $count ->
+    [one] wartet auf Dich
+   *[other] warten auf Dich
+}
+cockpit-fleet-more-sessions = … { $count } weitere
 # Review-Cluster. „geprüft" ist bewusst kein „freigegeben": die Markierung ist
 # eine private Notiz an dich selbst — sie sagt dem Agenten nichts und gibt nichts frei.
 cockpit-session-review = Ansehen
@@ -191,6 +201,11 @@ workspace-favorite-manage-host-error = Die Host-Einstellungen konnten nicht geö
 workspace-left-panel-ssh-manager-tree-empty = Noch keine SSH-Server. Nutze den Ordner-Button für einen Ordner, + für einen Server.
 workspace-left-panel-ssh-manager-add-blank = Leeren Server anlegen
 workspace-left-panel-ssh-manager-discover-tailscale = Tailscale-Hosts entdecken
+workspace-left-panel-ssh-manager-tailscale-start-failed = Tailscale-Suche konnte nicht gestartet werden: { $error }
+workspace-left-panel-ssh-manager-tailscale-timed-out = Die Tailscale-Suche hat zu lange gedauert.
+workspace-left-panel-ssh-manager-tailscale-read-failed = Tailscale-Status konnte nicht gelesen werden: { $error }
+workspace-left-panel-ssh-manager-tailscale-unavailable = Tailscale wurde nicht gefunden oder läuft nicht (`tailscale status` ist fehlgeschlagen).
+workspace-left-panel-ssh-manager-tailscale-import-failed = Tailscale-Hosts konnten nicht übernommen werden: { $error }
 
 # ── Allgemein (überall sichtbare Buttons/Labels) ─────────────────────────────
 common-ok = OK
@@ -614,7 +629,7 @@ workspace-left-panel-agent-conversations = Agent-Unterhaltungen
 workspace-left-panel-close-panel = Panel schließen
 workspace-left-panel-back-to-connections = Zurück zu Verbindungen
 workspace-left-panel-global-search = Globale Suche
-workspace-left-panel-project-explorer = Projekt-Explorer
+workspace-left-panel-project-explorer = Projektbrowser
 workspace-left-panel-server-file-browser = Server-Dateien
 workspace-left-panel-skill-manager = Skill-Manager
 workspace-left-panel-ssh-manager = Verbindungen
@@ -675,6 +690,11 @@ workspace-left-panel-ssh-manager-menu-delete = Löschen
 workspace-left-panel-ssh-manager-menu-edit = Bearbeiten
 workspace-left-panel-ssh-manager-menu-new-folder = Neuer Ordner
 workspace-left-panel-ssh-manager-menu-new-server = Neuer SSH-Server
+workspace-left-panel-ssh-manager-default-folder-name = Neuer Ordner
+workspace-left-panel-ssh-manager-default-server-name = Neuer Server
+workspace-left-panel-ssh-manager-clone-name-suffix = (Kopie)
+workspace-left-panel-ssh-manager-note-imported-from = Importiert aus
+workspace-left-panel-ssh-manager-note-discovered-via-tailscale = Über Tailscale gefunden
 workspace-left-panel-ssh-manager-menu-rename = Umbenennen
 workspace-left-panel-ssh-manager-menu-sessions = Zaplex-Sessions
 workspace-left-panel-ssh-manager-menu-refresh-sessions = Zaplex-Sessions aktualisieren
@@ -737,6 +757,7 @@ workspace-left-panel-ssh-manager-sessions-empty = Keine Zaplex-Sessions
 workspace-left-panel-ssh-manager-sessions-loading = Lade Sessions…
 workspace-left-panel-ssh-manager-sessions-needs-key = Zaplex-Sessions benötigen schlüsselbasierte Authentifizierung
 workspace-left-panel-ssh-manager-sessions-not-persistent = „Session-Persistenz“ auf „Dauerhaft“ setzen, um dies zu nutzen
+workspace-left-panel-ssh-manager-sessions-unix-only = Daemon-Sessions gibt es nur auf Unix-Hosts.
 workspace-left-panel-ssh-manager-session-id = Session-ID: { $id }
 workspace-left-panel-ssh-manager-session-open-here = In diesem Fenster offen
 workspace-left-panel-ssh-manager-session-show-tab = Tab anzeigen
@@ -847,6 +868,7 @@ theme-editor-error-image = Aus dem Bild konnte kein Theme erstellt werden: { $er
 theme-editor-error-local-files = Für den Theme-Import ist lokaler Dateizugriff erforderlich.
 theme-editor-error-export-write = Das exportierte Theme konnte nicht geschrieben werden: { $error }
 workspace-left-panel-ssh-manager-multiplexer-metadata = { $kind } · { $windows } Fenster · { $clients } Clients
+workspace-left-panel-ssh-manager-multiplexer-kind-unknown = unbekannt
 workspace-left-panel-ssh-manager-multiplexer-scan-error = Multiplexer-Erkennung fehlgeschlagen: { $detail }
 workspace-left-panel-ssh-manager-multiplexer-invalid = Diese Multiplexer-Session hat keinen unterstützten Typ.
 workspace-left-panel-ssh-manager-multiplexer-host-missing = Der gespeicherte Host ist nicht mehr vorhanden.
@@ -874,7 +896,10 @@ cockpit-table-col-last = Zuletzt
 cockpit-table-filter-all = Alle
 cockpit-table-filter-waiting = Wartet
 cockpit-table-filter-active = Aktiv
-cockpit-table-filter-idle = Idle
+cockpit-table-filter-idle = Ruht
+cockpit-table-state-waiting = Wartet
+cockpit-table-state-working = Aktiv
+cockpit-table-state-idle = Ruht
 cockpit-account-gone = Dieses Konto ist nicht mehr auffindbar — abgemeldet, oder sein Konfig-Verzeichnis fehlt.
 cockpit-menu-adopt = Session öffnen
 cockpit-menu-fork = Fork
@@ -950,8 +975,15 @@ sftp-context-menu-rename = Umbenennen
 sftp-context-menu-delete = Löschen
 sftp-context-menu-details = Details
 cockpit-table-search-placeholder = Sessions filtern…
-cockpit-meter-5h = 5h
-cockpit-meter-week = Wo
+cockpit-meter-5h = 5{"\u00A0"}h
+cockpit-meter-week = Woche
+cockpit-duration-minutes = { $minutes }{"\u00A0"}min
+cockpit-duration-hours = { $hours }{"\u00A0"}h
+cockpit-duration-days = { $days }{"\u00A0"}d
+cockpit-duration-hours-minutes = { $hours }{"\u00A0"}h { $minutes }{"\u00A0"}min
+cockpit-duration-days-hours = { $days }{"\u00A0"}d { $hours }{"\u00A0"}h
+cockpit-age-now = jetzt
+cockpit-reset-resetting = wird zurückgesetzt
 fm-col-name = Name
 fm-col-size = Größe
 fm-col-modified = Geändert
@@ -2099,7 +2131,7 @@ settings-code-show-diff-stats = Diff-Statistik auf der Code-Review-Schaltfläche
 settings-code-show-diff-stats-desc = Auf der Code-Review-Schaltfläche die Anzahl hinzugefügter und entfernter Zeilen anzeigen.
 settings-code-project-explorer = Projektbrowser
 settings-code-project-explorer-desc = Fügt dem linken Werkzeugbereich einen Projektbrowser beziehungsweise Dateibaum im IDE-Stil hinzu.
-settings-code-global-search = Globale Dateisuche
+settings-code-global-search = Globale Suche
 settings-code-global-search-desc = Fügt dem linken Werkzeugbereich eine globale Dateisuche hinzu.
 
 # ── Einstellungen: Ausführungsprofile ────────────────────────────────────────
@@ -3400,7 +3432,7 @@ global-search-title = Globale Suche
 global-search-description = Dateien in deinen aktuellen Verzeichnissen durchsuchen.
 global-search-unavailable-title = Globale Suche nicht verfügbar
 global-search-unavailable-description = Die globale Suche benötigt Zugriff auf deinen lokalen Arbeitsbereich. Öffne eine neue oder wechsle zu einer aktiven Session.
-global-search-remote-description = Die globale Suche benötigt Zugriff auf deinen lokalen Arbeitsbereich, der in Remote-Sessions nicht unterstützt wird
+global-search-remote-description = Die globale Suche benötigt Zugriff auf deinen lokalen Arbeitsbereich, der in Remote-Sessions nicht unterstützt wird.
 global-search-unsupported-session-description = Die globale Suche funktioniert derzeit nicht in Git Bash oder WSL.
 global-search-failed = Globale Suche fehlgeschlagen.
 
@@ -3699,7 +3731,7 @@ onboarding-customize-vertical = Vertikal
 onboarding-customize-horizontal = Horizontal
 onboarding-customize-conversation-history = Unterhaltungsverlauf
 onboarding-customize-file-explorer = Dateibrowser
-onboarding-customize-global-file-search = Globale Dateisuche
+onboarding-customize-global-file-search = Globale Suche
 onboarding-customize-warp-drive = Zaplex Drive
 onboarding-customize-tools-panel = Werkzeugbereich
 onboarding-customize-code-review = Code-Review
@@ -4116,6 +4148,7 @@ workspace-split-target-changed = Der Split wurde nicht geöffnet, weil sich sein
 workspace-split-host-already-connecting = { $host } wird bereits verbunden. Öffne den Split erneut, sobald die Verbindung steht.
 workspace-split-agent-single-launch = Ein Split nimmt genau einen Agenten auf. Wähle ein einzelnes Konto.
 workspace-launch-more-hosts = Weitere Hosts
+workspace-launch-host-not-found = { $agent } konnte nicht gestartet werden: Host „{ $host }“ nicht gefunden.
 workspace-remote-agent-route-validation-unavailable = Der Daemon kann diese Agent-zu-PTY-Route nicht validieren.
 workspace-remote-daemon-connection-unavailable = Die Daemon-Verbindung ist nicht verfügbar; aktualisiere die Agent-Sessions.
 workspace-remote-pty-agent-changed = Der Vordergrund-Agent dieses PTYs hat sich geändert. Aktualisiere die Agent-Sessions, bevor du es erneut anhängst.

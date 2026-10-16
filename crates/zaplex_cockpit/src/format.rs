@@ -1,6 +1,8 @@
 //! Pure display formatting shared by the cockpit sidebar + pane: heat band/colour,
 //! cost, humanized tokens, reset countdown. Warpui-free and fully unit-tested, so the
 //! visual layers stay thin and the numbers-to-text logic is verified headlessly.
+//! Values that read as words (cost, countdowns, ages) leave this crate as
+//! structured values; the app spells them in the user's language.
 
 use std::collections::BTreeSet;
 
@@ -235,49 +237,79 @@ fn rounded_tenths(n: u64, divisor: u64) -> u128 {
     whole * 10 + (remainder * 10 + divisor / 2) / divisor
 }
 
-/// Relative reset countdown (claudeplex `resetIn`): "45m", "2h13m", "4d1h";
-/// "resetting" once past; "" when there is no active window.
-pub fn format_reset(reset: Option<DateTime<Utc>>, now: DateTime<Utc>) -> String {
-    let Some(reset) = reset else {
-        return String::new();
-    };
+/// Time left until a rate-limit window resets (claudeplex `resetIn`), at
+/// glance precision: minutes below an hour, then hours and minutes, then days
+/// and hours. The app spells it in the user's language.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetCountdown {
+    /// The reset time has passed; the provider is starting the next window.
+    Resetting,
+    Minutes(i64),
+    HoursMinutes {
+        hours: i64,
+        minutes: i64,
+    },
+    DaysHours {
+        days: i64,
+        hours: i64,
+    },
+}
+
+/// The countdown to `reset`, rounded to the minute; `None` when there is no
+/// active window.
+pub fn reset_countdown(reset: Option<DateTime<Utc>>, now: DateTime<Utc>) -> Option<ResetCountdown> {
+    let reset = reset?;
     let ms = (reset - now).num_milliseconds();
     if ms <= 0 {
-        return "resetting".to_string();
+        return Some(ResetCountdown::Resetting);
     }
     let total_min = ((ms as f64) / 60_000.0).round() as i64;
     if total_min < 60 {
-        return format!("{total_min}m");
+        return Some(ResetCountdown::Minutes(total_min));
     }
-    let h = total_min / 60;
-    if h < 24 {
-        return format!("{}h{}m", h, total_min % 60);
+    let hours = total_min / 60;
+    if hours < 24 {
+        return Some(ResetCountdown::HoursMinutes {
+            hours,
+            minutes: total_min % 60,
+        });
     }
-    let d = h / 24;
-    format!("{}d{}h", d, h % 24)
+    Some(ResetCountdown::DaysHours {
+        days: hours / 24,
+        hours: hours % 24,
+    })
 }
 
-/// How long ago something happened, as a short glance-value: `"jetzt"`-scale
-/// `now`, then `5m`, `3h`, `2d`.
+/// How long ago something happened, as a short glance value in whole units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelativeAge {
+    /// Under a minute ago, or in the future.
+    Now,
+    Minutes(i64),
+    Hours(i64),
+    Days(i64),
+}
+
+/// The age of `ts`: `Now` under a minute, then whole minutes, hours, days.
 ///
-/// The mirror of [`format_reset`], which counts forward — same units, same
+/// The mirror of [`reset_countdown`], which counts forward — same units, same
 /// shortness, so a row's "last" and a meter's "resets in" read as one language.
 /// A future timestamp (a clock that disagrees with the host that wrote it) reads
-/// as `now` rather than a negative age: skew is not news.
-pub fn format_relative(ts: DateTime<Utc>, now: DateTime<Utc>) -> String {
+/// as `Now` rather than a negative age: skew is not news.
+pub fn relative_age(ts: DateTime<Utc>, now: DateTime<Utc>) -> RelativeAge {
     let ms = (now - ts).num_milliseconds();
     if ms < 60_000 {
-        return "now".to_string();
+        return RelativeAge::Now;
     }
     let total_min = ((ms as f64) / 60_000.0).floor() as i64;
     if total_min < 60 {
-        return format!("{total_min}m");
+        return RelativeAge::Minutes(total_min);
     }
-    let h = total_min / 60;
-    if h < 24 {
-        return format!("{h}h");
+    let hours = total_min / 60;
+    if hours < 24 {
+        return RelativeAge::Hours(hours);
     }
-    format!("{}d", h / 24)
+    RelativeAge::Days(hours / 24)
 }
 
 #[cfg(test)]

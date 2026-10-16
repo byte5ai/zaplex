@@ -304,3 +304,7 @@ mod tests {
 #[cfg(test)]
 #[path = "i18n_catalog_tests.rs"]
 mod catalog_tests;
+
+#[cfg(test)]
+#[path = "i18n_literal_guard_tests.rs"]
+mod literal_guard_tests;

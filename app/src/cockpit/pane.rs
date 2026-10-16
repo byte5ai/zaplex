@@ -29,8 +29,8 @@ use warpui::{
     ViewHandle,
 };
 use zaplex_cockpit::{
-    cost_figure, format_relative, format_reset, format_tokens, heat_pct_label_with_provenance,
-    host_ident, host_key, session_glyph, session_key, AccountStatus, AccountUsage, CostFigure,
+    cost_figure, format_tokens, heat_pct_label_with_provenance, host_ident, host_key, relative_age,
+    reset_countdown, session_glyph, session_key, AccountStatus, AccountUsage, CostFigure,
     FleetTree, PricingSource, Provider, SessionSnapshot, SessionState, UsageProvenance,
     WindowTotals,
 };
@@ -41,7 +41,8 @@ use crate::cockpit::fleet_details::{
     managed_fleet_details_from_proto, ManagedFleetInventory, ManagedFleetSession,
 };
 use crate::cockpit::localize::{
-    cost_amount_text, cost_hint_text, cost_source_text, cost_text, unpriced_models_text,
+    age_text, cost_amount_text, cost_hint_text, cost_source_text, cost_text, reset_text,
+    state_text, unpriced_models_text,
 };
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::session_lifecycle::{
@@ -51,6 +52,7 @@ use crate::cockpit::style::{
     attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, icon_verb_button_tooltip,
     icon_word_verb, provider_label, status_dot_coloru, utilisation_coloru, utilisation_track,
     verb_button, verb_button_colored, zone_card, VerbKind, BLOCK_RADIUS, CONTROL_RADIUS,
+    METER_LABEL_WIDTH,
 };
 use crate::cockpit::transcript_view::TranscriptTarget;
 use crate::editor::{
@@ -128,9 +130,8 @@ const ALIAS_EDITOR_WIDTH: f32 = 220.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_SPACING: f32 = 8.0;
 const HEAT_BAR_HEIGHT: f32 = 8.0;
-/// Width of a meter's short window label and the gap before its track; a
+/// The gap between a meter's label ([`METER_LABEL_WIDTH`]) and its track; a
 /// reset line under the meter starts at the track's edge.
-const METER_LABEL_WIDTH: f32 = 24.0;
 const METER_LABEL_GAP: f32 = 8.0;
 /// Fixed column width for the cost/token matrix cells.
 const MATRIX_COL_WIDTH: f32 = 110.0;
@@ -1229,7 +1230,7 @@ impl CockpitPaneView {
         self.account_key.as_deref()
     }
 
-    /// The fleet card's reset-countdown line: `5h ↻ <t> · Wo ↻ <t>` — absent
+    /// The fleet card's reset-countdown line: `5 h ↻ <t> · Woche ↻ <t>` — absent
     /// windows drop out, `None` when neither is known. Labels are the same
     /// short meter vocabulary as [`Self::heat_bar`]'s, so the line reads
     /// against the meters above it (audit P0.4: bare times with no label read
@@ -1237,13 +1238,13 @@ impl CockpitPaneView {
     fn reset_line(acct: &AccountUsage, now: chrono::DateTime<chrono::Utc>) -> Option<String> {
         let label_5h = crate::t!("cockpit-meter-5h");
         let label_week = crate::t!("cockpit-meter-week");
-        let reset_5h = format_reset(acct.reset5h, now);
-        let reset_wk = format_reset(acct.reset_week, now);
-        match (reset_5h.is_empty(), reset_wk.is_empty()) {
-            (true, true) => None,
-            (false, true) => Some(format!("{label_5h} ↻ {reset_5h}")),
-            (true, false) => Some(format!("{label_week} ↻ {reset_wk}")),
-            (false, false) => Some(format!(
+        let reset_5h = reset_countdown(acct.reset5h, now).map(reset_text);
+        let reset_wk = reset_countdown(acct.reset_week, now).map(reset_text);
+        match (reset_5h, reset_wk) {
+            (None, None) => None,
+            (Some(reset_5h), None) => Some(format!("{label_5h} ↻ {reset_5h}")),
+            (None, Some(reset_wk)) => Some(format!("{label_week} ↻ {reset_wk}")),
+            (Some(reset_5h), Some(reset_wk)) => Some(format!(
                 "{label_5h} ↻ {reset_5h} · {label_week} ↻ {reset_wk}"
             )),
         }
@@ -2595,7 +2596,7 @@ impl CockpitPaneView {
                             let session_state = session.state;
                             let task_state = session.task_state.clone();
                             let relative =
-                                format_relative(session.last_activity, chrono::Utc::now());
+                                age_text(relative_age(session.last_activity, chrono::Utc::now()));
                             let activity =
                                 super::panel::task_activity_label(task_state.as_ref(), &relative);
                             Hoverable::new(peek_state, move |mouse| {
@@ -2663,7 +2664,7 @@ impl CockpitPaneView {
                             appearance,
                         ))
                         .with_child(Self::text(
-                            zaplex_cockpit::state_word(presented_state).to_string(),
+                            state_text(zaplex_cockpit::state_word(presented_state)),
                             family,
                             body,
                             if presented_state == SessionState::Waiting {
@@ -2697,7 +2698,7 @@ impl CockpitPaneView {
                         today,
                         state_cell,
                         Self::cell(
-                            format_relative(session.last_activity, chrono::Utc::now()),
+                            age_text(relative_age(session.last_activity, chrono::Utc::now())),
                             faint,
                             true,
                             appearance,
@@ -2998,7 +2999,7 @@ impl CockpitPaneView {
         }
 
         // The two meters. `heat_bar` carries the one theme-role utilisation rule.
-        // Meter labels are the short vocabulary („5h"/„Wo"), same as the fleet
+        // Meter labels are the short vocabulary (`5 h`/`Woche`), same as the fleet
         // card — the long column titles clipped inside the label cell (audit
         // P0.3); they belong to the figures matrix below. Each limit keeps its
         // own reset directly under its meter, starting at the track's edge, so
@@ -3017,12 +3018,16 @@ impl CockpitPaneView {
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_spacing(2.0)
                 .with_child(self.heat_bar(&label, fraction, acct.provenance, appearance));
-            let reset = format_reset(reset, now);
-            if !reset.is_empty() {
+            if let Some(reset) = reset_countdown(reset, now) {
                 quota = quota.with_child(
-                    Container::new(Self::text(format!("↻ {reset}"), family, body, faint))
-                        .with_padding_left(METER_LABEL_WIDTH + METER_LABEL_GAP)
-                        .finish(),
+                    Container::new(Self::text(
+                        format!("↻ {}", reset_text(reset)),
+                        family,
+                        body,
+                        faint,
+                    ))
+                    .with_padding_left(METER_LABEL_WIDTH + METER_LABEL_GAP)
+                    .finish(),
                 );
             }
             col = col.with_child(quota.finish());
@@ -3240,8 +3245,9 @@ impl CockpitPaneView {
             col = col.with_child(row.with_main_axis_size(MainAxisSize::Max).finish());
         }
         if acct.sessions.len() > 4 {
+            let hidden_sessions = acct.sessions.len() - 4;
             col = col.with_child(Self::text(
-                format!("… {} more", acct.sessions.len() - 4),
+                crate::t!("cockpit-fleet-more-sessions", count = hidden_sessions),
                 family,
                 body,
                 muted,
@@ -3296,16 +3302,14 @@ impl CockpitPaneView {
             .filter(|s| matches!(s.state, SessionState::Active | SessionState::Monitor))
             .count();
 
-        let mut summary = format!(
-            "{} account{}",
-            accounts.len(),
-            if accounts.len() == 1 { "" } else { "s" }
-        );
+        let mut summary = crate::t!("cockpit-fleet-accounts", count = accounts.len());
         if working > 0 {
-            summary.push_str(&format!(" · ▶ {working} working"));
+            summary.push_str(" · ");
+            summary.push_str(&crate::t!("cockpit-fleet-working", count = working));
         }
         if waiting > 0 {
-            summary.push_str(&format!(" · ✋ {waiting} waiting on you"));
+            summary.push_str(" · ");
+            summary.push_str(&crate::t!("cockpit-fleet-waiting", count = waiting));
         }
 
         Flex::row()

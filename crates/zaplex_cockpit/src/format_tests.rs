@@ -116,16 +116,28 @@ fn token_humanization_promotes_rounded_unit_boundaries() {
 }
 
 #[test]
-fn reset_countdown() {
+fn reset_countdown_steps_from_minutes_to_hours_to_days() {
     let now = ts("2026-06-30T12:00:00Z");
-    assert_eq!(format_reset(None, now), "");
+    assert_eq!(reset_countdown(None, now), None);
     assert_eq!(
-        format_reset(Some(ts("2026-06-30T11:59:00Z")), now),
-        "resetting"
+        reset_countdown(Some(ts("2026-06-30T11:59:00Z")), now),
+        Some(ResetCountdown::Resetting)
     );
-    assert_eq!(format_reset(Some(ts("2026-06-30T12:45:00Z")), now), "45m");
-    assert_eq!(format_reset(Some(ts("2026-06-30T14:13:00Z")), now), "2h13m");
-    assert_eq!(format_reset(Some(ts("2026-07-04T13:00:00Z")), now), "4d1h");
+    assert_eq!(
+        reset_countdown(Some(ts("2026-06-30T12:45:00Z")), now),
+        Some(ResetCountdown::Minutes(45))
+    );
+    assert_eq!(
+        reset_countdown(Some(ts("2026-06-30T14:13:00Z")), now),
+        Some(ResetCountdown::HoursMinutes {
+            hours: 2,
+            minutes: 13
+        })
+    );
+    assert_eq!(
+        reset_countdown(Some(ts("2026-07-04T13:00:00Z")), now),
+        Some(ResetCountdown::DaysHours { days: 4, hours: 1 })
+    );
 }
 
 #[test]
@@ -160,16 +172,20 @@ fn relative_time_is_short_and_matches_the_reset_units() {
     let now = DateTime::parse_from_rfc3339("2026-07-17T12:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
-    let ago = |secs: i64| format_relative(now - chrono::Duration::seconds(secs), now);
+    let ago = |secs: i64| relative_age(now - chrono::Duration::seconds(secs), now);
 
-    assert_eq!(ago(5), "now", "under a minute is not worth a number");
-    assert_eq!(ago(59), "now");
-    assert_eq!(ago(60), "1m");
-    assert_eq!(ago(3599), "59m");
-    assert_eq!(ago(3600), "1h");
-    assert_eq!(ago(86_399), "23h");
-    assert_eq!(ago(86_400), "1d");
-    assert_eq!(ago(10 * 86_400), "10d");
+    assert_eq!(
+        ago(5),
+        RelativeAge::Now,
+        "under a minute is not worth a number"
+    );
+    assert_eq!(ago(59), RelativeAge::Now);
+    assert_eq!(ago(60), RelativeAge::Minutes(1));
+    assert_eq!(ago(3599), RelativeAge::Minutes(59));
+    assert_eq!(ago(3600), RelativeAge::Hours(1));
+    assert_eq!(ago(86_399), RelativeAge::Hours(23));
+    assert_eq!(ago(86_400), RelativeAge::Days(1));
+    assert_eq!(ago(10 * 86_400), RelativeAge::Days(10));
 }
 
 /// A timestamp from the future means two clocks disagree — the host that wrote
@@ -181,7 +197,7 @@ fn a_future_timestamp_reads_as_now_rather_than_negative() {
         .unwrap()
         .with_timezone(&Utc);
     assert_eq!(
-        format_relative(now + chrono::Duration::hours(3), now),
-        "now"
+        relative_age(now + chrono::Duration::hours(3), now),
+        RelativeAge::Now
     );
 }

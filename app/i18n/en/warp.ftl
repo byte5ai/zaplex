@@ -2894,6 +2894,16 @@ cockpit-cost-partly-unpriced = partly unpriced
 cockpit-cost-unpriced-models = No list price: { $models }
 cockpit-cost-source = Costs: estimate from API list prices as of { $date }
 cockpit-fleet-cost-summary = today { $today } · 5h { $block } · wk { $week }
+cockpit-fleet-accounts = { $count ->
+    [one] { $count } account
+   *[other] { $count } accounts
+}
+cockpit-fleet-working = ▶ { $count } working
+cockpit-fleet-waiting = ✋ { $count } { $count ->
+    [one] waiting on you
+   *[other] waiting on you
+}
+cockpit-fleet-more-sessions = … { $count } more
 # Review cluster. "reviewed" is deliberately not "approved": the mark is a
 # private note to yourself — it tells the agent nothing and approves nothing.
 cockpit-session-review = Review
@@ -2995,6 +3005,11 @@ workspace-left-panel-ssh-manager-delete-credential-unavailable = unavailable cre
 workspace-left-panel-ssh-manager-delete-cannot-undo = This action cannot be undone.
 workspace-left-panel-ssh-manager-menu-new-folder = New folder
 workspace-left-panel-ssh-manager-menu-new-server = New SSH server
+workspace-left-panel-ssh-manager-default-folder-name = New folder
+workspace-left-panel-ssh-manager-default-server-name = New server
+workspace-left-panel-ssh-manager-clone-name-suffix = (copy)
+workspace-left-panel-ssh-manager-note-imported-from = Imported from
+workspace-left-panel-ssh-manager-note-discovered-via-tailscale = Discovered via Tailscale
 workspace-left-panel-ssh-manager-menu-edit = Edit
 workspace-left-panel-ssh-manager-menu-connect = Connect
 workspace-left-panel-ssh-manager-menu-sessions = Zaplex sessions
@@ -3011,6 +3026,7 @@ workspace-left-panel-ssh-manager-zaplex-sessions = Zaplex sessions
 workspace-left-panel-ssh-manager-sessions-loading = Loading sessions…
 workspace-left-panel-ssh-manager-sessions-empty = No Zaplex sessions
 workspace-left-panel-ssh-manager-sessions-not-persistent = Set "Session persistence" to Persistent to use this
+workspace-left-panel-ssh-manager-sessions-unix-only = Daemon sessions are only supported on Unix hosts.
 workspace-left-panel-ssh-manager-sessions-needs-key = Zaplex sessions need key-based authentication
 workspace-left-panel-ssh-manager-session-id = Session ID: { $id }
 workspace-left-panel-ssh-manager-session-open-here = Open in this window
@@ -3122,6 +3138,7 @@ theme-editor-error-image = Could not create a theme from the image: { $error }
 theme-editor-error-local-files = Theme import requires local file access.
 theme-editor-error-export-write = Could not write the exported theme: { $error }
 workspace-left-panel-ssh-manager-multiplexer-metadata = { $kind } · { $windows } windows · { $clients } clients
+workspace-left-panel-ssh-manager-multiplexer-kind-unknown = unknown
 workspace-left-panel-ssh-manager-multiplexer-scan-error = Multiplexer discovery failed: { $detail }
 workspace-left-panel-ssh-manager-multiplexer-invalid = This multiplexer session has no supported type.
 workspace-left-panel-ssh-manager-multiplexer-host-missing = The saved host no longer exists.
@@ -3168,6 +3185,11 @@ workspace-left-panel-ssh-manager-candidates-refresh = Refresh from ~/.ssh/config
 workspace-left-panel-ssh-manager-add-heading = Add a host
 workspace-left-panel-ssh-manager-add-blank = Create a blank server
 workspace-left-panel-ssh-manager-discover-tailscale = Discover Tailscale hosts
+workspace-left-panel-ssh-manager-tailscale-start-failed = Could not start Tailscale discovery: { $error }
+workspace-left-panel-ssh-manager-tailscale-timed-out = Tailscale discovery timed out.
+workspace-left-panel-ssh-manager-tailscale-read-failed = Could not read Tailscale status: { $error }
+workspace-left-panel-ssh-manager-tailscale-unavailable = Tailscale not found or not running (`tailscale status` failed).
+workspace-left-panel-ssh-manager-tailscale-import-failed = Tailscale import worker failed: { $error }
 workspace-left-panel-ssh-manager-add-cancel = Cancel
 terminal-su-root-password-confirm = Auto-fill Root Password
 terminal-su-root-password-confirm-subtitle = Click to confirm and inject the saved Root password
@@ -3334,7 +3356,7 @@ global-search-title = Global search
 global-search-description = Search in files across your current directories.
 global-search-unavailable-title = Global search unavailable
 global-search-unavailable-description = Global search requires access to your local workspace. Open a new session or navigate to an active session to view.
-global-search-remote-description = Global search requires access to your local workspace, which isn't supported in remote sessions
+global-search-remote-description = Global search requires access to your local workspace, which isn't supported in remote sessions.
 global-search-unsupported-session-description = Global search doesn't currently work in Git Bash or WSL.
 global-search-failed = Global search failed.
 
@@ -4125,6 +4147,9 @@ cockpit-table-filter-all = All
 cockpit-table-filter-waiting = Waiting
 cockpit-table-filter-active = Active
 cockpit-table-filter-idle = Idle
+cockpit-table-state-waiting = waiting
+cockpit-table-state-working = working
+cockpit-table-state-idle = idle
 cockpit-account-gone = This account is no longer discoverable — signed out, or its config directory is gone.
 cockpit-menu-adopt = Open session
 cockpit-menu-fork = Fork
@@ -4197,6 +4222,13 @@ sftp-file-manager-title = File manager
 cockpit-table-search-placeholder = Filter sessions…
 cockpit-meter-5h = 5h
 cockpit-meter-week = wk
+cockpit-duration-minutes = { $minutes }m
+cockpit-duration-hours = { $hours }h
+cockpit-duration-days = { $days }d
+cockpit-duration-hours-minutes = { $hours }h{ $minutes }m
+cockpit-duration-days-hours = { $days }d{ $hours }h
+cockpit-age-now = now
+cockpit-reset-resetting = resetting
 fm-col-name = Name
 fm-col-size = Size
 fm-col-modified = Modified
@@ -4460,6 +4492,7 @@ workspace-split-target-changed = The split was not opened because its pane moved
 workspace-split-host-already-connecting = { $host } is already connecting. Open the split again once it is connected.
 workspace-split-agent-single-launch = A split holds exactly one agent. Choose a single account.
 workspace-launch-more-hosts = More hosts
+workspace-launch-host-not-found = Couldn't find host '{ $host }' to launch { $agent } on.
 workspace-remote-agent-route-validation-unavailable = The daemon cannot validate this agent-to-PTY route.
 workspace-remote-daemon-connection-unavailable = The daemon connection is unavailable; refresh Agent Sessions.
 workspace-remote-pty-agent-changed = This PTY's foreground agent changed. Refresh Agent Sessions before attaching again.

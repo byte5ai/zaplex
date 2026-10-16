@@ -1,11 +1,11 @@
 //! Localized text for the values the `zaplex_cockpit` spine computes.
 //!
 //! The spine stays language-neutral: it returns structured values (cost
-//! figures and the like), and this module is the one place that turns them
-//! into Fluent messages and the user's number format. New cockpit wording
-//! belongs here, not in the crate.
+//! figures, countdowns, ages, state words), and this module is the one place
+//! that turns them into Fluent messages and the user's number format. New
+//! cockpit wording belongs here, not in the crate.
 
-use zaplex_cockpit::{CostFigure, PricingSource};
+use zaplex_cockpit::{CostFigure, PricingSource, RelativeAge, ResetCountdown, StateWord};
 
 /// A cost on one line: `~4,20 $`, `~4,20 $ · teilweise ohne Preis`, or
 /// `ohne Preis` when nothing could be priced.
@@ -57,6 +57,45 @@ pub(crate) fn cost_source_text() -> String {
             .unwrap_or_default()
             .to_string()
     )
+}
+
+/// A reset countdown: `45 min`, `2 h 13 min`, `4 d 1 h`, or that the window
+/// is resetting right now.
+pub(crate) fn reset_text(countdown: ResetCountdown) -> String {
+    match countdown {
+        ResetCountdown::Resetting => crate::t!("cockpit-reset-resetting"),
+        ResetCountdown::Minutes(minutes) => {
+            crate::t!("cockpit-duration-minutes", minutes = minutes)
+        }
+        ResetCountdown::HoursMinutes { hours, minutes } => crate::t!(
+            "cockpit-duration-hours-minutes",
+            hours = hours,
+            minutes = minutes
+        ),
+        ResetCountdown::DaysHours { days, hours } => {
+            crate::t!("cockpit-duration-days-hours", days = days, hours = hours)
+        }
+    }
+}
+
+/// How long ago, in the same units as [`reset_text`]: `jetzt`, `5 min`,
+/// `3 h`, `2 d`.
+pub(crate) fn age_text(age: RelativeAge) -> String {
+    match age {
+        RelativeAge::Now => crate::t!("cockpit-age-now"),
+        RelativeAge::Minutes(minutes) => crate::t!("cockpit-duration-minutes", minutes = minutes),
+        RelativeAge::Hours(hours) => crate::t!("cockpit-duration-hours", hours = hours),
+        RelativeAge::Days(days) => crate::t!("cockpit-duration-days", days = days),
+    }
+}
+
+/// The session table's status word beside the glyph.
+pub(crate) fn state_text(word: StateWord) -> String {
+    match word {
+        StateWord::Waiting => crate::t!("cockpit-table-state-waiting"),
+        StateWord::Working => crate::t!("cockpit-table-state-working"),
+        StateWord::Idle => crate::t!("cockpit-table-state-idle"),
+    }
 }
 
 /// The estimate marker, amount and currency in the locale's layout. Fluent

@@ -26,7 +26,9 @@ use crate::cockpit::account_identity;
 use crate::cockpit::localize::{cost_text, unpriced_models_text};
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::panel::{account_count_presentation, CockpitPanel, CARD_PADDING, CARD_SPACING};
-use crate::cockpit::style::{utilisation_coloru, utilisation_track, zone_card, BLOCK_RADIUS};
+use crate::cockpit::style::{
+    utilisation_coloru, utilisation_track, zone_card, BLOCK_RADIUS, METER_LABEL_WIDTH,
+};
 use crate::view_components::action_button::{ActionButton, ButtonSize, PaneHeaderTheme};
 
 const HEAT_BAR_HEIGHT: f32 = 6.0;
@@ -309,7 +311,11 @@ impl CockpitAccountsPanel {
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
-            .with_child(CockpitPanel::text(label.to_string(), family, size, muted))
+            .with_child(
+                ConstrainedBox::new(CockpitPanel::text(label.to_string(), family, size, muted))
+                    .with_width(METER_LABEL_WIDTH)
+                    .finish(),
+            )
             .with_child(track)
             .with_child(CockpitPanel::text(
                 heat_pct_label_with_provenance(fraction, provenance),

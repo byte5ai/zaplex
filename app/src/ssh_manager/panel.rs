@@ -503,13 +503,23 @@ async fn tailscale_status_output(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|error| format!("Could not start Tailscale discovery: {error}"))?;
+        .map_err(|error| {
+            crate::t!(
+                "workspace-left-panel-ssh-manager-tailscale-start-failed",
+                error = error.to_string()
+            )
+        })?;
     child
         .output()
         .with_timeout(TAILSCALE_DISCOVERY_TIMEOUT)
         .await
-        .map_err(|_| "Tailscale discovery timed out.".to_string())?
-        .map_err(|error| format!("Could not read Tailscale status: {error}"))
+        .map_err(|_| crate::t!("workspace-left-panel-ssh-manager-tailscale-timed-out"))?
+        .map_err(|error| {
+            crate::t!(
+                "workspace-left-panel-ssh-manager-tailscale-read-failed",
+                error = error.to_string()
+            )
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1292,8 +1302,9 @@ impl SshManagerPanel {
 
     /// Create a new folder. When `parent` is None, it is created at the root level.
     fn on_add_folder_with_parent(&mut self, parent: Option<String>, ctx: &mut ViewContext<Self>) {
+        let base_name = crate::t!("workspace-left-panel-ssh-manager-default-folder-name");
         let result = warp_ssh_manager::with_conn(|c| {
-            let name = unique_name(c, parent.as_deref(), "New folder")?;
+            let name = unique_name(c, parent.as_deref(), &base_name)?;
             Ok(SshRepository::create_folder(c, parent.as_deref(), &name)?)
         });
         match result {
@@ -1367,7 +1378,12 @@ impl SshManagerPanel {
                 .map(|p| p.to_string_lossy().into_owned()),
             credential_id: None,
             startup_command: None,
-            notes: Some(format!("Imported from {path_display}")),
+            // Persisted text: composed without a Fluent placeable so no bidi
+            // isolates end up in the stored note.
+            notes: Some(format!(
+                "{} {path_display}",
+                crate::t!("workspace-left-panel-ssh-manager-note-imported-from")
+            )),
             last_connected_at: None,
             session_resilience: warp_ssh_manager::SessionResilience::default(),
             ring_ceiling_mb: 0,
@@ -1423,8 +1439,9 @@ impl SshManagerPanel {
         self.adding_mode = false;
         let parent = self.parent_for_new_node();
         let info_template = SshServerInfo::new_default(String::new());
+        let base_name = crate::t!("workspace-left-panel-ssh-manager-default-server-name");
         let result = warp_ssh_manager::with_conn(|c| {
-            let name = unique_name(c, parent.as_deref(), "New server")?;
+            let name = unique_name(c, parent.as_deref(), &base_name)?;
             Ok(SshRepository::create_server(
                 c,
                 parent.as_deref(),
@@ -1467,10 +1484,9 @@ impl SshManagerPanel {
             async move {
                 let output = tailscale_status_output(command_factory).await?;
                 if !output.status.success() {
-                    return Err(
-                        "Tailscale not found or not running (`tailscale status` failed)."
-                            .to_string(),
-                    );
+                    return Err(crate::t!(
+                        "workspace-left-panel-ssh-manager-tailscale-unavailable"
+                    ));
                 }
                 let json = String::from_utf8_lossy(&output.stdout).into_owned();
                 let candidates = crate::cockpit::tailscale::parse_tailscale_status(&json)
@@ -1483,7 +1499,12 @@ impl SshManagerPanel {
                     })
                 })
                 .await
-                .map_err(|error| format!("Tailscale import worker failed: {error}"))?
+                .map_err(|error| {
+                    crate::t!(
+                        "workspace-left-panel-ssh-manager-tailscale-import-failed",
+                        error = error.to_string()
+                    )
+                })?
                 .map_err(|error| error.to_string())
             },
             |me, result, ctx| {
@@ -1518,10 +1539,16 @@ impl SshManagerPanel {
 
             let parent = source_node.parent_id;
             let cloned_info = SshServerInfo::clone_from_template(&source_info, String::new());
+            // Persisted name: composed without a Fluent placeable so no bidi
+            // isolates end up in the stored name.
             let name = unique_name(
                 c,
                 parent.as_deref(),
-                &format!("{} (copy)", source_node.name),
+                &format!(
+                    "{} {}",
+                    source_node.name,
+                    crate::t!("workspace-left-panel-ssh-manager-clone-name-suffix")
+                ),
             )?;
 
             let store = KeychainSecretStore;
@@ -1874,7 +1901,7 @@ impl SshManagerPanel {
         {
             self.sessions_error.insert(
                 id,
-                "Daemon sessions are only supported on Unix hosts.".to_string(),
+                crate::t!("workspace-left-panel-ssh-manager-sessions-unix-only"),
             );
         }
     }
@@ -4623,7 +4650,13 @@ fn import_tailscale_hosts(
                 key_path: None,
                 credential_id: None,
                 startup_command: None,
-                notes: Some(format!("Discovered via Tailscale ({})", candidate.os)),
+                // Persisted text: composed without a Fluent placeable so no
+                // bidi isolates end up in the stored note.
+                notes: Some(format!(
+                    "{} ({})",
+                    crate::t!("workspace-left-panel-ssh-manager-note-discovered-via-tailscale"),
+                    candidate.os
+                )),
                 last_connected_at: None,
                 session_resilience: warp_ssh_manager::SessionResilience::default(),
                 ring_ceiling_mb: 0,
@@ -4656,8 +4689,9 @@ fn resolve_server_for_node(
 /// spine's "＋ Add host" (design §10 folds host add/edit onto the spine). The
 /// caller opens the editor + broadcasts the tree change.
 pub(crate) fn create_blank_host() -> anyhow::Result<String> {
+    let base_name = crate::t!("workspace-left-panel-ssh-manager-default-server-name");
     warp_ssh_manager::with_conn(|c| {
-        let name = unique_name(c, None, "New server")?;
+        let name = unique_name(c, None, &base_name)?;
         let info = SshServerInfo::new_default(String::new());
         let node = SshRepository::create_server(c, None, &name, &info)?;
         Ok(node.id)
@@ -4709,12 +4743,14 @@ fn multiplexer_attach_mode(kind: i32, attached_clients: u32) -> Option<Multiplex
     }
 }
 
-fn multiplexer_kind_label(kind: i32) -> &'static str {
+fn multiplexer_kind_label(kind: i32) -> String {
     match MultiplexerKind::try_from(kind) {
-        Ok(MultiplexerKind::Tmux) => "tmux",
-        Ok(MultiplexerKind::ByobuTmux) => "byobu (tmux)",
-        Ok(MultiplexerKind::ByobuScreen) => "byobu (screen)",
-        Ok(MultiplexerKind::Unspecified) | Err(_) => "unknown",
+        Ok(MultiplexerKind::Tmux) => "tmux".to_string(),
+        Ok(MultiplexerKind::ByobuTmux) => "byobu (tmux)".to_string(),
+        Ok(MultiplexerKind::ByobuScreen) => "byobu (screen)".to_string(),
+        Ok(MultiplexerKind::Unspecified) | Err(_) => {
+            crate::t!("workspace-left-panel-ssh-manager-multiplexer-kind-unknown")
+        }
     }
 }
 
