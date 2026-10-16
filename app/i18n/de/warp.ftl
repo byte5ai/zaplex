@@ -3259,6 +3259,7 @@ command-palette-conversations-a11y-navigate = Eingabetaste drücken, um zur Unte
 command-palette-conversations-a11y-fork = Eingabetaste drücken, um die aktuelle Unterhaltung in eine neue Unterhaltung zu forken.
 command-palette-conversations-a11y-new = Eingabetaste drücken, um eine neue Unterhaltung zu erstellen.
 project-explorer-empty-description = In dieser Session wurde kein Projekt gefunden. Öffne eine Session in einem Projektverzeichnis, um dessen Dateien zu durchsuchen.
+project-explorer-empty-title = Kein Projekt gefunden
 project-explorer-unavailable-title = Projektbrowser nicht verfügbar
 project-explorer-unavailable-disabled-description = Der Projektbrowser benötigt Zugriff auf deinen lokalen Arbeitsbereich. Öffne eine neue oder wechsle zu einer aktiven Session.
 project-explorer-unavailable-remote-description = Der Projektbrowser benötigt Zugriff auf deinen lokalen Arbeitsbereich, der in Remote-Sessions nicht unterstützt wird.
