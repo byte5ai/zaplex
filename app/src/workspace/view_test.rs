@@ -3916,6 +3916,68 @@ fn every_split_direction_opens_the_launch_menu_without_adding_a_pane() {
                 });
             });
         }
+
+        // A pane's own split actions (as dispatched by its context menu) take the same route,
+        // and the local choice inserts the new pane on the captured side.
+        for (action, direction, axis, source_index) in [
+            (
+                TerminalAction::SplitLeft(None),
+                Direction::Left,
+                pane_group::SplitDirection::Horizontal,
+                1,
+            ),
+            (
+                TerminalAction::SplitUp(None),
+                Direction::Up,
+                pane_group::SplitDirection::Vertical,
+                1,
+            ),
+            (
+                TerminalAction::SplitRight(None),
+                Direction::Right,
+                pane_group::SplitDirection::Horizontal,
+                0,
+            ),
+            (
+                TerminalAction::SplitDown(None),
+                Direction::Down,
+                pane_group::SplitDirection::Vertical,
+                0,
+            ),
+        ] {
+            let (pane_group, source, source_view) = workspace.update(&mut app, |workspace, ctx| {
+                workspace.add_terminal_tab(false, ctx);
+                let pane_group = workspace.active_tab_pane_group().clone();
+                let source = pane_group.as_ref(ctx).focused_pane_id(ctx);
+                let source_view = pane_group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(source, ctx)
+                    .expect("a new tab starts with a terminal pane");
+                (pane_group, source, source_view)
+            });
+
+            source_view.update(&mut app, |view, ctx| view.handle_action(&action, ctx));
+            workspace.read(&app, |workspace, ctx| {
+                let pending = workspace
+                    .pending_split_launch
+                    .as_ref()
+                    .expect("the split waits for a launch-menu choice");
+                assert_eq!(pending.target.pane_id(), source);
+                assert_eq!(pending.target.direction(), direction);
+                assert_eq!(pane_group.as_ref(ctx).visible_pane_ids(), vec![source]);
+            });
+
+            // Choosing the local terminal entry inserts the pane on the captured side.
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.handle_action(&WorkspaceAction::SplitLaunchLocal, ctx);
+            });
+            pane_group.read(&app, |group, _| {
+                let panes = group.visible_pane_ids();
+                assert_eq!(panes.len(), 2);
+                assert_eq!(panes[source_index], source);
+                assert_eq!(group.num_splits_at_root(axis), 2);
+            });
+        }
     });
 }
 
