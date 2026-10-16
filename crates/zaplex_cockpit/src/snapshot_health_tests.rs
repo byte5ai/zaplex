@@ -42,7 +42,9 @@ fn codex_session_discovery_failure_alone_degrades_snapshot_once() {
     let mut cache = TranscriptScanCache::default();
     cache.codex_rollouts.fail_next_parse();
 
-    let snapshot = build_snapshot_with_cache(
+    // Without process discovery: a Claude process running on the test host must
+    // not add a second account.
+    let snapshot = build_snapshot_with_claude_discovery(
         &home,
         &codex_home,
         None,
@@ -51,6 +53,7 @@ fn codex_session_discovery_failure_alone_degrades_snapshot_once() {
         0,
         &PricingTable::default(),
         &mut cache,
+        claude::discover_accounts_without_process_scan,
     );
 
     let ScanHealth::Degraded(reason) = snapshot.health else {
