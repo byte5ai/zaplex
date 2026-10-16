@@ -1726,6 +1726,7 @@ fn stale_daemon_adoption_cannot_resolve_a_different_inventory_row() {
         app.add_singleton_model(|_| SshTreeChangedNotifier::new());
         app.add_singleton_model(FavoritesStore::new_for_test);
         app.add_singleton_model(RemoteServerManager::new);
+        app.add_singleton_model(|_| ToastStack);
         app.update(init);
         let route = remote_server::transport::DaemonRuntimeRoute::new(
             "server-v1.0.28.sock".to_string(),
@@ -1777,6 +1778,84 @@ fn stale_daemon_adoption_cannot_resolve_a_different_inventory_row() {
             // Only the matching inventory row reaches database host resolution.
             assert!(panel.sessions_error.contains_key("missing-database-host"));
         });
+    });
+}
+
+#[test]
+fn stale_session_row_click_is_reported_and_the_reloaded_row_opens() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_singleton_model(FavoritesStore::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+        app.add_singleton_model(|_| ToastStack);
+        let toasts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = toasts.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&ToastStack::handle(ctx), move |_, event, _| {
+                if let crate::workspace::ToastStackEvent::AddEphemeralToast { window_id, toast } =
+                    event
+                {
+                    observed
+                        .lock()
+                        .unwrap()
+                        .push((*window_id, toast.main_text_for_test().to_owned()));
+                }
+            });
+        });
+        let listed = |generation| crate::remote_server::session_inventory::HostSessionInventory {
+            sessions: vec![RoutedDaemonSession {
+                host_id: None,
+                daemon_runtime: None,
+                session: SessionInfo {
+                    session_id: "pty-restarted".into(),
+                    generation,
+                    ..Default::default()
+                },
+                route: None,
+            }],
+            ..Default::default()
+        };
+        let rendered_key = session_row_key("devhost", &listed(7).sessions[0].session, None);
+        let reloaded_key = session_row_key("devhost", &listed(8).sessions[0].session, None);
+        let (window_id, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut panel = SshManagerPanel::new(ctx);
+            panel.set_nodes_for_test(vec![server("devhost", None, "Development", 0)], ctx);
+            panel.sessions_expanded.insert("devhost".into());
+            let generation = panel.begin_session_fetch("devhost").unwrap();
+            panel.complete_session_fetch("devhost", generation, Ok(listed(7)), ctx);
+            panel
+        });
+
+        panel.update(&mut app, |panel, ctx| {
+            // The daemon restarted and the list changed before the click on
+            // the row rendered for the old generation arrived.
+            let generation = panel.begin_session_fetch("devhost").unwrap();
+            panel.complete_session_fetch("devhost", generation, Ok(listed(8)), ctx);
+            panel.handle_action(&SshManagerPanelAction::OpenSessionRow(rendered_key), ctx);
+            panel.on_adopt_session("devhost".into(), "pty-restarted".into(), 7, None, ctx);
+            assert!(
+                panel.sessions_error.is_empty(),
+                "a stale row must not open any session"
+            );
+        });
+        {
+            let toasts = toasts.lock().unwrap();
+            assert_eq!(toasts.len(), 2, "every stale click is answered");
+            assert!(toasts
+                .iter()
+                .all(|(toast_window, _)| *toast_window == window_id));
+        }
+
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(&SshManagerPanelAction::OpenSessionRow(reloaded_key), ctx);
+            // Without a saved database host, reaching host resolution proves
+            // that the reloaded row opens its session again.
+            assert!(panel.sessions_error.contains_key("devhost"));
+        });
+        assert_eq!(toasts.lock().unwrap().len(), 2);
     });
 }
 

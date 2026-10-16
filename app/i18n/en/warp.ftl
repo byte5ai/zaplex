@@ -3023,6 +3023,7 @@ workspace-left-panel-ssh-manager-session-last-opened-days = { $count ->
     }
 workspace-left-panel-ssh-manager-session-host-missing = This host no longer exists in Connections
 workspace-left-panel-ssh-manager-session-open-error = Could not open this session: { $detail }
+workspace-left-panel-ssh-manager-session-stale = This session has changed or no longer exists. Reloading the session list.
 workspace-left-panel-ssh-manager-sessions-refreshing = Refreshing sessions…
 workspace-left-panel-ssh-manager-sessions-timeout = The session list could not be loaded within { $seconds } seconds. Refresh sessions to try again.
 workspace-left-panel-ssh-manager-sessions-needs-install = Connect to the host first to set up the Zaplex session service. Then refresh sessions.
