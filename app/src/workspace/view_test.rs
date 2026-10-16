@@ -4038,6 +4038,67 @@ fn dragging_a_tab_onto_a_pane_joins_its_panes_as_a_split() {
 }
 
 #[test]
+fn ending_a_pane_drag_focuses_the_dragged_pane_unless_focus_moved_during_the_drag() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let (pane_group, window_id) = workspace.read(&app, |workspace, _| {
+            (
+                workspace.active_tab_pane_group().clone(),
+                workspace.window_id,
+            )
+        });
+        let (first, dragged, third) = pane_group.update(&mut app, |group, ctx| {
+            let first = group.focused_pane_id(ctx);
+            let dragged: PaneId = group.add_terminal_pane(Direction::Right, None, ctx).into();
+            let third: PaneId = group.add_terminal_pane(Direction::Right, None, ctx).into();
+            (first, dragged, third)
+        });
+        let header = app
+            .views_of_type::<pane_group::PaneView<TerminalView>>(window_id)
+            .into_iter()
+            .flatten()
+            .find(|view| view.read(&app, |view, _| view.pane_id()) == dragged)
+            .map(|view| view.read(&app, |view, _| view.header().clone()))
+            .expect("the dragged pane has a pane view");
+        let start_drag = |app: &mut App| {
+            header.update(app, |header, ctx| {
+                header.handle_action(&pane_group::PaneHeaderAction::PaneHeaderDragStarted, ctx)
+            })
+        };
+        let drop_on_pane_group = |app: &mut App| {
+            header.update(app, |header, ctx| {
+                header.handle_action(
+                    &pane_group::PaneHeaderAction::PaneHeaderDropped {
+                        origin: ActionOrigin::Pane,
+                        drop_location: pane_group::PaneDragDropLocation::PaneGroup(dragged),
+                    },
+                    ctx,
+                )
+            })
+        };
+
+        // A drag that ends before any drag-over event (a quick flick, or a drop in the
+        // middle of a pane) still focuses the dragged pane.
+        pane_group.update(&mut app, |group, ctx| group.focus_pane_by_id(first, ctx));
+        start_drag(&mut app);
+        drop_on_pane_group(&mut app);
+        pane_group.read(&app, |group, ctx| {
+            assert_eq!(group.focused_pane_id(ctx), dragged);
+        });
+
+        // A focus change while dragging is kept when the drag ends.
+        pane_group.update(&mut app, |group, ctx| group.focus_pane_by_id(first, ctx));
+        start_drag(&mut app);
+        pane_group.update(&mut app, |group, ctx| group.focus_pane_by_id(third, ctx));
+        drop_on_pane_group(&mut app);
+        pane_group.read(&app, |group, ctx| {
+            assert_eq!(group.focused_pane_id(ctx), third);
+        });
+    });
+}
+
+#[test]
 fn split_agent_launch_recaptures_its_target_until_the_source_pane_closes() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
