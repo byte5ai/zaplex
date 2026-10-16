@@ -1745,6 +1745,7 @@ fn agent_model_discovery_response_preserves_capabilities_without_host_paths() {
                 display_name: "Remote account".to_string(),
                 provider_account_id: Some("provider-account-42".to_string()),
                 config_dir: Some("/secret/daemon/account".into()),
+                config_dir_pin: Some("/secret/daemon/account".into()),
             },
             executable: "/secret/bin/claude".into(),
             version: "2.1.220".to_string(),

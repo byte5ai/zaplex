@@ -17,6 +17,7 @@ fn target() -> SubscriptionTarget {
                 display_name: "Account".to_string(),
                 provider_account_id: None,
                 config_dir: None,
+                config_dir_pin: None,
             },
             executable: "codex".into(),
             version: "0.146.0".to_string(),
@@ -218,6 +219,7 @@ fn selecting_a_reported_account_clears_model_preferences() {
         display_name: "Second account".to_string(),
         provider_account_id: None,
         config_dir: None,
+        config_dir_pin: None,
     };
     registry.set_account_choices("conversation-1", vec![account.clone()]);
     registry.set_lifecycle("conversation-1", AgentLifecycle::SelectionRequired);
@@ -244,12 +246,14 @@ fn selecting_an_account_preserves_its_complete_routing_identity() {
         display_name: "First".to_string(),
         provider_account_id: Some("provider-1".to_string()),
         config_dir: Some("/accounts/one".into()),
+        config_dir_pin: None,
     };
     let second = AccountIdentity {
         id: "shared-id".to_string(),
         display_name: "Second".to_string(),
         provider_account_id: Some("provider-2".to_string()),
         config_dir: Some("/accounts/two".into()),
+        config_dir_pin: None,
     };
     registry.set_account_choices("conversation-1", vec![first, second.clone()]);
     registry.set_lifecycle("conversation-1", AgentLifecycle::SelectionRequired);
@@ -269,6 +273,7 @@ fn account_selection_rejects_ids_not_offered_for_this_conversation() {
         display_name: "First account".to_string(),
         provider_account_id: None,
         config_dir: None,
+        config_dir_pin: None,
     };
     registry.set_account_choices("conversation-1", vec![offered]);
     registry.set_lifecycle("conversation-1", AgentLifecycle::SelectionRequired);
@@ -280,6 +285,7 @@ fn account_selection_rejects_ids_not_offered_for_this_conversation() {
             display_name: "Second account".to_string(),
             provider_account_id: None,
             config_dir: None,
+            config_dir_pin: None,
         },
     ));
     assert_eq!(registry.preferences("conversation-1").account_id, None);
@@ -300,6 +306,7 @@ fn pending_first_prompt_survives_routing_choice_until_preflight_succeeds() {
             display_name: "Account".to_string(),
             provider_account_id: None,
             config_dir: None,
+            config_dir_pin: None,
         }],
     );
     registry.set_lifecycle("conversation-1", AgentLifecycle::SelectionRequired);

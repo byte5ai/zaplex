@@ -3,10 +3,12 @@
 use std::collections::HashMap;
 use std::future::Future;
 
+use chrono::{Local, TimeZone};
 use futures::FutureExt;
 use itertools::Itertools as _;
 use persistence::model::AgentConversationRecord;
 
+use crate::ai::agent::api::convert_conversation::last_turn_failed;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ServerAIConversationMetadata,
@@ -60,6 +62,7 @@ pub fn convert_persisted_conversation_to_ai_conversation_with_metadata(
             AgentConversationRecord {
                 conversation_id,
                 conversation_data,
+                last_modified_at,
                 ..
             },
     } = persisted_conversation;
@@ -74,7 +77,12 @@ pub fn convert_persisted_conversation_to_ai_conversation_with_metadata(
 
     let conversation_data = serde_json::from_str::<AgentConversationData>(&conversation_data).ok();
 
-    match AIConversation::new_restored(conversation_id, tasks, conversation_data) {
+    match AIConversation::new_restored(
+        conversation_id,
+        tasks,
+        conversation_data,
+        Local.from_utc_datetime(&last_modified_at),
+    ) {
         Ok(conversation) => Some(conversation),
         Err(e) => {
             log::debug!("Skipping persisted conversation (legacy/incomplete): {e:?}");
@@ -331,6 +339,7 @@ impl BlocklistAIHistoryModel {
                     is_restorable_locally: true,
                     artifacts,
                     ambient_agent_task_id: None,
+                    last_turn_failed: root_task.is_some_and(last_turn_failed),
                 }))
             })
             .collect();

@@ -20,6 +20,7 @@ fn capability(
                 display_name: account_id.to_string(),
                 provider_account_id: None,
                 config_dir: None,
+                config_dir_pin: None,
             },
             executable: agent.display_name().into(),
             version: "1.0".to_string(),
@@ -148,12 +149,14 @@ fn account_choices_preserve_policy_order_instead_of_sorting_opaque_ids() {
                     display_name: "z-freest-account".to_string(),
                     provider_account_id: None,
                     config_dir: None,
+                    config_dir_pin: None,
                 },
                 AccountIdentity {
                     id: "a-busy-account".to_string(),
                     display_name: "a-busy-account".to_string(),
                     provider_account_id: None,
                     config_dir: None,
+                    config_dir_pin: None,
                 },
             ],
         }
@@ -185,6 +188,7 @@ fn removed_preferred_account_never_falls_back_to_remaining_login() {
                 display_name: "remaining-account".to_string(),
                 provider_account_id: None,
                 config_dir: None,
+                config_dir_pin: None,
             }],
         }
     );

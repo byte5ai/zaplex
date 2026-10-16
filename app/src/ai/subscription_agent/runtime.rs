@@ -805,15 +805,14 @@ pub(crate) async fn generate_subscription_output(
                 Some(event) => match event {
                     Ok(Some(event)) => event,
                     Ok(None) => {
+                        let message =
+                            "Subscription agent ended without a terminal event".to_string();
                         registry.set_lifecycle(
                             conversation_id.clone(),
-                            recoverable_lifecycle(
-                                &registry,
-                                &conversation_id,
-                                "Subscription agent ended without a terminal event".to_string(),
-                            ),
+                            recoverable_lifecycle(&registry, &conversation_id, message.clone()),
                         );
                         end_session(&mut session, &registry, &conversation_id).await;
+                        yield Ok(adapter.turn_failed(message));
                         break;
                     }
                     Err(error) => {
@@ -827,6 +826,7 @@ pub(crate) async fn generate_subscription_output(
                             ),
                         );
                         end_session(&mut session, &registry, &conversation_id).await;
+                        yield Ok(adapter.turn_failed(error.to_string()));
                         yield Err(Arc::new(subscription_api_error(error)));
                         break;
                     }
@@ -941,6 +941,7 @@ pub(crate) async fn generate_subscription_output(
                         ),
                     );
                     end_session(&mut session, &registry, &conversation_id).await;
+                    yield Ok(adapter.turn_failed(error.to_string()));
                     yield Err(Arc::new(subscription_api_error(error)));
                     break;
                 }
@@ -1268,13 +1269,14 @@ fn local_candidates_from_inventory(
                     agent,
                     HostIdentity {
                         id: "local".to_string(),
-                        display_name: "Local".to_string(),
+                        display_name: crate::t!("ai-footer-subscription-local-machine"),
                     },
                     AccountIdentity {
                         id: format!("{}:default", provider.as_str()),
-                        display_name: "Default subscription".to_string(),
+                        display_name: crate::t!("ai-footer-subscription-default-account"),
                         provider_account_id: None,
                         config_dir: dirs::home_dir().map(|home| home.join(default_dir)),
+                        config_dir_pin: None,
                     },
                     executable.clone(),
                 ),
@@ -1286,7 +1288,7 @@ fn local_candidates_from_inventory(
                     agent,
                     HostIdentity {
                         id: "local".to_string(),
-                        display_name: "Local".to_string(),
+                        display_name: crate::t!("ai-footer-subscription-local-machine"),
                     },
                     local_account_identity(&usage.account),
                     executable.clone(),
@@ -1304,6 +1306,7 @@ fn local_account_identity(account: &Account) -> AccountIdentity {
         display_name: account.label.clone(),
         provider_account_id: account.provider_account_id.clone(),
         config_dir: Some(account.config_dir.clone()),
+        config_dir_pin: account.config_dir_pin().map(PathBuf::from),
     }
 }
 
@@ -1445,12 +1448,13 @@ fn remote_candidates_for_ssh(
                 AccountIdentity {
                     id: account.account_id.clone(),
                     display_name: if account_name.is_empty() {
-                        "Remote default subscription".to_string()
+                        crate::t!("ai-footer-subscription-remote-default-account")
                     } else {
                         account_name.to_string()
                     },
                     provider_account_id: Some(provider_account_id.to_string()),
                     config_dir: None,
+                    config_dir_pin: None,
                 },
                 PathBuf::from(command),
             ),

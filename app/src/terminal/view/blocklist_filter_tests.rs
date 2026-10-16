@@ -32,8 +32,13 @@ fn create_restored_conversation(
         vec![create_message(SUBTASK_OUTPUT_MESSAGE_ID, SUBTASK_ID)],
     );
 
-    AIConversation::new_restored(AIConversationId::new(), vec![root_task, subtask], None)
-        .expect("restored conversation should build")
+    AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![root_task, subtask],
+        None,
+        chrono::Local::now(),
+    )
+    .expect("restored conversation should build")
 }
 
 #[test]

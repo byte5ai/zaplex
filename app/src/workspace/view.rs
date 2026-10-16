@@ -25783,6 +25783,7 @@ impl Workspace {
                         id: account_name.clone(),
                         display_name: account_name,
                         provider_account_id: None,
+                        config_dir_pin: config_dir.clone(),
                         config_dir,
                     },
                     executable,

@@ -47,6 +47,7 @@ fn subscription_target(
                 id: "test-route".to_string(),
                 display_name: "developer@example.com".to_string(),
                 provider_account_id: Some(provider_account_id.to_string()),
+                config_dir_pin: Some(config_dir.clone()),
                 config_dir: Some(config_dir),
             },
             executable,

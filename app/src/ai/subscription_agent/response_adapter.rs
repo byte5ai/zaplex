@@ -1,4 +1,6 @@
 use super::{SubscriptionEvent, Usage};
+use crate::ai::agent::api::convert_conversation::TurnOutcome;
+use std::time::SystemTime;
 use uuid::Uuid;
 use warp_multi_agent_api as api;
 
@@ -76,18 +78,18 @@ impl ResponseEventAdapter {
                 ..Default::default()
             })),
             request_id: self.request_id.clone(),
-            timestamp: None,
+            timestamp: Some(SystemTime::now().into()),
         }])
     }
 
     pub(crate) fn target(&self, target: &super::SubscriptionTarget) -> api::ResponseEvent {
-        let session_target = format!(
-            "{} · {} · {} · {} · {}",
-            target.installation.agent.display_name(),
-            target.installation.account.display_name,
-            target.installation.host.display_name,
-            target.working_directory.display(),
-            target.model.display_name,
+        let session_target = crate::t!(
+            "ai-footer-subscription-session-target",
+            agent = target.installation.agent.display_name(),
+            account = target.installation.account.display_name.as_str(),
+            host = target.installation.host.display_name.as_str(),
+            directory = target.working_directory.display().to_string(),
+            model = target.model.display_name.as_str()
         );
         self.add_messages(vec![agent_output(
             &self.task_id,
@@ -114,7 +116,7 @@ impl ResponseEventAdapter {
                         tool: None,
                     })),
                     request_id: self.request_id.clone(),
-                    timestamp: None,
+                    timestamp: Some(SystemTime::now().into()),
                 }])]
             }
             SubscriptionEvent::ToolOutput {
@@ -138,7 +140,7 @@ impl ResponseEventAdapter {
                     },
                 )),
                 request_id: self.request_id.clone(),
-                timestamp: None,
+                timestamp: Some(SystemTime::now().into()),
             }])],
             SubscriptionEvent::Diff(diff) => vec![self.add_messages(vec![agent_output(
                 &self.task_id,
@@ -150,14 +152,20 @@ impl ResponseEventAdapter {
             } => vec![self.add_messages(vec![agent_output(
                 &self.task_id,
                 &self.request_id,
-                format!("Approval required for {kind}: {description}"),
+                crate::t!(
+                    "ai-footer-subscription-approval-required",
+                    kind = kind,
+                    description = description
+                ),
             )])],
             SubscriptionEvent::Usage(usage) => {
                 self.latest_usage = Some(usage);
                 Vec::new()
             }
-            SubscriptionEvent::TurnCompleted { .. } => vec![self.finished()],
-            SubscriptionEvent::Error { .. } => Vec::new(),
+            SubscriptionEvent::TurnCompleted { .. } => {
+                vec![self.turn_outcome(TurnOutcome::Completed), self.finished()]
+            }
+            SubscriptionEvent::Error { message, .. } => vec![self.turn_failed(message)],
         }
     }
 
@@ -176,7 +184,7 @@ impl ResponseEventAdapter {
                         api::message::AgentOutput { text },
                     )),
                     request_id: self.request_id.clone(),
-                    timestamp: None,
+                    timestamp: Some(SystemTime::now().into()),
                 }])
             }
         }
@@ -200,10 +208,30 @@ impl ResponseEventAdapter {
                         },
                     )),
                     request_id: self.request_id.clone(),
-                    timestamp: None,
+                    timestamp: Some(SystemTime::now().into()),
                 }])
             }
         }
+    }
+
+    /// Records that the turn failed. Persisted before the error ends the stream, so a
+    /// restored conversation shows the failure and when it happened.
+    pub(crate) fn turn_failed(&self, error_message: String) -> api::ResponseEvent {
+        self.turn_outcome(TurnOutcome::Failed { error_message })
+    }
+
+    /// The turn's last persisted message: it keeps the outcome, and its timestamp
+    /// is the turn's finish time, which appended streaming text cannot update.
+    fn turn_outcome(&self, outcome: TurnOutcome) -> api::ResponseEvent {
+        self.add_messages(vec![api::Message {
+            id: Uuid::new_v4().to_string(),
+            task_id: self.task_id.clone(),
+            server_message_data: String::new(),
+            citations: Vec::new(),
+            message: Some(api::message::Message::ServerEvent(outcome.server_event())),
+            request_id: self.request_id.clone(),
+            timestamp: Some(SystemTime::now().into()),
+        }])
     }
 
     fn add_messages(&self, messages: Vec<api::Message>) -> api::ResponseEvent {
@@ -313,7 +341,7 @@ fn agent_output(task_id: &str, request_id: &str, text: String) -> api::Message {
             api::message::AgentOutput { text },
         )),
         request_id: request_id.to_string(),
-        timestamp: None,
+        timestamp: Some(SystemTime::now().into()),
     }
 }
 

@@ -12,7 +12,7 @@ use crate::ai::agent::{
     RunningCommand, UserQueryMode,
 };
 use crate::ai::facts::{AIFact, AIFactObject, AIFactObjectModel, AIMemory};
-use crate::ai::subscription_agent::{ModelCapability, SessionIdentity};
+use crate::ai::subscription_agent::{ModelCapability, ProcessLaunch, SessionIdentity};
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::ObjectStoreModel;
 use crate::cloud_object::model::view::ObjectStoreViewModel;
@@ -59,6 +59,7 @@ fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
                 display_name: "Account".to_string(),
                 provider_account_id: None,
                 config_dir: None,
+                config_dir_pin: None,
             },
             executable: agent.display_name().into(),
             version: "1.0.0".to_string(),
@@ -110,6 +111,7 @@ fn account_identity(id: &str, provider_account_id: &str) -> AccountIdentity {
         display_name: id.to_string(),
         provider_account_id: Some(provider_account_id.to_string()),
         config_dir: None,
+        config_dir_pin: None,
     }
 }
 
@@ -303,6 +305,73 @@ fn local_preparation_keeps_an_explicit_cockpit_account_identity() {
         preferences.account_identity,
         Some(target.installation.account)
     );
+}
+
+/// Prepares the only local Claude Code candidate for `accounts` and returns its route identity
+/// with the auth-preflight launch and the turn launch built from it.
+fn local_claude_launches(
+    accounts: &[AccountUsage],
+) -> (AccountIdentity, ProcessLaunch, ProcessLaunch) {
+    let mut preferences = RoutePreferences::default();
+    let candidates = local_candidates_from_inventory(&mut preferences, accounts, None, |command| {
+        (command == "claude").then(|| "/bin/claude".into())
+    });
+    let [candidate] = candidates.as_slice() else {
+        panic!("expected exactly one local Claude Code candidate");
+    };
+    let mut selected = target(SubscriptionAgent::ClaudeCode);
+    selected.installation = candidate.installation.clone();
+    let preflight = ProcessLaunch::for_discovery(
+        &selected.installation,
+        selected.working_directory.clone(),
+        candidate.location.clone(),
+    );
+    let launch = ProcessLaunch::for_session(&selected, None, candidate.location.clone());
+    (selected.installation.account, preflight, launch)
+}
+
+#[test]
+fn local_claude_launch_pins_config_dir_only_for_non_default_accounts() {
+    let mut default_login = local_usage(Provider::Claude, "claude:default", 0.0);
+    default_login.account.is_default = true;
+    // The cockpit's default login, the fallback without cockpit accounts, and a pinned account.
+    for (accounts, route_config_dir, pinned_config_dir) in [
+        (
+            vec![default_login],
+            Some("/accounts/claude:default".into()),
+            None,
+        ),
+        (
+            Vec::new(),
+            dirs::home_dir().map(|home| home.join(".claude")),
+            None,
+        ),
+        (
+            vec![local_usage(Provider::Claude, "work", 0.0)],
+            Some("/accounts/work".into()),
+            Some("/accounts/work"),
+        ),
+    ] {
+        let (account, preflight, launch) = local_claude_launches(&accounts);
+
+        // The route keeps naming the config root even when the launch does not export it.
+        assert_eq!(account.config_dir, route_config_dir);
+        assert_eq!(
+            launch
+                .environment
+                .iter()
+                .find(|(name, _)| *name == "CLAUDE_CONFIG_DIR")
+                .map(|(_, value)| value.as_str()),
+            pinned_config_dir
+        );
+        assert_eq!(
+            launch.unset_environment.contains(&"CLAUDE_CONFIG_DIR"),
+            pinned_config_dir.is_none()
+        );
+        // The authentication preflight must check the login the turn will use.
+        assert_eq!(preflight.environment, launch.environment);
+        assert_eq!(preflight.unset_environment, launch.unset_environment);
+    }
 }
 
 #[test]

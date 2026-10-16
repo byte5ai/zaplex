@@ -14,6 +14,7 @@ fn installation() -> InstallationIdentity {
             display_name: "Configured account".to_string(),
             provider_account_id: Some("account-42".to_string()),
             config_dir: Some("/accounts/claude".into()),
+            config_dir_pin: None,
         },
         executable: "/usr/bin/claude".into(),
         version: "2.1.220".to_string(),

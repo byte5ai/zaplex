@@ -1340,6 +1340,8 @@ ai-footer-subscription-choose-account = Konto auswählen
 ai-footer-subscription-choose-model = Modell auswählen
 ai-footer-subscription-switch-location = Zu { $host } wechseln · Verzeichnis { $directory }
 ai-footer-subscription-local-machine = Lokaler Rechner
+ai-footer-subscription-default-account = Standard-Abo
+ai-footer-subscription-remote-default-account = Standard-Abo des Remote-Hosts
 ai-footer-subscription-choose-directory = Verzeichnis auswählen…
 ai-footer-subscription-enter-remote-directory = Absolutes Remote-Verzeichnis oder . eingeben…
 ai-footer-subscription-use-directory = Verzeichnis { $directory } verwenden
@@ -1362,6 +1364,7 @@ ai-footer-subscription-status-running-tool = { $tool } wird ausgeführt
 ai-footer-subscription-detail-running-tool = Der ausgewählte Agent führt { $tool } aus.
 ai-footer-subscription-status-waiting-for-approval = Wartet auf Genehmigung
 ai-footer-subscription-detail-waiting-for-approval = Prüfe die angeforderte Aktion, bevor der Agent fortfahren kann.
+ai-footer-subscription-approval-required = Genehmigung erforderlich für { $kind }: { $description }
 ai-footer-subscription-status-turn-complete = Antwort abgeschlossen
 ai-footer-subscription-detail-turn-complete = Setze die aufgezeichnete Sitzung fort oder starte neu.
 ai-footer-subscription-status-session-ended = Sitzung beendet
@@ -1369,6 +1372,7 @@ ai-footer-subscription-detail-session-ended = Diese Sitzung kann keine weiteren 
 ai-footer-subscription-identity-id = ID { $id }
 ai-footer-subscription-identity-named-id = { $name } · ID { $id }
 ai-footer-subscription-model-resolved = aufgelöst { $model }
+ai-footer-subscription-session-target = { $agent } · { $account } · { $host } · { $directory } · { $model }
 ai-footer-subscription-field-agent = Agent
 ai-footer-subscription-field-account = Konto
 ai-footer-subscription-field-host = Host
@@ -3168,6 +3172,29 @@ ai-context-blocks-days-ago = { $count ->
         [one] Vor 1 Tag
        *[other] Vor { $count } Tagen
     }
+time-format-just-now = gerade eben
+time-format-just-now-sentence-case = Gerade eben
+time-format-minutes-ago = vor { $count } Min.
+time-format-hours-ago = { $count ->
+        [one] vor 1 Stunde
+       *[other] vor { $count } Stunden
+    }
+time-format-days-ago = { $count ->
+        [one] vor 1 Tag
+       *[other] vor { $count } Tagen
+    }
+time-format-weeks-ago = { $count ->
+        [one] vor 1 Woche
+       *[other] vor { $count } Wochen
+    }
+time-format-months-ago = { $count ->
+        [one] vor 1 Monat
+       *[other] vor { $count } Monaten
+    }
+time-format-years-ago = { $count ->
+        [one] vor 1 Jahr
+       *[other] vor { $count } Jahren
+    }
 ai-context-blocks-no-output = Keine Ausgabe
 ai-context-blocks-accessibility-label = Block: { $command }
 
@@ -3282,14 +3309,13 @@ workspace-conversation-list-past = VERGANGEN
 workspace-conversation-list-view-all = Alle anzeigen
 workspace-conversation-list-show-less = Weniger anzeigen
 workspace-conversation-list-empty-title = Noch keine Unterhaltungen
-workspace-conversation-list-empty-description = Deine aktiven und vergangenen Unterhaltungen mit lokalen und Hintergrundagenten erscheinen hier.
+workspace-conversation-list-empty-description = Deine aktiven und vergangenen Agenten-Unterhaltungen erscheinen hier.
 workspace-conversation-list-new-conversation = Neue Unterhaltung
 conversation-untitled = Unbenannte Unterhaltung
 conversation-deleted = Gelöschte Unterhaltung
 workspace-conversation-list-no-matching = Keine passenden Unterhaltungen
 workspace-conversation-list-delete = Löschen
 workspace-conversation-list-delete-in-progress-error = Laufende Unterhaltungen können nicht gelöscht werden.
-workspace-conversation-list-delete-ambient-tooltip = Unterhaltungen mit Hintergrundagenten können nicht gelöscht werden
 workspace-conversation-list-fork-new-pane = In neues Pane forken
 workspace-conversation-list-fork-new-tab = In neuen Tab forken
 workspace-conversation-list-fallback-title = Unterhaltung

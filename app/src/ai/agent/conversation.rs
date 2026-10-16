@@ -272,10 +272,13 @@ impl AIConversation {
     // TODO: derive todo list state from tasks instead of taking args.
     //
     // This would make it possible to fully restore a convo from tasks, instead of having to persist this additional data.
+    /// `fallback_start_time` dates exchanges whose messages carry no timestamp; callers
+    /// pass the time the conversation was last persisted.
     pub fn new_restored(
         id: AIConversationId,
         tasks: Vec<api::Task>,
         conversation_data: Option<AgentConversationData>,
+        fallback_start_time: DateTime<Local>,
     ) -> Result<Self, RestoreConversationError> {
         let api_tasks_by_id: HashMap<String, api::Task> =
             tasks.into_iter().map(|t| (t.id.clone(), t)).collect();
@@ -296,7 +299,7 @@ impl AIConversation {
         let mut api_tasks_and_exchanges_by_id: HashMap<_, _> = api_tasks_by_id
             .into_iter()
             .map(|(id, task)| {
-                let exchanges = task.into_exchanges();
+                let exchanges = task.into_exchanges(fallback_start_time);
                 (id, (task, exchanges))
             })
             .collect();

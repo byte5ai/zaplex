@@ -403,6 +403,7 @@ fn target_with_directory(directory: &str) -> SubscriptionTarget {
                 display_name: "Work account".to_string(),
                 provider_account_id: None,
                 config_dir: None,
+                config_dir_pin: None,
             },
             executable: PathBuf::from("codex"),
             version: "1.0.0".to_string(),

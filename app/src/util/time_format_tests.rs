@@ -48,6 +48,7 @@ fn test_human_readable_precise_duration() {
 
 #[test]
 fn test_human_readable_approx_duration() {
+    crate::i18n::init(Some("en"));
     assert_eq!(
         human_readable_approx_duration(Duration::milliseconds(2), false),
         "just now".to_owned()
@@ -66,7 +67,7 @@ fn test_human_readable_approx_duration() {
     );
     assert_eq!(
         human_readable_approx_duration(Duration::seconds(90), false),
-        "1 min ago".to_owned()
+        "\u{2068}1\u{2069} min ago".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::minutes(100), false),
@@ -74,11 +75,11 @@ fn test_human_readable_approx_duration() {
     );
     assert_eq!(
         human_readable_approx_duration(Duration::minutes(130), false),
-        "2 hours ago".to_owned()
+        "\u{2068}2\u{2069} hours ago".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::days(4), false),
-        "4 days ago".to_owned()
+        "\u{2068}4\u{2069} days ago".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::weeks(1), false),
@@ -86,10 +87,10 @@ fn test_human_readable_approx_duration() {
     );
     assert_eq!(
         human_readable_approx_duration(Duration::weeks(15), false),
-        "3 months ago".to_owned()
+        "\u{2068}3\u{2069} months ago".to_owned()
     );
     assert_eq!(
         human_readable_approx_duration(Duration::weeks(520), false),
-        "9 years ago".to_owned()
+        "\u{2068}9\u{2069} years ago".to_owned()
     );
 }
