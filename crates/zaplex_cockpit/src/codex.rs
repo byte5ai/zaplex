@@ -9,7 +9,7 @@
 //! Raw token and API-key strings are never returned, persisted, logged, or sent
 //! over the network.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +18,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use walkdir::WalkDir;
 
+use crate::transcript::{file_fingerprint, FileFingerprint};
 use crate::types::{Account, Provider, UsageEntry};
 
 /// Result of account-root discovery before rollout/session scanning.
@@ -404,15 +405,113 @@ fn date_from_path(path: &Path) -> Option<DateTime<Utc>> {
         .map(|naive| DateTime::from_naive_utc_and_offset(naive, Utc))
 }
 
+/// Holds a week of heavy use, so follow-up usage scans stay incremental.
+const USAGE_CACHE_LIMIT: usize = 2048;
+
+#[derive(Clone, Debug)]
+struct CachedCodexUsage {
+    fingerprint: FileFingerprint,
+    /// The timestamp fallback the entries were parsed with. A rollout outside
+    /// the dated layout falls back to the scan cutoff, which moves every scan.
+    file_date: DateTime<Utc>,
+    entries: Vec<UsageEntry>,
+    last_used: u64,
+}
+
+/// Bounded process-local cache of distilled Codex usage records, keyed by
+/// rollout path. Raw rollout content is never retained, and an unchanged
+/// rollout is neither read nor parsed again.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CodexUsageCache {
+    entries: HashMap<PathBuf, CachedCodexUsage>,
+    clock: u64,
+    #[cfg(test)]
+    parse_count: u64,
+}
+
+impl CodexUsageCache {
+    fn parse_file(
+        &mut self,
+        path: &Path,
+        file_date: DateTime<Utc>,
+    ) -> std::io::Result<Vec<UsageEntry>> {
+        let fingerprint = match file_fingerprint(path) {
+            Ok(fingerprint) => fingerprint,
+            Err(error) => {
+                self.entries.remove(path);
+                return Err(error);
+            }
+        };
+        self.clock = self.clock.wrapping_add(1);
+        if let Some(cached) = self.entries.get_mut(path) {
+            if cached.fingerprint == fingerprint && cached.file_date == file_date {
+                cached.last_used = self.clock;
+                return Ok(cached.entries.clone());
+            }
+        }
+        let entries = match read_transcript_usage(path, file_date) {
+            Ok(entries) => entries,
+            Err(error) => {
+                self.entries.remove(path);
+                return Err(error);
+            }
+        };
+        #[cfg(test)]
+        {
+            self.parse_count = self.parse_count.saturating_add(1);
+        }
+        self.entries.insert(
+            path.to_path_buf(),
+            CachedCodexUsage {
+                fingerprint,
+                file_date,
+                entries: entries.clone(),
+                last_used: self.clock,
+            },
+        );
+        Ok(entries)
+    }
+
+    /// Forgets rollouts under `sessions` that a complete walk no longer saw,
+    /// then bounds the cache. Bounding during the walk would evict rollouts the
+    /// same walk still needs.
+    fn finish_walk(&mut self, sessions: &Path, seen: &HashSet<PathBuf>, walk_complete: bool) {
+        if walk_complete {
+            self.entries
+                .retain(|path, _| !path.starts_with(sessions) || seen.contains(path));
+        }
+        while self.entries.len() > USAGE_CACHE_LIMIT {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(path, _)| path.clone())
+            else {
+                return;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+}
+
 /// All Codex usage entries newer than `since`, from `<config_dir>/sessions/**/rollout-*.jsonl`.
 ///
 /// The returned bool is `true` when the walk hit an I/O error other than a missing
 /// `sessions/` dir — see [`crate::claude::usage_for_account`] for why the caller then
 /// marks the snapshot degraded.
 pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageEntry>, bool) {
+    usage_for_account_with_cache(account, since, &mut CodexUsageCache::default())
+}
+
+pub(crate) fn usage_for_account_with_cache(
+    account: &Account,
+    since: DateTime<Utc>,
+    cache: &mut CodexUsageCache,
+) -> (Vec<UsageEntry>, bool) {
     let sessions = account.config_dir.join("sessions");
     let mut entries = Vec::new();
     let mut io_error = false;
+    let mut seen = HashSet::new();
     for result in WalkDir::new(&sessions) {
         let file = match result {
             Ok(f) => f,
@@ -446,11 +545,13 @@ pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageE
             continue;
         }
         let file_date = date_from_path(file.path()).unwrap_or(since);
-        match read_transcript_usage(file.path(), file_date) {
+        seen.insert(file.path().to_path_buf());
+        match cache.parse_file(file.path(), file_date) {
             Ok(parsed) => entries.extend(parsed.into_iter().filter(|entry| entry.ts >= since)),
             Err(_) => io_error = true,
         }
     }
+    cache.finish_walk(&sessions, &seen, !io_error);
     (entries, io_error)
 }
 

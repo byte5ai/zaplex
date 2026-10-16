@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
 #[cfg(unix)]
@@ -64,7 +65,11 @@ use super::session_live::{read_session_live_state, RealPtyProcfs};
 use chrono::{DateTime, SecondsFormat};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
+use zaplex_cockpit::{
+    GuardrailSignal, ProcessSignalError, Provider, SessionSnapshot, TranscriptScanCache,
+};
+
+use super::agent_account::{AccountInventoryScan, LiveAgentScan};
 #[cfg(unix)]
 use zaplex_remote_session::agent_binding::{
     AgentIdentity, AgentPtyBindings, BindingError, BindingRequest,
@@ -1170,31 +1175,44 @@ impl FileChunkIoState {
     }
 }
 
+/// A completed account and history scan is served this long before a request
+/// starts a background refresh. Shorter than the client's 45 s reconcile
+/// interval, so every reconcile sees data at most one cycle old.
+const AGENT_ACCOUNT_SCAN_MAX_AGE: Duration = Duration::from_secs(30);
+/// How long a session inventory waits for this daemon's first account scan
+/// before answering with running sessions only. Keeps the reply well inside
+/// the 10 s deadline clients apply to it.
+const AGENT_ACCOUNT_SCAN_FIRST_WAIT: Duration = Duration::from_secs(2);
+/// Inventory scans at least this slow are logged with their measured duration.
+const SLOW_AGENT_SCAN: Duration = Duration::from_secs(2);
+
 struct CachedAgentInventoryScan {
     completed_at: Instant,
-    scan: super::agent_account::AccountInventoryScan,
+    scan: LiveAgentScan,
 }
 
+/// Live half of the agent inventory: account discovery plus running sessions.
+/// It never reads usage or dormant history, so it stays fast however large
+/// the transcript history grows.
 #[derive(Default)]
 struct AgentInventoryScanCache {
-    transcripts: zaplex_cockpit::TranscriptScanCache,
+    transcripts: TranscriptScanCache,
     latest: Option<CachedAgentInventoryScan>,
 }
 
 impl AgentInventoryScanCache {
-    fn scan(&mut self, requested_at: Instant) -> super::agent_account::AccountInventoryScan {
-        self.scan_with(requested_at, |transcripts| {
-            super::agent_account::scan_agent_accounts_with_cache(transcripts)
-        })
+    fn scan(&mut self, requested_at: Instant) -> LiveAgentScan {
+        self.scan_with(
+            requested_at,
+            super::agent_account::scan_live_agents_with_cache,
+        )
     }
 
     fn scan_with(
         &mut self,
         requested_at: Instant,
-        scanner: impl FnOnce(
-            &mut zaplex_cockpit::TranscriptScanCache,
-        ) -> super::agent_account::AccountInventoryScan,
-    ) -> super::agent_account::AccountInventoryScan {
+        scanner: impl FnOnce(&mut TranscriptScanCache) -> LiveAgentScan,
+    ) -> LiveAgentScan {
         if let Some(cached) = self
             .latest
             .as_ref()
@@ -1203,12 +1221,147 @@ impl AgentInventoryScanCache {
             return cached.scan.clone();
         }
 
+        let started = Instant::now();
         let scan = scanner(&mut self.transcripts);
+        let elapsed = started.elapsed();
+        if elapsed >= SLOW_AGENT_SCAN {
+            log::warn!("Daemon: live agent session scan took {elapsed:?}");
+        }
         self.latest = Some(CachedAgentInventoryScan {
             completed_at: Instant::now(),
             scan: scan.clone(),
         });
         scan
+    }
+}
+
+fn scan_live_agents(
+    cache: &Mutex<AgentInventoryScanCache>,
+    requested_at: Instant,
+) -> LiveAgentScan {
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            log::warn!("Daemon: agent inventory cache mutex was poisoned; recovering its state");
+            poisoned.into_inner()
+        })
+        .scan(requested_at)
+}
+
+struct CachedAgentAccountScan {
+    completed_at: Instant,
+    scan: AccountInventoryScan,
+}
+
+#[derive(Default)]
+struct AgentAccountScanState {
+    latest: Option<CachedAgentAccountScan>,
+    refreshing: bool,
+}
+
+/// Account and dormant-history half of the agent inventory. It aggregates
+/// usage over the whole transcript window and can take longer than a client
+/// deadline on a host with a large history. At most one scan runs at a time;
+/// its result serves every later request, including one whose own deadline
+/// ran out while it was scanning. Answering a request only takes the state
+/// lock, never the lock the scan holds.
+#[derive(Default)]
+struct AgentAccountScanCache {
+    state: Mutex<AgentAccountScanState>,
+    completed: Condvar,
+    transcripts: Mutex<TranscriptScanCache>,
+}
+
+impl AgentAccountScanCache {
+    fn lock_state(&self) -> MutexGuard<'_, AgentAccountScanState> {
+        self.state.lock().unwrap_or_else(|poisoned| {
+            log::warn!("Daemon: agent account scan state mutex was poisoned; recovering its state");
+            poisoned.into_inner()
+        })
+    }
+
+    /// Reserves the single refresh slot when no scan is running and the latest
+    /// completed scan is missing or older than [`AGENT_ACCOUNT_SCAN_MAX_AGE`].
+    fn claim_refresh(&self, now: Instant) -> bool {
+        let mut state = self.lock_state();
+        let current = state.latest.as_ref().is_some_and(|latest| {
+            now.saturating_duration_since(latest.completed_at) < AGENT_ACCOUNT_SCAN_MAX_AGE
+        });
+        if state.refreshing || current {
+            return false;
+        }
+        state.refreshing = true;
+        true
+    }
+
+    /// Runs a refresh reserved by [`Self::claim_refresh`], publishes its result
+    /// and wakes every request waiting for it.
+    fn refresh_with(
+        &self,
+        scanner: impl FnOnce(&mut TranscriptScanCache) -> AccountInventoryScan,
+    ) -> AccountInventoryScan {
+        let release = AgentAccountRefreshRelease(self);
+        let started = Instant::now();
+        let scan = scanner(&mut self.transcripts.lock().unwrap_or_else(|poisoned| {
+            log::warn!("Daemon: agent account scan cache mutex was poisoned; recovering its state");
+            poisoned.into_inner()
+        }));
+        let elapsed = started.elapsed();
+        if elapsed >= SLOW_AGENT_SCAN {
+            log::warn!(
+                "Daemon: agent account and history scan took {elapsed:?}; session inventories \
+                 meanwhile answer from the live scan"
+            );
+        }
+        self.lock_state().latest = Some(CachedAgentAccountScan {
+            completed_at: Instant::now(),
+            scan: scan.clone(),
+        });
+        drop(release);
+        scan
+    }
+
+    /// The latest completed scan, however old. Waits at most `wait` while the
+    /// first scan of this daemon is still running.
+    fn latest(&self, wait: Duration) -> Option<AccountInventoryScan> {
+        let (state, _) = self
+            .completed
+            .wait_timeout_while(self.lock_state(), wait, |state| {
+                state.latest.is_none() && state.refreshing
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        state.latest.as_ref().map(|latest| latest.scan.clone())
+    }
+
+    /// The latest completed scan, however old. Without one, waits for the
+    /// running scan, or scans on this thread when none is running.
+    fn latest_or_refresh_with(
+        &self,
+        scanner: impl FnOnce(&mut TranscriptScanCache) -> AccountInventoryScan,
+    ) -> AccountInventoryScan {
+        let mut state = self
+            .completed
+            .wait_while(self.lock_state(), |state| {
+                state.latest.is_none() && state.refreshing
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(latest) = state.latest.as_ref() {
+            return latest.scan.clone();
+        }
+        state.refreshing = true;
+        drop(state);
+        self.refresh_with(scanner)
+    }
+}
+
+/// Frees the refresh slot even when the scanner panics, so one failed scan
+/// cannot block every later refresh and every waiting request.
+struct AgentAccountRefreshRelease<'a>(&'a AgentAccountScanCache);
+
+impl Drop for AgentAccountRefreshRelease<'_> {
+    fn drop(&mut self) {
+        self.0.lock_state().refreshing = false;
+        self.0.completed.notify_all();
     }
 }
 
@@ -1592,11 +1745,14 @@ pub struct ServerModel {
     /// safe file-manager transfer protocol.
     #[cfg(unix)]
     safe_files: SafeFileWorker,
-    /// Single-flight inventory cache shared by all agent-inventory requests.
-    /// The mutex and every filesystem operation guarded by it run only on the
-    /// blocking pool. Requests that overlap reuse the scan that completed
-    /// after they were submitted instead of repeating the same walk.
+    /// Live-session inventory cache shared by every request that needs the
+    /// running agents. The mutex and every filesystem operation guarded by it
+    /// run only on the blocking pool. Requests that overlap reuse the scan that
+    /// completed after they were submitted instead of repeating the same walk.
     agent_inventory_scan_cache: Arc<Mutex<AgentInventoryScanCache>>,
+    /// Account capacity and dormant history. Scanned in the background with
+    /// its own locks, so a slow history never delays the live inventory.
+    agent_account_scan_cache: Arc<AgentAccountScanCache>,
     /// Opaque account ids from the latest daemon-local inventory mapped to
     /// provider config roots that never cross the wire.
     agent_account_routes: super::agent_account::AccountRouteCache,
@@ -1663,6 +1819,7 @@ impl ServerModel {
             #[cfg(unix)]
             safe_files: SafeFileWorker::new(),
             agent_inventory_scan_cache: Arc::new(Mutex::new(AgentInventoryScanCache::default())),
+            agent_account_scan_cache: Arc::new(AgentAccountScanCache::default()),
             agent_account_routes: Default::default(),
             #[cfg(test)]
             fresh_agent_account_routes_for_test: None,
@@ -3012,14 +3169,8 @@ impl ServerModel {
             request_id.clone(),
             conn_id,
             move || {
-                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
-                    log::warn!(
-                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                    );
-                    poisoned.into_inner()
-                });
-                let current_sessions = collect_agent_sessions(&mut cache, requested_at);
-                drop(cache);
+                let current_sessions =
+                    collect_agent_sessions(scan_live_agents(&inventory_cache, requested_at));
                 execute_agent_process_signal_with(
                     req,
                     &current_sessions,
@@ -4148,16 +4299,26 @@ struct CollectedAgentSessions {
 }
 
 fn collect_agent_sessions_for_peer(
-    inventory_cache: &mut AgentInventoryScanCache,
-    requested_at: Instant,
+    scan: LiveAgentScan,
+    dormant: Vec<SessionSnapshot>,
     supports_account_routing: bool,
 ) -> CollectedAgentSessions {
     let now = chrono::Utc::now();
-    // Build account inventory and session inventory in one discovery pass. This
-    // keeps CLAUDE_CONFIG_DIR/CODEX_HOME and process-discovered plexed roots
+    // Running sessions and routes come from one discovery pass. This keeps
+    // CLAUDE_CONFIG_DIR/CODEX_HOME and process-discovered plexed roots
     // identical to the opaque route cache that assigns account ids.
-    let scan = inventory_cache.scan(requested_at);
     let mut snapshots = scan.sessions;
+    // Dormant rows may come from an older account scan; a session that runs
+    // again since then is reported once, as running.
+    let running: HashSet<(Provider, String)> = snapshots
+        .iter()
+        .map(|session| (session.provider, session.session_id.clone()))
+        .collect();
+    snapshots.extend(
+        dormant
+            .into_iter()
+            .filter(|session| !running.contains(&(session.provider, session.session_id.clone()))),
+    );
     if let Some(home) = dirs::home_dir() {
         snapshots.extend(zaplex_cockpit::antigravity_idle_sessions(
             &home,
@@ -4204,11 +4365,26 @@ fn collect_agent_sessions_for_peer(
     }
 }
 
-fn collect_agent_sessions(
-    inventory_cache: &mut AgentInventoryScanCache,
+fn collect_agent_sessions(scan: LiveAgentScan) -> Vec<super::proto::AgentSessionInfo> {
+    collect_agent_sessions_for_peer(scan, Vec::new(), false).sessions
+}
+
+/// One `ListAgentSessions` reply: running sessions from a live scan plus the
+/// dormant rows of the latest completed account scan. Only the first account
+/// scan of this daemon is waited for, and at most `first_wait`.
+fn agent_session_inventory(
+    inventory_cache: &Mutex<AgentInventoryScanCache>,
+    account_scan_cache: &AgentAccountScanCache,
     requested_at: Instant,
-) -> Vec<super::proto::AgentSessionInfo> {
-    collect_agent_sessions_for_peer(inventory_cache, requested_at, false).sessions
+    first_wait: Duration,
+    supports_account_routing: bool,
+) -> CollectedAgentSessions {
+    let live = scan_live_agents(inventory_cache, requested_at);
+    let dormant = account_scan_cache
+        .latest(first_wait)
+        .map(|scan| scan.dormant_sessions)
+        .unwrap_or_default();
+    collect_agent_sessions_for_peer(live, dormant, supports_account_routing)
 }
 
 const AGENT_MODEL_DISCOVERY_SCHEMA_VERSION: u32 = 1;
@@ -4440,9 +4616,32 @@ fn public_agent_model_discovery_error(provider: &str, error: &anyhow::Error) -> 
 /// Daemon-side agent-session inventory handler (Agent-Cockpit). Cross-platform:
 /// filesystem/transcript discovery, no PTY ownership required.
 impl ServerModel {
+    /// Starts one background account and history scan when the latest
+    /// completed one is missing or stale and none is running. Its result
+    /// serves every later request, whether or not the request that started
+    /// it is still waiting.
+    fn refresh_agent_accounts_in_background(&self, now: Instant, ctx: &mut ModelContext<Self>) {
+        if !self.agent_account_scan_cache.claim_refresh(now) {
+            return;
+        }
+        let cache = Arc::clone(&self.agent_account_scan_cache);
+        ctx.background_executor()
+            .spawn(async move {
+                let refresh = tokio::task::spawn_blocking(move || {
+                    cache.refresh_with(super::agent_account::scan_agent_accounts_with_cache);
+                });
+                if let Err(error) = refresh.await {
+                    log::error!("Daemon: background agent account scan failed: {error}");
+                }
+            })
+            .detach();
+    }
+
     /// Reports this host's secret-free AI-account inventory and refreshes the
     /// daemon-local opaque-id route cache. Discovery runs off the model thread;
-    /// no provider config path is included in the response.
+    /// no provider config path is included in the response. The latest
+    /// completed account scan answers at once; only a daemon that has not
+    /// completed one yet makes the request wait for it.
     fn handle_list_agent_accounts(
         &mut self,
         request_id: &RequestId,
@@ -4456,21 +4655,14 @@ impl ServerModel {
             }));
         }
         let request_id_for_response = request_id.clone();
-        let inventory_cache = Arc::clone(&self.agent_inventory_scan_cache);
-        let requested_at = Instant::now();
+        let account_scan_cache = Arc::clone(&self.agent_account_scan_cache);
+        self.refresh_agent_accounts_in_background(Instant::now(), ctx);
         let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
             conn_id,
             move || {
-                inventory_cache
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        log::warn!(
-                            "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                        );
-                        poisoned.into_inner()
-                    })
-                    .scan(requested_at)
+                account_scan_cache
+                    .latest_or_refresh_with(super::agent_account::scan_agent_accounts_with_cache)
             },
             move |me, scan, _ctx| {
                 me.agent_account_routes.replace(scan.routes);
@@ -4629,9 +4821,14 @@ impl ServerModel {
     /// registry read. Running it inline on the model thread
     /// would stall PTY/session servicing (`SessionInput`/`SessionOutput`/attach)
     /// for the duration of every cockpit inventory poll. The blocking helper
-    /// runs the complete scan, including the cache lock, on Tokio's blocking
-    /// pool and invokes `on_resolve` back on the model thread. Overlapping
-    /// requests reuse the scan that completed after they were submitted.
+    /// runs the scan, including the cache lock, on Tokio's blocking pool and
+    /// invokes `on_resolve` back on the model thread. Overlapping requests
+    /// reuse the scan that completed after they were submitted.
+    ///
+    /// Only the running sessions are scanned per request. Dormant history
+    /// comes from the latest background account scan, which on a host with a
+    /// large transcript history can take longer than the client deadline;
+    /// the reply never waits for it beyond [`AGENT_ACCOUNT_SCAN_FIRST_WAIT`].
     fn handle_list_agent_sessions(
         &mut self,
         request_id: &RequestId,
@@ -4642,18 +4839,20 @@ impl ServerModel {
         let conn_id_for_response = conn_id;
         let supports_account_routing = self.client_supports_agent_account_routing(conn_id);
         let inventory_cache = Arc::clone(&self.agent_inventory_scan_cache);
+        let account_scan_cache = Arc::clone(&self.agent_account_scan_cache);
         let requested_at = Instant::now();
+        self.refresh_agent_accounts_in_background(requested_at, ctx);
         let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
             conn_id,
             move || {
-                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
-                    log::warn!(
-                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                    );
-                    poisoned.into_inner()
-                });
-                collect_agent_sessions_for_peer(&mut cache, requested_at, supports_account_routing)
+                agent_session_inventory(
+                    &inventory_cache,
+                    &account_scan_cache,
+                    requested_at,
+                    AGENT_ACCOUNT_SCAN_FIRST_WAIT,
+                    supports_account_routing,
+                )
             },
             move |me, collected, _ctx| {
                 let CollectedAgentSessions {
@@ -5565,15 +5764,9 @@ impl ServerModel {
             request_id.clone(),
             conn_id,
             move || {
-                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
-                    log::warn!(
-                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                    );
-                    poisoned.into_inner()
-                });
                 let collected = collect_agent_sessions_for_peer(
-                    &mut cache,
-                    requested_at,
+                    scan_live_agents(&inventory_cache, requested_at),
+                    Vec::new(),
                     supports_account_routing,
                 );
                 (collected.live_agents, collected.account_routes)
@@ -6619,15 +6812,9 @@ impl ServerModel {
             request_id.clone(),
             conn_id,
             move || {
-                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
-                    log::warn!(
-                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                    );
-                    poisoned.into_inner()
-                });
                 let collected = collect_agent_sessions_for_peer(
-                    &mut cache,
-                    requested_at,
+                    scan_live_agents(&inventory_cache, requested_at),
+                    Vec::new(),
                     supports_account_routing,
                 );
                 (collected.live_agents, collected.account_routes)

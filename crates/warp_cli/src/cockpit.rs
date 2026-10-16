@@ -959,7 +959,10 @@ fn host_state(
         (HostAvailability::Available, AgentInventoryStatus::Pending) => "loading",
         (HostAvailability::Available, AgentInventoryStatus::Ready) => "connected",
         (HostAvailability::Available, AgentInventoryStatus::Unsupported) => "unsupported",
-        (HostAvailability::Available, AgentInventoryStatus::Unavailable) => "unavailable",
+        (
+            HostAvailability::Available,
+            AgentInventoryStatus::Unavailable | AgentInventoryStatus::TimedOut,
+        ) => "unavailable",
     }
 }
 

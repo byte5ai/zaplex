@@ -7,6 +7,7 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 
+use super::super::agent_account::{AccountInventoryScan, LiveAgentScan};
 use super::super::proto::{
     client_message, list_directory_response, read_file_chunk_response, resolve_path_response,
     server_message, write_file_chunk_response, Abort, AgentProcessSignal,
@@ -22,12 +23,13 @@ use super::super::server_buffer_tracker::ServerBufferTracker;
 #[cfg(feature = "local_fs")]
 use super::collect_directory_entries;
 use super::{
-    agent_model_discovery_response, execute_agent_process_signal_with,
-    prepare_agent_model_discovery, public_agent_model_discovery_error,
-    server_features_with_runtime_support, AgentInventoryScanCache, AgentModelDiscoveryLimiter,
+    agent_model_discovery_response, agent_session_inventory, collect_agent_sessions_for_peer,
+    execute_agent_process_signal_with, prepare_agent_model_discovery,
+    public_agent_model_discovery_error, server_features_with_runtime_support,
+    AgentAccountScanCache, AgentInventoryScanCache, AgentModelDiscoveryLimiter,
     AgentModelDiscoveryPreparationError, AgentTranscriptReadPermit, ConnectionOutbox,
-    PendingFileOps, ServerModel, MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES,
-    MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
+    PendingFileOps, ServerModel, AGENT_ACCOUNT_SCAN_MAX_AGE,
+    MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES, MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
 };
 #[cfg(unix)]
 use super::{
@@ -40,7 +42,9 @@ use super::{
     FileChunkIoBackend, FileChunkIoState, StdFileChunkIoBackend, MAX_CONCURRENT_FILE_CHUNK_IO,
     MAX_FILE_CHUNK_BYTES, MAX_PENDING_FILE_CHUNK_IO,
 };
-use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
+use zaplex_cockpit::{
+    GuardrailSignal, ProcessSignalError, Provider, SessionSnapshot, SessionState,
+};
 #[cfg(unix)]
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
@@ -82,6 +86,7 @@ fn test_model() -> ServerModel {
         agent_inventory_scan_cache: std::sync::Arc::new(std::sync::Mutex::new(
             super::AgentInventoryScanCache::default(),
         )),
+        agent_account_scan_cache: std::sync::Arc::new(AgentAccountScanCache::default()),
         agent_account_routes: Default::default(),
         fresh_agent_account_routes_for_test: None,
         #[cfg(unix)]
@@ -869,22 +874,245 @@ fn overlapping_inventory_requests_reuse_the_completed_scan() {
     let mut cache = AgentInventoryScanCache::default();
     let requested_at = std::time::Instant::now();
     let mut scan_count = 0;
-    let make_scan = || super::super::agent_account::AccountInventoryScan {
-        inventory: super::super::proto::AgentAccountInventory::default(),
-        routes: HashMap::new(),
-        sessions: Vec::new(),
-    };
 
     cache.scan_with(requested_at, |_| {
         scan_count += 1;
-        make_scan()
+        live_scan(&[])
     });
     cache.scan_with(requested_at, |_| {
         scan_count += 1;
-        make_scan()
+        live_scan(&[])
     });
 
     assert_eq!(scan_count, 1);
+}
+
+fn agent_snapshot(session_id: &str, state: SessionState) -> SessionSnapshot {
+    SessionSnapshot {
+        session_id: session_id.to_string(),
+        cwd: "/work/project".to_string(),
+        name: String::new(),
+        state,
+        provider: Provider::Codex,
+        model: String::new(),
+        effort: None,
+        ctx_tokens: 0,
+        project_root: "/work/project".to_string(),
+        repo_root: "/work/project".to_string(),
+        project_name: "project".to_string(),
+        branch: None,
+        worktree: None,
+        config_dir: None,
+        account_email: None,
+        account_id: None,
+        process_fingerprint: None,
+        pty_session_id: None,
+        pty_session_generation: None,
+        pty_foreground: false,
+        task_state: None,
+        last_activity: chrono::Utc::now(),
+        pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
+    }
+}
+
+fn live_scan(running: &[&str]) -> LiveAgentScan {
+    LiveAgentScan {
+        routes: HashMap::new(),
+        sessions: running
+            .iter()
+            .map(|session_id| agent_snapshot(session_id, SessionState::Active))
+            .collect(),
+    }
+}
+
+fn account_scan(dormant: &[&str]) -> AccountInventoryScan {
+    AccountInventoryScan {
+        inventory: super::super::proto::AgentAccountInventory::default(),
+        routes: HashMap::new(),
+        dormant_sessions: dormant
+            .iter()
+            .map(|session_id| agent_snapshot(session_id, SessionState::Idle))
+            .collect(),
+    }
+}
+
+/// Starts an account scan at `now` that holds its scan lock until released,
+/// like a scan over a transcript history larger than any client deadline.
+fn start_blocked_account_scan(
+    cache: &std::sync::Arc<AgentAccountScanCache>,
+    now: std::time::Instant,
+) -> (
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<AccountInventoryScan>,
+) {
+    assert!(cache.claim_refresh(now));
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let cache = std::sync::Arc::clone(cache);
+    let scanning = std::thread::spawn(move || {
+        cache.refresh_with(|_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            account_scan(&["dormant-after-release"])
+        })
+    });
+    started_rx.recv().unwrap();
+    (release_tx, scanning)
+}
+
+/// Answers one session inventory on its own thread, so a reply that waits
+/// for the account scan fails the test instead of hanging it.
+fn session_inventory_within(
+    inventory_cache: &std::sync::Arc<std::sync::Mutex<AgentInventoryScanCache>>,
+    account_scan_cache: &std::sync::Arc<AgentAccountScanCache>,
+    requested_at: std::time::Instant,
+    deadline: std::time::Duration,
+) -> Option<Vec<AgentSessionInfo>> {
+    let (answered_tx, answered_rx) = std::sync::mpsc::channel();
+    let inventory_cache = std::sync::Arc::clone(inventory_cache);
+    let account_scan_cache = std::sync::Arc::clone(account_scan_cache);
+    std::thread::spawn(move || {
+        let collected = agent_session_inventory(
+            &inventory_cache,
+            &account_scan_cache,
+            requested_at,
+            std::time::Duration::from_millis(20),
+            false,
+        );
+        let _ = answered_tx.send(collected.sessions);
+    });
+    answered_rx.recv_timeout(deadline).ok()
+}
+
+#[test]
+fn slow_account_scan_blocks_neither_session_inventory_nor_account_listing() {
+    let inventory_cache =
+        std::sync::Arc::new(std::sync::Mutex::new(AgentInventoryScanCache::default()));
+    let account_scan_cache = std::sync::Arc::new(AgentAccountScanCache::default());
+    let requested_at = std::time::Instant::now();
+    // The live scan of these requests, already taken: a reply must not need more.
+    inventory_cache
+        .lock()
+        .unwrap()
+        .scan_with(requested_at, |_| live_scan(&["running"]));
+    let deadline = std::time::Duration::from_secs(1);
+
+    // The daemon's first account scan is still running: running sessions answer.
+    let (release, scanning) = start_blocked_account_scan(&account_scan_cache, requested_at);
+    let sessions = session_inventory_within(
+        &inventory_cache,
+        &account_scan_cache,
+        requested_at,
+        deadline,
+    )
+    .expect("the session inventory must answer while the first account scan runs");
+    assert!(sessions
+        .iter()
+        .any(|session| session.session_id == "running" && session.state == "active"));
+    release.send(()).unwrap();
+    scanning.join().unwrap();
+
+    // A stale result starts the next refresh, which then holds its scan lock.
+    let stale = std::time::Instant::now() + AGENT_ACCOUNT_SCAN_MAX_AGE;
+    let (release, scanning) = start_blocked_account_scan(&account_scan_cache, stale);
+    let (listed_tx, listed_rx) = std::sync::mpsc::channel();
+    let listing_cache = std::sync::Arc::clone(&account_scan_cache);
+    std::thread::spawn(move || {
+        let _ = listed_tx.send(listing_cache.latest_or_refresh_with(|_| {
+            panic!("a completed account scan must answer the listing")
+        }));
+    });
+    let listed = listed_rx
+        .recv_timeout(deadline)
+        .expect("account listing must not wait for the running scan");
+    assert_eq!(
+        listed.dormant_sessions[0].session_id,
+        "dormant-after-release"
+    );
+    let sessions = session_inventory_within(
+        &inventory_cache,
+        &account_scan_cache,
+        requested_at,
+        deadline,
+    )
+    .expect("session inventory must not wait for the running scan");
+    assert!(sessions
+        .iter()
+        .any(|session| session.session_id == "running"));
+    assert!(sessions
+        .iter()
+        .any(|session| session.session_id == "dormant-after-release" && session.state == "idle"));
+
+    release.send(()).unwrap();
+    scanning.join().unwrap();
+}
+
+#[test]
+fn timed_out_scan_result_is_reused_by_next_cycle() {
+    let cache = AgentAccountScanCache::default();
+    let mut scans = 0;
+    // A cycle's request started this scan and stopped waiting before it ended.
+    assert!(cache.claim_refresh(std::time::Instant::now()));
+    cache.refresh_with(|_| {
+        scans += 1;
+        account_scan(&["dormant"])
+    });
+
+    // The next cycle arrives after the scan completed and uses it.
+    let next_cycle = std::time::Instant::now();
+    assert!(
+        !cache.claim_refresh(next_cycle),
+        "a completed scan must not be restarted by the next cycle"
+    );
+    let reused = cache.latest_or_refresh_with(|_| {
+        scans += 1;
+        account_scan(&["rescanned"])
+    });
+
+    assert_eq!(scans, 1);
+    assert_eq!(reused.dormant_sessions[0].session_id, "dormant");
+}
+
+#[test]
+fn dormant_history_does_not_repeat_a_running_session() {
+    let collected = collect_agent_sessions_for_peer(
+        live_scan(&["resumed"]),
+        vec![
+            agent_snapshot("resumed", SessionState::Idle),
+            agent_snapshot("dormant", SessionState::Idle),
+        ],
+        false,
+    );
+
+    let resumed: Vec<&AgentSessionInfo> = collected
+        .sessions
+        .iter()
+        .filter(|session| session.session_id == "resumed")
+        .collect();
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].state, "active");
+    assert!(collected
+        .sessions
+        .iter()
+        .any(|session| session.session_id == "dormant" && session.state == "idle"));
+}
+
+#[test]
+fn failed_account_scan_releases_the_refresh_slot() {
+    let cache = AgentAccountScanCache::default();
+    assert!(cache.claim_refresh(std::time::Instant::now()));
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cache.refresh_with(|_| panic!("account scan failed"));
+    }));
+    assert!(failed.is_err());
+
+    // The slot is free again: later requests neither wait forever nor stop refreshing.
+    assert!(cache.claim_refresh(std::time::Instant::now()));
+    let recovered = cache.refresh_with(|_| account_scan(&["recovered"]));
+    assert_eq!(recovered.dormant_sessions[0].session_id, "recovered");
 }
 
 #[test]

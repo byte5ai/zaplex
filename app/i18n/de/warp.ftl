@@ -112,6 +112,7 @@ cockpit-host-no-local-agents = Keine lokalen KI-Sessions
 cockpit-host-inventory-pending = KI-Sessions werden geladen…
 cockpit-host-inventory-unsupported = Host-Dienst aktualisieren, um KI-Sessions anzuzeigen
 cockpit-host-inventory-unavailable = KI-Sessions sind vorübergehend nicht verfügbar
+cockpit-host-inventory-timed-out = Der Host braucht zu lange, um KI-Sessions aufzulisten
 cockpit-host-removed = aus Verbindungen entfernt
 cockpit-host-unverified = Verbindungsregister nicht verfügbar
 cockpit-conductor-rest-show-both = { $running } laufend · { $idle } ruhend — zeigen

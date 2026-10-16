@@ -2034,6 +2034,7 @@ fn empty_inventory_message(status: AgentInventoryStatus, is_local: bool) -> Stri
     match status {
         AgentInventoryStatus::Pending => crate::t!("cockpit-host-inventory-pending"),
         AgentInventoryStatus::Unavailable => crate::t!("cockpit-host-inventory-unavailable"),
+        AgentInventoryStatus::TimedOut => crate::t!("cockpit-host-inventory-timed-out"),
         AgentInventoryStatus::Unsupported => crate::t!("cockpit-host-inventory-unsupported"),
         AgentInventoryStatus::Ready if is_local => crate::t!("cockpit-host-no-local-agents"),
         AgentInventoryStatus::Ready => crate::t!("cockpit-host-no-agents"),

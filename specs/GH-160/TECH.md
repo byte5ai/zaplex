@@ -99,7 +99,9 @@ Each contribution carries `AgentInventoryStatus`:
 
 - `Ready` means inventory retrieval succeeded, including an empty result;
 - `Unsupported` means the connected peer lacks the inventory capability;
-- `Unavailable` means the request failed for this refresh.
+- `Unavailable` means the request failed for this refresh;
+- `TimedOut` means the daemon did not answer within the client deadline; the UI says the host
+  takes too long instead of calling it temporarily unavailable (#507).
 
 The local contribution is always retained. Every connected remote contribution is retained even
 when its session list is empty or its inventory is unsupported/unavailable.

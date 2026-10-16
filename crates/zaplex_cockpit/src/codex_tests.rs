@@ -651,6 +651,60 @@ fn usage_for_account_walks_sessions_tree() {
     assert_eq!(entries[0].provider, Provider::Codex);
 }
 
+fn token_count_line(input_tokens: u64) -> String {
+    serde_json::json!({
+        "type": "event_msg",
+        "timestamp": "2026-06-30T10:01:00Z",
+        "payload": {
+            "type": "token_count",
+            "info": {"last_token_usage": {"input_tokens": input_tokens, "output_tokens": 5}},
+        },
+    })
+    .to_string()
+        + "\n"
+}
+
+fn usage_cache_fixture(codex_home: &Path) -> (Account, PathBuf, DateTime<Utc>) {
+    write(
+        &codex_home.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"account-1"}}"#,
+    );
+    let rollout = codex_home.join("sessions/2026/06/30/rollout-abc.jsonl");
+    write(&rollout, &token_count_line(10));
+    let account = discover_accounts(codex_home).into_iter().next().unwrap();
+    let since = DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    (account, rollout, since)
+}
+
+#[test]
+fn codex_usage_cache_parses_unchanged_rollouts_once_and_follows_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (account, rollout, since) = usage_cache_fixture(tmp.path());
+    let mut cache = CodexUsageCache::default();
+
+    let first = usage_for_account_with_cache(&account, since, &mut cache);
+    let unchanged = usage_for_account_with_cache(&account, since, &mut cache);
+    assert_eq!(first, unchanged);
+    assert_eq!(first.0.len(), 1);
+    assert_eq!(cache.parse_count, 1);
+
+    write(&rollout, &(token_count_line(10) + &token_count_line(20)));
+    let (changed, _) = usage_for_account_with_cache(&account, since, &mut cache);
+    assert_eq!(
+        changed.iter().map(|entry| entry.input).collect::<Vec<_>>(),
+        [10, 20]
+    );
+    assert_eq!(cache.parse_count, 2);
+
+    fs::remove_file(&rollout).unwrap();
+    let (deleted, io_error) = usage_for_account_with_cache(&account, since, &mut cache);
+    assert!(!io_error);
+    assert!(deleted.is_empty());
+    assert!(cache.entries.is_empty());
+}
+
 /// Codex names its session inside the rollout, so spend must be stamped from
 /// `session_meta` — and with the same id discovery reads, or the table's
 /// "today $" column looks up a key no row has.

@@ -290,6 +290,15 @@ fn empty_local_inventory_does_not_hide_scan_failures() {
     );
 }
 
+#[test]
+fn timed_out_remote_inventory_is_not_presented_as_temporary() {
+    crate::i18n::init(Some("en"));
+    assert_ne!(
+        empty_inventory_message(AgentInventoryStatus::TimedOut, false),
+        empty_inventory_message(AgentInventoryStatus::Unavailable, false)
+    );
+}
+
 fn tree_agent(
     session_id: &str,
     cwd: &str,
