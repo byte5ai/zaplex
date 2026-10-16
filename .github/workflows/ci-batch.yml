@@ -37,7 +37,7 @@ on:
         type: boolean
         default: false
       per_test_coverage:
-        description: With coverage, also attribute executed functions to each test (#472 suite pruning)
+        description: With coverage, also attribute executed functions to each test and measure coverage without the pruning candidates (#472)
         type: boolean
         default: false
 
