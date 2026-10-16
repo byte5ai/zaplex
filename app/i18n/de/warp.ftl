@@ -4187,4 +4187,13 @@ persistence-startup-error-title = Zaplex konnte die gespeicherten Daten nicht ö
 persistence-startup-error-detail = Der Start wurde abgebrochen, damit keine Arbeit ohne Speicherung verloren geht. Die vorhandene Datenbank und Migrationsdateien bleiben erhalten. Schließe gegebenenfalls eine andere Zaplex-Instanz, behebe den folgenden Fehler und starte Zaplex erneut.
 
     { $error }
+persistence-startup-error-migration-locked = Eine andere Zaplex-Instanz öffnet gerade dieselben gespeicherten Daten, daher wurde dieser Start abgebrochen. Warte, bis die andere Instanz fertig gestartet ist, oder beende sie, und starte Zaplex dann erneut.
+
+    { $error }
+persistence-startup-error-legacy-database-locked = Zaplex konnte die Daten einer früheren Version aus { $path } nicht übernehmen, weil eine andere App sie noch verwendet, zum Beispiel eine frühere Version von Zap oder Zaplex. Beende diese App und starte Zaplex erneut; die Übernahme wird dann automatisch fortgesetzt. Die Datei und deine aktuellen Daten bleiben unverändert.
+
+    { $error }
+persistence-startup-error-legacy-database-copy-failed = Zaplex konnte die Daten einer früheren Version aus { $path } nicht übernehmen. Die Datei und deine aktuellen Daten bleiben unverändert. Behebe den folgenden Fehler, zum Beispiel indem du Speicherplatz freigibst oder den Zugriff auf den Ordner erlaubst, und starte Zaplex erneut. Ist die Datei beschädigt, verschiebe sie in einen anderen Ordner: Zaplex startet dann ohne diese Daten und lässt die Datei unangetastet.
+
+    { $error }
 persistence-startup-error-close = Zaplex schließen
