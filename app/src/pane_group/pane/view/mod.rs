@@ -49,6 +49,7 @@ pub enum PaneViewEvent {
         hidden_pane_preview_direction: Direction,
     },
     PaneDraggedOutsideTabBarOrPaneGroup,
+    PaneDragStarted,
     PaneDragEnded,
     PaneHeaderClicked,
 }
@@ -260,6 +261,7 @@ impl<P: BackingView> PaneView<P> {
                     });
                 }
             }
+            header::Event::PaneDragStarted => ctx.emit(PaneViewEvent::PaneDragStarted),
             header::Event::MovePaneWithinPaneGroup {
                 target_id,
                 direction,

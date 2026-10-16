@@ -62,6 +62,8 @@ pub enum Event<A: ActionPayload, B: ActionPayload> {
     CustomAction(B),
     /// The close button on the header was clicked.
     Close,
+    /// Dragging this header started, before any drag-over or drop event.
+    PaneDragStarted,
     /// This header has been dragged over the pane with target_id at the location
     MovePaneWithinPaneGroup {
         target_id: PaneId,
@@ -863,6 +865,7 @@ impl<P: BackingView> TypedActionView for PaneHeader<P> {
             }
             PaneHeaderAction::PaneHeaderDragStarted => {
                 send_telemetry_from_ctx!(TelemetryEvent::PaneDragInitiated, ctx);
+                ctx.emit(Event::PaneDragStarted);
             }
             PaneHeaderAction::PaneHeaderDragged {
                 origin,

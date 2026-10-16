@@ -3916,6 +3916,68 @@ fn every_split_direction_opens_the_launch_menu_without_adding_a_pane() {
                 });
             });
         }
+
+        // A pane's own split actions (as dispatched by its context menu) take the same route,
+        // and the local choice inserts the new pane on the captured side.
+        for (action, direction, axis, source_index) in [
+            (
+                TerminalAction::SplitLeft(None),
+                Direction::Left,
+                pane_group::SplitDirection::Horizontal,
+                1,
+            ),
+            (
+                TerminalAction::SplitUp(None),
+                Direction::Up,
+                pane_group::SplitDirection::Vertical,
+                1,
+            ),
+            (
+                TerminalAction::SplitRight(None),
+                Direction::Right,
+                pane_group::SplitDirection::Horizontal,
+                0,
+            ),
+            (
+                TerminalAction::SplitDown(None),
+                Direction::Down,
+                pane_group::SplitDirection::Vertical,
+                0,
+            ),
+        ] {
+            let (pane_group, source, source_view) = workspace.update(&mut app, |workspace, ctx| {
+                workspace.add_terminal_tab(false, ctx);
+                let pane_group = workspace.active_tab_pane_group().clone();
+                let source = pane_group.as_ref(ctx).focused_pane_id(ctx);
+                let source_view = pane_group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(source, ctx)
+                    .expect("a new tab starts with a terminal pane");
+                (pane_group, source, source_view)
+            });
+
+            source_view.update(&mut app, |view, ctx| view.handle_action(&action, ctx));
+            workspace.read(&app, |workspace, ctx| {
+                let pending = workspace
+                    .pending_split_launch
+                    .as_ref()
+                    .expect("the split waits for a launch-menu choice");
+                assert_eq!(pending.target.pane_id(), source);
+                assert_eq!(pending.target.direction(), direction);
+                assert_eq!(pane_group.as_ref(ctx).visible_pane_ids(), vec![source]);
+            });
+
+            // Choosing the local terminal entry inserts the pane on the captured side.
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.handle_action(&WorkspaceAction::SplitLaunchLocal, ctx);
+            });
+            pane_group.read(&app, |group, _| {
+                let panes = group.visible_pane_ids();
+                assert_eq!(panes.len(), 2);
+                assert_eq!(panes[source_index], source);
+                assert_eq!(group.num_splits_at_root(axis), 2);
+            });
+        }
     });
 }
 
@@ -3971,6 +4033,67 @@ fn dragging_a_tab_onto_a_pane_joins_its_panes_as_a_split() {
         workspace.read(&app, |workspace, _| {
             assert_eq!(workspace.tabs.len(), 1);
             assert_eq!(workspace.active_tab_pane_group().id(), target_group_id);
+        });
+    });
+}
+
+#[test]
+fn ending_a_pane_drag_focuses_the_dragged_pane_unless_focus_moved_during_the_drag() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let (pane_group, window_id) = workspace.read(&app, |workspace, _| {
+            (
+                workspace.active_tab_pane_group().clone(),
+                workspace.window_id,
+            )
+        });
+        let (first, dragged, third) = pane_group.update(&mut app, |group, ctx| {
+            let first = group.focused_pane_id(ctx);
+            let dragged: PaneId = group.add_terminal_pane(Direction::Right, None, ctx).into();
+            let third: PaneId = group.add_terminal_pane(Direction::Right, None, ctx).into();
+            (first, dragged, third)
+        });
+        let header = app
+            .views_of_type::<pane_group::PaneView<TerminalView>>(window_id)
+            .into_iter()
+            .flatten()
+            .find(|view| view.read(&app, |view, _| view.pane_id()) == dragged)
+            .map(|view| view.read(&app, |view, _| view.header().clone()))
+            .expect("the dragged pane has a pane view");
+        let start_drag = |app: &mut App| {
+            header.update(app, |header, ctx| {
+                header.handle_action(&pane_group::PaneHeaderAction::PaneHeaderDragStarted, ctx)
+            })
+        };
+        let drop_on_pane_group = |app: &mut App| {
+            header.update(app, |header, ctx| {
+                header.handle_action(
+                    &pane_group::PaneHeaderAction::PaneHeaderDropped {
+                        origin: ActionOrigin::Pane,
+                        drop_location: pane_group::PaneDragDropLocation::PaneGroup(dragged),
+                    },
+                    ctx,
+                )
+            })
+        };
+
+        // A drag that ends before any drag-over event (a quick flick, or a drop in the
+        // middle of a pane) still focuses the dragged pane.
+        pane_group.update(&mut app, |group, ctx| group.focus_pane_by_id(first, ctx));
+        start_drag(&mut app);
+        drop_on_pane_group(&mut app);
+        pane_group.read(&app, |group, ctx| {
+            assert_eq!(group.focused_pane_id(ctx), dragged);
+        });
+
+        // A focus change while dragging is kept when the drag ends.
+        pane_group.update(&mut app, |group, ctx| group.focus_pane_by_id(first, ctx));
+        start_drag(&mut app);
+        pane_group.update(&mut app, |group, ctx| group.focus_pane_by_id(third, ctx));
+        drop_on_pane_group(&mut app);
+        pane_group.read(&app, |group, ctx| {
+            assert_eq!(group.focused_pane_id(ctx), third);
         });
     });
 }
