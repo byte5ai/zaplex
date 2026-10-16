@@ -3022,6 +3022,49 @@ workspace-left-panel-ssh-manager-session-last-opened-days = { $count ->
         [one] last opened 1 day ago
        *[other] last opened { $count } days ago
     }
+workspace-left-panel-ssh-manager-session-detached-metadata = { $detached } · { $retention }
+workspace-left-panel-ssh-manager-session-detached-now = just detached
+workspace-left-panel-ssh-manager-session-detached-minutes = { $count ->
+        [one] detached for 1 minute
+       *[other] detached for { $count } minutes
+    }
+workspace-left-panel-ssh-manager-session-detached-hours = { $count ->
+        [one] detached for 1 hour
+       *[other] detached for { $count } hours
+    }
+workspace-left-panel-ssh-manager-session-detached-days = { $count ->
+        [one] detached for 1 day
+       *[other] detached for { $count } days
+    }
+workspace-left-panel-ssh-manager-session-expires-soon = ends shortly
+workspace-left-panel-ssh-manager-session-expires-minutes = { $count ->
+        [one] ends in 1 minute
+       *[other] ends in { $count } minutes
+    }
+workspace-left-panel-ssh-manager-session-expires-hours = { $count ->
+        [one] ends in 1 hour
+       *[other] ends in { $count } hours
+    }
+workspace-left-panel-ssh-manager-session-kept = kept
+workspace-left-panel-ssh-manager-session-kept-agent = kept while the agent runs
+workspace-left-panel-ssh-manager-session-kept-unknown = kept, program unknown
+workspace-left-panel-ssh-manager-session-legacy-metadata = { $opened } · { $expires }
+workspace-left-panel-ssh-manager-session-legacy-expires-soon = ends shortly unless attached
+workspace-left-panel-ssh-manager-session-legacy-expires-minutes = { $count ->
+        [one] ends in 1 minute unless attached
+       *[other] ends in { $count } minutes unless attached
+    }
+workspace-left-panel-ssh-manager-session-legacy-expires-hours = { $count ->
+        [one] ends in 1 hour unless attached
+       *[other] ends in { $count } hours unless attached
+    }
+workspace-left-panel-ssh-manager-session-end = End session
+workspace-left-panel-ssh-manager-session-end-title = End session “{ $name }”?
+workspace-left-panel-ssh-manager-session-end-summary = This ends the session's shell and every program running in it on { $host }. Its output is lost.
+workspace-left-panel-ssh-manager-session-end-agent = An agent is running in it and ends too.
+workspace-left-panel-ssh-manager-session-end-confirm = End
+workspace-left-panel-ssh-manager-session-end-changed = This session has changed or no longer exists. Refresh sessions.
+workspace-left-panel-ssh-manager-session-end-failed = Could not end this session: { $detail }
 workspace-left-panel-ssh-manager-session-host-missing = This host no longer exists in Connections
 workspace-left-panel-ssh-manager-session-open-error = Could not open this session: { $detail }
 workspace-left-panel-ssh-manager-sessions-refreshing = Refreshing sessions…

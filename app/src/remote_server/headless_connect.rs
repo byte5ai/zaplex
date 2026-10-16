@@ -35,8 +35,8 @@ use warp_ssh_manager::{
 };
 use warpui::r#async::{executor::Background, FutureExt as _};
 use zaplex_remote_session::types::{
-    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SESSION_HOST,
-    FEATURE_SESSION_LIVE_METADATA_V1,
+    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1,
+    FEATURE_SESSION_DETACH_RETENTION_V1, FEATURE_SESSION_HOST, FEATURE_SESSION_LIVE_METADATA_V1,
 };
 
 use super::session_inventory::{
@@ -145,6 +145,17 @@ fn discard_unsupported_live_metadata(daemon: &mut SessionList, initialize: &Init
     }
     for session in &mut daemon.sessions {
         session.live = None;
+    }
+}
+
+/// Detach times and expiry are trusted only from daemons that advertise them;
+/// an older daemon counts its age limit from the last attach instead.
+fn discard_unsupported_retention(daemon: &mut SessionList, initialize: &InitializeResponse) {
+    if has_feature(&initialize.features, FEATURE_SESSION_DETACH_RETENTION_V1) {
+        return;
+    }
+    for session in &mut daemon.sessions {
+        session.retention = None;
     }
 }
 
@@ -742,6 +753,7 @@ async fn query_daemon_inventory(
     .await?;
     let observed_at = Instant::now();
     discard_unsupported_live_metadata(&mut daemon, &initialize);
+    discard_unsupported_retention(&mut daemon, &initialize);
     if supports_agent_inventory(&initialize) {
         match inventory_before_deadline(
             async {
@@ -947,6 +959,78 @@ pub async fn list_daemon_runtime_diagnostics(
     )
     .await
     .map(|scan| scan.runtime_diagnostics)
+}
+
+/// Ends one listed daemon session for good (`CloseSession`): its shell and
+/// everything running in it are killed. On the same transient connection the
+/// daemon must first prove it is the one the row came from (handshake host id)
+/// and still own the exact PTY generation, unmanaged; a re-listing then
+/// confirms the session is gone. Never installs a daemon.
+#[allow(clippy::too_many_arguments)]
+pub async fn terminate_daemon_session(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+    executor: Arc<Background>,
+    route: Option<DaemonRuntimeRoute>,
+    expected_host_id: String,
+    pty_session_id: String,
+    pty_generation: u64,
+) -> std::result::Result<(), String> {
+    let terminate = async move {
+        let preflight =
+            preflight_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
+        require_daemon_inventory_ready(preflight)?;
+        let mut transport = SshTransport::new(socket_path, auth_context.clone());
+        if let Some(route) = route {
+            transport = transport.with_daemon_runtime(route);
+        }
+        let Connection { client, child, .. } = transport
+            .connect(executor)
+            .await
+            .map_err(|e| format!("daemon connect failed: {e:#}"))?;
+        // The proxy child lives until the requests are answered.
+        let _child = child;
+        let auth_token = auth_context.get_auth_token().await;
+        let initialize = client
+            .initialize(auth_token.as_deref())
+            .await
+            .map_err(|e| format!("daemon handshake failed: {e:#}"))?;
+        let changed = || crate::t!("workspace-left-panel-ssh-manager-session-end-changed");
+        if initialize.host_id != expected_host_id {
+            return Err(changed());
+        }
+        let listed = client
+            .list_sessions()
+            .await
+            .map_err(|e| format!("list_sessions failed: {e:#}"))?;
+        if !listed.sessions.iter().any(|session| {
+            session.session_id == pty_session_id
+                && session.generation == pty_generation
+                && session.managed.is_none()
+        }) {
+            return Err(changed());
+        }
+        client
+            .send_close_session(pty_session_id.clone())
+            .map_err(|e| format!("close_session failed: {e:#}"))?;
+        // The daemon handles one connection's messages in order, so this
+        // listing already reflects the close.
+        let remaining = client
+            .list_sessions()
+            .await
+            .map_err(|e| format!("list_sessions failed: {e:#}"))?;
+        if remaining
+            .sessions
+            .iter()
+            .any(|session| session.session_id == pty_session_id)
+        {
+            return Err(changed());
+        }
+        log::info!("Ended daemon session {pty_session_id} on request");
+        Ok(())
+    };
+    inventory_with_timeout(terminate, SESSION_INVENTORY_TIMEOUT).await
 }
 
 async fn inventory_with_timeout<T>(

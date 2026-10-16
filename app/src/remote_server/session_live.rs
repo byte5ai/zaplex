@@ -1,6 +1,7 @@
 //! Point-in-time facts about a daemon-hosted PTY that the daemon reads from
-//! `/proc` when it answers `ListSessions`: the working directory and the
-//! executable name of the terminal's foreground job.
+//! `/proc` when it answers `ListSessions` and when its detached-session GC
+//! decides: the working directory and the executable name of the terminal's
+//! foreground job, and whether that job is a coding agent.
 //!
 //! The session shell is a session leader with the PTY as its controlling
 //! terminal, so field 8 (`tpgid`) of its `/proc/<pid>/stat` names the PTY's
@@ -12,11 +13,16 @@ use std::path::{Path, PathBuf};
 
 use remote_server::proto::SessionLiveMetadata;
 
+use super::managed_fleet::ForegroundAgent;
+
 /// Interpreters whose first script argument names the actual command.
 const INTERPRETERS: &[&str] = &[
     "node", "nodejs", "bun", "deno", "python", "python3", "ruby", "perl",
 ];
 const SCRIPT_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "ts", "py", "rb", "pl"];
+/// Foreground command names of the coding agents: Claude Code and Codex CLI,
+/// launched natively or through their npm launcher scripts.
+const AGENT_COMMANDS: &[&str] = &["claude", "claude-code", "codex"];
 
 pub(crate) trait PtyProcfs {
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
@@ -44,30 +50,49 @@ impl PtyProcfs for RealPtyProcfs {
     }
 }
 
-/// Reads the live metadata of the PTY whose session shell is `shell_pid`.
-/// Unreadable facts stay empty; nothing is guessed.
-pub(crate) fn read_session_live_metadata(
-    procfs: &impl PtyProcfs,
-    shell_pid: u32,
-) -> SessionLiveMetadata {
+/// One reading of a daemon-hosted PTY from `/proc`.
+pub(crate) struct SessionLiveState {
+    /// What `ListSessions` reports. Unreadable facts stay empty.
+    pub(crate) metadata: SessionLiveMetadata,
+    /// Whether a coding agent holds the terminal foreground. Unlike the
+    /// metadata, an unreadable foreground is `Unknown`, never an idle prompt.
+    pub(crate) foreground_agent: ForegroundAgent,
+}
+
+/// Reads the PTY whose session shell is `shell_pid`; nothing is guessed.
+pub(crate) fn read_session_live_state(procfs: &impl PtyProcfs, shell_pid: u32) -> SessionLiveState {
     let Some(shell) = read_stat(procfs, shell_pid) else {
-        return SessionLiveMetadata::default();
+        return SessionLiveState {
+            metadata: SessionLiveMetadata::default(),
+            foreground_agent: ForegroundAgent::Unknown,
+        };
     };
+    let foreground_group = u32::try_from(shell.foreground_group).ok();
     // An idle prompt is the shell itself in the foreground.
-    let foreground = u32::try_from(shell.foreground_group)
-        .ok()
-        .filter(|group| *group != shell_pid)
+    let at_prompt = foreground_group == Some(shell_pid);
+    let foreground = foreground_group
+        .filter(|_| !at_prompt)
         .and_then(|group| foreground_process(procfs, group, shell.session));
     let cwd = foreground
         .and_then(|pid| read_cwd(procfs, pid))
         .or_else(|| read_cwd(procfs, shell_pid))
         .unwrap_or_default();
-    let foreground_command = foreground
-        .and_then(|pid| foreground_command_name(procfs, pid))
-        .unwrap_or_default();
-    SessionLiveMetadata {
-        cwd,
-        foreground_command,
+    let foreground_command = foreground.and_then(|pid| foreground_command_name(procfs, pid));
+    let foreground_agent = if at_prompt {
+        ForegroundAgent::NotRunning
+    } else {
+        match foreground_command.as_deref() {
+            Some(command) if AGENT_COMMANDS.contains(&command) => ForegroundAgent::Running,
+            Some(_) => ForegroundAgent::NotRunning,
+            None => ForegroundAgent::Unknown,
+        }
+    };
+    SessionLiveState {
+        metadata: SessionLiveMetadata {
+            cwd,
+            foreground_command: foreground_command.unwrap_or_default(),
+        },
+        foreground_agent,
     }
 }
 

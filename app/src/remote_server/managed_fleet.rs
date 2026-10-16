@@ -383,28 +383,81 @@ impl ManagedSessionMetadata {
     }
 }
 
-/// Detached-age GC is a lifecycle policy, not an implicit stop mechanism for
-/// managed work. Explicit close/process-exit paths do not call this helper.
-pub(crate) fn eligible_for_detached_age_gc(
-    managed: Option<&ManagedSessionMetadata>,
-    detached: bool,
-    now_epoch_millis: u64,
-    last_attached_epoch_millis: u64,
-    max_detached_age_millis: u64,
-) -> bool {
-    managed.is_none()
-        && detached
-        && now_epoch_millis.saturating_sub(last_attached_epoch_millis) >= max_detached_age_millis
+/// Whether a coding agent holds a PTY's terminal foreground.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ForegroundAgent {
+    Running,
+    NotRunning,
+    /// The foreground program could not be read; it might be an agent.
+    Unknown,
 }
 
-/// Ring-cap pressure may reclaim only unmanaged detached sessions. Managed
-/// output rings remain bounded by their per-session ceiling; process memory is
-/// handled by the start headroom gate rather than destructive surprise GC.
-pub(crate) fn eligible_for_ring_pressure_gc(
+/// Why a detached session is never ended automatically.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum KeepReason {
+    /// Managed sessions end only through their explicit lifecycle request.
+    Managed,
+    AgentRunning,
+    ForegroundUnknown,
+}
+
+/// What the daemon's automatic GC may do with one session.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DetachedRetention {
+    /// A client is attached.
+    Attached,
+    /// Detached, but never ended by the age limit or by ring-cap pressure.
+    Kept {
+        detached_since_epoch_millis: u64,
+        reason: KeepReason,
+    },
+    /// Detached; the age GC ends it once `expires_at_epoch_millis` has passed,
+    /// and ring-cap pressure may end it earlier, oldest detach first.
+    Expires {
+        detached_since_epoch_millis: u64,
+        expires_at_epoch_millis: u64,
+    },
+}
+
+/// The single policy for ending sessions automatically. Both GC phases and the
+/// session inventory decide through this function, so a policy change made
+/// here applies everywhere at once. The limit counts from the moment the last
+/// client detached, never from the last attach. A session whose foreground
+/// runs a coding agent is never ended automatically; neither is one whose
+/// foreground cannot be read, because it might run an agent. Managed output
+/// rings stay bounded by their per-session ceiling, and their process memory
+/// by the start headroom gate. Explicit close and process exit do not consult
+/// this policy. `foreground_agent` is only read for detached unmanaged
+/// sessions.
+pub(crate) fn detached_retention(
     managed: Option<&ManagedSessionMetadata>,
-    detached: bool,
-) -> bool {
-    managed.is_none() && detached
+    detached_since_epoch_millis: Option<u64>,
+    max_detached_age_millis: u64,
+    foreground_agent: impl FnOnce() -> ForegroundAgent,
+) -> DetachedRetention {
+    let Some(detached_since_epoch_millis) = detached_since_epoch_millis else {
+        return DetachedRetention::Attached;
+    };
+    let keep_reason = if managed.is_some() {
+        Some(KeepReason::Managed)
+    } else {
+        match foreground_agent() {
+            ForegroundAgent::Running => Some(KeepReason::AgentRunning),
+            ForegroundAgent::Unknown => Some(KeepReason::ForegroundUnknown),
+            ForegroundAgent::NotRunning => None,
+        }
+    };
+    match keep_reason {
+        Some(reason) => DetachedRetention::Kept {
+            detached_since_epoch_millis,
+            reason,
+        },
+        None => DetachedRetention::Expires {
+            detached_since_epoch_millis,
+            expires_at_epoch_millis: detached_since_epoch_millis
+                .saturating_add(max_detached_age_millis),
+        },
+    }
 }
 
 impl ClaudeRemoteControlSpec {

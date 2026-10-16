@@ -73,3 +73,54 @@ fn runtime_inventory_contains_only_daemon_sockets_with_current_first() {
     assert!(!runtimes.contains(&"server-v0.8.sock".to_string()));
     assert!(!runtimes.contains(&"unrelated.sock".to_string()));
 }
+
+#[test]
+fn stale_daemon_socket_without_process_is_pruned() {
+    use std::os::unix::net::UnixListener;
+
+    let directory = tempfile::tempdir().unwrap();
+    // A daemon that died without removing its socket: nothing listens on it
+    // and its PID file names no live process.
+    drop(UnixListener::bind(directory.path().join("server-v0.9.sock")).unwrap());
+    std::fs::write(directory.path().join("server-v0.9.pid"), "2147483647").unwrap();
+    // An older daemon that still runs.
+    let _live = UnixListener::bind(directory.path().join("server-v0.8.sock")).unwrap();
+    std::fs::write(
+        directory.path().join("server-v0.8.pid"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+
+    let runtimes = runtime_filenames_in_dir(directory.path()).unwrap();
+
+    assert!(!runtimes.contains(&"server-v0.9.sock".to_string()));
+    assert!(!directory.path().join("server-v0.9.sock").exists());
+    assert!(runtimes.contains(&"server-v0.8.sock".to_string()));
+    // The next scan no longer sees the dead runtime at all.
+    let rescanned = runtime_filenames_in_dir(directory.path()).unwrap();
+    assert!(!rescanned.contains(&"server-v0.9.sock".to_string()));
+}
+
+#[test]
+fn stale_socket_stays_while_a_proxy_starts_its_daemon() {
+    use std::os::unix::io::AsRawFd as _;
+    use std::os::unix::net::UnixListener;
+
+    let directory = tempfile::tempdir().unwrap();
+    // A starting daemon has bound its socket but does not listen yet; its
+    // proxy holds the PID file lock until the socket accepts connections.
+    drop(UnixListener::bind(directory.path().join("server-v0.9.sock")).unwrap());
+    let starting_proxy_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(directory.path().join("server-v0.9.pid"))
+        .unwrap();
+    super::flock_wait(starting_proxy_lock.as_raw_fd(), libc::LOCK_EX).unwrap();
+
+    let runtimes = runtime_filenames_in_dir(directory.path()).unwrap();
+
+    assert!(runtimes.contains(&"server-v0.9.sock".to_string()));
+    assert!(directory.path().join("server-v0.9.sock").exists());
+}

@@ -320,6 +320,8 @@ pub(crate) struct EventLoop {
     /// the capability-checked authoritative binding snapshot.
     awaiting_attach_snapshot: bool,
     initial_attach_pending: bool,
+    /// The initial-attach deadline runs; it starts once a transport is up.
+    initial_attach_deadline_armed: bool,
     /// Existing PTYs may have lost their bootstrap prefix on older daemons.
     adopted_session: bool,
     pending_attach_replay: Option<PendingAttachReplay>,
@@ -547,7 +549,10 @@ impl EventLoop {
                 event_loop.pty_generation = generation.filter(|generation| *generation != 0);
                 event_loop.expected_attach_agent_binding = expected_attach_agent_binding;
                 event_loop.awaiting_attach_snapshot = true;
-                event_loop.arm_initial_attach_timeout(ctx);
+                // Its deadline starts in `on_transport_connected`, like a
+                // fresh open's: restoring a PTY of an older daemon after an
+                // app update first installs this version's binary (#510).
+                event_loop.initial_attach_pending = true;
             }
             (Some(_), _) | (None, Some(_)) => {
                 event_loop.write_notice(&crate::t!("terminal-daemon-attach-identity-invalid"), ctx);
@@ -757,6 +762,9 @@ impl EventLoop {
             self.try_open(ctx);
             return;
         }
+        if self.initial_attach_pending {
+            self.arm_initial_attach_timeout(ctx);
+        }
         self.on_attached_transport_ready(&client, ctx);
     }
 
@@ -842,6 +850,7 @@ impl EventLoop {
             expected_attach_agent_binding: None,
             awaiting_attach_snapshot: false,
             initial_attach_pending: false,
+            initial_attach_deadline_armed: false,
             adopted_session: false,
             pending_attach_replay: None,
             reattach_after_replay: false,
@@ -1750,9 +1759,10 @@ impl EventLoop {
     }
 
     fn arm_initial_attach_timeout(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.initial_attach_pending {
+        if self.initial_attach_deadline_armed {
             return;
         }
+        self.initial_attach_deadline_armed = true;
         self.initial_attach_pending = true;
         ctx.spawn(
             async {

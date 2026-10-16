@@ -88,7 +88,9 @@ fn command_of(cmdline: &[&str]) -> String {
     let procfs = FakeProcfs::default()
         .process(100, 100, 700, "/srv/projects/api", &["bash"])
         .process(700, 100, 700, "/srv/projects/api", cmdline);
-    read_session_live_metadata(&procfs, 100).foreground_command
+    read_session_live_state(&procfs, 100)
+        .metadata
+        .foreground_command
 }
 
 #[test]
@@ -103,7 +105,7 @@ fn foreground_job_reports_its_directory_and_executable_name() {
             &["/home/dev/.local/bin/claude", "--resume", "secret-token"],
         );
 
-    let live = read_session_live_metadata(&procfs, 100);
+    let live = read_session_live_state(&procfs, 100).metadata;
 
     assert_eq!(live.cwd, "/srv/projects/api");
     assert_eq!(live.foreground_command, "claude");
@@ -113,7 +115,7 @@ fn foreground_job_reports_its_directory_and_executable_name() {
 fn idle_prompt_reports_the_shell_directory_without_a_command() {
     let procfs = FakeProcfs::default().process(100, 100, 100, "/srv/projects/api", &["-zsh"]);
 
-    let live = read_session_live_metadata(&procfs, 100);
+    let live = read_session_live_state(&procfs, 100).metadata;
 
     assert_eq!(live.cwd, "/srv/projects/api");
     assert_eq!(live.foreground_command, "");
@@ -138,7 +140,9 @@ fn interpreted_cli_reports_its_script_name_without_arguments() {
         );
 
     assert_eq!(
-        read_session_live_metadata(&procfs, 100).foreground_command,
+        read_session_live_state(&procfs, 100)
+            .metadata
+            .foreground_command,
         "codex"
     );
 }
@@ -150,7 +154,7 @@ fn unreadable_foreground_directory_falls_back_to_the_shell() {
         .process(400, 100, 400, "/root", &["sudo", "-i"])
         .without_cwd(400);
 
-    let live = read_session_live_metadata(&procfs, 100);
+    let live = read_session_live_state(&procfs, 100).metadata;
 
     assert_eq!(live.cwd, "/srv/projects/api");
     assert_eq!(live.foreground_command, "sudo");
@@ -163,7 +167,7 @@ fn foreground_group_from_another_session_is_ignored() {
         .process(100, 100, 500, "/srv/projects/api", &["bash"])
         .process(500, 900, 500, "/var/lib/other", &["unrelated-daemon"]);
 
-    let live = read_session_live_metadata(&procfs, 100);
+    let live = read_session_live_state(&procfs, 100).metadata;
 
     assert_eq!(live.cwd, "/srv/projects/api");
     assert_eq!(live.foreground_command, "");
@@ -172,7 +176,7 @@ fn foreground_group_from_another_session_is_ignored() {
 #[test]
 fn a_vanished_shell_reports_nothing() {
     assert_eq!(
-        read_session_live_metadata(&FakeProcfs::default(), 100),
+        read_session_live_state(&FakeProcfs::default(), 100).metadata,
         SessionLiveMetadata::default()
     );
 }
@@ -239,7 +243,7 @@ fn pipeline_whose_leader_exited_reports_a_remaining_stage() {
         // Same group id, but another kernel session: never this job.
         .member(9000, 600, 900, 600, "/var/lib/other", &["unrelated-daemon"]);
 
-    let live = read_session_live_metadata(&procfs, 100);
+    let live = read_session_live_state(&procfs, 100).metadata;
 
     assert_eq!(live.cwd, "/var/log/app");
     assert_eq!(live.foreground_command, "less");
@@ -249,8 +253,62 @@ fn pipeline_whose_leader_exited_reports_a_remaining_stage() {
 fn reaped_pipeline_leader_without_survivors_reports_the_shell() {
     let procfs = FakeProcfs::default().process(100, 100, 600, "/srv/projects/api", &["bash"]);
 
-    let live = read_session_live_metadata(&procfs, 100);
+    let live = read_session_live_state(&procfs, 100).metadata;
 
     assert_eq!(live.cwd, "/srv/projects/api");
     assert_eq!(live.foreground_command, "");
+}
+
+fn foreground_agent_of(cmdline: &[&str]) -> ForegroundAgent {
+    let procfs = FakeProcfs::default()
+        .process(100, 100, 700, "/srv/projects/api", &["bash"])
+        .process(700, 100, 700, "/srv/projects/api", cmdline);
+    read_session_live_state(&procfs, 100).foreground_agent
+}
+
+#[test]
+fn claude_or_codex_in_the_foreground_is_a_running_agent() {
+    for cmdline in [
+        &["/home/dev/.local/bin/claude", "--resume", "secret-token"][..],
+        &["node", "/usr/local/bin/claude"],
+        &["codex"],
+        &[
+            "node",
+            "/usr/lib/node_modules/@openai/codex/bin/codex.js",
+            "exec",
+        ],
+    ] {
+        assert_eq!(
+            foreground_agent_of(cmdline),
+            ForegroundAgent::Running,
+            "{cmdline:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unreadable_foreground_is_unknown_rather_than_an_idle_prompt() {
+    // An idle prompt and other programs are known not to be an agent.
+    let idle = FakeProcfs::default().process(100, 100, 100, "/srv/projects/api", &["-zsh"]);
+    assert_eq!(
+        read_session_live_state(&idle, 100).foreground_agent,
+        ForegroundAgent::NotRunning
+    );
+    assert_eq!(
+        foreground_agent_of(&["less", "claude.log"]),
+        ForegroundAgent::NotRunning
+    );
+    // The shell itself can no longer be read.
+    assert_eq!(
+        read_session_live_state(&FakeProcfs::default(), 100).foreground_agent,
+        ForegroundAgent::Unknown
+    );
+    // The foreground job has no live member to read.
+    let procfs = FakeProcfs::default().process(100, 100, 600, "/srv/projects/api", &["bash"]);
+    assert_eq!(
+        read_session_live_state(&procfs, 100).foreground_agent,
+        ForegroundAgent::Unknown
+    );
+    // The job is there, but neither its command line nor its name is readable.
+    assert_eq!(foreground_agent_of(&[]), ForegroundAgent::Unknown);
 }

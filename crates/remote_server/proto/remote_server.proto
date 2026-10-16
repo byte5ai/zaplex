@@ -1070,6 +1070,31 @@ message SessionInfo {
   // Set only by daemons advertising "session-live-metadata-v1". Clients must
   // ignore it from any other daemon.
   SessionLiveMetadata live = 10;
+  // Set only by daemons advertising "session-detach-retention-v1". Clients
+  // must ignore it from any other daemon.
+  SessionRetention retention = 11;
+}
+
+// How long a session survives without a client, as decided by the daemon's
+// detached-session GC. Capability: "session-detach-retention-v1".
+message SessionRetention {
+  // Unix epoch millis since which no client is attached; 0 while one is.
+  uint64 detached_since_epoch_millis = 1;
+  // Unix epoch millis from which the periodic GC sweep ends the detached
+  // session; 0 when it is never ended automatically.
+  uint64 expires_at_epoch_millis = 2;
+  // Why a detached session is never ended automatically.
+  SessionKeepReason keep_reason = 3;
+}
+
+enum SessionKeepReason {
+  SESSION_KEEP_REASON_UNSPECIFIED = 0;
+  // A coding agent (Claude Code, Codex) holds the terminal foreground.
+  SESSION_KEEP_REASON_AGENT_RUNNING = 1;
+  // The foreground program could not be read, so it might be an agent.
+  SESSION_KEEP_REASON_FOREGROUND_UNKNOWN = 2;
+  // Managed agent fleet sessions end only through their lifecycle request.
+  SESSION_KEEP_REASON_MANAGED = 3;
 }
 
 // Point-in-time facts the daemon reads from the PTY while answering
