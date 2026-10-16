@@ -41,7 +41,7 @@ on:
         required: false
         default: false
       per_test_coverage:
-        description: "With coverage: also attribute executed functions to each test (#472). Adds processing time."
+        description: "With coverage: also attribute executed functions to each test and measure coverage without the pruning candidates (#472). Adds processing time."
         type: boolean
         required: false
         default: false
@@ -284,6 +284,32 @@ jobs:
           cargo llvm-cov report --lcov --output-path "$RUNNER_TEMP/suite-evidence/rust-lcov.info"
           "$RUNNER_TEMP/suite-evidence-parser/bin/python" script/test-suite-evidence "$RUNNER_TEMP/suite-evidence" \
             --source-root "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/suite-evidence/summary.json"
+        shell: bash
+
+      # #472: the same build and profiles, reported once more without the pruning
+      # candidates' per-test profiles. Nothing is deleted; the profiles are restored.
+      - name: Measure coverage without suite-pruning candidates
+        if: ${{ inputs.coverage && inputs.per_test_coverage && always() && steps.coverage_tests.outcome == 'success' }}
+        env:
+          CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
+        run: |
+          evidence="$RUNNER_TEMP/suite-evidence"
+          candidate="$evidence/without-pruning-candidates"
+          aside="$RUNNER_TEMP/pruning-candidate-profiles"
+          test -s "$evidence/summary.json" || { echo "::error::baseline summary.json missing"; exit 1; }
+          trap 'python3 script/test-suite-candidate-coverage restore --aside-dir "$aside" --target-dir "$CARGO_LLVM_COV_TARGET_DIR"' EXIT
+          python3 script/test-suite-candidate-coverage set-aside \
+            --candidates script/test-suite-pruning-candidates.tsv \
+            --manifest "$RUNNER_TEMP/per-test-coverage-manifest.tsv" \
+            --target-dir "$CARGO_LLVM_COV_TARGET_DIR" --aside-dir "$aside" \
+            --junit "$evidence/junit.xml" --candidate-dir "$candidate"
+          cp "$evidence/provenance.json" "$evidence/test-outcome.txt" "$candidate/"
+          cargo llvm-cov report --lcov --output-path "$candidate/rust-lcov.info"
+          "$RUNNER_TEMP/suite-evidence-parser/bin/python" script/test-suite-evidence "$candidate" \
+            --source-root "$GITHUB_WORKSPACE" > "$candidate/summary.json"
+          "$RUNNER_TEMP/suite-evidence-parser/bin/python" script/test-suite-candidate-coverage compare \
+            --baseline "$evidence/summary.json" --candidate "$candidate/summary.json" \
+            --selection "$candidate/selection.json" --output "$evidence/pruning-comparison.json"
         shell: bash
 
       - name: Upload Rust suite evidence
