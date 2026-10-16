@@ -679,25 +679,16 @@ fn usage_cache_fixture(codex_home: &Path) -> (Account, PathBuf, DateTime<Utc>) {
 }
 
 #[test]
-fn unchanged_codex_usage_rollout_is_parsed_once_across_cached_scans() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (account, _, since) = usage_cache_fixture(tmp.path());
-    let mut cache = CodexUsageCache::default();
-
-    let first = usage_for_account_with_cache(&account, since, &mut cache);
-    let second = usage_for_account_with_cache(&account, since, &mut cache);
-
-    assert_eq!(first, second);
-    assert_eq!(first.0.len(), 1);
-    assert_eq!(cache.parse_count, 1);
-}
-
-#[test]
-fn codex_usage_cache_rereads_changed_and_forgets_deleted_rollouts() {
+fn codex_usage_cache_parses_unchanged_rollouts_once_and_follows_changes() {
     let tmp = tempfile::tempdir().unwrap();
     let (account, rollout, since) = usage_cache_fixture(tmp.path());
     let mut cache = CodexUsageCache::default();
-    usage_for_account_with_cache(&account, since, &mut cache);
+
+    let first = usage_for_account_with_cache(&account, since, &mut cache);
+    let unchanged = usage_for_account_with_cache(&account, since, &mut cache);
+    assert_eq!(first, unchanged);
+    assert_eq!(first.0.len(), 1);
+    assert_eq!(cache.parse_count, 1);
 
     write(&rollout, &(token_count_line(10) + &token_count_line(20)));
     let (changed, _) = usage_for_account_with_cache(&account, since, &mut cache);

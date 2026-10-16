@@ -4352,17 +4352,17 @@ fn collect_agent_sessions(scan: LiveAgentScan) -> Vec<super::proto::AgentSession
 
 /// One `ListAgentSessions` reply: running sessions from a live scan plus the
 /// dormant rows of the latest completed account scan. Only the first account
-/// scan of this daemon is waited for, and at most
-/// [`AGENT_ACCOUNT_SCAN_FIRST_WAIT`].
+/// scan of this daemon is waited for, and at most `first_wait`.
 fn agent_session_inventory(
     inventory_cache: &Mutex<AgentInventoryScanCache>,
     account_scan_cache: &AgentAccountScanCache,
     requested_at: Instant,
+    first_wait: Duration,
     supports_account_routing: bool,
 ) -> CollectedAgentSessions {
     let live = scan_live_agents(inventory_cache, requested_at);
     let dormant = account_scan_cache
-        .latest(AGENT_ACCOUNT_SCAN_FIRST_WAIT)
+        .latest(first_wait)
         .map(|scan| scan.dormant_sessions)
         .unwrap_or_default();
     collect_agent_sessions_for_peer(live, dormant, supports_account_routing)
@@ -4830,6 +4830,7 @@ impl ServerModel {
                     &inventory_cache,
                     &account_scan_cache,
                     requested_at,
+                    AGENT_ACCOUNT_SCAN_FIRST_WAIT,
                     supports_account_routing,
                 )
             },

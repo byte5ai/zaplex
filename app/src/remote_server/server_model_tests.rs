@@ -975,36 +975,76 @@ fn session_inventory_within(
     let inventory_cache = std::sync::Arc::clone(inventory_cache);
     let account_scan_cache = std::sync::Arc::clone(account_scan_cache);
     std::thread::spawn(move || {
-        let collected =
-            agent_session_inventory(&inventory_cache, &account_scan_cache, requested_at, false);
+        let collected = agent_session_inventory(
+            &inventory_cache,
+            &account_scan_cache,
+            requested_at,
+            std::time::Duration::from_millis(20),
+            false,
+        );
         let _ = answered_tx.send(collected.sessions);
     });
     answered_rx.recv_timeout(deadline).ok()
 }
 
 #[test]
-fn slow_account_scan_does_not_make_live_inventory_unavailable() {
+fn slow_account_scan_blocks_neither_session_inventory_nor_account_listing() {
     let inventory_cache =
         std::sync::Arc::new(std::sync::Mutex::new(AgentInventoryScanCache::default()));
     let account_scan_cache = std::sync::Arc::new(AgentAccountScanCache::default());
     let requested_at = std::time::Instant::now();
-    // The live scan of this request, already taken: the reply must not need more.
+    // The live scan of these requests, already taken: a reply must not need more.
     inventory_cache
         .lock()
         .unwrap()
         .scan_with(requested_at, |_| live_scan(&["running"]));
-    let (release, scanning) = start_blocked_account_scan(&account_scan_cache, requested_at);
+    let deadline = std::time::Duration::from_secs(1);
 
+    // The daemon's first account scan is still running: running sessions answer.
+    let (release, scanning) = start_blocked_account_scan(&account_scan_cache, requested_at);
     let sessions = session_inventory_within(
         &inventory_cache,
         &account_scan_cache,
         requested_at,
-        std::time::Duration::from_secs(8),
+        deadline,
     )
-    .expect("the session inventory must answer while the account scan still runs");
+    .expect("the session inventory must answer while the first account scan runs");
     assert!(sessions
         .iter()
         .any(|session| session.session_id == "running" && session.state == "active"));
+    release.send(()).unwrap();
+    scanning.join().unwrap();
+
+    // A stale result starts the next refresh, which then holds its scan lock.
+    let stale = std::time::Instant::now() + AGENT_ACCOUNT_SCAN_MAX_AGE;
+    let (release, scanning) = start_blocked_account_scan(&account_scan_cache, stale);
+    let (listed_tx, listed_rx) = std::sync::mpsc::channel();
+    let listing_cache = std::sync::Arc::clone(&account_scan_cache);
+    std::thread::spawn(move || {
+        let _ = listed_tx.send(listing_cache.latest_or_refresh_with(|_| {
+            panic!("a completed account scan must answer the listing")
+        }));
+    });
+    let listed = listed_rx
+        .recv_timeout(deadline)
+        .expect("account listing must not wait for the running scan");
+    assert_eq!(
+        listed.dormant_sessions[0].session_id,
+        "dormant-after-release"
+    );
+    let sessions = session_inventory_within(
+        &inventory_cache,
+        &account_scan_cache,
+        requested_at,
+        deadline,
+    )
+    .expect("session inventory must not wait for the running scan");
+    assert!(sessions
+        .iter()
+        .any(|session| session.session_id == "running"));
+    assert!(sessions
+        .iter()
+        .any(|session| session.session_id == "dormant-after-release" && session.state == "idle"));
 
     release.send(()).unwrap();
     scanning.join().unwrap();
@@ -1034,53 +1074,6 @@ fn timed_out_scan_result_is_reused_by_next_cycle() {
 
     assert_eq!(scans, 1);
     assert_eq!(reused.dormant_sessions[0].session_id, "dormant");
-}
-
-#[test]
-fn inventory_and_account_listing_do_not_serialize_on_one_mutex() {
-    let inventory_cache =
-        std::sync::Arc::new(std::sync::Mutex::new(AgentInventoryScanCache::default()));
-    let account_scan_cache = std::sync::Arc::new(AgentAccountScanCache::default());
-    assert!(account_scan_cache.claim_refresh(std::time::Instant::now()));
-    account_scan_cache.refresh_with(|_| account_scan(&["dormant"]));
-    // A stale result starts the next refresh, which then holds its scan lock.
-    let stale = std::time::Instant::now() + AGENT_ACCOUNT_SCAN_MAX_AGE;
-    let (release, scanning) = start_blocked_account_scan(&account_scan_cache, stale);
-    let requested_at = std::time::Instant::now();
-    inventory_cache
-        .lock()
-        .unwrap()
-        .scan_with(requested_at, |_| live_scan(&["running"]));
-
-    // The account listing answers from the completed scan...
-    let (listed_tx, listed_rx) = std::sync::mpsc::channel();
-    let listing_cache = std::sync::Arc::clone(&account_scan_cache);
-    std::thread::spawn(move || {
-        let _ = listed_tx.send(listing_cache.latest_or_refresh_with(|_| {
-            panic!("a completed account scan must answer the listing")
-        }));
-    });
-    let listed = listed_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .expect("account listing must not wait for the running scan");
-    assert_eq!(listed.dormant_sessions[0].session_id, "dormant");
-    // ...and so does the session inventory, with the dormant history it holds.
-    let sessions = session_inventory_within(
-        &inventory_cache,
-        &account_scan_cache,
-        requested_at,
-        std::time::Duration::from_secs(1),
-    )
-    .expect("session inventory must not wait for the running scan");
-    assert!(sessions
-        .iter()
-        .any(|session| session.session_id == "running"));
-    assert!(sessions
-        .iter()
-        .any(|session| session.session_id == "dormant" && session.state == "idle"));
-
-    release.send(()).unwrap();
-    scanning.join().unwrap();
 }
 
 #[test]
@@ -1116,9 +1109,9 @@ fn failed_account_scan_releases_the_refresh_slot() {
     }));
     assert!(failed.is_err());
 
-    // Requests neither wait forever nor lose the ability to scan again.
-    assert!(cache.latest(std::time::Duration::from_secs(1)).is_none());
-    let recovered = cache.latest_or_refresh_with(|_| account_scan(&["recovered"]));
+    // The slot is free again: later requests neither wait forever nor stop refreshing.
+    assert!(cache.claim_refresh(std::time::Instant::now()));
+    let recovered = cache.refresh_with(|_| account_scan(&["recovered"]));
     assert_eq!(recovered.dormant_sessions[0].session_id, "recovered");
 }
 
