@@ -208,6 +208,20 @@ impl TerminalManager {
             model.clone(),
             ctx,
         );
+        // The event loop rejects input during attach and replay; queued writes
+        // such as in-band generators wait for its `Ready` phase instead.
+        let input_phase = event_loop.read(ctx, |event_loop, _| event_loop.input_phase());
+        pty_controller.update(ctx, |pty_controller, ctx| {
+            pty_controller.set_remote_input_phase(input_phase, ctx);
+        });
+        let weak_pty_controller = pty_controller.downgrade();
+        ctx.subscribe_to_model(&event_loop, move |_, phase, ctx| {
+            if let Some(pty_controller) = weak_pty_controller.upgrade(ctx) {
+                pty_controller.update(ctx, |pty_controller, ctx| {
+                    pty_controller.set_remote_input_phase(*phase, ctx);
+                });
+            }
+        });
 
         let cloned_model = model.clone();
         let prompt_type =

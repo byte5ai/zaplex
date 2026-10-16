@@ -14,7 +14,7 @@ use crate::terminal::model::session::{
 };
 use crate::terminal::model::tmux::commands::TmuxCommand;
 use crate::terminal::model_events::AnsiHandlerEvent;
-use crate::terminal::view::LINEFEED_REGEX;
+use crate::terminal::view::{RemoteInputPhase, LINEFEED_REGEX};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::writeable_pty::bootstrap_file::{permanent_bootstrap_file, TempBootstrapFile};
 use crate::terminal::{
@@ -27,7 +27,7 @@ use crate::terminal::{
 };
 use crate::SessionSettings;
 
-use super::Message;
+use super::{InBandCommandInput, Message};
 
 /// Byte sequence to emulate the user pressing ENTER, used to execute a command in the shell.
 const COMMAND_ENTER: &[u8] = &[escape_sequences::C0::CR, escape_sequences::C0::LF];
@@ -46,8 +46,10 @@ enum PtyWrite {
         /// The id if the command is an in-band command or `None` if the command is not an in-band
         /// command.
         in_band_command_id: Option<String>,
+        /// Cancels the in-band command if its event loop rejects the bytes.
+        cancel_tx: Option<Sender<InBandCommandCancelledEvent>>,
         /// If 'some', the given callback is called right before the bytes are written to the PTY.
-        before_write_fn: Option<Box<dyn Fn() + Send + 'static>>,
+        before_write_fn: Option<Box<dyn Fn() + Send + Sync + 'static>>,
     },
     Bytes {
         /// The bytes to be written.
@@ -107,6 +109,9 @@ pub struct PtyController<T: EventLoopSender> {
     bootstrap_file: Option<TempBootstrapFile>,
     tmux_control_mode: Option<TmuxControlMode>,
     in_flight_native_completions_state: Option<NativeShellCompletionsState>,
+    /// Input phase of a daemon-hosted PTY, whose event loop rejects input until
+    /// the phase is `Ready`. `None` for a PTY that accepts every write.
+    remote_input_phase: Option<RemoteInputPhase>,
 }
 
 impl<T: EventLoopSender> PtyController<T> {
@@ -274,7 +279,20 @@ impl<T: EventLoopSender> PtyController<T> {
             bootstrap_file: None,
             tmux_control_mode: None,
             in_flight_native_completions_state: None,
+            remote_input_phase: None,
         }
+    }
+
+    /// Binds queued writes to the input phase of a daemon-hosted PTY. Its event
+    /// loop rejects input during attach and replay, so writes stay queued until
+    /// the phase is `Ready` instead of being dropped there.
+    pub fn set_remote_input_phase(
+        &mut self,
+        phase: RemoteInputPhase,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.remote_input_phase = Some(phase);
+        self.execute_next_queued_write(ctx);
     }
 
     /// Sends bindkey to notify shell process to switch to PS1 logic for prompt
@@ -363,6 +381,7 @@ impl<T: EventLoopSender> PtyController<T> {
             command: command.to_owned(),
             shell_type,
             in_band_command_id: Some(command_id),
+            cancel_tx: Some(cancel_tx),
             before_write_fn: Some(Box::new(move || {
                 let mut terminal_model = terminal_model.lock();
                 terminal_model
@@ -378,6 +397,11 @@ impl<T: EventLoopSender> PtyController<T> {
     /// enqueue writes for later.
     fn can_write_to_pty(&self, ctx: &mut ModelContext<Self>) -> bool {
         self.line_editor_status.as_ref(ctx).is_line_editor_active()
+            // A daemon-hosted PTY rejects input until its remote phase is `Ready`, even if a
+            // replayed prompt made the line editor look active.
+            && self
+                .remote_input_phase
+                .is_none_or(|phase| phase == RemoteInputPhase::Ready)
             // If we're in the middle of a native completions request, we should not send any more
             // writes to the shell until we've sent the string to complete.
             && !self.in_flight_native_completions_state.as_ref().is_some_and(|state| state.is_awaiting_prompt())
@@ -387,7 +411,8 @@ impl<T: EventLoopSender> PtyController<T> {
     ///
     /// This is a no-op if the line editor is currently inactive; in the constructor of
     /// PtyController, a subscription is registered on `LineEditorStatus` which calls this function
-    /// when the line editor becomes active.
+    /// when the line editor becomes active. It is also a no-op while a daemon-hosted PTY is not
+    /// ready for input; [`Self::set_remote_input_phase`] calls it again on every phase change.
     fn execute_next_queued_write(&mut self, ctx: &mut ModelContext<Self>) {
         if !self.can_write_to_pty(ctx) {
             return;
@@ -589,6 +614,7 @@ impl<T: EventLoopSender> PtyController<T> {
             command: command.to_owned(),
             shell_type,
             in_band_command_id: None,
+            cancel_tx: None,
             before_write_fn: None,
         };
         if self.can_write_to_pty(ctx) {
@@ -669,12 +695,13 @@ impl<T: EventLoopSender> PtyController<T> {
     /// If the write corresponds to a command, this also calls
     /// [`LineEditorStatus::did_execute_command()`].
     fn send_write_to_event_loop(&mut self, write: PtyWrite, ctx: &mut ModelContext<Self>) {
-        let (bytes_to_write, is_for_command, on_write_fn, raw_tmux_command) = match write {
+        let (bytes_to_write, is_for_command, on_write_fn, in_band, raw_tmux_command) = match write {
             PtyWrite::Command {
                 command,
                 shell_type,
+                in_band_command_id,
+                cancel_tx,
                 before_write_fn: on_write_fn,
-                ..
             } => (
                 Cow::Owned(bytes_to_execute_command(
                     command.as_str(),
@@ -683,14 +710,15 @@ impl<T: EventLoopSender> PtyController<T> {
                 )),
                 true,
                 on_write_fn,
+                in_band_command_id.zip(cancel_tx),
                 false,
             ),
             PtyWrite::AgentInput { bytes, mode } => {
                 let decorated_bytes =
                     mode.decorate_bytes(bytes.into_owned(), self.is_bracketed_paste_enabled);
-                (decorated_bytes.into(), false, None, false)
+                (decorated_bytes.into(), false, None, None, false)
             }
-            PtyWrite::Bytes { bytes } => (bytes, false, None, false),
+            PtyWrite::Bytes { bytes } => (bytes, false, None, None, false),
             PtyWrite::TmuxCommand(command) => {
                 let command = command.get_command_string();
                 debug_assert!(
@@ -701,7 +729,7 @@ impl<T: EventLoopSender> PtyController<T> {
                     self.tmux_control_mode.is_some(),
                     "Received tmux command outside of control mode."
                 );
-                (command.into_bytes().into(), false, None, true)
+                (command.into_bytes().into(), false, None, None, true)
             }
             PtyWrite::RunNativeShellCompletions(state) => {
                 self.in_flight_native_completions_state = Some(state);
@@ -710,7 +738,7 @@ impl<T: EventLoopSender> PtyController<T> {
                 // then wait for an OSC-based signal from the shell before we
                 // send the text that needs to be completed.
                 let bytes = vec![0x19_u8];
-                (bytes.into(), false, None, false)
+                (bytes.into(), false, None, None, false)
             }
         };
 
@@ -741,11 +769,28 @@ impl<T: EventLoopSender> PtyController<T> {
                 });
         }
 
-        if let Some(on_write_fn) = on_write_fn {
-            on_write_fn();
-        }
+        let message = match (on_write_fn, in_band) {
+            // A daemon-hosted PTY can still reject these bytes. Its event loop marks the block
+            // only once it hands them to the PTY and cancels the command otherwise.
+            (Some(mark_block), Some((command_id, cancel_tx)))
+                if self.remote_input_phase.is_some() =>
+            {
+                Message::InBandCommand(InBandCommandInput::new(
+                    bytes_to_write,
+                    command_id,
+                    mark_block,
+                    cancel_tx,
+                ))
+            }
+            (on_write_fn, _) => {
+                if let Some(on_write_fn) = on_write_fn {
+                    on_write_fn();
+                }
+                Message::Input(bytes_to_write)
+            }
+        };
 
-        self.send_message_to_event_loop(Message::Input(bytes_to_write), ctx);
+        self.send_message_to_event_loop(message, ctx);
     }
 
     /// Sends a message to the event loop. If the send fails with `SendError::Disconnected`, emits
@@ -867,3 +912,7 @@ pub enum EventLoopSendError {
 pub trait EventLoopSender: 'static {
     fn send(&self, message: Message) -> Result<(), EventLoopSendError>;
 }
+
+#[cfg(test)]
+#[path = "pty_controller_tests.rs"]
+mod tests;

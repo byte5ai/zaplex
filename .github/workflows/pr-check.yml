@@ -389,6 +389,7 @@ jobs:
             remote_server::headless_connect::tests \
             remote_server::session_live::tests \
             terminal::daemon_tty::event_loop::tests \
+            terminal::writeable_pty::pty_controller::tests \
             provisional_daemon_adoption_cleanup_covers_connection_and_tab
           cargo test --locked -p remote_server --lib client::tests
           cargo test --locked -p zap_sftp --lib session::tests

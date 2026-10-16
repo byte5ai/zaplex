@@ -7,7 +7,7 @@ use crate::terminal::{
     event_listener::ChannelEventListener,
     model::{ansi::Processor, terminal_model::ExitReason},
     view::{RemoteInputPhase, TerminalView},
-    writeable_pty::Message as EventLoopMessage,
+    writeable_pty::{InBandCommandInput, Message as EventLoopMessage},
     SizeInfo, TerminalModel,
 };
 use async_channel::Receiver;
@@ -19,6 +19,7 @@ use remote_server::{
     },
 };
 use std::borrow::Cow;
+use std::fmt::Debug;
 use std::io::{self, Write};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -921,6 +922,9 @@ impl EventLoop {
                 view.set_remote_input_phase(phase, Some(connection_session_id), ctx);
             });
         }
+        // The PtyController holds queued writes, such as in-band generators,
+        // until this loop accepts input again.
+        ctx.emit(phase);
         ctx.notify();
     }
 
@@ -2432,10 +2436,14 @@ impl EventLoop {
 
     fn on_event_loop_message(&mut self, message: EventLoopMessage, ctx: &mut ModelContext<Self>) {
         if self.terminated {
+            if let EventLoopMessage::InBandCommand(command) = message {
+                command.rejected();
+            }
             return;
         }
         match message {
             EventLoopMessage::Input(bytes) => self.dispatch_user_input(bytes, ctx),
+            EventLoopMessage::InBandCommand(command) => self.dispatch_in_band_command(command, ctx),
             EventLoopMessage::Resize(size) => {
                 self.dispatch_or_buffer_control(EventLoopMessage::Resize(size), ctx)
             }
@@ -2520,6 +2528,50 @@ impl EventLoop {
         }
     }
 
+    /// In-band command bytes pass the same readiness gate as user input, but a
+    /// rejection is never silent: the command is cancelled so its executor
+    /// does not wait for output that cannot arrive.
+    fn dispatch_in_band_command(
+        &mut self,
+        command: InBandCommandInput,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(client) = self.client(ctx) else {
+            log::debug!(
+                "daemon_tty: cancelled an in-band command while the transport is unavailable"
+            );
+            command.rejected();
+            return;
+        };
+        self.deliver_in_band_command_with(command, |pty_session_id, bytes| {
+            client.send_session_input(pty_session_id.to_string(), bytes)
+        });
+    }
+
+    /// Deterministic seam of [`Self::dispatch_in_band_command`]. The active
+    /// block is marked only after the bytes were handed to the daemon; the
+    /// shell's echo can only be parsed in a later callback, so it still lands
+    /// in the in-band block. A replayed block is never marked.
+    fn deliver_in_band_command_with<E: Debug>(
+        &self,
+        command: InBandCommandInput,
+        dispatch: impl FnOnce(&str, Vec<u8>) -> Result<(), E>,
+    ) {
+        match self.try_deliver_user_input_with(command.bytes.clone(), dispatch) {
+            Ok(true) => command.delivered(),
+            Ok(false) => {
+                log::debug!(
+                    "daemon_tty: cancelled an in-band command before attach/replay/input readiness"
+                );
+                command.rejected();
+            }
+            Err(err) => {
+                log::error!("Failed to send an in-band command to daemon session: {err:?}");
+                command.rejected();
+            }
+        }
+    }
+
     fn dispatch_or_buffer_control(
         &mut self,
         message: EventLoopMessage,
@@ -2557,6 +2609,12 @@ impl EventLoop {
                 client.send_session_input(pty_session_id.to_string(), bytes.into_owned()),
                 None,
             ),
+            // In-band commands are settled by `dispatch_in_band_command` and
+            // never reach this path; reject rather than run a stale generator.
+            EventLoopMessage::InBandCommand(command) => {
+                command.rejected();
+                return;
+            }
             EventLoopMessage::Resize(size_info) => (
                 client.send_resize_session(
                     pty_session_id.to_string(),
@@ -3033,7 +3091,8 @@ impl EventLoop {
 }
 
 impl Entity for EventLoop {
-    type Event = ();
+    /// Every change of the remote input phase.
+    type Event = RemoteInputPhase;
 }
 
 #[cfg(test)]
