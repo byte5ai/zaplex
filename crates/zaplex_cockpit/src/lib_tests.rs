@@ -89,6 +89,91 @@ fn a_clean_empty_setup_is_loaded_not_degraded() {
 }
 
 #[test]
+fn live_scan_reports_running_sessions_without_dormant_history() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let codex_home = home.join(".codex");
+    let day = codex_home.join("sessions/2026/10/14");
+    fs::create_dir_all(&day).unwrap();
+    fs::write(
+        codex_home.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"account-1"}}"#,
+    )
+    .unwrap();
+    let now = Utc::now();
+    let rollout = |session_id: &str, at: chrono::DateTime<Utc>| {
+        [
+            serde_json::json!({
+                "type": "session_meta",
+                "timestamp": at.to_rfc3339(),
+                "payload": {"id": session_id, "cwd": "/tmp/project"}
+            }),
+            serde_json::json!({
+                "type": "event_msg",
+                "timestamp": at.to_rfc3339(),
+                "payload": {"type": "task_started"}
+            }),
+        ]
+        .map(|line| line.to_string() + "\n")
+        .concat()
+    };
+    fs::write(day.join("rollout-running.jsonl"), rollout("running", now)).unwrap();
+    let two_days_ago = now - chrono::Duration::days(2);
+    let dormant = day.join("rollout-dormant.jsonl");
+    fs::write(&dormant, rollout("dormant", two_days_ago)).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&dormant)
+        .unwrap()
+        .set_modified(two_days_ago.into())
+        .unwrap();
+
+    let snapshot = build_snapshot_with_claude_discovery(
+        &home,
+        &codex_home,
+        None,
+        now,
+        0,
+        0,
+        &PricingTable::default(),
+        &mut TranscriptScanCache::default(),
+        claude::discover_accounts_without_process_scan,
+    );
+    let live = scan_live_sessions_with_claude_discovery(
+        &home,
+        &codex_home,
+        None,
+        now,
+        &mut TranscriptScanCache::default(),
+        claude::discover_accounts_without_process_scan,
+    );
+
+    assert!(
+        snapshot
+            .accounts
+            .iter()
+            .flat_map(|account| &account.idle_sessions)
+            .any(|session| session.session_id == "dormant"),
+        "the full snapshot sees the dormant rollout"
+    );
+    let live_ids: Vec<&str> = live
+        .sessions
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect();
+    assert_eq!(live_ids, ["running"]);
+    assert_eq!(
+        live.accounts,
+        snapshot
+            .accounts
+            .iter()
+            .map(|account| account.account.clone())
+            .collect::<Vec<_>>(),
+        "both scans name the same accounts"
+    );
+}
+
+#[test]
 fn non_test_sources_use_file_backed_test_modules() {
     let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for entry in WalkDir::new(source_dir) {

@@ -290,6 +290,18 @@ fn empty_local_inventory_does_not_hide_scan_failures() {
     );
 }
 
+#[test]
+fn timed_out_remote_inventory_is_not_presented_as_temporary() {
+    crate::i18n::init(Some("en"));
+    let message = empty_inventory_message(AgentInventoryStatus::TimedOut, false);
+
+    assert_eq!(message, "The host takes too long to list AI sessions");
+    assert_ne!(
+        message,
+        empty_inventory_message(AgentInventoryStatus::Unavailable, false)
+    );
+}
+
 fn tree_agent(
     session_id: &str,
     cwd: &str,

@@ -63,6 +63,8 @@ use crate::cockpit::oauth::{self, OauthCache};
 use crate::cockpit::settings::{CockpitSettings, CockpitSettingsChangedEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::remote_server::agent_session::proto_to_snapshot;
+#[cfg(not(target_family = "wasm"))]
+use crate::remote_server::client::ClientError;
 use crate::remote_server::manager::{
     ConnectedDaemon, RemoteServerManager, RemoteServerManagerEvent,
 };
@@ -1184,6 +1186,22 @@ impl CockpitModel {
     }
 }
 
+/// Status of a host whose agent-inventory request failed. A request that ran
+/// past its deadline is reported as such, not as a passing outage: a host
+/// whose inventory is slower than the deadline misses it on every refresh.
+#[cfg(not(target_family = "wasm"))]
+fn failed_inventory_status(error: &ClientError) -> AgentInventoryStatus {
+    match error {
+        ClientError::Timeout(_) => AgentInventoryStatus::TimedOut,
+        ClientError::Disconnected
+        | ClientError::Protocol(_)
+        | ClientError::ResponseChannelClosed
+        | ClientError::UnexpectedResponse
+        | ClientError::ServerError { .. }
+        | ClientError::FileOperationFailed(_) => AgentInventoryStatus::Unavailable,
+    }
+}
+
 /// Each RPC has its own deadline and correlation cleanup in the client. All
 /// three inventories on a host, and all hosts, can progress independently.
 #[cfg(not(target_family = "wasm"))]
@@ -1266,7 +1284,7 @@ async fn refresh_remote_host(
                 "cockpit: agent inventory failed for {:?}: {error}",
                 daemon.host_label
             );
-            (AgentInventoryStatus::Unavailable, Vec::new())
+            (failed_inventory_status(&error), Vec::new())
         }
         None => (AgentInventoryStatus::Unsupported, Vec::new()),
     };

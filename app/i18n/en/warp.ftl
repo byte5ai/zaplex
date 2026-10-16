@@ -4037,6 +4037,7 @@ cockpit-host-no-local-agents = No local AI sessions
 cockpit-host-inventory-pending = Loading AI sessions…
 cockpit-host-inventory-unsupported = Update the host service to list AI sessions
 cockpit-host-inventory-unavailable = AI sessions are temporarily unavailable
+cockpit-host-inventory-timed-out = The host takes too long to list AI sessions
 cockpit-host-removed = removed from Connections
 cockpit-host-unverified = Connections registry unavailable
 cockpit-conductor-rest-show-both = { $running } running · { $idle } idle — show

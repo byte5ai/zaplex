@@ -97,6 +97,10 @@ pub enum AgentInventoryStatus {
     Unsupported,
     /// The daemon negotiated inventory, but the current request failed.
     Unavailable,
+    /// The daemon negotiated inventory, but did not answer within the client's
+    /// deadline. Kept apart from [`Self::Unavailable`] so a host that is too
+    /// slow on every refresh is not presented as briefly unavailable.
+    TimedOut,
 }
 
 /// Whether a host can currently be used as a navigation/routing target.

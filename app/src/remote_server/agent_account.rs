@@ -191,6 +191,16 @@ pub(crate) fn session_account_id(
 pub(crate) struct AccountInventoryScan {
     pub(crate) inventory: AgentAccountInventory,
     pub(crate) routes: AccountRoutes,
+    /// Dormant sessions of the scanned accounts. Running sessions come from
+    /// the [`LiveAgentScan`], which must not wait for this slower scan.
+    pub(crate) dormant_sessions: Vec<SessionSnapshot>,
+}
+
+/// Running sessions plus the opaque routes of every discovered account. It
+/// carries no account capacity: its accounts were never measured against usage.
+#[derive(Clone)]
+pub(crate) struct LiveAgentScan {
+    pub(crate) routes: AccountRoutes,
     pub(crate) sessions: Vec<SessionSnapshot>,
 }
 
@@ -282,7 +292,7 @@ pub(crate) fn scan_agent_accounts() -> AccountInventoryScan {
                 health_message: "daemon home directory is unavailable".to_string(),
             },
             routes: HashMap::new(),
-            sessions: Vec::new(),
+            dormant_sessions: Vec::new(),
         };
     };
 
@@ -315,7 +325,7 @@ pub(crate) fn scan_agent_accounts_with_cache(
                 health_message: "daemon home directory is unavailable".to_string(),
             },
             routes: HashMap::new(),
-            sessions: Vec::new(),
+            dormant_sessions: Vec::new(),
         };
     };
     let codex_home = std::env::var_os(CODEX_HOME)
@@ -335,29 +345,88 @@ pub(crate) fn scan_agent_accounts_with_cache(
     inventory_from_snapshot(snapshot)
 }
 
+/// Discovers the accounts and their running sessions without the usage and
+/// dormant-history scan, so its cost does not grow with transcript history.
+pub(crate) fn scan_live_agents_with_cache(
+    transcript_cache: &mut TranscriptScanCache,
+) -> LiveAgentScan {
+    let Some(home) = dirs::home_dir() else {
+        return LiveAgentScan {
+            routes: HashMap::new(),
+            sessions: Vec::new(),
+        };
+    };
+    let codex_home = std::env::var_os(CODEX_HOME)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"));
+    let claude_config_dir = std::env::var(CLAUDE_CONFIG_DIR).ok();
+    let scan = zaplex_cockpit::scan_live_sessions_with_cache(
+        &home,
+        &codex_home,
+        claude_config_dir.as_deref(),
+        chrono::Utc::now(),
+        transcript_cache,
+    );
+    LiveAgentScan {
+        routes: unique_account_routes(&scan.accounts),
+        sessions: scan.sessions,
+    }
+}
+
+/// The opaque route key and daemon-local launch target of one discovered
+/// account. `None` for a provider without launch routing.
+fn account_route(account: &Account) -> Option<(AccountRouteKey, AccountRouteTarget)> {
+    let provider = provider_name(account.provider)?;
+    Some((
+        AccountRouteKey {
+            provider: provider.to_string(),
+            account_id: stable_account_id(account),
+        },
+        AccountRouteTarget {
+            provider: provider.to_string(),
+            provider_account_id: account.provider_account_id.clone(),
+            config_dir: account.config_dir_pin().map(PathBuf::from),
+        },
+    ))
+}
+
+/// Routes of every account whose opaque id is unique. Colliding ids stay
+/// unroutable. The live scan and the account inventory both use this, so a
+/// session carries the same account id the inventory reports.
+fn unique_account_routes<'a>(accounts: impl IntoIterator<Item = &'a Account>) -> AccountRoutes {
+    let mut candidates: HashMap<AccountRouteKey, Option<AccountRouteTarget>> = HashMap::new();
+    for (key, target) in accounts.into_iter().filter_map(account_route) {
+        candidates
+            .entry(key)
+            .and_modify(|collided| *collided = None)
+            .or_insert(Some(target));
+    }
+    candidates
+        .into_iter()
+        .filter_map(|(key, target)| Some((key, target?)))
+        .collect()
+}
+
 fn inventory_from_snapshot(snapshot: CockpitSnapshot) -> AccountInventoryScan {
     let capacity_known = snapshot.health.is_loaded();
     let account_health = if capacity_known { "loaded" } else { "degraded" };
-    let mut candidates = Vec::new();
-    let mut counts: HashMap<AccountRouteKey, usize> = HashMap::new();
-    let mut sessions = Vec::new();
+    let routes = unique_account_routes(snapshot.accounts.iter().map(|usage| &usage.account));
+    let mut identity_collision = false;
+    let mut accounts = Vec::new();
+    let mut dormant_sessions = Vec::new();
 
     for mut usage in snapshot.accounts {
-        sessions.append(&mut usage.sessions);
-        sessions.append(&mut usage.idle_sessions);
-        let Some(provider) = provider_name(usage.account.provider) else {
+        dormant_sessions.append(&mut usage.idle_sessions);
+        let Some((key, _)) = account_route(&usage.account) else {
             continue;
         };
-        let account_id = stable_account_id(&usage.account);
-        let key = AccountRouteKey {
-            provider: provider.to_string(),
-            account_id: account_id.clone(),
-        };
-        *counts.entry(key.clone()).or_default() += 1;
-        let config_dir = usage.account.config_dir_pin().map(PathBuf::from);
-        let info = AgentAccountInfo {
-            provider: provider.to_string(),
-            account_id,
+        if !routes.contains_key(&key) {
+            identity_collision = true;
+            continue;
+        }
+        accounts.push(AgentAccountInfo {
+            provider: key.provider,
+            account_id: key.account_id,
             display_label: usage.account.label.clone(),
             email: usage.account.email.clone().unwrap_or_default(),
             organization: usage.account.org.clone().unwrap_or_default(),
@@ -373,27 +442,9 @@ fn inventory_from_snapshot(snapshot: CockpitSnapshot) -> AccountInventoryScan {
             }
             .to_string(),
             provider_account_id: usage.account.provider_account_id.clone(),
-        };
-        candidates.push((
-            key,
-            AccountRouteTarget {
-                provider: provider.to_string(),
-                provider_account_id: usage.account.provider_account_id.clone(),
-                config_dir,
-            },
-            info,
-        ));
+        });
     }
 
-    let identity_collision = counts.values().any(|count| *count != 1);
-    let mut routes = HashMap::new();
-    let mut accounts = Vec::new();
-    for (key, target, info) in candidates {
-        if counts.get(&key) == Some(&1) {
-            routes.insert(key, target);
-            accounts.push(info);
-        }
-    }
     accounts.sort_by(|left, right| {
         (&left.provider, &left.display_label, &left.account_id).cmp(&(
             &right.provider,
@@ -411,7 +462,7 @@ fn inventory_from_snapshot(snapshot: CockpitSnapshot) -> AccountInventoryScan {
             health_message,
         },
         routes,
-        sessions,
+        dormant_sessions,
     }
 }
 
