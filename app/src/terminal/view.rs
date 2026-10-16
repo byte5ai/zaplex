@@ -4240,8 +4240,12 @@ impl TerminalView {
                 // `RemoteServerManager` is a singleton, so every `TerminalView` receives every event.
                 // Filter for session-scoped events that are specifically tracked by this view.
                 // Host-scoped variants return `None` and pass through unfiltered.
+                // `NavigatedToDirectory` carries the id the navigation was sent with (a
+                // daemon-hosted shell's connection session); its arm matches it exactly.
                 if let Some(sid) = event.session_id() {
-                    if !me.sessions.as_ref(ctx).tracks_session(sid) {
+                    if !matches!(event, RemoteServerManagerEvent::NavigatedToDirectory { .. })
+                        && !me.sessions.as_ref(ctx).tracks_session(sid)
+                    {
                         return;
                     }
                 }
@@ -4454,10 +4458,14 @@ impl TerminalView {
                         ..
                     } => {
                         // Check if this navigation belongs to our active session
-                        // using exact session_id match (no CWD heuristics).
-                        let is_relevant = me
-                            .active_block_session_id()
-                            .is_some_and(|sid| sid == *nav_session_id);
+                        // using exact session_id match (no CWD heuristics). The
+                        // workspace navigates under the active session's
+                        // remote-server id, which is the connection session for a
+                        // daemon-hosted shell.
+                        let is_relevant = me.active_block_session_id().is_some_and(|sid| {
+                            me.sessions.as_ref(ctx).remote_server_session_id(sid)
+                                == *nav_session_id
+                        });
                         if is_relevant {
                             ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
                                 host_id: host_id.clone(),
