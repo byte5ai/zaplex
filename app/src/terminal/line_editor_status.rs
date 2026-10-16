@@ -66,6 +66,14 @@ impl LineEditorStatus {
         self.set_line_editor_inactive(ctx);
     }
 
+    /// Marks the line editor active as a shell prompt does, without needing a
+    /// session or the activation delay.
+    #[cfg(test)]
+    pub(super) fn mark_active_for_test(&mut self, ctx: &mut ModelContext<Self>) {
+        self.is_line_editor_active = true;
+        ctx.emit(LineEditorStatusEvent::Active);
+    }
+
     fn handle_model_event(&mut self, event: &ModelEvent, ctx: &mut ModelContext<Self>) {
         let Some(active_session_id) = self.model_event_dispatcher.as_ref(ctx).active_session_id()
         else {

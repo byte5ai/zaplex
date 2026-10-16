@@ -122,6 +122,14 @@ impl EventLoop {
                                 log::error!("Failed to send message to network-backed PTY {e:?}");
                             };
                         }
+                        // This loop never rejects input: mark the block and send.
+                        EventLoopMessage::InBandCommand(command) => {
+                            let bytes = command.bytes.to_vec();
+                            command.delivered();
+                            if let Err(e) = sink.send(Message::new_binary(bytes)).await {
+                                log::error!("Failed to send message to network-backed PTY {e:?}");
+                            };
+                        }
                         EventLoopMessage::Resize(size_info) => {
                             let size_change = WindowSizeChange {
                                 width: size_info.columns as u32,

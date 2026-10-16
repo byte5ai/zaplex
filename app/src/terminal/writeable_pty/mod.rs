@@ -9,5 +9,5 @@ pub mod pty_controller;
 pub mod remote_server_controller;
 pub mod terminal_manager_util;
 
-pub use message::Message;
+pub use message::{InBandCommandInput, Message};
 pub use pty_controller::{PtyController, PtyControllerEvent};

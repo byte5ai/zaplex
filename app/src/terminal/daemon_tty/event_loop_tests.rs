@@ -1,5 +1,6 @@
 use super::*;
 use crate::ai::blocklist::agent_view::AgentViewState;
+use crate::terminal::model::session::InBandCommandCancelledEvent;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -1600,7 +1601,8 @@ fn live_cursor_query_is_routed_back_as_session_input() {
             assert_eq!(me.pending_input.len(), 1);
             match &me.pending_input[0] {
                 EventLoopMessage::Input(bytes) => assert_eq!(&**bytes, b"\x1b[1;1R"),
-                EventLoopMessage::Resize(_)
+                EventLoopMessage::InBandCommand(_)
+                | EventLoopMessage::Resize(_)
                 | EventLoopMessage::Shutdown
                 | EventLoopMessage::ChildExited => {
                     panic!("the terminal reply must be queued as session input")
@@ -2247,7 +2249,8 @@ fn pending_buffer_never_evicts_unacknowledged_startup_command() {
         .iter()
         .map(|message| match message {
             EventLoopMessage::Input(bytes) => bytes.len(),
-            EventLoopMessage::Resize(_)
+            EventLoopMessage::InBandCommand(_)
+            | EventLoopMessage::Resize(_)
             | EventLoopMessage::Shutdown
             | EventLoopMessage::ChildExited => 0,
         })
@@ -3066,6 +3069,142 @@ fn large_attach_replay_yields_with_model_unlocked_between_chunks() {
             assert!(!me.awaiting_attach_snapshot);
             assert!(me.terminated, "the buffered exit applies after all output");
         });
+    });
+}
+
+const IN_BAND_GENERATOR: &[u8] = b"warp_run_generator_command 1700000000000002 'compgen -c'\r";
+
+/// An in-band command as the PtyController sends it to a daemon-hosted PTY:
+/// delivery marks the active block exactly like the controller's hook.
+fn in_band_command(
+    model: &Arc<FairMutex<TerminalModel>>,
+    command_id: &str,
+    cancel_tx: &async_channel::Sender<InBandCommandCancelledEvent>,
+) -> InBandCommandInput {
+    let model = model.clone();
+    InBandCommandInput::new(
+        Cow::Borrowed(IN_BAND_GENERATOR),
+        command_id.to_string(),
+        Box::new(move || {
+            model
+                .lock()
+                .block_list_mut()
+                .start_active_block_for_in_band_command();
+        }),
+        cancel_tx.clone(),
+    )
+}
+
+fn cancelled_command_ids(
+    cancel_rx: &async_channel::Receiver<InBandCommandCancelledEvent>,
+) -> Vec<String> {
+    let mut command_ids = Vec::new();
+    while let Ok(event) = cancel_rx.try_recv() {
+        command_ids.push(event.command_id);
+    }
+    command_ids
+}
+
+fn in_band_block_marked(model: &Arc<FairMutex<TerminalModel>>) -> bool {
+    let model = model.lock();
+    model.block_list().is_writing_or_executing_in_band_command()
+        || model.block_list().active_block().is_in_band_command_block()
+}
+
+/// #530: an in-band generator that reaches the loop between replay chunks is
+/// neither delivered nor allowed to mark the block the replay is parsing. It
+/// is cancelled, so its executor stops waiting. Once input is ready, a
+/// generator is delivered and only then marks the live block.
+#[test]
+fn in_band_command_between_replay_chunks_is_cancelled_without_marking() {
+    App::test((), |mut app| async move {
+        let conn = SessionId::from(66u64);
+        let (_manager, event_loop, model, wakeups_rx) = start_adopted_loop(&mut app, conn);
+        let (cancel_tx, cancel_rx) = async_channel::unbounded();
+
+        event_loop.update(&mut app, |me, ctx| {
+            me.on_session_attached(
+                SessionAttached {
+                    session_id: OUR_PTY.to_string(),
+                    size: None,
+                    base_seq: 0,
+                    replay: vec![b'x'; ATTACH_PARSE_CHUNK_BYTES * 3 + 17],
+                    bootstrap_preamble: Vec::new(),
+                    generation: 7,
+                    agent_binding: None,
+                },
+                true,
+                ctx,
+            );
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(me.pending_attach_replay.is_some());
+            assert_eq!(me.input_phase(), RemoteInputPhase::Replay);
+        });
+
+        // The readiness gate rejects the bytes before any transport is
+        // involved; the input channel cancels them instead of dropping them.
+        let mut dispatched = Vec::new();
+        event_loop.update(&mut app, |me, ctx| {
+            me.deliver_in_band_command_with(
+                in_band_command(&model, "during-replay", &cancel_tx),
+                |pty_session_id, bytes| {
+                    dispatched.push((pty_session_id.to_string(), bytes));
+                    Ok::<(), ()>(())
+                },
+            );
+            me.on_event_loop_message(
+                EventLoopMessage::InBandCommand(in_band_command(
+                    &model,
+                    "via-input-channel",
+                    &cancel_tx,
+                )),
+                ctx,
+            );
+        });
+        event_loop.read(&app, |me, _| {
+            assert!(
+                me.pending_attach_replay.is_some(),
+                "the generators arrived between two replay chunks"
+            );
+        });
+        assert!(
+            dispatched.is_empty(),
+            "nothing is delivered before input readiness"
+        );
+        assert_eq!(
+            cancelled_command_ids(&cancel_rx),
+            ["during-replay", "via-input-channel"],
+            "every rejected generator is cancelled"
+        );
+        assert!(
+            !in_band_block_marked(&model),
+            "a rejected generator marks no block and raises no in-flight count"
+        );
+
+        wait_for_attach_replay(&event_loop, &app, &wakeups_rx).await;
+        event_loop.update(&mut app, |me, _ctx| {
+            assert_eq!(me.input_phase(), RemoteInputPhase::Ready);
+            me.deliver_in_band_command_with(
+                in_band_command(&model, "after-ready", &cancel_tx),
+                |pty_session_id, bytes| {
+                    dispatched.push((pty_session_id.to_string(), bytes));
+                    Ok::<(), ()>(())
+                },
+            );
+        });
+        assert_eq!(
+            dispatched,
+            [(OUR_PTY.to_string(), IN_BAND_GENERATOR.to_vec())]
+        );
+        assert!(
+            cancelled_command_ids(&cancel_rx).is_empty(),
+            "a delivered generator is not cancelled"
+        );
+        assert!(
+            in_band_block_marked(&model),
+            "delivery marks the live block for the generator's output"
+        );
     });
 }
 
