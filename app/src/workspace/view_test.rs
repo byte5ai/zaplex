@@ -5558,22 +5558,22 @@ fn daemon_identity_indexing_requests_the_coalesced_app_state_save_last() {
         .map(|offset| start + offset)
         .unwrap();
     let body = &source[start..end];
-    let claim = body.find("claim_daemon_pty(").unwrap();
+    let claim = body.find("if !self.settle_opened_daemon_claim(").unwrap();
     let identity = body.find("set_terminal_remote_identity(").unwrap();
     let save = body
         .rfind("ctx.dispatch_global_action(\"workspace:save_app\", ());")
         .unwrap();
-    let collision_cleanup = &body[claim..identity];
+    let collision_cleanup = &body[body.find("fn settle_opened_daemon_claim(").unwrap()..];
 
     assert!(claim < identity);
     assert!(save > identity);
+    assert!(body[claim..identity].contains("return;"));
     assert!(body.contains("daemon_connection_pane_for_terminal_view("));
     assert!(collision_cleanup.contains("retire_competing_daemon_surface("));
     assert!(collision_cleanup.contains("if !existing.shares_connection_with(&owner)"));
     assert!(collision_cleanup.contains("deregister_session(connection_session_id, false, ctx)"));
     assert!(collision_cleanup.contains("focus_daemon_claim_owner(&existing, ctx)"));
     assert!(collision_cleanup.contains("owns_same_terminal_surface(&owner)"));
-    assert!(collision_cleanup.contains("return;"));
 }
 
 #[test]
@@ -6321,6 +6321,84 @@ fn retry_claim_takes_over_only_from_an_unreachable_owner() {
         drop(orphaned_group);
         crate::app_state::release_daemon_pty_claim_for_connection(conn);
         crate::app_state::release_daemon_pty_claim_for_connection(retry_conn);
+    });
+}
+
+/// Records every daemon connection the remote-server manager deregisters.
+#[cfg(unix)]
+fn record_deregistered_sessions(app: &mut App) -> Arc<std::sync::Mutex<Vec<SessionId>>> {
+    let deregistered = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = deregistered.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_model(&RemoteServerManager::handle(ctx), move |_, event, _| {
+            if let crate::remote_server::manager::RemoteServerManagerEvent::SessionDeregistered {
+                session_id,
+            } = event
+            {
+                observed.lock().unwrap().push(*session_id);
+            }
+        });
+    });
+    deregistered
+}
+
+/// The event loop fails a surface that lost the PTY claim before its deferred
+/// `SessionOpened` reaches the workspace. That open must still discard the
+/// surface, drop its connection and focus the PTY's owner.
+#[cfg(unix)]
+#[test]
+fn deferred_open_of_a_failed_surface_yields_to_the_pty_owner() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let deregistered = record_deregistered_sessions(&mut app);
+        let conn = warp_core::SessionId::from(911u64);
+        let losing_conn = warp_core::SessionId::from(912u64);
+        let route = hidden_owner_test_route();
+        let binding = daemon_adoption_key("daemon-open-conflict", &route, "pty-conflict", 13);
+        workspace.update(&mut app, |workspace, ctx| {
+            let (owner_group, owner) = add_claimed_daemon_tab(workspace, conn, &binding, ctx);
+            let (losing_group, losing_pane, losing_view) =
+                add_adopted_daemon_tab(workspace, losing_conn, ctx);
+            workspace
+                .daemon_session_hosts
+                .insert(losing_conn, "conflict.example.test".to_string());
+            // What `finish_failed_startup` leaves once the event loop saw the conflict.
+            losing_view.update(ctx, |view, ctx| {
+                view.set_remote_input_phase(
+                    crate::terminal::view::RemoteInputPhase::Failed,
+                    Some(losing_conn),
+                    ctx,
+                );
+            });
+            workspace.activate_tab(0, ctx);
+            let tab_count = workspace.tabs.len();
+
+            assert!(!workspace.settle_opened_daemon_claim(
+                losing_conn,
+                &losing_group,
+                losing_pane,
+                &losing_view,
+                &binding,
+                ctx,
+            ));
+
+            assert_eq!(workspace.tabs.len(), tab_count - 1);
+            assert!(!workspace
+                .tabs
+                .iter()
+                .any(|tab| tab.pane_group.id() == losing_group.id()));
+            assert_eq!(workspace.active_tab_pane_group().id(), owner_group.id());
+            assert!(!workspace.daemon_session_hosts.contains_key(&losing_conn));
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .and_then(|claim| claim.terminal_view_id),
+                owner.terminal_view_id
+            );
+        });
+        assert_eq!(*deregistered.lock().unwrap(), vec![losing_conn]);
+        crate::app_state::release_daemon_pty_claim_for_connection(conn);
+        crate::app_state::release_daemon_pty_claim_for_connection(losing_conn);
     });
 }
 

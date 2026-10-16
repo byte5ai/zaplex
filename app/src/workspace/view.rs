@@ -14117,57 +14117,21 @@ impl Workspace {
             );
             return;
         };
-        if terminal_view.as_ref(ctx).remote_input_has_failed() {
-            return;
-        }
         let binding_key = daemon_adoption_key(
             descriptor.host_id.as_str(),
             &descriptor.daemon_runtime,
             pty_session_id,
             generation,
         );
-        let owner = DaemonPtyClaimOwner {
-            terminal_view_id: Some(terminal_view.id()),
+        if !self.settle_opened_daemon_claim(
             connection_session_id,
-            terminal_view: Some(terminal_view.downgrade()),
-        };
-        match claim_daemon_pty(binding_key, owner.clone(), ctx) {
-            DaemonPtyClaimOutcome::Existing(existing)
-                if !existing.owns_same_terminal_surface(&owner) =>
-            {
-                log::warn!(
-                    "daemon PTY {pty_session_id} was claimed while this surface was opening; \
-                     discarding the duplicate surface"
-                );
-                let pane_group_id = pane_group.id();
-                let opened_new_tab = pane_group.as_ref(ctx).visible_pane_ids().len() == 1;
-                self.retire_competing_daemon_surface(
-                    connection_session_id,
-                    pane_group_id,
-                    pane_id,
-                    opened_new_tab,
-                    ctx,
-                );
-                if !existing.shares_connection_with(&owner) {
-                    self.daemon_session_servers.remove(&connection_session_id);
-                    self.daemon_session_hosts.remove(&connection_session_id);
-                    #[cfg(feature = "local_tty")]
-                    self.sftp_file_service_sessions
-                        .retain(|_, candidate| *candidate != connection_session_id);
-                    #[cfg(feature = "local_tty")]
-                    forget_daemon_node_session(
-                        &mut self.daemon_node_sessions,
-                        connection_session_id,
-                    );
-                    release_daemon_pty_claim_for_connection(connection_session_id);
-                    RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
-                        manager.deregister_session(connection_session_id, false, ctx)
-                    });
-                }
-                self.focus_daemon_claim_owner(&existing, ctx);
-                return;
-            }
-            DaemonPtyClaimOutcome::Claimed | DaemonPtyClaimOutcome::Existing(_) => {}
+            &pane_group,
+            pane_id,
+            &terminal_view,
+            &binding_key,
+            ctx,
+        ) {
+            return;
         }
         self.bind_ssh_pane_node(
             &pane_group,
@@ -14198,6 +14162,78 @@ impl Workspace {
             },
         );
         ctx.dispatch_global_action("workspace:save_app", ());
+    }
+
+    /// Settles the PTY claim of a surface whose daemon session has just opened
+    /// and returns whether that surface keeps the PTY. When another surface
+    /// owns the PTY, this surface is discarded, its connection is dropped unless
+    /// the owner shares it, and the owner is focused.
+    #[cfg(unix)]
+    fn settle_opened_daemon_claim(
+        &mut self,
+        connection_session_id: SessionId,
+        pane_group: &ViewHandle<PaneGroup>,
+        pane_id: PaneId,
+        terminal_view: &ViewHandle<TerminalView>,
+        binding_key: &DaemonPtyIdentity,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let owner = DaemonPtyClaimOwner {
+            terminal_view_id: Some(terminal_view.id()),
+            connection_session_id,
+            terminal_view: Some(terminal_view.downgrade()),
+        };
+        let input_failed = terminal_view.as_ref(ctx).remote_input_has_failed();
+        // A failed surface never claims the PTY. Its event loop fails it right
+        // after reporting the open when another surface already owns the PTY,
+        // so that owner must still take over here.
+        let outcome = if input_failed {
+            match daemon_pty_claim(binding_key, ctx) {
+                Some(existing) => DaemonPtyClaimOutcome::Existing(existing),
+                None => return false,
+            }
+        } else {
+            claim_daemon_pty(binding_key.clone(), owner.clone(), ctx)
+        };
+        match outcome {
+            DaemonPtyClaimOutcome::Existing(existing)
+                if !existing.owns_same_terminal_surface(&owner) =>
+            {
+                let pty_session_id = &binding_key.pty_session_id;
+                log::warn!(
+                    "daemon PTY {pty_session_id} was claimed while this surface was opening; \
+                     discarding the duplicate surface"
+                );
+                let pane_group_id = pane_group.id();
+                let opened_new_tab = pane_group.as_ref(ctx).visible_pane_ids().len() == 1;
+                self.retire_competing_daemon_surface(
+                    connection_session_id,
+                    pane_group_id,
+                    pane_id,
+                    opened_new_tab,
+                    ctx,
+                );
+                if !existing.shares_connection_with(&owner) {
+                    self.daemon_session_servers.remove(&connection_session_id);
+                    self.daemon_session_hosts.remove(&connection_session_id);
+                    #[cfg(feature = "local_tty")]
+                    self.sftp_file_service_sessions
+                        .retain(|_, candidate| *candidate != connection_session_id);
+                    #[cfg(feature = "local_tty")]
+                    forget_daemon_node_session(
+                        &mut self.daemon_node_sessions,
+                        connection_session_id,
+                    );
+                    release_daemon_pty_claim_for_connection(connection_session_id);
+                    RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.deregister_session(connection_session_id, false, ctx)
+                    });
+                }
+                self.focus_daemon_claim_owner(&existing, ctx);
+                false
+            }
+            DaemonPtyClaimOutcome::Claimed | DaemonPtyClaimOutcome::Existing(_) => !input_failed,
+        }
     }
 
     /// Adopts an already-running daemon session in a new tab: attaches to
