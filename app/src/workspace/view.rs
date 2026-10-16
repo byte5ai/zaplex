@@ -13755,21 +13755,22 @@ impl Workspace {
     }
 
     /// Focuses an already-open exact daemon binding. Agent-backed bindings still
-    /// revalidate the foreground agent before moving focus. Returns false when
+    /// revalidate the foreground agent before moving focus. Returns `None` when
     /// the caller must open the PTY itself: nothing holds it, or its owner was
-    /// unreachable and has just been retired.
+    /// unreachable and has just been retired. Otherwise an owner holds the PTY
+    /// and the caller must not open it again; the result tells whether its tab
+    /// is focused now. A failed focus has already told the user why, and an
+    /// agent binding is only focused once its revalidation succeeds.
     #[cfg(unix)]
     fn focus_existing_adopted_daemon_session(
         &mut self,
         binding_key: &DaemonPtyIdentity,
         expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         ctx: &mut ViewContext<Self>,
-    ) -> bool {
-        let Some(owner) = daemon_pty_claim(binding_key, ctx) else {
-            return false;
-        };
+    ) -> Option<bool> {
+        let owner = daemon_pty_claim(binding_key, ctx)?;
         if self.retire_unreachable_daemon_claim_owner(&owner, ctx) {
-            return false;
+            return None;
         }
         if let Some(expected_agent_binding) = expected_agent_binding {
             self.validate_and_focus_adopted_agent_session(
@@ -13778,14 +13779,13 @@ impl Workspace {
                 expected_agent_binding,
                 ctx,
             );
-            return true;
+            return Some(false);
         }
         log::info!(
             "daemon adopt: session {} already open — focusing its tab",
             binding_key.pty_session_id
         );
-        self.focus_daemon_claim_owner(&owner, ctx);
-        true
+        Some(self.focus_daemon_claim_owner(&owner, ctx))
     }
 
     #[cfg(unix)]
@@ -14334,11 +14334,14 @@ impl Workspace {
             pty_generation,
         );
         let registry_node_id = server.node_id.clone();
-        if self.focus_existing_adopted_daemon_session(
-            &binding_key,
-            expected_agent_binding.clone(),
-            ctx,
-        ) {
+        if self
+            .focus_existing_adopted_daemon_session(
+                &binding_key,
+                expected_agent_binding.clone(),
+                ctx,
+            )
+            .is_some()
+        {
             return;
         }
 
