@@ -4375,6 +4375,13 @@ pub struct ClosedWindowData {
     fullscreen_state: FullscreenState,
 }
 
+impl ClosedWindowData {
+    /// Whether the view with the given id belongs to this closed window.
+    pub fn contains_view(&self, view_id: EntityId) -> bool {
+        self.view_to_window.contains_key(&view_id)
+    }
+}
+
 impl AppContext {
     pub fn font_cache(&self) -> &fonts::Cache {
         fonts::Cache::as_ref(self)

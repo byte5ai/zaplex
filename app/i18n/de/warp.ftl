@@ -790,6 +790,7 @@ workspace-left-panel-ssh-manager-session-end-changed = Diese Session hat sich in
 workspace-left-panel-ssh-manager-session-end-failed = Diese Session konnte nicht beendet werden: { $detail }
 workspace-left-panel-ssh-manager-session-host-missing = Dieser Host existiert nicht mehr unter Verbindungen
 workspace-left-panel-ssh-manager-session-open-error = Diese Session konnte nicht geöffnet werden: { $detail }
+workspace-left-panel-ssh-manager-session-stale = Diese Session hat sich geändert oder existiert nicht mehr. Die Sessionliste wird neu geladen.
 workspace-left-panel-ssh-manager-sessions-refreshing = Sessions werden aktualisiert…
 workspace-left-panel-ssh-manager-sessions-timeout = Die Sessionliste konnte innerhalb von { $seconds } Sekunden nicht geladen werden. Aktualisiere die Sessions, um es erneut zu versuchen.
 workspace-left-panel-ssh-manager-sessions-needs-install = Verbinde zuerst den Host, um den Zaplex-Sitzungsdienst einzurichten. Aktualisiere danach die Sessions.

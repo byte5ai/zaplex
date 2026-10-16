@@ -75,6 +75,8 @@ use crate::terminal::view::{terminal_identity, TerminalIdentity};
 use crate::ui_components::compact_row_action::CompactRowAction;
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
+use crate::view_components::DismissibleToast;
+use crate::workspace::ToastStack;
 
 // ---- visual constants (see Drive) ----
 const TOOLBAR_BUTTON_SIZE: f32 = 26.0;
@@ -2087,6 +2089,7 @@ impl SshManagerPanel {
                 })
             })
         else {
+            self.reload_stale_session_list(node_id, ctx);
             return;
         };
         let expected_host_id = session.host_id.clone();
@@ -2234,6 +2237,24 @@ impl SshManagerPanel {
                 },
             );
         }
+    }
+
+    /// A session row was picked from a list that no longer matches the host's
+    /// inventory, e.g. after a daemon restart changed a PTY generation. Say so
+    /// and reload the list, so the session can be picked again if it still
+    /// exists.
+    fn reload_stale_session_list(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |stack, ctx| {
+            stack.add_ephemeral_toast(
+                DismissibleToast::default(crate::t!(
+                    "workspace-left-panel-ssh-manager-session-stale"
+                )),
+                window_id,
+                ctx,
+            );
+        });
+        self.fetch_sessions(node_id, ctx);
     }
 
     fn sync_session_open_actions(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
@@ -4563,6 +4584,14 @@ impl TypedActionView for SshManagerPanel {
                 if let Some(action) = self.session_row_action(key) {
                     self.focused_row = Some(FocusedRow::Session(key.clone()));
                     self.handle_action(&action, ctx);
+                } else if let Some(node_id) = self
+                    .nodes
+                    .iter()
+                    .find(|node| key.starts_with(&format!("{}:", node.id)))
+                    .map(|node| node.id.clone())
+                {
+                    // The row was rendered before its host's session list changed.
+                    self.reload_stale_session_list(node_id, ctx);
                 }
             }
             SshManagerPanelAction::FocusPrevious => self.move_focus(false, ctx),
