@@ -6,9 +6,10 @@ use std::{
         Arc, Barrier, Mutex,
     },
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
+use anyhow::anyhow;
 use diesel::{
     connection::SimpleConnection, sql_types::Text, sqlite::SqliteConnection, Connection,
     ExpressionMethods, QueryDsl, RunQueryDsl,
@@ -31,7 +32,10 @@ use crate::{
     cloud_object::{ObjectIdType, Owner, StoredObjectPermissions},
     code::editor_management::CodeSource,
     notebooks::{NotebookObject, NotebookObjectModel},
-    persistence::{model::ObjectPermissions, schema, BlockCompleted, ModelEvent},
+    persistence::{
+        model::ObjectPermissions, schema, startup_error_detail, BlockCompleted, ModelEvent,
+        StartupBlocker,
+    },
     server::ids::{ClientId, ServerId, SyncId},
     server_time::ServerTimestamp,
     tab::SelectedTabColor,
@@ -47,7 +51,7 @@ use super::{
     read_sqlite_data, save_app_state, save_workspaces, setup_database,
     should_copy_legacy_zap_sqlite, snapshot_sqlite_database,
     snapshot_sqlite_database_with_page_limit, take_prewarmed_result, upsert_notebooks,
-    PrewarmState,
+    PrewarmState, SQLITE_SNAPSHOT_LOCK_RETRY_WINDOW,
 };
 
 #[test]
@@ -1088,6 +1092,22 @@ fn sqlite_migration_lock_waits_for_a_concurrent_start_to_finish() {
     drop(next);
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn sqlite_migration_lock_held_past_the_wait_is_reported_as_locked() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let target_db = tempdir.path().join("warp.sqlite");
+    let _first = super::lock_sqlite_migration(&target_db).expect("first start should acquire lock");
+
+    let error = super::lock_sqlite_migration_with_timeout(&target_db, Duration::ZERO)
+        .expect_err("a held lock should stop the second start after its wait");
+
+    assert!(matches!(
+        error.downcast_ref::<StartupBlocker>(),
+        Some(StartupBlocker::MigrationLocked)
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn sqlite_snapshot_creates_private_destination() {
@@ -1183,12 +1203,150 @@ fn incomplete_sqlite_snapshot_rolls_back_existing_target() {
     }
     let _target_connection = create_migration_test_database(&target_db, &["keep-target"], true);
 
-    let error = snapshot_sqlite_database_with_page_limit(&source_db, &target_db, 1)
+    let error = snapshot_sqlite_database_with_page_limit(&source_db, &target_db, 1, Duration::ZERO)
         .expect_err("one backup page should not complete the snapshot");
 
     assert!(error.to_string().contains("did not complete"));
     assert!(error.to_string().contains("step status 0"));
     assert_eq!(migration_test_values(&target_db), vec!["keep-target"]);
+}
+
+#[test]
+fn sqlite_snapshot_waits_for_a_transient_source_lock() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let source_db = tempdir.path().join("source.sqlite");
+    let target_db = tempdir.path().join("target.sqlite");
+    drop(create_migration_test_database(
+        &source_db,
+        &["locked-source"],
+        false,
+    ));
+    let locked = Arc::new(Barrier::new(2));
+    let holder = {
+        let locked = Arc::clone(&locked);
+        let source_db = source_db.clone();
+        thread::spawn(move || {
+            let mut connection =
+                SqliteConnection::establish(source_db.to_str().expect("test path is UTF-8"))
+                    .expect("lock holder should open the source");
+            connection
+                .batch_execute("BEGIN EXCLUSIVE;")
+                .expect("lock holder should lock the source");
+            locked.wait();
+            // Outlast the busy timeout of a single backup attempt.
+            thread::sleep(Duration::from_secs(2));
+            connection
+                .batch_execute("COMMIT;")
+                .expect("lock holder should release the source");
+        })
+    };
+    locked.wait();
+
+    snapshot_sqlite_database(&source_db, &target_db)
+        .expect("snapshot should wait for a lock released within the retry window");
+
+    holder.join().expect("lock holder should finish");
+    assert_eq!(migration_test_values(&target_db), vec!["locked-source"]);
+}
+
+#[test]
+fn sqlite_snapshot_reports_a_lock_that_outlasts_the_retry_window() {
+    crate::i18n::init(Some("en"));
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let source_db = tempdir.path().join("source.sqlite");
+    let target_db = tempdir.path().join("target.sqlite");
+    drop(create_migration_test_database(
+        &source_db,
+        &["locked-source"],
+        false,
+    ));
+    drop(create_migration_test_database(
+        &target_db,
+        &["keep-target"],
+        false,
+    ));
+    let mut holder = SqliteConnection::establish(source_db.to_str().expect("test path is UTF-8"))
+        .expect("lock holder should open the source");
+    holder
+        .batch_execute("BEGIN EXCLUSIVE;")
+        .expect("lock holder should lock the source");
+
+    let error = snapshot_sqlite_database_with_page_limit(
+        &source_db,
+        &target_db,
+        -1,
+        Duration::from_millis(100),
+    )
+    .expect_err("a lock that outlasts the retry window should stop the snapshot");
+
+    holder
+        .batch_execute("COMMIT;")
+        .expect("lock holder should release the source");
+    assert!(matches!(
+        error.downcast_ref::<StartupBlocker>(),
+        Some(StartupBlocker::LegacyDatabaseLocked(path)) if path == &source_db
+    ));
+    assert_eq!(migration_test_values(&target_db), vec!["keep-target"]);
+    let detail = startup_error_detail(&error);
+    assert!(detail.contains(&format!("\u{2068}{}\u{2069}", source_db.display())));
+    assert!(detail.contains("database is locked"));
+}
+
+#[test]
+fn damaged_sqlite_source_stops_the_snapshot_without_lock_retries() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let source_db = tempdir.path().join("source.sqlite");
+    let target_db = tempdir.path().join("target.sqlite");
+    fs::write(&source_db, b"not a sqlite database").expect("damaged source should be written");
+
+    let started = Instant::now();
+    let error = snapshot_sqlite_database(&source_db, &target_db)
+        .expect_err("a damaged source should stop the snapshot");
+
+    assert!(started.elapsed() < SQLITE_SNAPSHOT_LOCK_RETRY_WINDOW);
+    assert!(matches!(
+        error.downcast_ref::<StartupBlocker>(),
+        Some(StartupBlocker::LegacyDatabaseCopyFailed(path)) if path == &source_db
+    ));
+}
+
+/// Returns the dialog explanation without the technical error that every variant appends.
+fn startup_error_explanation(error: &anyhow::Error) -> String {
+    let detail = startup_error_detail(error);
+    let technical_error = format!("\u{2068}{error:#}\u{2069}");
+    detail
+        .strip_suffix(&technical_error)
+        .unwrap_or_else(|| panic!("dialog should end with the technical error: {detail:?}"))
+        .to_owned()
+}
+
+#[test]
+fn startup_error_dialog_explains_each_blocker_and_keeps_the_technical_error() {
+    crate::i18n::init(Some("en"));
+    let source_db = PathBuf::from("/earlier/warp.sqlite");
+    let generic = startup_error_explanation(&anyhow!("disk I/O error"));
+    let blocked = [
+        StartupBlocker::MigrationLocked,
+        StartupBlocker::LegacyDatabaseLocked(source_db.clone()),
+        StartupBlocker::LegacyDatabaseCopyFailed(source_db),
+    ]
+    .map(|blocker| {
+        startup_error_explanation(
+            &anyhow!("disk I/O error")
+                .context(blocker)
+                .context("SQLite initialization error"),
+        )
+    });
+
+    for (index, explanation) in blocked.iter().enumerate() {
+        assert_ne!(explanation, &generic);
+        assert!(blocked[index + 1..]
+            .iter()
+            .all(|other| other != explanation));
+    }
+    for explanation in &blocked[1..] {
+        assert!(explanation.contains("\u{2068}/earlier/warp.sqlite\u{2069}"));
+    }
 }
 
 #[test]
@@ -1319,7 +1477,7 @@ fn app_group_completed_snapshot_is_idempotent_and_keeps_source() {
 }
 
 #[test]
-fn app_group_pending_marker_rejects_missing_source() {
+fn app_group_pending_marker_without_source_is_abandoned_without_completion() {
     let tempdir = tempfile::tempdir().expect("tempdir should be created");
     let legacy_dir = tempdir.path().join("legacy");
     let state_dir = tempdir.path().join("state");
@@ -1338,10 +1496,51 @@ fn app_group_pending_marker_rejects_missing_source() {
     .expect("pending marker should be written");
 
     migrate_zap_app_group_sqlite_if_needed(&target_db, &legacy_dir)
-        .expect_err("a pending migration without its source should fail closed");
+        .expect("a pending migration whose source is gone should not block startup");
 
     assert_eq!(migration_test_values(&target_db), vec!["keep-target"]);
+    assert!(!state_dir
+        .join(".zap-app-group-sqlite-migration-pending")
+        .exists());
     assert!(!state_dir.join(".zap-app-group-sqlite-migrated").exists());
+}
+
+#[test]
+fn legacy_state_pending_marker_without_source_keeps_target_when_source_reappears() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let source_db = tempdir.path().join("legacy").join("warp.sqlite");
+    let target_dir = tempdir.path().join("secure-state");
+    let target_db = target_dir.join("warp.sqlite");
+    let pending_marker = target_dir.join(".legacy-state-sqlite-migration-pending");
+    let complete_marker = target_dir.join(".legacy-state-sqlite-migrated");
+    fs::create_dir_all(source_db.parent().unwrap()).expect("legacy dir should be created");
+    fs::create_dir_all(&target_dir).expect("target dir should be created");
+    drop(create_migration_test_database(
+        &target_db,
+        &["saved-after-start"],
+        false,
+    ));
+    fs::write(&pending_marker, "pending\n").expect("pending marker should be written");
+
+    assert!(
+        !migrate_legacy_state_sqlite_if_needed(&source_db, &target_db)
+            .expect("a pending migration whose source is gone should not block startup")
+    );
+    assert!(!pending_marker.exists());
+    assert!(!complete_marker.exists());
+    assert_eq!(migration_test_values(&target_db), vec!["saved-after-start"]);
+
+    drop(create_migration_test_database(
+        &source_db,
+        &["reappeared-source"],
+        false,
+    ));
+    assert!(
+        !migrate_legacy_state_sqlite_if_needed(&source_db, &target_db)
+            .expect("a reappearing source should not block startup")
+    );
+    assert_eq!(migration_test_values(&target_db), vec!["saved-after-start"]);
+    assert!(complete_marker.exists());
 }
 
 #[test]
@@ -1378,7 +1577,7 @@ fn legacy_state_migration_retries_after_incomplete_snapshot() {
         "pending\n",
     )
     .expect("pending marker should be written");
-    snapshot_sqlite_database_with_page_limit(&source_db, &target_db, 1)
+    snapshot_sqlite_database_with_page_limit(&source_db, &target_db, 1, Duration::ZERO)
         .expect_err("injected partial snapshot should fail");
     assert_eq!(migration_test_values(&target_db), vec!["old-target"]);
 

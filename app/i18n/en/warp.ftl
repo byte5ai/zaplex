@@ -4532,4 +4532,13 @@ persistence-startup-error-title = Zaplex could not open its saved data
 persistence-startup-error-detail = Startup was stopped to prevent working without saving. Your existing database and migration files have been kept. Close any other Zaplex instance, resolve the error below, then restart Zaplex.
 
     { $error }
+persistence-startup-error-migration-locked = Another Zaplex instance is opening the same saved data, so this start was stopped. Wait until the other instance has finished starting, or quit it, then start Zaplex again.
+
+    { $error }
+persistence-startup-error-legacy-database-locked = Zaplex could not take over the data of an earlier version from { $path } because another app is still using it, for example an earlier version of Zap or Zaplex. Quit that app, then start Zaplex again; the transfer then continues automatically. The file and your current data are unchanged.
+
+    { $error }
+persistence-startup-error-legacy-database-copy-failed = Zaplex could not take over the data of an earlier version from { $path }. The file and your current data are unchanged. Resolve the error below, for example by freeing disk space or allowing access to the folder, then start Zaplex again. If the file is damaged, move it to another folder: Zaplex then starts without this data and leaves the file untouched.
+
+    { $error }
 persistence-startup-error-close = Close Zaplex

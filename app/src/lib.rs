@@ -1049,11 +1049,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
 fn show_persistence_startup_error(error: &anyhow::Error, ctx: &mut AppContext) {
     ctx.disable_application_callbacks_after_failed_startup();
     let title = crate::t!("persistence-startup-error-title").to_string();
-    let detail = crate::t!(
-        "persistence-startup-error-detail",
-        error = format!("{error:#}")
-    )
-    .to_string();
+    let detail = persistence::startup_error_detail(error);
     log::error!("{title}: {detail}");
     eprintln!("{title}: {detail}");
     // Normal termination calls NotebookManager and PersistenceWriter, which do not exist
