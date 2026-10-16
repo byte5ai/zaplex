@@ -23,6 +23,7 @@
 
 use std::fs::Permissions;
 use std::io::ErrorKind;
+use std::io::Read as _;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
@@ -64,7 +65,8 @@ fn socket_path_for_runtime(identity_key: &str, runtime_filename: &str) -> anyhow
 
 /// Lists existing identity-local daemon sockets. The current release sorts
 /// first; older runtimes follow deterministically and can be queried without
-/// weakening the default version-isolated rendezvous.
+/// weakening the default version-isolated rendezvous. Older runtimes whose
+/// daemon is gone are removed instead of listed ([`prune_stale_runtime`]).
 pub(crate) fn runtime_filenames(identity_key: &str) -> anyhow::Result<Vec<String>> {
     let dir = setup::remote_server_daemon_dir(identity_key);
     let expanded = shellexpand::tilde(&dir).into_owned();
@@ -88,7 +90,9 @@ fn runtime_filenames_in_dir(dir: &std::path::Path) -> anyhow::Result<Vec<String>
         let Some(filename) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
-        if setup::is_daemon_socket_filename(&filename) {
+        if setup::is_daemon_socket_filename(&filename)
+            && (filename == current || !prune_stale_runtime(dir, &filename))
+        {
             filenames.push(filename);
         }
     }
@@ -101,6 +105,78 @@ fn runtime_filenames_in_dir(dir: &std::path::Path) -> anyhow::Result<Vec<String>
     });
     filenames.truncate(MAX_LISTED_DAEMON_RUNTIMES);
     Ok(filenames)
+}
+
+/// Removes an older runtime's socket whose daemon is gone: its PID file names
+/// no live process and nothing accepts connections on the socket. Such a
+/// daemon crashed or was killed and never removed its socket; listed, it would
+/// be probed over SSH on every inventory scan. Returns whether the runtime is
+/// gone and must not be listed.
+///
+/// The PID file is the lock a proxy of that version holds while it starts the
+/// daemon, so holding it excludes a socket that is bound but not yet
+/// listening. The PID file itself stays: unlinking a lock file races with a
+/// proxy that is opening it. A runtime without a PID file is left alone.
+fn prune_stale_runtime(dir: &std::path::Path, socket_filename: &str) -> bool {
+    let Some(stem) = socket_filename.strip_suffix(".sock") else {
+        return false;
+    };
+    let Ok(mut pid_file) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dir.join(format!("{stem}.pid")))
+    else {
+        return false;
+    };
+    if !try_lock_exclusive(pid_file.as_raw_fd()) {
+        return false;
+    }
+    let mut recorded = String::new();
+    let daemon_alive = pid_file.read_to_string(&mut recorded).is_ok()
+        && recorded
+            .trim()
+            .parse::<libc::pid_t>()
+            .is_ok_and(|pid| pid > 0 && process_exists(pid));
+    if daemon_alive {
+        return false;
+    }
+    let socket_path = dir.join(socket_filename);
+    match UnixStream::connect(&socket_path) {
+        Err(error) if error.kind() == ErrorKind::ConnectionRefused => {
+            match std::fs::remove_file(&socket_path) {
+                Ok(()) => {
+                    log::info!(
+                        "Proxy: removed stale daemon socket {} (no daemon process)",
+                        socket_path.display()
+                    );
+                    true
+                }
+                Err(error) => error.kind() == ErrorKind::NotFound,
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => true,
+        Ok(_) | Err(_) => false,
+    }
+}
+
+/// Takes `flock(LOCK_EX | LOCK_NB)`; `false` while another process holds it.
+fn try_lock_exclusive(fd: std::os::unix::io::RawFd) -> bool {
+    loop {
+        // SAFETY: flock(2) is safe to call with a valid fd and a valid operation.
+        if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return true;
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+            return false;
+        }
+    }
+}
+
+/// Whether a process with this id exists (signal 0 only checks).
+fn process_exists(pid: libc::pid_t) -> bool {
+    // SAFETY: kill(2) with signal 0 sends nothing; it only checks the target.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 fn connect_existing_daemon(socket_path: &std::path::Path) -> std::io::Result<UnixStream> {

@@ -175,6 +175,7 @@ fn compose_connection_row_targets(
 fn compose_session_row_targets(
     primary: Box<dyn Element>,
     open: Option<Box<dyn Element>>,
+    end: Option<Box<dyn Element>>,
 ) -> Box<dyn Element> {
     // ui-contract: compact-row-actions:start
     let mut row = Flex::row()
@@ -184,6 +185,9 @@ fn compose_session_row_targets(
         .with_child(Shrinkable::new(1.0, primary).finish());
     if let Some(open) = open {
         row = row.with_child(open);
+    }
+    if let Some(end) = end {
+        row = row.with_child(end);
     }
     row.finish()
     // ui-contract: compact-row-actions:end
@@ -342,17 +346,14 @@ fn session_metadata(session: &SessionInfo, now_epoch_millis: u64) -> Option<Stri
         .as_ref()
         .map(|live| live.foreground_command.trim())
         .filter(|command| !command.is_empty() && session.title.trim().is_empty());
-    let opened = match session
-        .retention
-        .as_ref()
-        .filter(|retention| retention.detached_since_epoch_millis > 0)
-    {
-        Some(retention) => Some(crate::t!(
+    let opened = match session.retention.as_ref() {
+        Some(retention) if retention.detached_since_epoch_millis > 0 => Some(crate::t!(
             "workspace-left-panel-ssh-manager-session-detached-metadata",
             detached = detached_label(retention.detached_since_epoch_millis, now_epoch_millis),
             retention = retention_label(retention, now_epoch_millis)
         )),
-        None => last_opened_label(session.last_attached_epoch_millis, now_epoch_millis),
+        Some(_) => last_opened_label(session.last_attached_epoch_millis, now_epoch_millis),
+        None => legacy_opened_label(session, now_epoch_millis),
     };
     match (command, opened) {
         (Some(command), Some(opened)) => Some(crate::t!(
@@ -393,6 +394,63 @@ fn last_opened_label(last_attached_epoch_millis: u64, now_epoch_millis: u64) -> 
             count = days
         )
     })
+}
+
+/// The age limit of daemons that predate `session-detach-retention-v1`,
+/// counted from the last attach; it was 24 h in every such release.
+const LEGACY_DETACHED_SESSION_AGE_MILLIS: u64 = 24 * 60 * 60 * 1000;
+
+/// An older daemon reports no detach time and ends an unmanaged session 24 h
+/// after its last attach once no client is attached (#510). Whether one still
+/// is cannot be told from its inventory, so the line names that condition.
+fn legacy_opened_label(session: &SessionInfo, now_epoch_millis: u64) -> Option<String> {
+    let opened = last_opened_label(session.last_attached_epoch_millis, now_epoch_millis)?;
+    if session.managed.is_some() {
+        return Some(opened);
+    }
+    let expires_at = session
+        .last_attached_epoch_millis
+        .saturating_add(LEGACY_DETACHED_SESSION_AGE_MILLIS);
+    let minutes = expires_at.saturating_sub(now_epoch_millis) / 60_000;
+    let hours = minutes / 60;
+    let expires = if minutes == 0 {
+        crate::t!("workspace-left-panel-ssh-manager-session-legacy-expires-soon")
+    } else if hours == 0 {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-legacy-expires-minutes",
+            count = minutes
+        )
+    } else {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-legacy-expires-hours",
+            count = hours
+        )
+    };
+    Some(crate::t!(
+        "workspace-left-panel-ssh-manager-session-legacy-metadata",
+        opened = opened,
+        expires = expires
+    ))
+}
+
+/// Whether an agent holds the session's foreground, as far as the list
+/// knows: the daemon keeps it for that reason, or its title names the agent.
+fn session_runs_agent(session: &SessionInfo) -> bool {
+    !session.title.trim().is_empty()
+        || session.retention.as_ref().is_some_and(|retention| {
+            retention.keep_reason == SessionKeepReason::AgentRunning as i32
+        })
+}
+
+/// Whether the list may offer to end a session: its daemon must be known
+/// exactly (handshake host id), and managed sessions end only through their
+/// lifecycle request, which refuses a generic close.
+fn session_can_be_ended(routed: &RoutedDaemonSession) -> bool {
+    routed.session.managed.is_none()
+        && routed
+            .host_id
+            .as_deref()
+            .is_some_and(|host_id| !host_id.is_empty())
 }
 
 /// Since when a session has had no client, in the same coarse steps.
@@ -646,6 +704,12 @@ pub fn init(app: &mut AppContext) {
 pub enum SshManagerPanelAction {
     /// Resolve a stable row identity against the latest visible inventory.
     OpenSessionRow(String),
+    /// Ask to end a listed session that is not open here.
+    EndSessionRow(String),
+    /// End the session the confirmation names, for good.
+    ConfirmEndSession,
+    /// Dismiss the end-session confirmation.
+    CancelEndSession,
     FocusPrevious,
     FocusNext,
     ActivateFocused,
@@ -798,6 +862,18 @@ struct PendingDelete {
     expectation: DeleteNodeExpectation,
 }
 
+/// The exact listed session a confirmed "End session" targets.
+struct PendingEndSession {
+    node_id: String,
+    host_name: String,
+    title: String,
+    pty_session_id: String,
+    pty_generation: u64,
+    route: Option<remote_server::transport::DaemonRuntimeRoute>,
+    host_id: String,
+    agent_running: bool,
+}
+
 /// Content fields for a single candidate row — bundles the few Options that rendering cares about into one struct,
 /// to keep `render_candidate_row`'s argument list from getting too long (clippy::too_many_arguments).
 struct CandidateRowFields<'a> {
@@ -873,6 +949,11 @@ pub struct SshManagerPanel {
     delete_confirm_close_btn: ViewHandle<ActionButton>,
     delete_confirm_cancel_btn: ViewHandle<ActionButton>,
     delete_confirm_confirm_btn: ViewHandle<ActionButton>,
+    /// A listed session awaiting confirmation before it is ended.
+    pending_end: Option<PendingEndSession>,
+    end_confirm_close_btn: ViewHandle<ActionButton>,
+    end_confirm_cancel_btn: ViewHandle<ActionButton>,
+    end_confirm_confirm_btn: ViewHandle<ActionButton>,
 
     /// The node currently being renamed (editor + node_id).
     rename_state: Option<RenameState>,
@@ -932,6 +1013,8 @@ pub struct SshManagerPanel {
     /// Fixed-width open actions for both daemon and tmux/byobu sessions. The
     /// flag records whether the action shows an existing tab in this window.
     session_open_actions: HashMap<String, (bool, CompactRowAction)>,
+    /// End actions of listed daemon sessions that are not open here.
+    session_end_actions: HashMap<String, CompactRowAction>,
     /// Native session rows open in this window, keyed like their row state.
     local_session_panes: HashMap<String, LocalSessionPane>,
     /// Pane configurations whose title changes refresh `local_session_panes`.
@@ -980,6 +1063,22 @@ impl SshManagerPanel {
                 ctx.dispatch_typed_action(SshManagerPanelAction::ConfirmDelete);
             })
         });
+        let end_confirm_close_btn =
+            ctx.add_view(|_| modal_frame::close_button(SshManagerPanelAction::CancelEndSession));
+        let end_confirm_cancel_btn = ctx.add_typed_action_view(|_| {
+            ActionButton::new(crate::t!("common-cancel"), NakedTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(SshManagerPanelAction::CancelEndSession);
+            })
+        });
+        let end_confirm_confirm_btn = ctx.add_typed_action_view(|_| {
+            ActionButton::new(
+                crate::t!("workspace-left-panel-ssh-manager-session-end-confirm"),
+                DangerPrimaryTheme,
+            )
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(SshManagerPanelAction::ConfirmEndSession);
+            })
+        });
 
         let mut me = Self {
             nodes: Vec::new(),
@@ -1011,6 +1110,10 @@ impl SshManagerPanel {
             delete_confirm_close_btn,
             delete_confirm_cancel_btn,
             delete_confirm_confirm_btn,
+            pending_end: None,
+            end_confirm_close_btn,
+            end_confirm_cancel_btn,
+            end_confirm_confirm_btn,
             context_menu_item_states: (0..MAX_CONTEXT_MENU_ITEMS)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
@@ -1035,6 +1138,7 @@ impl SshManagerPanel {
             sessions_error: HashMap::new(),
             session_row_states: HashMap::new(),
             session_open_actions: HashMap::new(),
+            session_end_actions: HashMap::new(),
             local_session_panes: HashMap::new(),
             observed_pane_configurations: HashMap::new(),
             content_scroll_state: ClippedScrollStateHandle::default(),
@@ -1267,6 +1371,11 @@ impl SshManagerPanel {
                 .is_some_and(|node_id| active_ids.contains(node_id))
         });
         self.session_open_actions.retain(|key, _| {
+            key.split(':')
+                .next()
+                .is_some_and(|node_id| active_ids.contains(node_id))
+        });
+        self.session_end_actions.retain(|key, _| {
             key.split(':')
                 .next()
                 .is_some_and(|node_id| active_ids.contains(node_id))
@@ -1814,6 +1923,7 @@ impl SshManagerPanel {
         self.sessions_error.clear();
         self.session_row_states.clear();
         self.session_open_actions.clear();
+        self.session_end_actions.clear();
         self.local_session_panes.clear();
     }
 
@@ -2014,6 +2124,118 @@ impl SshManagerPanel {
         self.normalize_session_focus(&node_id);
     }
 
+    /// Opens the confirmation for ending a listed session that is not open
+    /// here. The row's exact daemon identity travels with the request.
+    fn on_request_end_session(&mut self, key: &str, ctx: &mut ViewContext<Self>) {
+        if self.local_session_panes.contains_key(key) {
+            return;
+        }
+        let pending = self
+            .host_session_inventories
+            .iter()
+            .find_map(|(node_id, inventory)| {
+                let routed = inventory.sessions.iter().find(|routed| {
+                    session_row_key(node_id, &routed.session, routed.route.as_ref()) == key
+                })?;
+                if !session_can_be_ended(routed) {
+                    return None;
+                }
+                let host_name = self
+                    .nodes
+                    .iter()
+                    .find(|node| &node.id == node_id)
+                    .map(|node| node.name.clone())
+                    .unwrap_or_default();
+                Some(PendingEndSession {
+                    node_id: node_id.clone(),
+                    title: daemon_session_identity(&host_name, &routed.session).short,
+                    host_name,
+                    pty_session_id: routed.session.session_id.clone(),
+                    pty_generation: routed.session.generation,
+                    route: routed.route.clone(),
+                    host_id: routed.host_id.clone().unwrap_or_default(),
+                    agent_running: session_runs_agent(&routed.session),
+                })
+            });
+        if let Some(pending) = pending {
+            self.pending_end = Some(pending);
+            ctx.notify();
+        }
+    }
+
+    /// Ends the confirmed session through a transient daemon connection, then
+    /// refreshes the host's list; a failure replaces the list with its reason.
+    fn on_confirm_end_session(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(pending) = self.pending_end.take() else {
+            return;
+        };
+        ctx.notify();
+        #[cfg(unix)]
+        {
+            use crate::auth::AuthStateProvider;
+            use crate::remote_server::auth_context::server_api_auth_context;
+            use crate::remote_server::headless_connect;
+
+            let node_id = pending.node_id;
+            let server = match warp_ssh_manager::with_conn(|c| resolve_server_for_node(c, &node_id))
+            {
+                Ok(Some(server)) => server,
+                Ok(None) => {
+                    self.sessions_error.insert(
+                        node_id.clone(),
+                        crate::t!("workspace-left-panel-ssh-manager-session-host-missing"),
+                    );
+                    self.normalize_session_focus(&node_id);
+                    return;
+                }
+                Err(error) => {
+                    self.sessions_error.insert(
+                        node_id.clone(),
+                        crate::t!(
+                            "workspace-left-panel-ssh-manager-session-end-failed",
+                            detail = error.to_string()
+                        ),
+                    );
+                    self.normalize_session_focus(&node_id);
+                    return;
+                }
+            };
+            let auth_context = Arc::new(server_api_auth_context(
+                AuthStateProvider::as_ref(ctx).get().clone(),
+            ));
+            let socket_path = headless_connect::control_socket_path(&server);
+            let executor = ctx.background_executor().clone();
+            ctx.spawn(
+                headless_connect::terminate_daemon_session(
+                    server,
+                    socket_path,
+                    auth_context,
+                    executor,
+                    pending.route,
+                    pending.host_id,
+                    pending.pty_session_id,
+                    pending.pty_generation,
+                ),
+                move |me, result, ctx| {
+                    match result {
+                        Ok(()) => me.fetch_sessions(node_id, ctx),
+                        Err(error) => {
+                            me.sessions_error.insert(
+                                node_id.clone(),
+                                crate::t!(
+                                    "workspace-left-panel-ssh-manager-session-end-failed",
+                                    detail = error
+                                ),
+                            );
+                            me.normalize_session_focus(&node_id);
+                        }
+                    }
+                    ctx.notify();
+                },
+            );
+        }
+    }
+
     fn sync_session_open_actions(&mut self, node_id: &str, ctx: &mut ViewContext<Self>) {
         let prefix = format!("{node_id}:");
         let keys: std::collections::HashSet<String> = self
@@ -2048,6 +2270,41 @@ impl SshManagerPanel {
                 ctx,
             );
             self.session_open_actions.insert(key, (open_here, action));
+        }
+        // A session open here ends with its pane; every other listed session
+        // can be ended from the list.
+        let endable: std::collections::HashSet<String> =
+            if self.sessions_error.contains_key(node_id) {
+                std::collections::HashSet::new()
+            } else {
+                self.host_session_inventories
+                    .get(node_id)
+                    .map(|inventory| {
+                        inventory
+                            .sessions
+                            .iter()
+                            .filter(|routed| session_can_be_ended(routed))
+                            .map(|routed| {
+                                session_row_key(node_id, &routed.session, routed.route.as_ref())
+                            })
+                            .filter(|key| !self.local_session_panes.contains_key(key))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+        self.session_end_actions
+            .retain(|key, _| !key.starts_with(&prefix) || endable.contains(key));
+        for key in endable {
+            if self.session_end_actions.contains_key(&key) {
+                continue;
+            }
+            let action = CompactRowAction::new(
+                crate::ui_components::icons::Icon::Stop,
+                crate::t!("workspace-left-panel-ssh-manager-session-end"),
+                SshManagerPanelAction::EndSessionRow(key.clone()),
+                ctx,
+            );
+            self.session_end_actions.insert(key, action);
         }
     }
 
@@ -3370,6 +3627,16 @@ impl SshManagerPanel {
             .for_single_frame()
             .finish()
         });
+        let end = self.session_end_actions.get(key).map(|action| {
+            SavePosition::new(
+                Container::new(action.render())
+                    .with_horizontal_padding(1.0)
+                    .finish(),
+                &format!("ssh-manager-session:{key}:end"),
+            )
+            .for_single_frame()
+            .finish()
+        });
         // The open-here mark hangs in the fixed indentation slot before the
         // title, so marked and unmarked rows share one text axis. Its meaning
         // is named in the row tooltip.
@@ -3401,7 +3668,9 @@ impl SshManagerPanel {
                     .with_width(FOLDER_DEPTH_INDENT)
                     .finish(),
             )
-            .with_child(Shrinkable::new(1.0, compose_session_row_targets(primary, open)).finish())
+            .with_child(
+                Shrinkable::new(1.0, compose_session_row_targets(primary, open, end)).finish(),
+            )
             .finish();
         SavePosition::new(
             Container::new(row)
@@ -4208,6 +4477,77 @@ impl SshManagerPanel {
         let card = modal_frame::modal_card(content, modal_frame::MODAL_WIDTH_STANDARD, appearance);
         modal_frame::modal_overlay(card, Some(SshManagerPanelAction::CancelDelete), app)
     }
+
+    /// Confirmation for ending a listed session: what ends, and a warning
+    /// when an agent runs in it.
+    fn render_end_session_confirm(
+        &self,
+        pending: &PendingEndSession,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = warp_core::ui::appearance::Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let family = appearance.ui_font_family();
+        let main = theme.main_text_color(theme.background()).into_solid();
+
+        let mut body = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(8.0)
+            .with_child(
+                Text::new(
+                    crate::t!(
+                        "workspace-left-panel-ssh-manager-session-end-summary",
+                        host = pending.host_name.clone()
+                    ),
+                    family,
+                    appearance.ui_font_body(),
+                )
+                .with_color(main)
+                .finish(),
+            );
+        if pending.agent_running {
+            body.add_child(
+                Text::new(
+                    crate::t!("workspace-left-panel-ssh-manager-session-end-agent"),
+                    family,
+                    appearance.ui_font_body(),
+                )
+                .with_color(main)
+                .finish(),
+            );
+        }
+        let buttons = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_child(ChildView::new(&self.end_confirm_cancel_btn).finish())
+            .with_child(
+                Container::new(ChildView::new(&self.end_confirm_confirm_btn).finish())
+                    .with_margin_left(8.0)
+                    .finish(),
+            )
+            .finish();
+        let content = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_child(
+                Container::new(modal_frame::modal_header(
+                    crate::t!(
+                        "workspace-left-panel-ssh-manager-session-end-title",
+                        name = pending.title.clone()
+                    ),
+                    None,
+                    ChildView::new(&self.end_confirm_close_btn).finish(),
+                    appearance,
+                ))
+                .with_margin_bottom(16.0)
+                .finish(),
+            )
+            .with_child(body.finish())
+            .with_child(Container::new(buttons).with_margin_top(20.0).finish())
+            .finish();
+
+        let card = modal_frame::modal_card(content, modal_frame::MODAL_WIDTH_STANDARD, appearance);
+        modal_frame::modal_overlay(card, Some(SshManagerPanelAction::CancelEndSession), app)
+    }
 }
 
 impl Entity for SshManagerPanel {
@@ -4258,6 +4598,13 @@ impl TypedActionView for SshManagerPanel {
             SshManagerPanelAction::DeleteSelected => self.on_request_delete(ctx),
             SshManagerPanelAction::ConfirmDelete => self.on_confirm_delete(ctx),
             SshManagerPanelAction::CancelDelete => self.on_cancel_delete(ctx),
+            SshManagerPanelAction::EndSessionRow(key) => self.on_request_end_session(key, ctx),
+            SshManagerPanelAction::ConfirmEndSession => self.on_confirm_end_session(ctx),
+            SshManagerPanelAction::CancelEndSession => {
+                if self.pending_end.take().is_some() {
+                    ctx.notify();
+                }
+            }
             SshManagerPanelAction::Connect => self.on_connect(ctx),
             SshManagerPanelAction::Edit => self.on_edit(ctx),
             SshManagerPanelAction::CloneServer(id) => self.on_clone_server(id, ctx),
@@ -4363,6 +4710,7 @@ impl View for SshManagerPanel {
         if self.keyboard_focused
             && self.rename_state.is_none()
             && self.pending_delete.is_none()
+            && self.pending_end.is_none()
             && self.context_menu_position.is_none()
         {
             context.set.insert("SshManagerPanelNavigation");
@@ -4432,7 +4780,10 @@ impl View for SshManagerPanel {
 
         // Overlays: the context menu and/or the delete-confirmation dialog. With
         // neither up, return the bare panel unchanged.
-        if self.context_menu_position.is_none() && self.pending_delete.is_none() {
+        if self.context_menu_position.is_none()
+            && self.pending_delete.is_none()
+            && self.pending_end.is_none()
+        {
             return positioned_panel;
         }
 
@@ -4450,6 +4801,9 @@ impl View for SshManagerPanel {
         }
         if let Some(pending) = self.pending_delete.as_ref() {
             stack.add_overlay_child(self.render_delete_confirm(&pending.impact, app));
+        }
+        if let Some(pending) = self.pending_end.as_ref() {
+            stack.add_overlay_child(self.render_end_session_confirm(pending, app));
         }
         stack.finish()
     }

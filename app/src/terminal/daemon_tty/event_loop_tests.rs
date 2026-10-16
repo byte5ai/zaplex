@@ -3471,6 +3471,24 @@ fn fresh_open_has_no_attach_deadline_before_the_transport_connects() {
 }
 
 #[test]
+fn adopted_session_has_no_attach_deadline_before_the_transport_connects() {
+    App::test((), |mut app| async move {
+        let (_manager, event_loop, _model, _wakeups) =
+            start_adopted_loop(&mut app, SessionId::from(905u64));
+        // Restoring a PTY of an older daemon after an app update first
+        // installs this version's binary; that must not count against the
+        // attach deadline while the transport is still being set up.
+        event_loop.update(&mut app, |me, ctx| {
+            assert!(me.initial_attach_pending, "the adopt awaits its first attach");
+            assert!(!me.initial_attach_deadline_armed);
+            me.on_transport_connected(ctx);
+            assert!(!me.initial_attach_deadline_armed);
+            assert!(!me.terminated);
+        });
+    });
+}
+
+#[test]
 fn rejected_initial_attach_finishes_the_hidden_bootstrap_block() {
     App::test((), |mut app| async move {
         let conn = SessionId::from(901u64);

@@ -539,6 +539,7 @@ jobs:
           detached_session_row_uses_daemon_live_cwd_and_foreground_command
           old_daemon_without_live_metadata_falls_back_honestly
           detached_session_row_reports_detach_time_and_expiry
+          older_daemon_row_names_its_attach_based_end
           normalized_agent_titles_are_preserved_with_known_cwd_in_the_tooltip
           stale_daemon_adoption_cannot_resolve_a_different_inventory_row
           test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled

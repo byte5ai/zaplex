@@ -771,6 +771,23 @@ workspace-left-panel-ssh-manager-session-expires-hours = { $count ->
 workspace-left-panel-ssh-manager-session-kept = bleibt erhalten
 workspace-left-panel-ssh-manager-session-kept-agent = bleibt erhalten, solange der Agent läuft
 workspace-left-panel-ssh-manager-session-kept-unknown = bleibt erhalten, Programm unbekannt
+workspace-left-panel-ssh-manager-session-legacy-metadata = { $opened } · { $expires }
+workspace-left-panel-ssh-manager-session-legacy-expires-soon = läuft ohne Verbindung in Kürze ab
+workspace-left-panel-ssh-manager-session-legacy-expires-minutes = { $count ->
+        [one] läuft ohne Verbindung in 1 Minute ab
+       *[other] läuft ohne Verbindung in { $count } Minuten ab
+    }
+workspace-left-panel-ssh-manager-session-legacy-expires-hours = { $count ->
+        [one] läuft ohne Verbindung in 1 Stunde ab
+       *[other] läuft ohne Verbindung in { $count } Stunden ab
+    }
+workspace-left-panel-ssh-manager-session-end = Session beenden
+workspace-left-panel-ssh-manager-session-end-title = Session „{ $name }“ beenden?
+workspace-left-panel-ssh-manager-session-end-summary = Auf { $host } werden die Shell dieser Session und alle darin laufenden Programme beendet. Ihre Ausgabe geht verloren.
+workspace-left-panel-ssh-manager-session-end-agent = Darin läuft gerade ein Agent; er wird ebenfalls beendet.
+workspace-left-panel-ssh-manager-session-end-confirm = Beenden
+workspace-left-panel-ssh-manager-session-end-changed = Diese Session hat sich inzwischen geändert oder existiert nicht mehr. Aktualisiere die Sessions.
+workspace-left-panel-ssh-manager-session-end-failed = Diese Session konnte nicht beendet werden: { $detail }
 workspace-left-panel-ssh-manager-session-host-missing = Dieser Host existiert nicht mehr unter Verbindungen
 workspace-left-panel-ssh-manager-session-open-error = Diese Session konnte nicht geöffnet werden: { $detail }
 workspace-left-panel-ssh-manager-sessions-refreshing = Sessions werden aktualisiert…

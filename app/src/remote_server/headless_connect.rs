@@ -961,6 +961,78 @@ pub async fn list_daemon_runtime_diagnostics(
     .map(|scan| scan.runtime_diagnostics)
 }
 
+/// Ends one listed daemon session for good (`CloseSession`): its shell and
+/// everything running in it are killed. On the same transient connection the
+/// daemon must first prove it is the one the row came from (handshake host id)
+/// and still own the exact PTY generation, unmanaged; a re-listing then
+/// confirms the session is gone. Never installs a daemon.
+#[allow(clippy::too_many_arguments)]
+pub async fn terminate_daemon_session(
+    server: SshServerInfo,
+    socket_path: PathBuf,
+    auth_context: Arc<RemoteServerAuthContext>,
+    executor: Arc<Background>,
+    route: Option<DaemonRuntimeRoute>,
+    expected_host_id: String,
+    pty_session_id: String,
+    pty_generation: u64,
+) -> std::result::Result<(), String> {
+    let terminate = async move {
+        let preflight =
+            preflight_daemon_transport(server, socket_path.clone(), auth_context.clone()).await?;
+        require_daemon_inventory_ready(preflight)?;
+        let mut transport = SshTransport::new(socket_path, auth_context.clone());
+        if let Some(route) = route {
+            transport = transport.with_daemon_runtime(route);
+        }
+        let Connection { client, child, .. } = transport
+            .connect(executor)
+            .await
+            .map_err(|e| format!("daemon connect failed: {e:#}"))?;
+        // The proxy child lives until the requests are answered.
+        let _child = child;
+        let auth_token = auth_context.get_auth_token().await;
+        let initialize = client
+            .initialize(auth_token.as_deref())
+            .await
+            .map_err(|e| format!("daemon handshake failed: {e:#}"))?;
+        let changed = || crate::t!("workspace-left-panel-ssh-manager-session-end-changed");
+        if initialize.host_id != expected_host_id {
+            return Err(changed());
+        }
+        let listed = client
+            .list_sessions()
+            .await
+            .map_err(|e| format!("list_sessions failed: {e:#}"))?;
+        if !listed.sessions.iter().any(|session| {
+            session.session_id == pty_session_id
+                && session.generation == pty_generation
+                && session.managed.is_none()
+        }) {
+            return Err(changed());
+        }
+        client
+            .send_close_session(pty_session_id.clone())
+            .map_err(|e| format!("close_session failed: {e:#}"))?;
+        // The daemon handles one connection's messages in order, so this
+        // listing already reflects the close.
+        let remaining = client
+            .list_sessions()
+            .await
+            .map_err(|e| format!("list_sessions failed: {e:#}"))?;
+        if remaining
+            .sessions
+            .iter()
+            .any(|session| session.session_id == pty_session_id)
+        {
+            return Err(changed());
+        }
+        log::info!("Ended daemon session {pty_session_id} on request");
+        Ok(())
+    };
+    inventory_with_timeout(terminate, SESSION_INVENTORY_TIMEOUT).await
+}
+
 async fn inventory_with_timeout<T>(
     inventory: impl Future<Output = std::result::Result<T, String>>,
     timeout: Duration,
