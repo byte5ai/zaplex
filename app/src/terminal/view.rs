@@ -331,6 +331,8 @@ use chrono::{DateTime, Local, NaiveDateTime};
 use command_corrections::rules::{Rule, RuleId as CommandCorrectionsRuleId};
 use command_corrections::{correct_command, Command, Correction, HistoryItem, SessionMetadata};
 use enclose::enclose;
+#[cfg(feature = "local_fs")]
+use futures::future::{ready, Either};
 use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -11163,16 +11165,30 @@ impl TerminalView {
                                 let directory_for_detection =
                                     native_directory.as_deref().unwrap_or(active_directory);
 
-                                let fut = DetectedRepositories::handle(ctx).update(
-                                    ctx,
-                                    |updater, ctx| {
-                                        updater.detect_possible_git_repo(
-                                            directory_for_detection,
-                                            RepoDetectionSource::TerminalNavigation,
-                                            ctx,
-                                        )
-                                    },
-                                );
+                                // A remote shell (SSH or daemon-hosted) reports a path on
+                                // its own host: a repository at that path on this machine
+                                // is not its repository.
+                                let is_remote_session = block_metadata_received_event
+                                    .block_metadata
+                                    .session_id()
+                                    .and_then(|session_id| {
+                                        self.sessions.as_ref(ctx).get(session_id)
+                                    })
+                                    .is_some_and(|session| !session.is_local());
+                                let fut = if is_remote_session {
+                                    Either::Right(ready(None))
+                                } else {
+                                    Either::Left(DetectedRepositories::handle(ctx).update(
+                                        ctx,
+                                        |updater, ctx| {
+                                            updater.detect_possible_git_repo(
+                                                directory_for_detection,
+                                                RepoDetectionSource::TerminalNavigation,
+                                                ctx,
+                                            )
+                                        },
+                                    ))
+                                };
 
                                 ctx.spawn(fut, move |me, repo_path_opt, ctx| {
                                     let old_repo_path = me.current_repo_path.clone();

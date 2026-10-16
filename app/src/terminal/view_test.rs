@@ -6839,6 +6839,92 @@ fn daemon_hosted_shell_receives_remote_repo_navigation() {
     });
 }
 
+/// Relays a post-bootstrap precmd for `session` and returns the repository the
+/// terminal adopted once its repository detection for that prompt finished.
+#[cfg(all(feature = "local_tty", feature = "local_fs"))]
+async fn repository_after_prompt(
+    app: &mut App,
+    terminal: &ViewHandle<TerminalView>,
+    session: SessionId,
+    directory: &str,
+) -> Option<PathBuf> {
+    let (tx, rx) = async_channel::unbounded();
+    let directory = directory.to_string();
+    terminal.update(&mut *app, |view, ctx| {
+        view.on_next_block_completed(move |view, _| {
+            tx.try_send(view.current_repo_path().cloned()).unwrap();
+        });
+        let block_index = view.model.lock().block_list().active_block().index();
+        view.model_event_dispatcher().update(ctx, |_, ctx| {
+            ctx.emit(ModelEvent::BlockMetadataReceived(
+                crate::terminal::event::BlockMetadataReceivedEvent {
+                    block_metadata: BlockMetadata::new(Some(session), Some(directory)),
+                    block_index,
+                    is_after_in_band_command: false,
+                    is_done_bootstrapping: true,
+                },
+            ));
+        });
+    });
+    rx.recv()
+        .with_timeout(Duration::from_secs(10))
+        .await
+        .expect("repository detection should finish")
+        .unwrap()
+}
+
+/// A daemon-hosted shell's directory is a path on the daemon's host. Even when
+/// the same path is a git repository on this machine, the terminal must not
+/// adopt that local repository: its git status would replace the target host's.
+#[cfg(all(feature = "local_tty", feature = "local_fs"))]
+#[test]
+fn daemon_hosted_shell_directory_is_not_detected_as_a_local_repository() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(RemoteServerManager::new);
+        let terminal = add_window_with_terminal(&mut app, None);
+        // A git repository on this machine at the path the remote shell reports.
+        let local_repository = tempfile::tempdir().unwrap();
+        std::fs::create_dir(local_repository.path().join(".git")).unwrap();
+        std::fs::write(
+            local_repository.path().join(".git").join("HEAD"),
+            "ref: refs/heads/main\n",
+        )
+        .unwrap();
+        let directory = local_repository.path().join("src");
+        std::fs::create_dir(&directory).unwrap();
+        let directory = directory.to_str().unwrap();
+        let daemon_shell = SessionId::from(4860u64);
+        let local_shell = SessionId::from(4861u64);
+        terminal.update(&mut app, |view, ctx| {
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.set_daemon_connection_session_id(SessionId::from((1u64 << 63) + 486));
+                sessions
+                    .register_session_for_test(SessionInfo::new_for_test().with_id(daemon_shell));
+                sessions
+                    .get(daemon_shell)
+                    .expect("registered shell")
+                    .mark_daemon_hosted(None);
+                sessions
+                    .register_session_for_test(SessionInfo::new_for_test().with_id(local_shell));
+            });
+            // A prompt without a directory: repository detection needs a previous
+            // prompt but does not run for this one.
+            view.active_block_metadata = Some(BlockMetadata::new(Some(daemon_shell), None));
+        });
+
+        assert_eq!(
+            repository_after_prompt(&mut app, &terminal, daemon_shell, directory).await,
+            None,
+        );
+        // The same directory in a local shell is this machine's repository.
+        assert_eq!(
+            repository_after_prompt(&mut app, &terminal, local_shell, directory).await,
+            Some(std::fs::canonicalize(local_repository.path()).unwrap()),
+        );
+    });
+}
+
 #[cfg(all(
     feature = "local_tty",
     feature = "local_fs",
