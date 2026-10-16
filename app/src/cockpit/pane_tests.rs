@@ -2,7 +2,7 @@ use chrono::Utc;
 use std::collections::BTreeMap;
 #[cfg(not(target_family = "wasm"))]
 use zaplex_cockpit::{AgentInventoryStatus, FleetTree, HostAvailability, HostNode, ProjectNode};
-use zaplex_cockpit::{Provider, SessionSnapshot, SessionState, WindowTotals};
+use zaplex_cockpit::{CostFigure, Provider, SessionSnapshot, SessionState, WindowTotals};
 #[cfg(not(target_family = "wasm"))]
 use zaplex_remote_session::types::FEATURE_AGENT_TRANSCRIPT_READ_V1;
 
@@ -34,7 +34,7 @@ fn remote_host_without_pricing_data_has_no_fabricated_cost() {
     );
     assert_eq!(
         session_today_cost(true, "same-session-id", &local_totals),
-        Some(4.2)
+        Some(CostFigure::Estimate { usd: 4.2 })
     );
 }
 

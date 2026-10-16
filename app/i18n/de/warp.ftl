@@ -84,6 +84,15 @@ cockpit-card-reset-both = 5h ↻ { $reset5h } · Wo ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
 cockpit-header-cost-summary = heute { $today } · { $week } Wo
 cockpit-header-today-total = Alle Konten · heute { $today }
+# List-price cost estimates. Fluent does not localize decimal separators, so the
+# whole dollars and the cents are placed separately; the no-break space keeps
+# amount and currency on one line.
+cockpit-cost-estimate = ~{ $whole },{ $cents }{"\u00A0"}$
+cockpit-cost-unpriced = ohne Preis
+cockpit-cost-partly-unpriced = teilweise ohne Preis
+cockpit-cost-unpriced-models = Ohne Listenpreis: { $models }
+cockpit-cost-source = Kosten: Schätzung nach API-Listenpreisen, Stand { $date }
+cockpit-fleet-cost-summary = heute { $today } · 5{"\u00A0"}h { $block } · Woche { $week }
 # Review-Cluster. „geprüft" ist bewusst kein „freigegeben": die Markierung ist
 # eine private Notiz an dich selbst — sie sagt dem Agenten nichts und gibt nichts frei.
 cockpit-session-review = Ansehen

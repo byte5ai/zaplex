@@ -2,7 +2,11 @@
 //! cost, humanized tokens, reset countdown. Warpui-free and fully unit-tested, so the
 //! visual layers stay thin and the numbers-to-text logic is verified headlessly.
 
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
+
+use crate::types::WindowTotals;
 
 /// Heat band, matching the claudeplex-desktop `LoadBar` thresholds. Input is the heat
 /// *fraction* (work / budget), where 1.0 == 100% of budget.
@@ -149,15 +153,43 @@ pub fn model_family(model: &str) -> &str {
     model
 }
 
-/// A bundled-list-price estimate with 2 decimals: 4.2 -> "~$4.20".
-///
-/// Negative values mark a window containing an unpriced model and are never
-/// rendered as a fictional zero cost.
-pub fn format_cost(usd: f64) -> String {
-    if usd < 0.0 {
-        "unpriced".to_string()
-    } else {
-        format!("~${usd:.2}")
+/// What a window's estimated spend can honestly say. The app turns it into text
+/// in the user's language and number format; this crate only decides the case.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CostFigure {
+    /// Every turn ran on a model with a bundled list price.
+    Estimate { usd: f64 },
+    /// Some turns ran on models without a price: `usd` covers the priced turns
+    /// only, and `unpriced_models` names the models it leaves out.
+    Partial {
+        usd: f64,
+        unpriced_models: Vec<String>,
+    },
+    /// No priced spend to show: every turn that billed tokens ran on a model
+    /// without a price.
+    Unpriced { unpriced_models: Vec<String> },
+}
+
+/// The [`CostFigure`] of one window, or of several windows summed into one (the
+/// fleet total across accounts). An unpriced share never hides the priced part:
+/// it is reported beside it, with the models it concerns (sorted, deduplicated).
+pub fn cost_figure<'a>(windows: impl IntoIterator<Item = &'a WindowTotals>) -> CostFigure {
+    let mut usd = 0.0;
+    let mut has_unpriced_usage = false;
+    let mut unpriced_models = BTreeSet::new();
+    for window in windows {
+        usd += window.cost_usd;
+        has_unpriced_usage |= window.has_unpriced_usage;
+        unpriced_models.extend(window.unpriced_models.iter().cloned());
+    }
+    let unpriced_models = unpriced_models.into_iter().collect();
+    match (has_unpriced_usage, usd > 0.0) {
+        (false, _) => CostFigure::Estimate { usd },
+        (true, true) => CostFigure::Partial {
+            usd,
+            unpriced_models,
+        },
+        (true, false) => CostFigure::Unpriced { unpriced_models },
     }
 }
 

@@ -53,12 +53,45 @@ fn provenance_marks_estimates_only() {
     );
 }
 
+fn window(cost_usd: f64, unpriced_models: &[&str]) -> WindowTotals {
+    WindowTotals {
+        has_unpriced_usage: !unpriced_models.is_empty(),
+        unpriced_models: unpriced_models
+            .iter()
+            .map(|model| model.to_string())
+            .collect(),
+        cost_usd,
+        ..WindowTotals::default()
+    }
+}
+
+/// An unpriced share never voids the priced part (#515): the fleet total sums
+/// every account's priced spend and names each unpriced model once.
 #[test]
-fn cost_format() {
-    assert_eq!(format_cost(4.2), "~$4.20");
-    assert_eq!(format_cost(0.0), "~$0.00");
-    assert_eq!(format_cost(19.005), "~$19.00");
-    assert_eq!(format_cost(-1.0), "unpriced");
+fn cost_figure_keeps_the_priced_part_beside_unpriced_models() {
+    assert_eq!(
+        cost_figure([&WindowTotals::default()]),
+        CostFigure::Estimate { usd: 0.0 },
+        "a window without spend is a real zero, not an unknown one"
+    );
+    assert_eq!(
+        cost_figure([&window(0.0, &["gpt-5.5"])]),
+        CostFigure::Unpriced {
+            unpriced_models: vec!["gpt-5.5".to_string()],
+        }
+    );
+    let accounts = [
+        window(1.25, &[]),
+        window(2.5, &["gpt-5.5", "claude-next"]),
+        window(0.0, &["gpt-5.5"]),
+    ];
+    assert_eq!(
+        cost_figure(&accounts),
+        CostFigure::Partial {
+            usd: 3.75,
+            unpriced_models: vec!["claude-next".to_string(), "gpt-5.5".to_string()],
+        }
+    );
 }
 
 #[test]

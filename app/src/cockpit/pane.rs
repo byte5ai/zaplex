@@ -29,15 +29,19 @@ use warpui::{
     ViewHandle,
 };
 use zaplex_cockpit::{
-    format_cost, format_relative, format_reset, format_tokens, heat_pct_label_with_provenance,
-    host_ident, host_key, session_glyph, session_key, AccountStatus, AccountUsage, FleetTree,
-    PricingSource, Provider, SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
+    cost_figure, format_relative, format_reset, format_tokens, heat_pct_label_with_provenance,
+    host_ident, host_key, session_glyph, session_key, AccountStatus, AccountUsage, CostFigure,
+    FleetTree, PricingSource, Provider, SessionSnapshot, SessionState, UsageProvenance,
+    WindowTotals,
 };
 
 use crate::cockpit::account_identity;
 use crate::cockpit::capabilities::SessionCapabilities;
 use crate::cockpit::fleet_details::{
     managed_fleet_details_from_proto, ManagedFleetInventory, ManagedFleetSession,
+};
+use crate::cockpit::localize::{
+    cost_amount_text, cost_hint_text, cost_source_text, cost_text, unpriced_models_text,
 };
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::session_lifecycle::{
@@ -102,9 +106,13 @@ fn session_today_cost(
     is_local: bool,
     session_id: &str,
     local_totals: &BTreeMap<String, WindowTotals>,
-) -> Option<f64> {
+) -> Option<CostFigure> {
     is_local
-        .then(|| local_totals.get(session_id).map(|totals| totals.cost_usd))
+        .then(|| {
+            local_totals
+                .get(session_id)
+                .map(|totals| cost_figure([totals]))
+        })
         .flatten()
 }
 
@@ -308,7 +316,7 @@ enum TableRow {
         host_id: Option<String>,
         is_local: bool,
         /// What it spent today (F4), or `None` when it spent nothing.
-        today_cost: Option<f64>,
+        today_cost: Option<CostFigure>,
     },
 }
 
@@ -1361,24 +1369,26 @@ impl CockpitPaneView {
         let body = appearance.ui_font_body();
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
+        let cost = cost_figure([totals]);
 
-        ConstrainedBox::new(
-            Flex::column()
-                .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_spacing(2.0)
-                .with_child(Self::text(label.to_string(), family, body, muted))
-                .with_child(Self::text(
-                    format_cost(totals.cost_usd),
-                    family,
-                    appearance.ui_font_subheading(),
-                    main,
-                ))
-                .with_child(Self::text(format_tokens(totals.total), family, body, muted))
-                .finish(),
-        )
-        .with_width(MATRIX_COL_WIDTH)
-        .finish()
+        let mut cell = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(2.0)
+            .with_child(Self::text(label.to_string(), family, body, muted))
+            .with_child(Self::text(
+                cost_amount_text(&cost),
+                family,
+                appearance.ui_font_subheading(),
+                main,
+            ))
+            .with_child(Self::text(format_tokens(totals.total), family, body, muted));
+        if let Some(hint) = cost_hint_text(&cost) {
+            cell = cell.with_child(Self::text(hint, family, body, muted));
+        }
+        ConstrainedBox::new(cell.finish())
+            .with_width(MATRIX_COL_WIDTH)
+            .finish()
     }
 
     /// A full account card: header (label + plan), both heat bars, the
@@ -2638,7 +2648,7 @@ impl CockpitPaneView {
                     );
 
                     let today = match today_cost {
-                        Some(c) => Self::cell(format_cost(*c), main, true, appearance),
+                        Some(c) => Self::cell(cost_text(c), main, true, appearance),
                         // No figure rather than $0.00 — a zero would read as one.
                         None => Self::cell("—".to_string(), faint, true, appearance),
                     };
@@ -3028,19 +3038,18 @@ impl CockpitPaneView {
 
         // Three windows × ($ / tokens). "Today" is the LOCAL day (F2).
         let figure = |label: String, totals: &WindowTotals| -> Box<dyn Element> {
-            Flex::column()
+            let cost = cost_figure([totals]);
+            let mut column = Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Start)
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_spacing(2.0)
                 .with_child(Self::text(label, family, body, muted))
-                .with_child(Self::text(
-                    format_cost(totals.cost_usd),
-                    family,
-                    heading,
-                    main,
-                ))
-                .with_child(Self::text(format_tokens(totals.total), family, body, faint))
-                .finish()
+                .with_child(Self::text(cost_amount_text(&cost), family, heading, main))
+                .with_child(Self::text(format_tokens(totals.total), family, body, faint));
+            if let Some(hint) = cost_hint_text(&cost) {
+                column = column.with_child(Self::text(hint, family, body, faint));
+            }
+            column.finish()
         };
         let figures = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -3060,6 +3069,15 @@ impl CockpitPaneView {
             ))
             .finish();
         col = col.with_child(figures);
+        // Where the figures come from (#515): a list-price estimate as of the
+        // table's verification date, plus the models it could not price. The
+        // windows overlap, so only their union of unpriced models is used here.
+        let unpriced = unpriced_models_text(&cost_figure([&acct.today, &acct.block5h, &acct.week]));
+        let source = match unpriced {
+            Some(unpriced) => format!("{} · {unpriced}", cost_source_text()),
+            None => cost_source_text(),
+        };
+        col = col.with_child(Self::text(source, family, body, faint));
 
         // A bounded card (hairline zone-card, §2.1), not print on the pane
         // background: the edge is what keeps the meters from visually running
@@ -3261,9 +3279,9 @@ impl CockpitPaneView {
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
 
-        let cost_today: f64 = accounts.iter().map(|a| a.today.cost_usd).sum();
-        let cost_5h: f64 = accounts.iter().map(|a| a.block5h.cost_usd).sum();
-        let cost_wk: f64 = accounts.iter().map(|a| a.week.cost_usd).sum();
+        let cost_today = cost_figure(accounts.iter().map(|a| &a.today));
+        let cost_5h = cost_figure(accounts.iter().map(|a| &a.block5h));
+        let cost_wk = cost_figure(accounts.iter().map(|a| &a.week));
         let waiting: usize = accounts
             .iter()
             .flat_map(|a| &a.sessions)
@@ -3305,11 +3323,11 @@ impl CockpitPaneView {
                 },
             ))
             .with_child(Self::text(
-                format!(
-                    "today {} · 5h {} · wk {}",
-                    format_cost(cost_today),
-                    format_cost(cost_5h),
-                    format_cost(cost_wk)
+                crate::t!(
+                    "cockpit-fleet-cost-summary",
+                    today = cost_text(&cost_today),
+                    block = cost_text(&cost_5h),
+                    week = cost_text(&cost_wk)
                 ),
                 family,
                 body,

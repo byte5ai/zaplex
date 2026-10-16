@@ -2886,6 +2886,14 @@ cockpit-card-reset-both = 5h ↻ { $reset5h } · wk ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
 cockpit-header-cost-summary = today { $today } · { $week } wk
 cockpit-header-today-total = All accounts · today { $today }
+# List-price cost estimates. Fluent does not localize decimal separators, so the
+# whole dollars and the cents are placed separately.
+cockpit-cost-estimate = ~${ $whole }.{ $cents }
+cockpit-cost-unpriced = unpriced
+cockpit-cost-partly-unpriced = partly unpriced
+cockpit-cost-unpriced-models = No list price: { $models }
+cockpit-cost-source = Costs: estimate from API list prices as of { $date }
+cockpit-fleet-cost-summary = today { $today } · 5h { $block } · wk { $week }
 # Review cluster. "reviewed" is deliberately not "approved": the mark is a
 # private note to yourself — it tells the agent nothing and approves nothing.
 cockpit-session-review = Review

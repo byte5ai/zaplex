@@ -12,6 +12,7 @@ pub(crate) mod fleet_details;
 pub(crate) mod github_flow_dialog;
 pub mod github_flows;
 pub mod launch_registry;
+pub(crate) mod localize;
 pub mod model;
 pub mod oauth;
 pub mod palette;
