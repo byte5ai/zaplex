@@ -40,7 +40,9 @@ fn a_malformed_claude_identity_degrades_the_snapshot() {
     fs::create_dir_all(home.join(".claude")).unwrap();
     fs::write(home.join(".claude/.claude.json"), "{not valid json").unwrap();
 
-    let snap = build_snapshot(
+    // Without process discovery: a Claude process running on the test host must
+    // not add its account to this malformed setup.
+    let snap = build_snapshot_with_claude_discovery(
         &home,
         &codex_home,
         None,
@@ -48,6 +50,8 @@ fn a_malformed_claude_identity_degrades_the_snapshot() {
         0,
         0,
         &PricingTable::default(),
+        &mut TranscriptScanCache::default(),
+        claude::discover_accounts_without_process_scan,
     );
     assert!(
         matches!(snap.health, ScanHealth::Degraded(_)),

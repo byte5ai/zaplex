@@ -370,14 +370,41 @@ fn merged_links_prefer_a_zaplex_surface_then_external_evidence() {
     );
 }
 
+/// A harmless agent stand-in that already runs its own program image.
+///
+/// `spawn` can return while the child is still inside `execve`: its new
+/// environment is not published yet, so `/proc/<pid>/environ` shows the
+/// parent's environment or nothing. `cat -u` echoing a byte proves the new
+/// image is running.
 #[cfg(target_os = "linux")]
-fn sleeping_child_with_surface(surface_id: Option<&str>) -> std::process::Child {
-    let mut command = command::blocking::Command::new("/bin/sleep");
-    command.arg("60").env_remove(ZAPLEX_SURFACE_ENV);
+fn running_child_with_surface(surface_id: Option<&str>) -> std::process::Child {
+    use std::io::{Read as _, Write as _};
+    use std::process::Stdio;
+
+    let mut command = command::blocking::Command::new("/bin/cat");
+    command
+        .arg("-u")
+        .env_remove(ZAPLEX_SURFACE_ENV)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
     if let Some(surface_id) = surface_id {
         command.env(ZAPLEX_SURFACE_ENV, surface_id);
     }
-    command.spawn().expect("spawn a harmless agent stand-in")
+    let mut child = command.spawn().expect("spawn a harmless agent stand-in");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(b"x")
+        .expect("send a byte to the agent stand-in");
+    let mut echo = [0; 1];
+    child
+        .stdout
+        .as_mut()
+        .expect("stdout is piped")
+        .read_exact(&mut echo)
+        .expect("the agent stand-in echoes from its own image");
+    child
 }
 
 /// A process started in a Zaplex pane carries that pane's surface id even
@@ -385,8 +412,8 @@ fn sleeping_child_with_surface(surface_id: Option<&str>) -> std::process::Child 
 #[cfg(target_os = "linux")]
 #[test]
 fn a_live_process_is_linked_to_the_zaplex_pane_it_was_started_in() {
-    let mut inside = sleeping_child_with_surface(Some("surface-1"));
-    let mut outside = sleeping_child_with_surface(None);
+    let mut inside = running_child_with_surface(Some("surface-1"));
+    let mut outside = running_child_with_surface(None);
     let inside_fingerprint = current_process_fingerprint(inside.id());
 
     let inside_link = terminal_link_for_pid(inside.id(), inside_fingerprint.as_deref());
@@ -403,7 +430,7 @@ fn a_live_process_is_linked_to_the_zaplex_pane_it_was_started_in() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_reused_or_vanished_pid_is_never_linked() {
-    let mut child = sleeping_child_with_surface(Some("surface-2"));
+    let mut child = running_child_with_surface(Some("surface-2"));
     let pid = child.id();
     let fingerprint = current_process_fingerprint(pid).expect("child is inspectable");
     let reused = terminal_link_for_pid(pid, Some(&format!("{fingerprint}:other-process")));
