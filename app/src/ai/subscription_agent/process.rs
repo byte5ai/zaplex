@@ -1,6 +1,6 @@
 use super::{
-    InstallationIdentity, SubscriptionAgent, SubscriptionTarget, CLAUDE_PROVIDER_MANAGED_BY_HOST,
-    CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES,
+    AccountIdentity, InstallationIdentity, SubscriptionAgent, SubscriptionTarget,
+    CLAUDE_PROVIDER_MANAGED_BY_HOST, CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use async_process::{Child, ChildStderr, ChildStdin, ChildStdout};
@@ -73,19 +73,6 @@ impl ProcessLaunch {
                     "--permission-mode".to_string(),
                     "default".to_string(),
                 ]);
-                launch
-                    .unset_environment
-                    .extend(CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES);
-                launch.environment.push((
-                    CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
-                    CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
-                ));
-                if let Some(config_dir) = installation.account.config_dir.as_ref() {
-                    launch.environment.push((
-                        "CLAUDE_CONFIG_DIR",
-                        config_dir.to_string_lossy().into_owned(),
-                    ));
-                }
             }
             SubscriptionAgent::Codex => {
                 launch.args.extend([
@@ -93,14 +80,9 @@ impl ProcessLaunch {
                     "--listen".to_string(),
                     "stdio://".to_string(),
                 ]);
-                launch.unset_environment.push("OPENAI_API_KEY");
-                if let Some(config_dir) = installation.account.config_dir.as_ref() {
-                    launch
-                        .environment
-                        .push(("CODEX_HOME", config_dir.to_string_lossy().into_owned()));
-                }
             }
         }
+        launch.push_account_environment(installation.agent, &installation.account);
         launch
     }
 
@@ -141,19 +123,6 @@ impl ProcessLaunch {
                         .args
                         .extend(["--resume".to_string(), session.to_string()]);
                 }
-                launch
-                    .unset_environment
-                    .extend(CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES);
-                launch.environment.push((
-                    CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
-                    CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
-                ));
-                if let Some(config_dir) = target.installation.account.config_dir.as_ref() {
-                    launch.environment.push((
-                        "CLAUDE_CONFIG_DIR",
-                        config_dir.to_string_lossy().into_owned(),
-                    ));
-                }
             }
             SubscriptionAgent::Codex => {
                 launch.args.extend([
@@ -161,15 +130,47 @@ impl ProcessLaunch {
                     "--listen".to_string(),
                     "stdio://".to_string(),
                 ]);
-                launch.unset_environment.push("OPENAI_API_KEY");
-                if let Some(config_dir) = target.installation.account.config_dir.as_ref() {
-                    launch
-                        .environment
+            }
+        }
+        launch.push_account_environment(target.installation.agent, &target.installation.account);
+        launch
+    }
+
+    /// Discovery doubles as the authentication preflight, so it shares this
+    /// environment with the session launch and checks the login that will run.
+    fn push_account_environment(&mut self, agent: SubscriptionAgent, account: &AccountIdentity) {
+        match agent {
+            SubscriptionAgent::ClaudeCode => {
+                self.unset_environment
+                    .extend(CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES);
+                self.environment.push((
+                    CLAUDE_PROVIDER_MANAGED_BY_HOST.0,
+                    CLAUDE_PROVIDER_MANAGED_BY_HOST.1.to_string(),
+                ));
+                match (&account.config_dir_pin, &account.config_dir) {
+                    (Some(config_dir), _) => self.environment.push((
+                        "CLAUDE_CONFIG_DIR",
+                        config_dir.to_string_lossy().into_owned(),
+                    )),
+                    // A set CLAUDE_CONFIG_DIR, even one naming the default root,
+                    // makes Claude Code look up another credential entry than its
+                    // default login, so that login starts without the variable.
+                    (None, Some(_)) => self.unset_environment.push("CLAUDE_CONFIG_DIR"),
+                    // A remote host selects its default login in its own environment.
+                    (None, None) => {}
+                }
+            }
+            SubscriptionAgent::Codex => {
+                self.unset_environment.push("OPENAI_API_KEY");
+                // Codex resolves CODEX_HOME to the canonical root that also keys its
+                // credentials, so even the default root is exported to override an
+                // inherited value.
+                if let Some(config_dir) = account.config_dir.as_ref() {
+                    self.environment
                         .push(("CODEX_HOME", config_dir.to_string_lossy().into_owned()));
                 }
             }
         }
-        launch
     }
 
     /// Keep the native conversation while restricting a /plan turn to research

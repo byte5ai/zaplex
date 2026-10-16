@@ -1275,6 +1275,7 @@ fn local_candidates_from_inventory(
                         display_name: "Default subscription".to_string(),
                         provider_account_id: None,
                         config_dir: dirs::home_dir().map(|home| home.join(default_dir)),
+                        config_dir_pin: None,
                     },
                     executable.clone(),
                 ),
@@ -1304,6 +1305,7 @@ fn local_account_identity(account: &Account) -> AccountIdentity {
         display_name: account.label.clone(),
         provider_account_id: account.provider_account_id.clone(),
         config_dir: Some(account.config_dir.clone()),
+        config_dir_pin: account.config_dir_pin().map(PathBuf::from),
     }
 }
 
@@ -1451,6 +1453,7 @@ fn remote_candidates_for_ssh(
                     },
                     provider_account_id: Some(provider_account_id.to_string()),
                     config_dir: None,
+                    config_dir_pin: None,
                 },
                 PathBuf::from(command),
             ),

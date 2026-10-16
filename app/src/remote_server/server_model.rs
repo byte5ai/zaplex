@@ -4363,6 +4363,7 @@ async fn discover_agent_models_on_daemon(
             provider_account_id: resolved.provider_account_id,
             // Set even for the provider's default account so the child cannot
             // inherit an unrelated daemon-level config-root override.
+            config_dir_pin: Some(config_dir.clone()),
             config_dir: Some(config_dir),
         },
         executable,

@@ -263,6 +263,7 @@ fn test_target() -> SubscriptionTarget {
                 display_name: "Engineering account with a long display name".to_string(),
                 provider_account_id: Some("provider-account-layout-evidence".to_string()),
                 config_dir: Some(PathBuf::from("/Users/test/.codex-engineering")),
+                config_dir_pin: None,
             },
             executable: PathBuf::from("/usr/local/bin/codex"),
             version: "layout-evidence".to_string(),
