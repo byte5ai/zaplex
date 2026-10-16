@@ -8839,9 +8839,10 @@ impl Workspace {
                     return Err("The remote account route could not be opened.".to_string());
                 }
                 _ => {
-                    return Err(format!(
-                        "Couldn't find host '{node_id}' to launch {} on.",
-                        agent.display_name()
+                    return Err(crate::t!(
+                        "workspace-launch-host-not-found",
+                        host = node_id.to_string(),
+                        agent = agent.display_name().to_string()
                     ));
                 }
             }

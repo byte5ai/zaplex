@@ -53,12 +53,45 @@ fn provenance_marks_estimates_only() {
     );
 }
 
+fn window(cost_usd: f64, unpriced_models: &[&str]) -> WindowTotals {
+    WindowTotals {
+        has_unpriced_usage: !unpriced_models.is_empty(),
+        unpriced_models: unpriced_models
+            .iter()
+            .map(|model| model.to_string())
+            .collect(),
+        cost_usd,
+        ..WindowTotals::default()
+    }
+}
+
+/// An unpriced share never voids the priced part (#515): the fleet total sums
+/// every account's priced spend and names each unpriced model once.
 #[test]
-fn cost_format() {
-    assert_eq!(format_cost(4.2), "~$4.20");
-    assert_eq!(format_cost(0.0), "~$0.00");
-    assert_eq!(format_cost(19.005), "~$19.00");
-    assert_eq!(format_cost(-1.0), "unpriced");
+fn cost_figure_keeps_the_priced_part_beside_unpriced_models() {
+    assert_eq!(
+        cost_figure([&WindowTotals::default()]),
+        CostFigure::Estimate { usd: 0.0 },
+        "a window without spend is a real zero, not an unknown one"
+    );
+    assert_eq!(
+        cost_figure([&window(0.0, &["gpt-5.5"])]),
+        CostFigure::Unpriced {
+            unpriced_models: vec!["gpt-5.5".to_string()],
+        }
+    );
+    let accounts = [
+        window(1.25, &[]),
+        window(2.5, &["gpt-5.5", "claude-next"]),
+        window(0.0, &["gpt-5.5"]),
+    ];
+    assert_eq!(
+        cost_figure(&accounts),
+        CostFigure::Partial {
+            usd: 3.75,
+            unpriced_models: vec!["claude-next".to_string(), "gpt-5.5".to_string()],
+        }
+    );
 }
 
 #[test]
@@ -83,16 +116,28 @@ fn token_humanization_promotes_rounded_unit_boundaries() {
 }
 
 #[test]
-fn reset_countdown() {
+fn reset_countdown_steps_from_minutes_to_hours_to_days() {
     let now = ts("2026-06-30T12:00:00Z");
-    assert_eq!(format_reset(None, now), "");
+    assert_eq!(reset_countdown(None, now), None);
     assert_eq!(
-        format_reset(Some(ts("2026-06-30T11:59:00Z")), now),
-        "resetting"
+        reset_countdown(Some(ts("2026-06-30T11:59:00Z")), now),
+        Some(ResetCountdown::Resetting)
     );
-    assert_eq!(format_reset(Some(ts("2026-06-30T12:45:00Z")), now), "45m");
-    assert_eq!(format_reset(Some(ts("2026-06-30T14:13:00Z")), now), "2h13m");
-    assert_eq!(format_reset(Some(ts("2026-07-04T13:00:00Z")), now), "4d1h");
+    assert_eq!(
+        reset_countdown(Some(ts("2026-06-30T12:45:00Z")), now),
+        Some(ResetCountdown::Minutes(45))
+    );
+    assert_eq!(
+        reset_countdown(Some(ts("2026-06-30T14:13:00Z")), now),
+        Some(ResetCountdown::HoursMinutes {
+            hours: 2,
+            minutes: 13
+        })
+    );
+    assert_eq!(
+        reset_countdown(Some(ts("2026-07-04T13:00:00Z")), now),
+        Some(ResetCountdown::DaysHours { days: 4, hours: 1 })
+    );
 }
 
 #[test]
@@ -127,16 +172,20 @@ fn relative_time_is_short_and_matches_the_reset_units() {
     let now = DateTime::parse_from_rfc3339("2026-07-17T12:00:00Z")
         .unwrap()
         .with_timezone(&Utc);
-    let ago = |secs: i64| format_relative(now - chrono::Duration::seconds(secs), now);
+    let ago = |secs: i64| relative_age(now - chrono::Duration::seconds(secs), now);
 
-    assert_eq!(ago(5), "now", "under a minute is not worth a number");
-    assert_eq!(ago(59), "now");
-    assert_eq!(ago(60), "1m");
-    assert_eq!(ago(3599), "59m");
-    assert_eq!(ago(3600), "1h");
-    assert_eq!(ago(86_399), "23h");
-    assert_eq!(ago(86_400), "1d");
-    assert_eq!(ago(10 * 86_400), "10d");
+    assert_eq!(
+        ago(5),
+        RelativeAge::Now,
+        "under a minute is not worth a number"
+    );
+    assert_eq!(ago(59), RelativeAge::Now);
+    assert_eq!(ago(60), RelativeAge::Minutes(1));
+    assert_eq!(ago(3599), RelativeAge::Minutes(59));
+    assert_eq!(ago(3600), RelativeAge::Hours(1));
+    assert_eq!(ago(86_399), RelativeAge::Hours(23));
+    assert_eq!(ago(86_400), RelativeAge::Days(1));
+    assert_eq!(ago(10 * 86_400), RelativeAge::Days(10));
 }
 
 /// A timestamp from the future means two clocks disagree — the host that wrote
@@ -148,7 +197,7 @@ fn a_future_timestamp_reads_as_now_rather_than_negative() {
         .unwrap()
         .with_timezone(&Utc);
     assert_eq!(
-        format_relative(now + chrono::Duration::hours(3), now),
-        "now"
+        relative_age(now + chrono::Duration::hours(3), now),
+        RelativeAge::Now
     );
 }

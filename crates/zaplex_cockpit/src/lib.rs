@@ -47,9 +47,9 @@ pub use claude_registry_lifecycle::{
 pub use conductor::{
     fleet_conductor_session_count, fleet_session_count, group_project_sessions,
     host_conductor_session_count, host_ident, host_key, host_key_is_local, host_session_count,
-    model_effort_label, next_waiting, session_attr_line, session_attrs, session_glyph,
-    session_identity_key, session_identity_key_with_account_id, session_key, split_host_key,
-    state_word, waiting_sessions, ConductorSession, SessionAttrs, WaitingTarget, GLYPH_IDLE,
+    model_effort_label, next_waiting, session_attrs, session_glyph, session_identity_key,
+    session_identity_key_with_account_id, session_key, split_host_key, state_word,
+    waiting_sessions, ConductorSession, SessionAttrs, StateWord, WaitingTarget, GLYPH_IDLE,
     GLYPH_WAITING, GLYPH_WORKING,
 };
 pub use favorites::{Favorite, FavoriteKind, Favorites};
@@ -60,8 +60,9 @@ pub use fleet::{
     ProjectNode, RegisteredHost, RemoteHost, SeenTurns, SessionVerdict,
 };
 pub use format::{
-    binding_window, context_fill, context_window, format_cost, format_relative, format_reset,
-    format_tokens, heat_fill, heat_pct_label_with_provenance, model_family, HeatLevel,
+    binding_window, context_fill, context_window, cost_figure, format_tokens, heat_fill,
+    heat_pct_label_with_provenance, model_family, relative_age, reset_countdown, CostFigure,
+    HeatLevel, RelativeAge, ResetCountdown,
 };
 pub use guardrails::{
     failed_toast, guardrail_target, kill_confirm_message, no_remote_connection_toast,

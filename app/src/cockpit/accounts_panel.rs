@@ -20,12 +20,15 @@ use warpui::{
     AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
-use zaplex_cockpit::{format_cost, heat_pct_label_with_provenance, AccountUsage, UsageProvenance};
+use zaplex_cockpit::{cost_figure, heat_pct_label_with_provenance, AccountUsage, UsageProvenance};
 
 use crate::cockpit::account_identity;
+use crate::cockpit::localize::{cost_text, unpriced_models_text};
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::panel::{account_count_presentation, CockpitPanel, CARD_PADDING, CARD_SPACING};
-use crate::cockpit::style::{utilisation_coloru, utilisation_track, zone_card, BLOCK_RADIUS};
+use crate::cockpit::style::{
+    utilisation_coloru, utilisation_track, zone_card, BLOCK_RADIUS, METER_LABEL_WIDTH,
+};
 use crate::view_components::action_button::{ActionButton, ButtonSize, PaneHeaderTheme};
 
 const HEAT_BAR_HEIGHT: f32 = 6.0;
@@ -81,10 +84,12 @@ impl FleetTotalButton {
         }
     }
 
-    fn set_label(&mut self, label: String, ctx: &mut ViewContext<Self>) {
+    fn set_label(&mut self, label: String, tooltip: Option<String>, ctx: &mut ViewContext<Self>) {
         self.label.clone_from(&label);
-        self.button
-            .update(ctx, |button, ctx| button.set_label(label, ctx));
+        self.button.update(ctx, |button, ctx| {
+            button.set_label(label, ctx);
+            button.set_tooltip(tooltip, ctx);
+        });
         ctx.notify();
     }
 }
@@ -192,19 +197,24 @@ impl CockpitAccountsPanel {
         me
     }
 
+    /// The fleet total sums every account's priced spend; an unpriced share is
+    /// named beside it ("teilweise ohne Preis") with its models in the tooltip,
+    /// instead of voiding the whole figure (#515).
     fn sync_fleet_total_button(&self, ctx: &mut ViewContext<Self>) {
-        let fleet_today = CockpitModel::as_ref(ctx)
-            .snapshot()
-            .accounts
-            .iter()
-            .map(|account| account.today.cost_usd)
-            .sum::<f64>();
+        let fleet_today = cost_figure(
+            CockpitModel::as_ref(ctx)
+                .snapshot()
+                .accounts
+                .iter()
+                .map(|account| &account.today),
+        );
         let label = crate::t!(
             "cockpit-header-today-total",
-            today = format_cost(fleet_today)
+            today = cost_text(&fleet_today)
         );
+        let tooltip = unpriced_models_text(&fleet_today);
         self.fleet_total_button
-            .update(ctx, |button, ctx| button.set_label(label.to_string(), ctx));
+            .update(ctx, |button, ctx| button.set_label(label, tooltip, ctx));
     }
 
     /// Card hover handles, keyed by account `key` (one stable handle per card
@@ -301,7 +311,11 @@ impl CockpitAccountsPanel {
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(6.0)
-            .with_child(CockpitPanel::text(label.to_string(), family, size, muted))
+            .with_child(
+                ConstrainedBox::new(CockpitPanel::text(label.to_string(), family, size, muted))
+                    .with_width(METER_LABEL_WIDTH)
+                    .finish(),
+            )
             .with_child(track)
             .with_child(CockpitPanel::text(
                 heat_pct_label_with_provenance(fraction, provenance),
