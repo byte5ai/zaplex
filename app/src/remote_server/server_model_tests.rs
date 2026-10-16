@@ -3131,14 +3131,18 @@ fn create_directory_creates_nested_directories() {
 
 #[cfg(unix)]
 mod daemon_session {
-    use super::super::{normalize_pty_dimensions, LogicalOpenReservation, HOST_RING_CAP_BYTES};
+    use super::super::{
+        normalize_pty_dimensions, LogicalOpenReservation, HOST_RING_CAP_BYTES,
+        MAX_DETACHED_SESSION_AGE,
+    };
     use super::{bind_status, binding_identity, test_model};
+    use crate::remote_server::managed_fleet::ForegroundAgent;
     use crate::remote_server::proto::{
         client_message, server_message, Abort, AttachSession, BindAgentPty, ClientMessage,
         CloseSession, DetachSession, ListSessions, ManagedLaunch, ManagedSessionLifecycleAction,
         ManagedSessionLifecycleRequest, ManagedSessionLifecycleStatus, OpenSession,
-        ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionList,
-        SessionOpened, SessionSize,
+        ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionKeepReason,
+        SessionList, SessionOpened, SessionSize,
     };
     use crate::remote_server::protocol::RequestId;
     use futures::future::Either;
@@ -5418,7 +5422,10 @@ mod daemon_session {
 
             model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
             model.update(&mut app, |m, _ctx| {
-                assert_eq!(m.gc_sessions(u64::MAX, 1, 0), 0);
+                assert_eq!(
+                    m.gc_sessions(u64::MAX, 1, 0, |_| ForegroundAgent::NotRunning),
+                    0
+                );
                 assert!(m.sessions.contains_key(&opened.session_id));
             });
 
@@ -5997,13 +6004,15 @@ mod daemon_session {
             // grace guard keeps the daemon up).
             model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
             model.update(&mut app, |m, _ctx| {
-                m.sessions.get_mut(&id1).unwrap().last_attached_ms = 0;
-                m.sessions.get_mut(&id2).unwrap().last_attached_ms = 1_000_000_000_000;
+                m.sessions.get_mut(&id1).unwrap().detached_since_ms = Some(0);
+                m.sessions.get_mut(&id2).unwrap().detached_since_ms = Some(1_000_000_000_000);
             });
 
             // Age GC (60s max, unlimited cap): reap ancient id1, keep recent id2.
             let reaped = model.update(&mut app, |m, _ctx| {
-                m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX)
+                m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX, |_| {
+                    ForegroundAgent::NotRunning
+                })
             });
             assert_eq!(reaped, 1, "ancient detached session reaped");
             model.update(&mut app, |m, _ctx| {
@@ -6019,7 +6028,9 @@ mod daemon_session {
             let mut reaped2 = 0;
             for _ in 0..50 {
                 reaped2 = model.update(&mut app, |m, _ctx| {
-                    m.gc_sessions(1_000_000_000_000, u64::MAX, 0)
+                    m.gc_sessions(1_000_000_000_000, u64::MAX, 0, |_| {
+                        ForegroundAgent::NotRunning
+                    })
                 });
                 if reaped2 == 1 {
                     break;
@@ -6120,13 +6131,15 @@ mod daemon_session {
                 );
                 // Age the session so the next GC sweep reaps it.
                 for s in m.sessions.values_mut() {
-                    s.last_attached_ms = 0;
+                    s.detached_since_ms = Some(0);
                 }
             });
 
             // GC reaps the now-ancient last session, then re-evaluates idleness.
             model.update(&mut app, |m, ctx| {
-                let reaped = m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX);
+                let reaped = m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX, |_| {
+                    ForegroundAgent::NotRunning
+                });
                 assert_eq!(reaped, 1, "the last detached session is reaped");
                 m.maybe_arm_grace_when_idle(ctx);
             });
@@ -6137,6 +6150,221 @@ mod daemon_session {
                     m.grace_timer_cancel.is_some(),
                     "GC emptied the daemon with no connections — grace timer must be armed"
                 );
+            });
+        });
+    }
+
+    /// #508: the age limit counts from the detach, never from the last attach.
+    /// A session attached for 48 h whose connection then drops (laptop lid
+    /// closed) still lives the full limit before the GC ends it.
+    #[test]
+    fn long_attached_session_survives_disconnect_for_full_grace_period() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in(&path), ctx)
+            });
+            let id = recv_session_opened(&conn_rx).await.expect("session opened");
+            let max_age_ms = MAX_DETACHED_SESSION_AGE.as_millis() as u64;
+
+            let detached_at = model.update(&mut app, |m, ctx| {
+                let session = m.sessions.get_mut(&id).unwrap();
+                session.last_attached_ms = session.last_attached_ms.saturating_sub(2 * max_age_ms);
+                m.deregister_connection(conn_id, ctx);
+                m.sessions[&id]
+                    .detached_since_ms
+                    .expect("a dropped connection records the detach time")
+            });
+
+            let reaped = model.update(&mut app, |m, _ctx| {
+                m.gc_sessions(detached_at + max_age_ms - 1, max_age_ms, usize::MAX, |_| {
+                    ForegroundAgent::NotRunning
+                })
+            });
+            assert_eq!(reaped, 0, "48 h of attachment must not shorten the limit");
+            let reaped = model.update(&mut app, |m, _ctx| {
+                m.gc_sessions(detached_at + max_age_ms, max_age_ms, usize::MAX, |_| {
+                    ForegroundAgent::NotRunning
+                })
+            });
+            assert_eq!(reaped, 1, "the full limit after the drop ends the session");
+            model.update(&mut app, |m, _ctx| assert!(!m.sessions.contains_key(&id)));
+        });
+    }
+
+    /// #508: ring-cap pressure ends the longest-detached session first, not
+    /// the one whose last attach is oldest.
+    #[test]
+    fn ring_cap_eviction_orders_by_detach_time() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "ring-early"), ctx)
+            });
+            let early_id = recv_session_opened(&conn_rx)
+                .await
+                .expect("early session opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "ring-late"), ctx)
+            });
+            let late_id = recv_session_opened(&conn_rx)
+                .await
+                .expect("late session opened");
+            model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
+
+            // One model update, so no shell output can grow a ring in between.
+            let reaped = model.update(&mut app, |m, _ctx| {
+                let early = m.sessions.get_mut(&early_id).unwrap();
+                early.last_attached_ms = 2_000;
+                early.detached_since_ms = Some(3_000);
+                early.ring.append(b"detached first, attached last");
+                let late = m.sessions.get_mut(&late_id).unwrap();
+                late.last_attached_ms = 1_000;
+                late.detached_since_ms = Some(4_000);
+                late.ring.append(b"attached first, detached last");
+                let total: usize = m.sessions.values().map(|s| s.ring.len()).sum();
+                m.gc_sessions(5_000, u64::MAX, total - 1, |_| ForegroundAgent::NotRunning)
+            });
+            assert_eq!(reaped, 1, "one byte over the cap ends exactly one session");
+            model.update(&mut app, |m, _ctx| {
+                assert!(
+                    !m.sessions.contains_key(&early_id),
+                    "the earliest detach goes first"
+                );
+                assert!(m.sessions.contains_key(&late_id));
+            });
+        });
+    }
+
+    /// Product decision for #508: a detached session whose foreground runs a
+    /// coding agent is ended neither by the age limit nor by ring-cap
+    /// pressure, even if the cap then stays exceeded.
+    #[test]
+    fn running_agent_session_is_never_reaped() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "agent"), ctx)
+            });
+            let agent_id = recv_session_opened(&conn_rx)
+                .await
+                .expect("agent session opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "shell"), ctx)
+            });
+            let shell_id = recv_session_opened(&conn_rx)
+                .await
+                .expect("shell session opened");
+            model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
+
+            let (reaped, survivors) = model.update(&mut app, |m, _ctx| {
+                for session in m.sessions.values_mut() {
+                    session.detached_since_ms = Some(0);
+                    session.ring.append(b"output");
+                }
+                let agent_pid = m.sessions[&agent_id].child.id();
+                let reaped = m.gc_sessions(1_000_000_000_000, 60_000, 0, |pid| {
+                    if pid == agent_pid {
+                        ForegroundAgent::Running
+                    } else {
+                        ForegroundAgent::NotRunning
+                    }
+                });
+                (reaped, m.sessions.keys().cloned().collect::<Vec<_>>())
+            });
+            assert_eq!(reaped, 1, "only the plain shell past its limit is reaped");
+            assert_eq!(survivors, vec![agent_id.clone()]);
+            assert!(!survivors.contains(&shell_id));
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(uuid::Uuid::new_v4(), close_msg(&agent_id), ctx)
+            });
+        });
+    }
+
+    /// #508: the inventory reports since when a session has had no client and
+    /// when the GC ends it, counted from that detach; an attached session
+    /// reports neither.
+    #[test]
+    fn list_sessions_reports_detach_time_and_expiry() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (dropped_tx, dropped_rx) = async_channel::unbounded::<ServerMessage>();
+            let dropped = uuid::Uuid::new_v4();
+            let (lister_tx, lister_rx) = async_channel::unbounded::<ServerMessage>();
+            let lister = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(dropped, dropped_tx, ctx);
+                m.register_connection(lister, lister_tx, ctx);
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(dropped, open_in_with_logical_id(&path, "dropped"), ctx)
+            });
+            let detached_id = recv_session_opened(&dropped_rx)
+                .await
+                .expect("detached session opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(lister, open_in_with_logical_id(&path, "attached"), ctx)
+            });
+            let attached_id = recv_session_opened(&lister_rx)
+                .await
+                .expect("attached session opened");
+
+            let detached_at = model.update(&mut app, |m, ctx| {
+                m.deregister_connection(dropped, ctx);
+                m.handle_message(lister, list_msg(), ctx);
+                m.sessions[&detached_id].detached_since_ms.unwrap()
+            });
+            let list = recv_session_list(&lister_rx).await.expect("SessionList");
+            let retention = |id: &str| {
+                list.sessions
+                    .iter()
+                    .find(|session| session.session_id == id)
+                    .and_then(|session| session.retention.clone())
+                    .expect("retention reported")
+            };
+
+            let detached = retention(&detached_id);
+            assert_eq!(detached.detached_since_epoch_millis, detached_at);
+            // A plain shell expires a full limit after the drop. Between two
+            // bootstrap commands its foreground may be unreadable, which keeps
+            // it instead; it never expires by attach time.
+            let max_age_ms = MAX_DETACHED_SESSION_AGE.as_millis() as u64;
+            assert!(
+                detached.expires_at_epoch_millis == detached_at + max_age_ms
+                    || detached.keep_reason == SessionKeepReason::ForegroundUnknown as i32,
+                "{detached:?}"
+            );
+            let attached = retention(&attached_id);
+            assert_eq!(attached.detached_since_epoch_millis, 0);
+            assert_eq!(attached.expires_at_epoch_millis, 0);
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(lister, close_msg(&detached_id), ctx);
+                m.handle_message(lister, close_msg(&attached_id), ctx);
             });
         });
     }

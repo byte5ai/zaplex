@@ -118,8 +118,11 @@ pub(super) struct Session {
     /// Login shell the session runs (for `ListSessions` titles).
     pub(super) shell: String,
     /// Unix epoch millis of the last attach (open counts as the first attach);
-    /// `0` means never. Drives `ListSessions` and the detached-idle GC.
+    /// `0` means never. Reported by `ListSessions`.
     pub(super) last_attached_ms: u64,
+    /// Unix epoch millis since which no connection is attached; `None` while
+    /// one is. The detached-session GC counts its age limit from here.
+    pub(super) detached_since_ms: Option<u64>,
     /// The session's captured bootstrap handshake, served to a later adopt whose
     /// ring has evicted it so bootstrap can still be armed (T1.3).
     pub(super) preamble: BootstrapPreamble,

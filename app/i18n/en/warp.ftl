@@ -3021,6 +3021,32 @@ workspace-left-panel-ssh-manager-session-last-opened-days = { $count ->
         [one] last opened 1 day ago
        *[other] last opened { $count } days ago
     }
+workspace-left-panel-ssh-manager-session-detached-metadata = { $detached } · { $retention }
+workspace-left-panel-ssh-manager-session-detached-now = just detached
+workspace-left-panel-ssh-manager-session-detached-minutes = { $count ->
+        [one] detached for 1 minute
+       *[other] detached for { $count } minutes
+    }
+workspace-left-panel-ssh-manager-session-detached-hours = { $count ->
+        [one] detached for 1 hour
+       *[other] detached for { $count } hours
+    }
+workspace-left-panel-ssh-manager-session-detached-days = { $count ->
+        [one] detached for 1 day
+       *[other] detached for { $count } days
+    }
+workspace-left-panel-ssh-manager-session-expires-soon = ends shortly
+workspace-left-panel-ssh-manager-session-expires-minutes = { $count ->
+        [one] ends in 1 minute
+       *[other] ends in { $count } minutes
+    }
+workspace-left-panel-ssh-manager-session-expires-hours = { $count ->
+        [one] ends in 1 hour
+       *[other] ends in { $count } hours
+    }
+workspace-left-panel-ssh-manager-session-kept = kept
+workspace-left-panel-ssh-manager-session-kept-agent = kept while the agent runs
+workspace-left-panel-ssh-manager-session-kept-unknown = kept, program unknown
 workspace-left-panel-ssh-manager-session-host-missing = This host no longer exists in Connections
 workspace-left-panel-ssh-manager-session-open-error = Could not open this session: { $detail }
 workspace-left-panel-ssh-manager-sessions-refreshing = Refreshing sessions…

@@ -224,24 +224,38 @@ fn managed_session_is_exempt_from_both_implicit_gc_paths() {
     .unwrap();
     let managed = ManagedSessionMetadata::new(plan, None);
 
-    assert!(!eligible_for_detached_age_gc(
-        Some(&managed),
-        true,
-        100_000,
-        1,
-        60_000,
-    ));
-    assert!(!eligible_for_ring_pressure_gc(Some(&managed), true));
+    assert_eq!(
+        detached_retention(Some(&managed), Some(1), 60_000, || {
+            ForegroundAgent::NotRunning
+        }),
+        DetachedRetention::Kept {
+            detached_since_epoch_millis: 1,
+            reason: KeepReason::Managed,
+        }
+    );
 }
 
 #[test]
-fn unmanaged_session_keeps_existing_detached_gc_semantics() {
-    assert!(eligible_for_detached_age_gc(None, true, 100_000, 1, 60_000,));
-    assert!(!eligible_for_detached_age_gc(
-        None, false, 100_000, 1, 60_000,
-    ));
-    assert!(eligible_for_ring_pressure_gc(None, true));
-    assert!(!eligible_for_ring_pressure_gc(None, false));
+fn unmanaged_detached_session_expires_a_full_age_after_its_detach() {
+    assert_eq!(
+        detached_retention(None, Some(5_000), 60_000, || ForegroundAgent::NotRunning),
+        DetachedRetention::Expires {
+            detached_since_epoch_millis: 5_000,
+            expires_at_epoch_millis: 65_000,
+        }
+    );
+    assert_eq!(
+        detached_retention(None, None, 60_000, || ForegroundAgent::NotRunning),
+        DetachedRetention::Attached
+    );
+    // An unreadable foreground might be an agent, so it is never reaped.
+    assert_eq!(
+        detached_retention(None, Some(5_000), 60_000, || ForegroundAgent::Unknown),
+        DetachedRetention::Kept {
+            detached_since_epoch_millis: 5_000,
+            reason: KeepReason::ForegroundUnknown,
+        }
+    );
 }
 
 #[test]

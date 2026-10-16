@@ -33,6 +33,8 @@ use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::FileId;
 
+#[cfg(unix)]
+use super::managed_fleet::{detached_retention, DetachedRetention, ForegroundAgent, KeepReason};
 use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
     write_file_response, Abort, AgentModelCapability, AgentModelDiscoveryResponse,
@@ -52,9 +54,14 @@ use super::proto::{
     AttachSession, BindAgentPty, CloseSession, DetachSession, ManagedLaunch,
     ManagedSessionExitInfo, ManagedSessionInfo, ManagedSessionLifecycleAction,
     ManagedSessionLifecycleRequest, MemoryMeasurement, MemoryMeasurementStatus, OpenSession,
-    ResizeSession, SessionAttached, SessionExited, SessionInfo, SessionInput, SessionList,
-    SessionNotice, SessionOpened, SessionOutput, SessionSize, SetBootstrapPreamble, UnbindAgentPty,
+    ResizeSession, SessionAttached, SessionExited, SessionInfo, SessionInput, SessionKeepReason,
+    SessionList, SessionNotice, SessionOpened, SessionOutput, SessionRetention, SessionSize,
+    SetBootstrapPreamble, UnbindAgentPty,
 };
+#[cfg(target_os = "linux")]
+use super::session_live::{read_session_live_state, RealPtyProcfs};
+#[cfg(unix)]
+use chrono::{DateTime, SecondsFormat};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
@@ -100,14 +107,16 @@ pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 
 /// consumer is disconnected before its outbox can grow beyond this budget.
 pub(super) const CONNECTION_OUTBOX_BUDGET_BYTES: usize = 8 * 1024 * 1024;
 
-/// Reap a session that has had no attached connection for this long. Detached
-/// sessions otherwise live indefinitely so a client can reconnect (laptop
-/// closed, etc.); this bounds memory against truly abandoned ones (Stage 4).
+/// Reap a session that has had no attached connection for this long, counted
+/// from its detach. Detached sessions otherwise live indefinitely so a client
+/// can reconnect (laptop closed, etc.); this bounds memory against truly
+/// abandoned ones (Stage 4). Exemptions: `managed_fleet::detached_retention`.
 #[cfg(unix)]
 const MAX_DETACHED_SESSION_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// Soft cap on total output-ring bytes across all of this host's sessions. When
-/// exceeded, the oldest *detached* sessions are reaped until back under it
-/// (live, attached sessions are never reaped).
+/// exceeded, the longest-detached sessions the retention policy lets expire are
+/// reaped until back under it (attached sessions and those kept by policy, such
+/// as a running agent, are never reaped, even if the cap stays exceeded).
 #[cfg(unix)]
 const HOST_RING_CAP_BYTES: usize = 256 * 1024 * 1024;
 /// How often the detached-session GC sweep runs.
@@ -1990,6 +1999,16 @@ impl ServerModel {
         for request_id in self.accepted_opens.remove_connection(conn_id) {
             if let Some(handle) = self.in_progress.remove(&request_id) {
                 handle.abort();
+            }
+        }
+        // Its sessions keep running detached; their age limit starts now.
+        #[cfg(unix)]
+        {
+            let now_ms = now_epoch_millis();
+            for session in self.sessions.values_mut() {
+                if session.attached == conn_id {
+                    session.detached_since_ms.get_or_insert(now_ms);
+                }
             }
         }
         self.executors
@@ -5040,6 +5059,90 @@ fn managed_lifecycle_response(
     }
 }
 
+/// Whether no registered connection receives the session's output.
+#[cfg(unix)]
+fn session_is_detached(
+    session: &super::session_host::Session,
+    connection_senders: &HashMap<ConnectionId, ConnectionOutbox>,
+) -> bool {
+    session.attached == uuid::Uuid::nil() || !connection_senders.contains_key(&session.attached)
+}
+
+/// The session's standing under the detached-session policy. A detached
+/// session without a recorded detach time counts as attached; callers record
+/// one first ([`ServerModel::stamp_unrecorded_detachments`]).
+#[cfg(unix)]
+fn session_retention(
+    session: &super::session_host::Session,
+    connection_senders: &HashMap<ConnectionId, ConnectionOutbox>,
+    max_detached_age_ms: u64,
+    foreground_agent: impl FnOnce() -> ForegroundAgent,
+) -> DetachedRetention {
+    let detached_since_ms = session_is_detached(session, connection_senders)
+        .then_some(session.detached_since_ms)
+        .flatten();
+    detached_retention(
+        session.managed.as_ref(),
+        detached_since_ms,
+        max_detached_age_ms,
+        foreground_agent,
+    )
+}
+
+/// Whether a coding agent holds the session's terminal foreground. Only Linux
+/// daemons can read it from `/proc`; elsewhere it stays unknown, which keeps
+/// detached sessions from being ended automatically.
+#[cfg(unix)]
+fn session_foreground_agent(shell_pid: u32) -> ForegroundAgent {
+    #[cfg(target_os = "linux")]
+    {
+        read_session_live_state(&RealPtyProcfs, shell_pid).foreground_agent
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = shell_pid;
+        ForegroundAgent::Unknown
+    }
+}
+
+#[cfg(unix)]
+fn session_retention_to_proto(retention: DetachedRetention) -> SessionRetention {
+    match retention {
+        DetachedRetention::Attached => SessionRetention::default(),
+        DetachedRetention::Kept {
+            detached_since_epoch_millis,
+            reason,
+        } => SessionRetention {
+            detached_since_epoch_millis,
+            expires_at_epoch_millis: 0,
+            keep_reason: match reason {
+                KeepReason::Managed => SessionKeepReason::Managed,
+                KeepReason::AgentRunning => SessionKeepReason::AgentRunning,
+                KeepReason::ForegroundUnknown => SessionKeepReason::ForegroundUnknown,
+            }
+            .into(),
+        },
+        DetachedRetention::Expires {
+            detached_since_epoch_millis,
+            expires_at_epoch_millis,
+        } => SessionRetention {
+            detached_since_epoch_millis,
+            expires_at_epoch_millis,
+            keep_reason: SessionKeepReason::Unspecified.into(),
+        },
+    }
+}
+
+/// UTC RFC 3339 form of a Unix epoch millis timestamp, for logs.
+#[cfg(unix)]
+fn format_epoch_millis(epoch_millis: u64) -> String {
+    i64::try_from(epoch_millis)
+        .ok()
+        .and_then(DateTime::from_timestamp_millis)
+        .map(|time| time.to_rfc3339_opts(SecondsFormat::Secs, true))
+        .unwrap_or_else(|| format!("{epoch_millis} epoch ms"))
+}
+
 #[cfg(unix)]
 impl ServerModel {
     fn prune_recent_managed_exits(&mut self, now_epoch_millis: u64) {
@@ -6183,6 +6286,7 @@ impl ServerModel {
                 cwd,
                 shell: shell.clone(),
                 last_attached_ms: now_epoch_millis(),
+                detached_since_ms: None,
                 preamble: super::session_host::BootstrapPreamble::new(
                     super::session_host::BOOTSTRAP_PREAMBLE_CAP_BYTES,
                 ),
@@ -6718,6 +6822,7 @@ impl ServerModel {
         // Route live output to the reconnected connection from now on.
         session.attached = conn_id;
         session.last_attached_ms = now_epoch_millis();
+        session.detached_since_ms = None;
         let agent_binding = if client_supports_agent_pty_binding {
             self.agent_pty_bindings
                 .foreground_for_pty(&msg.session_id, generation)
@@ -6800,6 +6905,7 @@ impl ServerModel {
             // (which would silently cut off the new tab's live output).
             if session.attached == conn_id {
                 session.attached = uuid::Uuid::nil();
+                session.detached_since_ms = Some(now_epoch_millis());
                 log::info!(
                     "Daemon: detached session {} (still running)",
                     msg.session_id
@@ -6824,7 +6930,9 @@ impl ServerModel {
         conn_id: ConnectionId,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
-        self.prune_recent_managed_exits(now_epoch_millis());
+        let now_ms = now_epoch_millis();
+        self.prune_recent_managed_exits(now_ms);
+        self.stamp_unrecorded_detachments(now_ms);
         let recent_managed_exits: Vec<_> = self
             .recent_managed_exits
             .iter()
@@ -6860,13 +6968,20 @@ impl ServerModel {
                     (None, Some(project)) => project,
                     (None, None) => String::new(),
                 };
+                // One reading, so a row never names an agent next to an expiry.
                 #[cfg(target_os = "linux")]
-                let live = Some(super::session_live::read_session_live_metadata(
-                    &super::session_live::RealPtyProcfs,
-                    session.child.id(),
-                ));
+                let (live, foreground_agent) = {
+                    let state = read_session_live_state(&RealPtyProcfs, session.child.id());
+                    (Some(state.metadata), state.foreground_agent)
+                };
                 #[cfg(not(target_os = "linux"))]
-                let live = None;
+                let (live, foreground_agent) = (None, ForegroundAgent::Unknown);
+                let retention = session_retention(
+                    session,
+                    &self.connection_senders,
+                    MAX_DETACHED_SESSION_AGE.as_millis() as u64,
+                    || foreground_agent,
+                );
                 (
                     SessionInfo {
                         session_id: id.clone(),
@@ -6884,6 +6999,7 @@ impl ServerModel {
                             .map(|managed| managed_session_info(managed, session.generation)),
                         process_memory: None,
                         live,
+                        retention: Some(session_retention_to_proto(retention)),
                     },
                     session
                         .managed
@@ -6965,81 +7081,91 @@ impl ServerModel {
         HandlerOutcome::Async(Some(handle))
     }
 
-    /// Memory governor (Stage 4): reaps detached sessions that are either idle
-    /// past `max_detached_age_ms`, or — if total ring bytes exceed
-    /// `host_ring_cap_bytes` — the oldest detached ones until back under the cap.
-    /// Never touches a session with a live attached connection. Returns the
-    /// number reaped. Wall-clock is passed in (`now_ms`) so it is unit-testable.
+    /// Memory governor (Stage 4): ends detached sessions whose age limit,
+    /// counted from their detach, has passed, and — if total ring bytes exceed
+    /// `host_ring_cap_bytes` — the longest-detached ones until back under the
+    /// cap. Whether a session may be ended at all is decided only by
+    /// [`detached_retention`]: never one with a live attached connection, a
+    /// managed one, or one whose foreground runs or might run a coding agent.
+    /// Returns the number reaped. Wall-clock (`now_ms`) and the foreground
+    /// reading by shell pid (`foreground_agent`) are passed in so it is
+    /// unit-testable.
     fn gc_sessions(
         &mut self,
         now_ms: u64,
         max_detached_age_ms: u64,
         host_ring_cap_bytes: usize,
+        foreground_agent: impl Fn(u32) -> ForegroundAgent,
     ) -> usize {
-        let mut reaped = 0;
-
-        // Phase 1: detached and idle longer than the max age.
-        let aged: Vec<String> = {
+        self.stamp_unrecorded_detachments(now_ms);
+        let retentions: Vec<(String, DetachedRetention)> = {
             let senders = &self.connection_senders;
             self.sessions
                 .iter()
-                .filter(|(_, s)| {
-                    let detached =
-                        s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached);
-                    super::managed_fleet::eligible_for_detached_age_gc(
-                        s.managed.as_ref(),
-                        detached,
-                        now_ms,
-                        s.last_attached_ms,
-                        max_detached_age_ms,
-                    )
+                .map(|(id, session)| {
+                    let retention =
+                        session_retention(session, senders, max_detached_age_ms, || {
+                            foreground_agent(session.child.id())
+                        });
+                    (id.clone(), retention)
                 })
-                .map(|(id, _)| id.clone())
                 .collect()
         };
-        for id in aged {
-            if let Some(mut session) = self.sessions.remove(&id) {
-                self.accepted_opens.retain_session_tombstone(&id);
-                self.agent_pty_bindings.remove_pty(&id, session.generation);
-                let _ = session.child.kill();
-                let _ = session.child.wait();
-                reaped += 1;
+        let mut reaped = 0;
+
+        // Phase 1: detached for longer than the age limit.
+        for (id, retention) in &retentions {
+            match *retention {
+                DetachedRetention::Expires {
+                    detached_since_epoch_millis,
+                    expires_at_epoch_millis,
+                } if expires_at_epoch_millis <= now_ms => {
+                    if self
+                        .reap_detached_session(id, detached_since_epoch_millis, now_ms, "age limit")
+                        .is_some()
+                    {
+                        reaped += 1;
+                    }
+                }
+                DetachedRetention::Expires { .. }
+                | DetachedRetention::Kept { .. }
+                | DetachedRetention::Attached => {}
             }
         }
 
-        // Phase 2: enforce the host-wide ring-bytes cap by reaping oldest
-        // detached sessions until back under it.
+        // Phase 2: enforce the host-wide ring-bytes cap by ending the
+        // longest-detached sessions the policy lets expire.
         let total: usize = self.sessions.values().map(|s| s.ring.len()).sum();
         if total > host_ring_cap_bytes {
             let mut over = total - host_ring_cap_bytes;
-            let mut candidates: Vec<(u64, String)> = {
-                let senders = &self.connection_senders;
-                self.sessions
-                    .iter()
-                    .filter(|(_, s)| {
-                        let detached =
-                            s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached);
-                        super::managed_fleet::eligible_for_ring_pressure_gc(
-                            s.managed.as_ref(),
-                            detached,
-                        )
-                    })
-                    .map(|(id, s)| (s.last_attached_ms, id.clone()))
-                    .collect()
-            };
-            candidates.sort_by_key(|(age, _)| *age); // oldest (smallest ms) first
-            for (_, id) in candidates {
+            let mut candidates: Vec<(u64, &String)> = retentions
+                .iter()
+                .filter_map(|(id, retention)| match *retention {
+                    DetachedRetention::Expires {
+                        detached_since_epoch_millis,
+                        ..
+                    } => Some((detached_since_epoch_millis, id)),
+                    DetachedRetention::Kept { .. } | DetachedRetention::Attached => None,
+                })
+                .collect();
+            candidates.sort(); // earliest detach first
+            for (detached_since_ms, id) in candidates {
                 if over == 0 {
                     break;
                 }
-                if let Some(mut session) = self.sessions.remove(&id) {
-                    self.accepted_opens.retain_session_tombstone(&id);
-                    self.agent_pty_bindings.remove_pty(&id, session.generation);
-                    over = over.saturating_sub(session.ring.len());
-                    let _ = session.child.kill();
-                    let _ = session.child.wait();
+                if let Some(ring_bytes) =
+                    self.reap_detached_session(id, detached_since_ms, now_ms, "host ring cap")
+                {
+                    over = over.saturating_sub(ring_bytes);
                     reaped += 1;
                 }
+            }
+            if over > 0 {
+                log::warn!(
+                    "Daemon GC: output rings stay {over} bytes over the host cap; the remaining \
+                     sessions are attached or kept by policy (agent running, foreground unknown, \
+                     or managed)"
+                );
             }
         }
 
@@ -7047,6 +7173,43 @@ impl ServerModel {
             log::info!("Daemon GC: reaped {reaped} detached session(s)");
         }
         reaped
+    }
+
+    /// Records `now_ms` as the detach time of every detached session without
+    /// one (an open that completed after its connection was gone), so its age
+    /// limit counts from the first time the daemon sees it without a client.
+    fn stamp_unrecorded_detachments(&mut self, now_ms: u64) {
+        let senders = &self.connection_senders;
+        for session in self.sessions.values_mut() {
+            if session_is_detached(session, senders) {
+                session.detached_since_ms.get_or_insert(now_ms);
+            }
+        }
+    }
+
+    /// Ends one detached session for the GC and logs it with its detach time
+    /// and `reason`. Returns the ring bytes it held, or `None` if it no longer
+    /// exists.
+    fn reap_detached_session(
+        &mut self,
+        id: &str,
+        detached_since_ms: u64,
+        now_ms: u64,
+        reason: &str,
+    ) -> Option<usize> {
+        let mut session = self.sessions.remove(id)?;
+        self.accepted_opens.retain_session_tombstone(id);
+        self.agent_pty_bindings.remove_pty(id, session.generation);
+        let ring_bytes = session.ring.len();
+        log::info!(
+            "Daemon GC: ending session {id} ({reason}); detached since {} ({} min ago), \
+             {ring_bytes} ring bytes",
+            format_epoch_millis(detached_since_ms),
+            now_ms.saturating_sub(detached_since_ms) / 60_000,
+        );
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+        Some(ring_bytes)
     }
 
     /// Arm the shutdown grace timer if the daemon is now fully idle: no
@@ -7085,6 +7248,7 @@ impl ServerModel {
                                 now,
                                 MAX_DETACHED_SESSION_AGE.as_millis() as u64,
                                 HOST_RING_CAP_BYTES,
+                                session_foreground_agent,
                             );
                             // GC may have reaped the last session. If no proxies
                             // are connected either, the daemon is now fully idle —

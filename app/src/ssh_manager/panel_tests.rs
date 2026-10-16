@@ -1922,6 +1922,84 @@ fn old_daemon_without_live_metadata_falls_back_honestly() {
 }
 
 #[test]
+fn detached_session_row_reports_detach_time_and_expiry() {
+    crate::i18n::init(Some("en"));
+    let now = 30 * 86_400_000;
+    let mut session = SessionInfo {
+        session_id: "12345678-abcdef".to_string(),
+        cwd: "/srv/projects/api".to_string(),
+        // Attached for days before the drop; the line never counts from here.
+        last_attached_epoch_millis: now - 5 * 86_400_000,
+        retention: Some(SessionRetention {
+            detached_since_epoch_millis: now - 2 * 3_600_000,
+            expires_at_epoch_millis: now + 22 * 3_600_000,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let row = daemon_session_row("devhost", &session, None, now);
+    assert_eq!(
+        row.metadata.as_deref(),
+        Some(
+            "\u{2068}detached for \u{2068}2\u{2069} hours\u{2069} · \
+             \u{2068}ends in \u{2068}22\u{2069} hours\u{2069}"
+        )
+    );
+
+    // A running agent keeps its session; the agent title names the program.
+    session.title = "Claude · api".to_string();
+    session.retention = Some(SessionRetention {
+        detached_since_epoch_millis: now - 3 * 86_400_000,
+        keep_reason: SessionKeepReason::AgentRunning.into(),
+        ..Default::default()
+    });
+    let row = daemon_session_row("devhost", &session, None, now);
+    assert_eq!(
+        row.metadata.as_deref(),
+        Some(
+            "\u{2068}detached for \u{2068}3\u{2069} days\u{2069} · \
+             \u{2068}kept while the agent runs\u{2069}"
+        )
+    );
+
+    // Past its deadline the next sweep ends it; an unreadable foreground
+    // keeps it because it might be an agent.
+    session.title.clear();
+    session.retention = Some(SessionRetention {
+        detached_since_epoch_millis: now - 25 * 3_600_000,
+        expires_at_epoch_millis: now - 3_600_000,
+        ..Default::default()
+    });
+    let row = daemon_session_row("devhost", &session, None, now);
+    assert_eq!(
+        row.metadata.as_deref(),
+        Some("\u{2068}detached for 1 day\u{2069} · \u{2068}ends shortly\u{2069}")
+    );
+    session.retention = Some(SessionRetention {
+        detached_since_epoch_millis: now - 30 * 60_000,
+        keep_reason: SessionKeepReason::ForegroundUnknown.into(),
+        ..Default::default()
+    });
+    let row = daemon_session_row("devhost", &session, None, now);
+    assert_eq!(
+        row.metadata.as_deref(),
+        Some(
+            "\u{2068}detached for \u{2068}30\u{2069} minutes\u{2069} · \
+             \u{2068}kept, program unknown\u{2069}"
+        )
+    );
+
+    // A session another client still holds keeps its last-opened time.
+    session.retention = Some(SessionRetention::default());
+    let row = daemon_session_row("devhost", &session, None, now);
+    assert_eq!(
+        row.metadata.as_deref(),
+        Some("last opened \u{2068}5\u{2069} days ago")
+    );
+}
+
+#[test]
 fn sessions_open_here_come_first_and_the_rest_follow_by_most_recent_attach() {
     let routed = |id: &str, last_attached_epoch_millis: u64| RoutedDaemonSession {
         session: SessionInfo {

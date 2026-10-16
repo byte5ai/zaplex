@@ -35,8 +35,8 @@ use warp_ssh_manager::{
 };
 use warpui::r#async::{executor::Background, FutureExt as _};
 use zaplex_remote_session::types::{
-    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1, FEATURE_SESSION_HOST,
-    FEATURE_SESSION_LIVE_METADATA_V1,
+    has_feature, FEATURE_AGENT_INVENTORY, FEATURE_MULTIPLEXER_INVENTORY_V1,
+    FEATURE_SESSION_DETACH_RETENTION_V1, FEATURE_SESSION_HOST, FEATURE_SESSION_LIVE_METADATA_V1,
 };
 
 use super::session_inventory::{
@@ -145,6 +145,17 @@ fn discard_unsupported_live_metadata(daemon: &mut SessionList, initialize: &Init
     }
     for session in &mut daemon.sessions {
         session.live = None;
+    }
+}
+
+/// Detach times and expiry are trusted only from daemons that advertise them;
+/// an older daemon counts its age limit from the last attach instead.
+fn discard_unsupported_retention(daemon: &mut SessionList, initialize: &InitializeResponse) {
+    if has_feature(&initialize.features, FEATURE_SESSION_DETACH_RETENTION_V1) {
+        return;
+    }
+    for session in &mut daemon.sessions {
+        session.retention = None;
     }
 }
 
@@ -742,6 +753,7 @@ async fn query_daemon_inventory(
     .await?;
     let observed_at = Instant::now();
     discard_unsupported_live_metadata(&mut daemon, &initialize);
+    discard_unsupported_retention(&mut daemon, &initialize);
     if supports_agent_inventory(&initialize) {
         match inventory_before_deadline(
             async {

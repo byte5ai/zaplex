@@ -47,7 +47,9 @@ use warp_ssh_manager::{
     SshServerInfo, ValidatedSshEndpoint, WorkspaceCommandFactory,
 };
 
-use remote_server::proto::{MultiplexerKind, MultiplexerSessionInfo, SessionInfo};
+use remote_server::proto::{
+    MultiplexerKind, MultiplexerSessionInfo, SessionInfo, SessionKeepReason, SessionRetention,
+};
 use warp_core::ui::theme::AnsiColorIdentifier;
 use warp_core::HostId;
 
@@ -331,7 +333,8 @@ fn daemon_session_row(
 }
 
 /// The fixed metadata line of a session not open here: the daemon-reported
-/// foreground command, then the last attach. An agent title already names the
+/// foreground command, then since when it has had no client and when it ends
+/// (#508), or else its last attach. An agent title already names the
 /// foreground program, so the command is not repeated next to it.
 fn session_metadata(session: &SessionInfo, now_epoch_millis: u64) -> Option<String> {
     let command = session
@@ -339,7 +342,18 @@ fn session_metadata(session: &SessionInfo, now_epoch_millis: u64) -> Option<Stri
         .as_ref()
         .map(|live| live.foreground_command.trim())
         .filter(|command| !command.is_empty() && session.title.trim().is_empty());
-    let opened = last_opened_label(session.last_attached_epoch_millis, now_epoch_millis);
+    let opened = match session
+        .retention
+        .as_ref()
+        .filter(|retention| retention.detached_since_epoch_millis > 0)
+    {
+        Some(retention) => Some(crate::t!(
+            "workspace-left-panel-ssh-manager-session-detached-metadata",
+            detached = detached_label(retention.detached_since_epoch_millis, now_epoch_millis),
+            retention = retention_label(retention, now_epoch_millis)
+        )),
+        None => last_opened_label(session.last_attached_epoch_millis, now_epoch_millis),
+    };
     match (command, opened) {
         (Some(command), Some(opened)) => Some(crate::t!(
             "workspace-left-panel-ssh-manager-session-metadata",
@@ -379,6 +393,70 @@ fn last_opened_label(last_attached_epoch_millis: u64, now_epoch_millis: u64) -> 
             count = days
         )
     })
+}
+
+/// Since when a session has had no client, in the same coarse steps.
+fn detached_label(detached_since_epoch_millis: u64, now_epoch_millis: u64) -> String {
+    let minutes = now_epoch_millis.saturating_sub(detached_since_epoch_millis) / 60_000;
+    let hours = minutes / 60;
+    let days = hours / 24;
+    if minutes == 0 {
+        crate::t!("workspace-left-panel-ssh-manager-session-detached-now")
+    } else if hours == 0 {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-detached-minutes",
+            count = minutes
+        )
+    } else if days == 0 {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-detached-hours",
+            count = hours
+        )
+    } else {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-detached-days",
+            count = days
+        )
+    }
+}
+
+/// What the daemon's GC will do with a detached session: end it after the
+/// remaining time, rounded down, or keep it and why.
+fn retention_label(retention: &SessionRetention, now_epoch_millis: u64) -> String {
+    if retention.expires_at_epoch_millis > 0 {
+        return expires_label(retention.expires_at_epoch_millis, now_epoch_millis);
+    }
+    match SessionKeepReason::try_from(retention.keep_reason) {
+        Ok(SessionKeepReason::AgentRunning) => {
+            crate::t!("workspace-left-panel-ssh-manager-session-kept-agent")
+        }
+        Ok(SessionKeepReason::ForegroundUnknown) => {
+            crate::t!("workspace-left-panel-ssh-manager-session-kept-unknown")
+        }
+        Ok(SessionKeepReason::Managed | SessionKeepReason::Unspecified) | Err(_) => {
+            crate::t!("workspace-left-panel-ssh-manager-session-kept")
+        }
+    }
+}
+
+/// The time left until the GC sweep ends a session. Past the deadline the
+/// next sweep, a few minutes at most, ends it.
+fn expires_label(expires_at_epoch_millis: u64, now_epoch_millis: u64) -> String {
+    let minutes = expires_at_epoch_millis.saturating_sub(now_epoch_millis) / 60_000;
+    let hours = minutes / 60;
+    if minutes == 0 {
+        crate::t!("workspace-left-panel-ssh-manager-session-expires-soon")
+    } else if hours == 0 {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-expires-minutes",
+            count = minutes
+        )
+    } else {
+        crate::t!(
+            "workspace-left-panel-ssh-manager-session-expires-hours",
+            count = hours
+        )
+    }
 }
 
 /// Display and keyboard order of one host's native sessions. The daemon lists
