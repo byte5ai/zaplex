@@ -23,7 +23,9 @@ use crate::types::{Account, Provider, UsageEntry};
 /// Directory-name fragments that mark a `.claude*` dir as a backup/scratch copy, not
 /// a real account (mirrors `claudeplex` discover.ts exclusions).
 const EXCLUDE_FRAGMENTS: &[&str] = &["mem", "backup", "bak", "old", "tmp", "temp", "observer"];
-const USAGE_CACHE_LIMIT: usize = 512;
+/// Holds a week of heavy use (#507 measured about 760 recently changed
+/// transcripts on one host), so follow-up usage scans stay incremental.
+const USAGE_CACHE_LIMIT: usize = 2048;
 
 /// Result of account-root discovery before transcript/session scanning.
 #[derive(Debug, Default)]
@@ -673,7 +675,6 @@ impl ClaudeUsageCache {
                 last_used: self.clock,
             },
         );
-        self.evict_lru();
         Ok(entries)
     }
 
@@ -881,6 +882,10 @@ pub(crate) fn usage_for_account_with_cache(
         }
     }
     cache.retain_account(&account_root, &seen, !io_error);
+    // Bound the cache only after the walk. Evicting while walking dropped the
+    // transcripts this walk still needed, so a history larger than the bound
+    // was parsed again in full on every scan.
+    cache.evict_lru();
     (entries, io_error)
 }
 

@@ -107,6 +107,7 @@ pub struct TranscriptScanCache {
     task_states: transcript::TaskStateCache,
     codex_rollouts: codex_sessions::RolloutCache,
     claude_usage: claude::ClaudeUsageCache,
+    codex_usage: codex::CodexUsageCache,
 }
 
 /// How far back dormant-session discovery looks.
@@ -258,7 +259,8 @@ fn build_snapshot_with_claude_discovery(
     let codex_discovery = discover_codex_accounts(home, codex_home);
     degraded.extend(codex_discovery.issues);
     for account in codex_discovery.accounts {
-        let (entries, usage_io_error) = codex::usage_for_account(&account, since);
+        let (entries, usage_io_error) =
+            codex::usage_for_account_with_cache(&account, since, &mut transcript_cache.codex_usage);
         let b5h = if budget_5h > 0 {
             budget_5h
         } else {

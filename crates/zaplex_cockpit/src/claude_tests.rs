@@ -903,10 +903,56 @@ fn claude_usage_cache_evicts_the_least_recently_used_transcript() {
             &overflow,
         )
         .unwrap();
+    cache.evict_lru();
 
     assert_eq!(cache.entries.len(), USAGE_CACHE_LIMIT);
     assert!(cache.entries.contains_key(&keys[0].0));
     assert!(!cache.entries.contains_key(&keys[1].0));
+}
+
+/// A week of transcripts larger than the cache bound must not be parsed again
+/// in full on every scan: only the overflow beyond the bound is re-read.
+#[test]
+fn claude_usage_walk_larger_than_the_cache_bound_stays_incremental() {
+    const OVERFLOW: usize = 3;
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path();
+    write(
+        &home.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"me@example.com"}}"#,
+    );
+    let line = concat!(
+        r#"{"type":"assistant","timestamp":"2026-09-09T10:00:00Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1}}}"#,
+        "\n"
+    );
+    for index in 0..USAGE_CACHE_LIMIT + OVERFLOW {
+        write(
+            &home.join(format!(".claude/projects/p/session-{index}.jsonl")),
+            line,
+        );
+    }
+    let account = accounts_without_process(home, None)
+        .into_iter()
+        .find(|account| account.is_default)
+        .unwrap();
+    let since = DateTime::parse_from_rfc3339("2026-09-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let mut cache = ClaudeUsageCache::default();
+
+    let (first, _) = usage_for_account_with_cache(&account, since, &mut cache);
+    let parsed_by_first_scan = cache.parse_count;
+    let (second, _) = usage_for_account_with_cache(&account, since, &mut cache);
+
+    assert_eq!(first.len(), USAGE_CACHE_LIMIT + OVERFLOW);
+    assert_eq!(second.len(), first.len());
+    assert_eq!(parsed_by_first_scan, (USAGE_CACHE_LIMIT + OVERFLOW) as u64);
+    assert!(
+        cache.parse_count - parsed_by_first_scan <= OVERFLOW as u64,
+        "the second scan re-parsed {} transcripts",
+        cache.parse_count - parsed_by_first_scan
+    );
+    assert_eq!(cache.entries.len(), USAGE_CACHE_LIMIT);
 }
 
 /// The join that makes per-session spend usable: the id `parse_transcript`
