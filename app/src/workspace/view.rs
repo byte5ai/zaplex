@@ -61,9 +61,9 @@ use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::app_state::{
     bind_daemon_pty_claim_owner, claim_daemon_pty, daemon_pty_claim,
     release_daemon_pty_claim_for_connection, release_daemon_pty_claim_for_terminal_view,
-    release_daemon_pty_claim_reservation, DaemonPtyClaimOutcome, DaemonPtyClaimOwner,
-    DaemonPtyIdentity, LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot,
-    NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, PersistedDaemonRuntime,
+    release_daemon_pty_claim_reservation, stale_daemon_pty_claim, DaemonPtyClaimOutcome,
+    DaemonPtyClaimOwner, DaemonPtyIdentity, LeafContents, LeafSnapshot, LeftPanelDisplayedTab,
+    LeftPanelSnapshot, NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, PersistedDaemonRuntime,
     RemoteTerminalIdentity, RemoteTerminalTransport, RightPanelSnapshot, SettingsPaneSnapshot,
     TabSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
@@ -13768,7 +13768,10 @@ impl Workspace {
         expected_agent_binding: Option<remote_server::proto::AgentSessionIdentity>,
         ctx: &mut ViewContext<Self>,
     ) -> Option<bool> {
-        let owner = daemon_pty_claim(binding_key, ctx)?;
+        let Some(owner) = daemon_pty_claim(binding_key, ctx) else {
+            self.retire_stale_daemon_claim_owner(binding_key, ctx);
+            return None;
+        };
         if self.retire_unreachable_daemon_claim_owner(&owner, ctx) {
             return None;
         }
@@ -13970,6 +13973,20 @@ impl Workspace {
         true
     }
 
+    /// Retires the owner of a PTY claim whose surface is gone, e.g. a tab of a
+    /// window closed into Undo Close. Its claim no longer counts, but its
+    /// connection would stay attached next to the one taking the PTY over.
+    #[cfg(unix)]
+    fn retire_stale_daemon_claim_owner(
+        &mut self,
+        identity: &DaemonPtyIdentity,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(stale) = stale_daemon_pty_claim(identity, ctx) {
+            self.retire_unreachable_daemon_claim_owner(&stale, ctx);
+        }
+    }
+
     /// Claims a daemon PTY like [`claim_daemon_pty`], first retiring an
     /// existing owner that no tab can show any more.
     #[cfg(unix)]
@@ -13979,6 +13996,7 @@ impl Workspace {
         owner: DaemonPtyClaimOwner,
         ctx: &mut ViewContext<Self>,
     ) -> DaemonPtyClaimOutcome<DaemonPtyClaimOwner> {
+        self.retire_stale_daemon_claim_owner(&identity, ctx);
         match claim_daemon_pty(identity.clone(), owner.clone(), ctx) {
             DaemonPtyClaimOutcome::Existing(existing)
                 if self.retire_unreachable_daemon_claim_owner(&existing, ctx) =>

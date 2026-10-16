@@ -6219,6 +6219,7 @@ fn sidebar_open_retires_a_pty_owner_no_tab_can_show() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let workspace = mock_workspace(&mut app);
+        let deregistered = record_deregistered_sessions(&mut app);
         let conn = warp_core::SessionId::from(907u64);
         let adopt_conn = warp_core::SessionId::from(908u64);
         let route = hidden_owner_test_route();
@@ -6272,8 +6273,39 @@ fn sidebar_open_retires_a_pty_owner_no_tab_can_show() {
                 DaemonPtyClaimOutcome::Claimed
             ));
         });
+
+        // A surface that no longer exists at all, like a tab of a window closed
+        // into Undo Close, leaves a claim that only looks free. Its connection
+        // is dropped before the PTY is taken over.
+        let stale_conn = warp_core::SessionId::from(915u64);
+        let stale_binding = daemon_adoption_key("daemon-orphaned-owner", &route, "pty-stale", 16);
+        let stale_group = workspace.update(&mut app, |workspace, ctx| {
+            let (group, _) = add_claimed_daemon_tab(workspace, stale_conn, &stale_binding, ctx);
+            let index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == group.id())
+                .unwrap();
+            workspace.remove_tab(index, false, false, ctx);
+            group.downgrade()
+        });
+        app.update(|_| ());
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(stale_group.upgrade(ctx).is_none());
+            assert!(crate::app_state::daemon_pty_claim(&stale_binding, ctx).is_none());
+            assert!(crate::app_state::stale_daemon_pty_claim(&stale_binding, ctx).is_some());
+
+            assert_eq!(
+                workspace.focus_existing_adopted_daemon_session(&stale_binding, None, ctx),
+                None
+            );
+
+            assert!(crate::app_state::stale_daemon_pty_claim(&stale_binding, ctx).is_none());
+        });
+        assert_eq!(*deregistered.lock().unwrap(), vec![conn, stale_conn]);
         crate::app_state::release_daemon_pty_claim_for_connection(conn);
         crate::app_state::release_daemon_pty_claim_for_connection(adopt_conn);
+        crate::app_state::release_daemon_pty_claim_for_connection(stale_conn);
     });
 }
 
