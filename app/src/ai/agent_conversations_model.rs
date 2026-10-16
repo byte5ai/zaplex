@@ -322,6 +322,22 @@ pub struct ConversationMetadata {
     pub nav_data: ConversationNavigationData,
 }
 
+/// Status of a conversation that is not loaded into memory: only a failed latest turn is
+/// known without restoring it.
+fn unloaded_conversation_status(
+    history_model: &BlocklistAIHistoryModel,
+    metadata: &ConversationMetadata,
+) -> ConversationStatus {
+    if history_model
+        .get_conversation_metadata(&metadata.nav_data.id)
+        .is_some_and(|persisted| persisted.last_turn_failed)
+    {
+        ConversationStatus::Error
+    } else {
+        ConversationStatus::Success
+    }
+}
+
 /// ConversationOrTask is a wrapper around either conversation
 /// or task data stored in the `AgentConversationsModel`.
 ///
@@ -373,7 +389,7 @@ impl ConversationOrTask<'_> {
                 history_model
                     .conversation(&metadata.nav_data.id)
                     .map(|conv| conv.status().clone())
-                    .unwrap_or(ConversationStatus::Success)
+                    .unwrap_or_else(|| unloaded_conversation_status(history_model, metadata))
             }
         }
     }
@@ -386,7 +402,11 @@ impl ConversationOrTask<'_> {
                 history_model
                     .conversation(&metadata.nav_data.id)
                     .map(|conv| AgentRunDisplayStatus::from_conversation_status(conv.status()))
-                    .unwrap_or(AgentRunDisplayStatus::ConversationSucceeded)
+                    .unwrap_or_else(|| {
+                        AgentRunDisplayStatus::from_conversation_status(
+                            &unloaded_conversation_status(history_model, metadata),
+                        )
+                    })
             }
         }
     }

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use itertools::Itertools;
 use warpui::{App, EntityId};
 
@@ -371,6 +371,7 @@ fn test_ambient_agent_conversations_excluded_from_list_but_accessible_by_id() {
                 is_restorable_locally: false,
                 artifacts: Vec::new(),
                 ambient_agent_task_id: None,
+                last_turn_failed: false,
             };
             model
                 .all_conversations_metadata
@@ -389,6 +390,7 @@ fn test_ambient_agent_conversations_excluded_from_list_but_accessible_by_id() {
                 is_restorable_locally: false,
                 artifacts: Vec::new(),
                 ambient_agent_task_id: Some(ambient_task_id),
+                last_turn_failed: false,
             };
             model
                 .all_conversations_metadata
@@ -1085,4 +1087,130 @@ fn test_set_server_conversation_token_rebinds_reverse_index() {
             );
         });
     });
+}
+
+/// A persisted conversation whose root task holds one turn made of `messages`.
+fn persisted_turn(
+    conversation_id: AIConversationId,
+    last_modified_at: chrono::NaiveDateTime,
+    messages: Vec<warp_multi_agent_api::Message>,
+) -> crate::persistence::model::AgentConversation {
+    crate::persistence::model::AgentConversation {
+        conversation: crate::persistence::model::AgentConversationRecord {
+            id: 1,
+            conversation_id: conversation_id.to_string(),
+            conversation_data: "{}".to_string(),
+            last_modified_at,
+        },
+        tasks: vec![warp_multi_agent_api::Task {
+            id: "root-task".to_string(),
+            messages,
+            dependencies: None,
+            description: String::new(),
+            summary: String::new(),
+            server_data: String::new(),
+        }],
+    }
+}
+
+fn turn_message(
+    id: &str,
+    message: warp_multi_agent_api::message::Message,
+) -> warp_multi_agent_api::Message {
+    warp_multi_agent_api::Message {
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: Vec::new(),
+        message: Some(message),
+        request_id: "request-1".to_string(),
+        timestamp: None,
+    }
+}
+
+fn user_query(query: &str) -> warp_multi_agent_api::message::Message {
+    warp_multi_agent_api::message::Message::UserQuery(warp_multi_agent_api::message::UserQuery {
+        query: query.to_string(),
+        ..Default::default()
+    })
+}
+
+#[test]
+fn legacy_conversation_without_message_timestamp_uses_row_timestamp() {
+    let last_modified_at = chrono::NaiveDate::from_ymd_opt(2026, 9, 1)
+        .unwrap()
+        .and_hms_opt(8, 30, 0)
+        .unwrap();
+    let persisted = persisted_turn(
+        AIConversationId::new(),
+        last_modified_at,
+        vec![
+            turn_message("user", user_query("Hi")),
+            turn_message(
+                "agent",
+                warp_multi_agent_api::message::Message::AgentOutput(
+                    warp_multi_agent_api::message::AgentOutput {
+                        text: "Hello".to_string(),
+                    },
+                ),
+            ),
+        ],
+    );
+
+    let conversation =
+        super::convert_persisted_conversation_to_ai_conversation_with_metadata(persisted).unwrap();
+
+    assert_eq!(
+        conversation.latest_exchange().unwrap().start_time,
+        Local.from_utc_datetime(&last_modified_at)
+    );
+}
+
+#[test]
+fn unloaded_conversation_keeps_its_failed_last_turn() {
+    use crate::ai::agent::api::convert_conversation::TurnOutcome;
+
+    let failed_id = AIConversationId::new();
+    let completed_id = AIConversationId::new();
+    let outcome = |outcome: TurnOutcome| {
+        warp_multi_agent_api::message::Message::ServerEvent(outcome.server_event())
+    };
+    let conversations = [
+        persisted_turn(
+            failed_id,
+            Utc::now().naive_utc(),
+            vec![
+                turn_message("user", user_query("Hi")),
+                turn_message(
+                    "outcome",
+                    outcome(TurnOutcome::Failed {
+                        error_message: "Not logged in".to_string(),
+                    }),
+                ),
+            ],
+        ),
+        persisted_turn(
+            completed_id,
+            Utc::now().naive_utc(),
+            vec![
+                turn_message("user", user_query("Hi")),
+                turn_message("outcome", outcome(TurnOutcome::Completed)),
+            ],
+        ),
+    ];
+
+    let model = BlocklistAIHistoryModel::new(vec![], &conversations);
+
+    assert!(
+        model
+            .get_conversation_metadata(&failed_id)
+            .unwrap()
+            .last_turn_failed
+    );
+    assert!(
+        !model
+            .get_conversation_metadata(&completed_id)
+            .unwrap()
+            .last_turn_failed
+    );
 }

@@ -312,6 +312,8 @@ ai-footer-subscription-choose-account = Choose account
 ai-footer-subscription-choose-model = Choose model
 ai-footer-subscription-switch-location = Switch to { $host } · Directory { $directory }
 ai-footer-subscription-local-machine = Local machine
+ai-footer-subscription-default-account = Default subscription
+ai-footer-subscription-remote-default-account = Remote default subscription
 ai-footer-subscription-choose-directory = Choose directory…
 ai-footer-subscription-enter-remote-directory = Enter an absolute remote directory or .…
 ai-footer-subscription-use-directory = Use directory { $directory }
@@ -334,6 +336,7 @@ ai-footer-subscription-status-running-tool = Running { $tool }
 ai-footer-subscription-detail-running-tool = The selected agent is running { $tool }.
 ai-footer-subscription-status-waiting-for-approval = Waiting for approval
 ai-footer-subscription-detail-waiting-for-approval = Review the requested action before the agent can continue.
+ai-footer-subscription-approval-required = Approval required for { $kind }: { $description }
 ai-footer-subscription-status-turn-complete = Turn complete
 ai-footer-subscription-detail-turn-complete = Continue the recorded session or start over.
 ai-footer-subscription-status-session-ended = Session ended
@@ -341,6 +344,7 @@ ai-footer-subscription-detail-session-ended = This session cannot accept more pr
 ai-footer-subscription-identity-id = ID { $id }
 ai-footer-subscription-identity-named-id = { $name } · ID { $id }
 ai-footer-subscription-model-resolved = resolved { $model }
+ai-footer-subscription-session-target = { $agent } · { $account } · { $host } · { $directory } · { $model }
 ai-footer-subscription-field-agent = Agent
 ai-footer-subscription-field-account = Account
 ai-footer-subscription-field-host = Host
@@ -2682,6 +2686,29 @@ ai-context-blocks-days-ago = { $count ->
         [one] 1 day ago
        *[other] { $count } days ago
     }
+time-format-just-now = just now
+time-format-just-now-sentence-case = Just now
+time-format-minutes-ago = { $count } min ago
+time-format-hours-ago = { $count ->
+        [one] 1 hour ago
+       *[other] { $count } hours ago
+    }
+time-format-days-ago = { $count ->
+        [one] 1 day ago
+       *[other] { $count } days ago
+    }
+time-format-weeks-ago = { $count ->
+        [one] 1 week ago
+       *[other] { $count } weeks ago
+    }
+time-format-months-ago = { $count ->
+        [one] 1 month ago
+       *[other] { $count } months ago
+    }
+time-format-years-ago = { $count ->
+        [one] 1 year ago
+       *[other] { $count } years ago
+    }
 ai-context-blocks-no-output = No output
 ai-context-blocks-accessibility-label = Block: { $command }
 
@@ -2801,14 +2828,13 @@ workspace-conversation-list-past = PAST
 workspace-conversation-list-view-all = View all
 workspace-conversation-list-show-less = Show less
 workspace-conversation-list-empty-title = No conversations yet
-workspace-conversation-list-empty-description = Your active and past conversations with local and ambient agents will appear here.
+workspace-conversation-list-empty-description = Your active and past agent conversations will appear here.
 workspace-conversation-list-new-conversation = New conversation
 conversation-untitled = Untitled conversation
 conversation-deleted = Deleted conversation
 workspace-conversation-list-no-matching = No matching conversations
 workspace-conversation-list-delete = Delete
 workspace-conversation-list-delete-in-progress-error = Conversations cannot be deleted while in progress.
-workspace-conversation-list-delete-ambient-tooltip = Ambient agent conversations cannot be deleted
 workspace-conversation-list-fork-new-pane = Fork in new pane
 workspace-conversation-list-fork-new-tab = Fork in new tab
 workspace-conversation-list-fallback-title = Conversation

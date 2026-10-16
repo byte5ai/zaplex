@@ -442,8 +442,13 @@ fn create_restored_conversation(
         )],
     );
 
-    AIConversation::new_restored(conversation_id, vec![task], Some(conversation_data))
-        .expect("restored conversation should build")
+    AIConversation::new_restored(
+        conversation_id,
+        vec![task],
+        Some(conversation_data),
+        Utc::now().into(),
+    )
+    .expect("restored conversation should build")
 }
 
 fn all_owner_filters() -> AgentManagementFilters {

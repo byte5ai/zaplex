@@ -816,65 +816,34 @@ impl TypedActionView for ConversationListView {
                     });
 
                     let conversation_id = *conversation_id;
-                    let is_ambient_agent_conversation =
-                        matches!(conversation_id, ConversationOrTaskId::TaskId(_));
-
-                    let mut delete_item =
+                    let delete_item =
                         MenuItemFields::new(crate::t!("workspace-conversation-list-delete"))
                             .with_override_text_color(Appearance::as_ref(ctx).theme().ansi_fg_red())
                             .with_on_select_action(
                                 ConversationListViewAction::DeleteFromOverflowMenu {
                                     conversation_id,
                                 },
-                            )
-                            .with_disabled(is_ambient_agent_conversation);
-                    if is_ambient_agent_conversation {
-                        delete_item = delete_item.with_tooltip(crate::t!(
-                            "workspace-conversation-list-delete-ambient-tooltip"
-                        ));
-                    }
+                            );
 
                     // Zaplex Phase 2a: conversation share menu item removed
                     // (cloud-conversation sharing was already retired upstream).
 
-                    let fork_items: Option<[MenuItem<ConversationListViewAction>; 2]> =
-                        // Forking from a closed ambient agent conversation is not supported at this point.
-                        if !is_ambient_agent_conversation {
-                            Some([
-                                MenuItemFields::new(crate::t!(
-                                    "workspace-conversation-list-fork-new-pane"
-                                ))
-                                    .with_on_select_action(
-                                        ConversationListViewAction::ForkConversation {
-                                            conversation_id,
-                                            destination: ForkedConversationDestination::SplitPane,
-                                        },
-                                    )
-                                    .into_item(),
-                                MenuItemFields::new(crate::t!(
-                                    "workspace-conversation-list-fork-new-tab"
-                                ))
-                                    .with_on_select_action(
-                                        ConversationListViewAction::ForkConversation {
-                                            conversation_id,
-                                            destination: ForkedConversationDestination::NewTab,
-                                        },
-                                    )
-                                    .into_item(),
-                            ])
-                        } else {
-                            None
-                        };
-
-                    let mut items = Vec::new();
-                    if let Some(fork_items) = fork_items {
-                        items.extend(fork_items);
-                    }
-
-                    if !items.is_empty() {
-                        items.push(MenuItem::Separator);
-                    }
-                    items.push(delete_item.into_item());
+                    let items = vec![
+                        MenuItemFields::new(crate::t!("workspace-conversation-list-fork-new-pane"))
+                            .with_on_select_action(ConversationListViewAction::ForkConversation {
+                                conversation_id,
+                                destination: ForkedConversationDestination::SplitPane,
+                            })
+                            .into_item(),
+                        MenuItemFields::new(crate::t!("workspace-conversation-list-fork-new-tab"))
+                            .with_on_select_action(ConversationListViewAction::ForkConversation {
+                                conversation_id,
+                                destination: ForkedConversationDestination::NewTab,
+                            })
+                            .into_item(),
+                        MenuItem::Separator,
+                        delete_item.into_item(),
+                    ];
                     self.item_overflow_menu.update(ctx, |menu, ctx| {
                         menu.set_items(items, ctx);
                     });

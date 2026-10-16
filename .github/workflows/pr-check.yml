@@ -365,6 +365,8 @@ jobs:
           claude_discovery_scrubs_all_provider_environment_variables
           remote_launch_quotes_working_directory_environment_and_model
           selected_subscription_accounts_scrub_provider_auth_environment
+          legacy_conversation_without_message_timestamp_uses_row_timestamp
+          unloaded_conversation_keeps_its_failed_last_turn
         shell: bash
 
       - name: cargo test (retired BYOP persistence compatibility)

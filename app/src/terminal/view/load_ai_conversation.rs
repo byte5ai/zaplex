@@ -983,7 +983,12 @@ impl TerminalView {
             byop_repair_state_json: None,
         };
 
-        match AIConversation::new_restored(conversation_id, tasks, Some(conversation_data)) {
+        match AIConversation::new_restored(
+            conversation_id,
+            tasks,
+            Some(conversation_data),
+            Local::now(),
+        ) {
             Ok(conversation) => {
                 // Use live appearance for the read-only conversation viewer.
                 self.restore_conversation_after_view_creation(
