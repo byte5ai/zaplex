@@ -477,10 +477,12 @@ last projection remains valid after the source Cockpit closes.
 
 ### Executable parity gate (#169)
 
-`.github/workflows/cockpit-parity-audit.yml` runs on relevant pull-request paths and explicit
-dispatch. `script/cockpit-parity-audit` validates a machine-readable matrix, refreshes or verifies
-the reference default branches fail-closed, records exact revisions/timestamps, runs the focused
-Rust check/test suites in CI, and drives normal, narrow, and reduced-motion Playwright screenshots.
+`script/cockpit-parity-audit` validates a machine-readable matrix, refreshes or verifies the
+reference default branches fail-closed, records exact revisions/timestamps, runs the focused Rust
+check/test suites, and drives normal, narrow, and reduced-motion Playwright screenshots. It is not
+part of CI: it runs on demand in a project session on the development host, where the reference
+checkouts live, to decide whether parity gaps still need issues. Once it is green, it does not need
+to run again.
 The real two-host lifecycle remains a documented manual smoke because hosted CI cannot truthfully
 manufacture the user's authenticated remote environment.
 

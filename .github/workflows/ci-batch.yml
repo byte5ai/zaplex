@@ -14,24 +14,6 @@ on:
         description: Artifact version; empty uses the checked-out VERSION
         type: string
         default: ''
-      runtime_evidence_run_id:
-        description: Optional run containing real Cockpit runtime evidence
-        type: string
-      runtime_evidence_artifact:
-        description: Runtime evidence artifact name
-        type: string
-        default: cockpit-runtime-smoke
-      runtime_evidence_release_tag:
-        description: Optional SHA-bound draft runtime evidence release
-        type: string
-      runtime_evidence_release_asset:
-        description: Runtime evidence draft asset name
-        type: string
-        default: cockpit-runtime-smoke.zip
-      require_manual_runtime:
-        description: Require real two-host runtime evidence as well as automated parity checks
-        type: boolean
-        default: false
       coverage:
         description: Run the full suite with coverage, non-Rust evidence and the real Linux daemon acceptance
         type: boolean
@@ -106,22 +88,8 @@ jobs:
     uses: ./.github/workflows/live-sftp-safety.yml
     secrets: inherit
 
-  cockpit_parity:
-    needs: compile_checks
-    permissions:
-      contents: write
-      actions: read
-    uses: ./.github/workflows/cockpit-parity-audit.yml
-    with:
-      runtime_evidence_run_id: ${{ inputs.runtime_evidence_run_id }}
-      runtime_evidence_artifact: ${{ inputs.runtime_evidence_artifact }}
-      runtime_evidence_release_tag: ${{ inputs.runtime_evidence_release_tag }}
-      runtime_evidence_release_asset: ${{ inputs.runtime_evidence_release_asset }}
-      require_manual_runtime: ${{ inputs.require_manual_runtime }}
-    secrets: inherit
-
   test_dmg:
-    needs: [preflight, tests, live_sftp, cockpit_parity]
+    needs: [preflight, tests, live_sftp]
     if: inputs.artifacts == 'test-dmg'
     uses: ./.github/workflows/test-dmg.yml
     with:
@@ -130,7 +98,7 @@ jobs:
     secrets: inherit
 
   remote_server:
-    needs: [preflight, tests, live_sftp, cockpit_parity]
+    needs: [preflight, tests, live_sftp]
     if: inputs.artifacts == 'remote-server'
     uses: ./.github/workflows/build-remote-server.yml
     with:
