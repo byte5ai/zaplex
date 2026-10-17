@@ -927,9 +927,10 @@ if [[ "$ARTIFACT" = app ]]; then
       --filesystem APFS
     )
 
-    # Skip running an AppleScript to format the DMG contents if running in Namespace - this consistently times out.
+    # Skip running an AppleScript to format the DMG contents if running in Namespace or on a
+    # self-hosted runner VM: Finder automation is not granted there, so it consistently times out.
     # See https://github.com/create-dmg/create-dmg/issues/72
-    if [[ "${RUNNER_NAME:-}" == nsc-* ]]; then
+    if [[ "${RUNNER_NAME:-}" == nsc-* || "${RUNNER_ENVIRONMENT:-}" == self-hosted ]]; then
       args+=(--skip-jenkins)
     fi
 
