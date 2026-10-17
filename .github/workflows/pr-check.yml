@@ -157,7 +157,8 @@ jobs:
     name: cargo check (macOS Apple Silicon)
     needs: changes
     if: needs.changes.outputs.needs_build == 'true'
-    runs-on: macos-26
+    # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
+    runs-on: macrunner
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

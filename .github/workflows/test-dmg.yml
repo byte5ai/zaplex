@@ -92,7 +92,8 @@ jobs:
   signing_preflight:
     name: Validate macOS signing identity
     # macOS is required for Keychain, codesign and notarytool validation.
-    runs-on: macos-26
+    # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
+    runs-on: macrunner
     needs: readiness
     timeout-minutes: 10
     steps:
@@ -216,8 +217,9 @@ jobs:
 
   build_app:
     name: Prepare Test app (macOS Apple Silicon)
-    # GitHub's pinned macOS 26 image provisions Xcode's optional Metal toolchain.
-    runs-on: macos-26
+    # The macrunner image ships Xcode 27; prepare_environment verifies the Metal toolchain.
+    # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
+    runs-on: macrunner
     timeout-minutes: 360
     needs: [readiness, signing_preflight]
     steps:
@@ -286,7 +288,8 @@ jobs:
 
   build_dmg:
     name: Sign and package Test DMG (macOS Apple Silicon)
-    runs-on: macos-26
+    # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
+    runs-on: macrunner
     timeout-minutes: 60
     needs: [readiness, build_app, build_remote_server]
     env:
@@ -321,10 +324,6 @@ jobs:
           mkdir -p "$APP_PATH/Contents/Resources/bundled/remote-server"
           cp resources/bundled/remote-server/* "$APP_PATH/Contents/Resources/bundled/remote-server/"
         shell: bash
-
-      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
-        with:
-          xcode-version: '26'
 
       - name: Install create-dmg
         run: brew install create-dmg
