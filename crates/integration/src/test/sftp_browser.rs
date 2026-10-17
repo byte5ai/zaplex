@@ -420,8 +420,8 @@ pub fn test_sftp_toolbar_up() -> Builder {
         )
 }
 
-/// Click a file row and verify the selection state
-pub fn test_sftp_click_file_row_selects() -> Builder {
+/// A plain click on a file row moves the cursor there without marking it
+pub fn test_sftp_click_file_row_moves_cursor() -> Builder {
     new_builder()
         .with_user_defaults(HashMap::from([(
             "UndoCloseEnabled".to_string(),
@@ -433,20 +433,21 @@ pub fn test_sftp_click_file_row_selects() -> Builder {
             ("file_b.txt", b"b"),
         ]))
         .with_step(
-            TestStep::new("Click on first file row")
+            TestStep::new("Click on second file row")
                 .with_click_on_saved_position_fn(|app, window_id| {
-                    sftp::row_position_id(app, window_id, 0)
+                    sftp::row_position_id(app, window_id, 1)
                 })
                 .set_post_step_pause(std::time::Duration::from_millis(300)),
         )
         .with_step(
-            TestStep::new("Verify file is selected")
+            TestStep::new("Verify the cursor moved without marking")
                 .add_assertion(|app, window_id| {
+                    let cursor = sftp::cursor_entry_index(app, window_id);
                     let view = sftp::sftp_browser_view(app, window_id);
                     view.read(app, |v, _| {
                         async_assert!(
-                            v.selected().contains(&v.entries()[0].entry_identity()),
-                            "The first file should be selected"
+                            cursor == Some(1) && v.selected().is_empty(),
+                            "A plain click should move the cursor to the second file and mark nothing"
                         )
                     })
                 }),

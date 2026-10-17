@@ -448,7 +448,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_sftp_toolbar_new_folder);
     register_test!(test_sftp_toolbar_upload);
     register_test!(test_sftp_toolbar_up);
-    register_test!(test_sftp_click_file_row_selects);
+    register_test!(test_sftp_click_file_row_moves_cursor);
     register_test!(test_sftp_right_click_opens_menu);
     register_test!(test_sftp_ctx_menu_delete);
     register_test!(test_sftp_ctx_menu_rename);
