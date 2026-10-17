@@ -223,17 +223,13 @@ runs:
         echo "::error::protoc install step failed on $TARGET_OS"
         exit 1
 
-    - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
-      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
-      with:
-        xcode-version: '26'
-
-    # Xcode 26 ships the Metal toolchain as a separately downloadable component;
+    # Since Xcode 26 the Metal toolchain is a separately downloadable component;
     # without it `xcrun metal` is missing and crates/warpui/build.rs fails to
     # compile the .metal shaders ("cannot execute tool 'metal' due to missing
-    # Metal Toolchain"). Must run AFTER setup-xcode so it targets the selected
-    # Xcode. `script/macos/install_build_deps` completes first-launch setup,
-    # downloads the component, and verifies that `xcrun` can resolve `metal`.
+    # Metal Toolchain"). No Xcode selection is needed: the macrunner image has
+    # Xcode 27 as its only Xcode. `script/macos/install_build_deps` completes
+    # first-launch setup, downloads the component, and verifies that `xcrun`
+    # can resolve `metal`.
     - name: Install macOS build deps (Metal toolchain)
       if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
       shell: bash

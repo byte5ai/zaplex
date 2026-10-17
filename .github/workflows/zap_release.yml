@@ -304,7 +304,8 @@ jobs:
   signing_preflight:
     name: Validate macOS signing identity
     # macOS is required for Keychain, codesign and notarytool validation.
-    runs-on: macos-26
+    # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
+    runs-on: macrunner
     needs: prepare_metadata
     timeout-minutes: 10
     steps:
@@ -412,12 +413,13 @@ jobs:
   release_macos:
     name: Build Release (macOS ${{ matrix.dmg_name_suffix }})
     # macOS is required to build, sign, notarize and staple the native DMG.
+    # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
     runs-on: ${{ matrix.runner }}
     needs:
       - prepare_metadata
       - signing_preflight
       - build_remote_server
-    # Native arm64 build on GitHub's pinned macOS 26 image. Full cargo build + bundle +
+    # Native arm64 build on the self-hosted macrunner (fresh macOS VM per job, Xcode 27). Full cargo build + bundle +
     # create-dmg with no sccache is still time-consuming; keep a generous timeout to be safe.
     timeout-minutes: 360
     strategy:
@@ -426,7 +428,7 @@ jobs:
         include:
           - arch: aarch64
             dmg_name_suffix: arm64
-            runner: macos-26
+            runner: macrunner
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:

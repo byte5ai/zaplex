@@ -54,7 +54,7 @@ WORKSPACE_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 #
 # This should be kept in sync with the definition of this variable in
 # `.cargo/config.toml`.
-export MACOSX_DEPLOYMENT_TARGET="10.14"
+export MACOSX_DEPLOYMENT_TARGET="12.0"
 
 # Constants used later in the script.
 INTEL_ARCH="x86_64"
@@ -913,7 +913,7 @@ if [[ "$ARTIFACT" = app ]]; then
       --app-drop-link 550 250
       --icon "$ZAPLEX_APP_NAME.app" 150 250
       # macOS 26.4 Beta has issues with mounting HFS+ DMGs, so we're using APFS instead.
-      # APFS has been supported as a DMG filesystem since macOS 10.13, and we target 10.14
+      # APFS has been supported as a DMG filesystem since macOS 10.13, and we target 12.0
       # as our minimum version.
       #
       # See: https://developer.apple.com/documentation/macos-release-notes/macos-26_4-release-notes#External-Media
