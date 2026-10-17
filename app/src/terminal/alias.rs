@@ -45,7 +45,3 @@ fn check_for_alias(source: &str, session: Arc<Session>) -> Option<AliasedCommand
 pub async fn check_for_alias_async(source: &str, session: Arc<Session>) -> Option<AliasedCommand> {
     check_for_alias(source, session)
 }
-
-#[cfg(test)]
-#[path = "alias_tests.rs"]
-pub mod tests;

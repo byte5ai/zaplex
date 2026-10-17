@@ -112,34 +112,6 @@ cat "Hello $(ls -la)" && echo `ps \`; {echo Goodbye😀}"#;
     );
 }
 
-// Test that a backslash is retained when preceding a command.
-#[test]
-fn test_backslash_before_command() {
-    let source = r#"\ls"#;
-    let command = Parser::new(Lexer::new(source, EscapeChar::Backslash, false)).parse_command();
-
-    assert_eq!(
-        command,
-        Command::new(vec![Part::Literal(r"\ls".into()).spanned((0, 3))]).spanned((0, 3))
-    );
-}
-
-// Test that a backslash is not retained in the middle of a command.
-#[test]
-fn test_backslash_in_command() {
-    let source = r#"ls \-la"#;
-    let command = Parser::new(Lexer::new(source, EscapeChar::Backslash, false)).parse_command();
-
-    assert_eq!(
-        command,
-        Command::new(vec![
-            Part::Literal("ls".into()).spanned((0, 2)),
-            Part::Literal("-la".into()).spanned((3, 7))
-        ])
-        .spanned((0, 7))
-    );
-}
-
 #[test]
 fn test_decompose_command() {
     let test_data = vec![

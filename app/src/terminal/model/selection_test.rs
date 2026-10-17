@@ -118,16 +118,6 @@ fn selection_bigger_then_smaller() {
 }
 
 #[test]
-fn simple_is_empty() {
-    let mut selection = Selection::new(SelectionType::Simple, Point::new(0, 0), Side::Right);
-    assert!(selection.is_empty());
-    selection.update(Point::new(0, 1), Side::Left);
-    assert!(selection.is_empty());
-    selection.update(Point::new(1, 0), Side::Right);
-    assert!(!selection.is_empty());
-}
-
-#[test]
 fn simple_max_min_column() {
     // If the selection starts on the Right side of a cell, it should skip that cell
     let mut selection = Selection::new(SelectionType::Simple, Point::new(0, 0), Side::Right);

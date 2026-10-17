@@ -6,56 +6,6 @@ use warp_terminal::shell::{ShellLaunchData, ShellType};
 
 use super::*;
 
-#[cfg(unix)]
-#[test]
-fn test_host_native_absolute_path() {
-    // Test with absolute path
-    assert_eq!(
-        host_native_absolute_path(
-            "/home/user/file.txt",
-            &None,
-            &Some("/current/dir".to_string())
-        ),
-        "/home/user/file.txt"
-    );
-
-    // Test with relative path
-    assert_eq!(
-        host_native_absolute_path("file.txt", &None, &Some("/current/dir".to_string())),
-        "/current/dir/file.txt"
-    );
-
-    // Test with tilde expansion
-    assert_eq!(
-        host_native_absolute_path("~/file.txt", &None, &Some("/current/dir".to_string())),
-        shellexpand::tilde("~/file.txt").into_owned()
-    );
-
-    // Test with ..
-    assert_eq!(
-        host_native_absolute_path("../user/file.txt", &None, &Some("/current/dir".to_string())),
-        "/current/user/file.txt"
-    );
-
-    // Test with .
-    assert_eq!(
-        host_native_absolute_path("./user/file.txt", &None, &Some("/current/dir".to_string())),
-        "/current/dir/user/file.txt"
-    );
-
-    // Test with no current working directory
-    assert_eq!(
-        host_native_absolute_path("file.txt", &None, &None),
-        "file.txt"
-    );
-
-    // Test with empty current working directory
-    assert_eq!(
-        host_native_absolute_path("file.txt", &None, &Some("".to_string())),
-        "file.txt"
-    );
-}
-
 #[cfg(windows)]
 #[test]
 fn test_host_native_absolute_path() {

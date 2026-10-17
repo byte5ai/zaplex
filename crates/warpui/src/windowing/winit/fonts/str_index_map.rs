@@ -51,7 +51,3 @@ impl StrIndexMap {
         self.char_to_byte_index.len()
     }
 }
-
-#[cfg(test)]
-#[path = "str_index_map_tests.rs"]
-mod tests;

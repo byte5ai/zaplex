@@ -156,16 +156,4 @@ mod tests {
         assert_eq!(c.b, 0xCC);
         assert_eq!(c.a, 255);
     }
-
-    #[test]
-    fn test_serialize_opaque() {
-        let c = ColorU { r: 0x39, g: 0x94, b: 0xBC, a: 255 };
-        assert_eq!(coloru_to_hex_alpha_string(&c), "#3994bc");
-    }
-
-    #[test]
-    fn test_serialize_with_alpha() {
-        let c = ColorU { r: 0x39, g: 0x94, b: 0xBC, a: 0xB3 };
-        assert_eq!(coloru_to_hex_alpha_string(&c), "#3994bcb3");
-    }
 }

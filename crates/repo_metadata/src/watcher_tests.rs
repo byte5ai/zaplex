@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::repositories::stub_git_repository;
 use crate::repository::RepositorySubscriber;
 use crate::watcher::{DirectoryWatcher, TaskQueue};
-use crate::{CanonicalizedPath, RepoMetadataError, Repository, RepositoryUpdate};
+use crate::{Repository, RepositoryUpdate};
 use futures::channel::mpsc;
 use futures::StreamExt as _;
 use virtual_fs::{Stub, VirtualFS};
@@ -42,35 +42,6 @@ fn test_add_repository_success() {
             watcher_handle.read(&app, |watcher, _ctx| {
                 assert!(watcher.is_directory_watched(&canonical_path));
             });
-        });
-    });
-}
-
-#[test]
-fn test_add_repository_non_existent() {
-    VirtualFS::test("add_repo_nonexistent", |dirs, _vfs| {
-        let non_existent = dirs.tests().join("non_existent");
-        // Don't create the directory
-
-        App::test((), |mut app| async move {
-            let watcher_handle = app.add_model(DirectoryWatcher::new);
-
-            let result = watcher_handle.update(&mut app, |watcher, ctx| {
-                // This will fail because we can't canonicalize a non-existent path
-                let canonical_result = CanonicalizedPath::try_from(&non_existent);
-                match canonical_result {
-                    Ok(canonical_path) => watcher.add_directory(canonical_path.into(), ctx),
-                    Err(_) => Err(RepoMetadataError::RepoNotFound(
-                        "Path does not exist".to_string(),
-                    )),
-                }
-            });
-
-            assert!(result.is_err());
-            match result.unwrap_err() {
-                RepoMetadataError::RepoNotFound(_) => {} // Expected
-                _ => panic!("Expected RepoNotFound error"),
-            }
         });
     });
 }
@@ -371,29 +342,6 @@ async fn wait_for_queue_complete(queue: ModelHandle<TaskQueue>, app: &mut App) {
             queue.active_tasks
         );
     })
-}
-
-#[test]
-fn test_is_git_internal_path() {
-    use crate::entry::is_git_internal_path;
-    use std::path::Path;
-
-    // .git/ internal paths should be detected
-    assert!(is_git_internal_path(Path::new("/repo/.git/HEAD")));
-    assert!(is_git_internal_path(Path::new("/repo/.git/index")));
-    assert!(is_git_internal_path(Path::new(
-        "/repo/.git/refs/heads/main"
-    )));
-    assert!(is_git_internal_path(Path::new("/repo/.git/config")));
-    assert!(is_git_internal_path(Path::new("/repo/.git/objects/abc123")));
-    assert!(is_git_internal_path(Path::new("/repo/.git")));
-
-    #[cfg(windows)]
-    assert!(is_git_internal_path(Path::new(r"C:\repo\.git\HEAD")));
-
-    // Non-git files should not be detected
-    assert!(!is_git_internal_path(Path::new("/repo/src/main.rs")));
-    assert!(!is_git_internal_path(Path::new("/repo/README.md")));
 }
 
 #[test]

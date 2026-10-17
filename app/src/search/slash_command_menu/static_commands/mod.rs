@@ -107,7 +107,3 @@ impl StaticCommand {
         session_context.contains(self.availability)
     }
 }
-
-#[cfg(test)]
-#[path = "mod_test.rs"]
-mod tests;

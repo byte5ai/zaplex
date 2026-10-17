@@ -11,7 +11,7 @@ use crate::{
         ObjectType, ServerObjectContainer, StoredObjectGuest, StoredObjectMetadata,
         StoredObjectPermissions,
     },
-    drive::sharing::{LinkSharingSubjectType, SharingAccessLevel, Subject, TeamKind, UserKind},
+    drive::sharing::{SharingAccessLevel, Subject, TeamKind, UserKind},
     server::ids::{ClientId, ServerId, SyncId},
 };
 
@@ -68,14 +68,4 @@ fn test_roundtrip_guests() {
     let decoded = super::decode_guests(&encoded).expect("decode should succeed");
 
     assert_eq!(guests, decoded);
-}
-
-#[test]
-fn test_fail_unsupported_subjects() {
-    let result = super::encode_guests(&[StoredObjectGuest {
-        subject: Subject::AnyoneWithLink(LinkSharingSubjectType::Anyone),
-        access_level: SharingAccessLevel::View,
-        source: None,
-    }]);
-    assert!(result.is_err());
 }

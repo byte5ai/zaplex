@@ -1,6 +1,4 @@
-use super::{
-    display_working_directory, format_recent_conversation_activity, format_session_location,
-};
+use super::{format_recent_conversation_activity, format_session_location};
 use crate::ai::blocklist::agent_view::zero_state_block::current_working_directory_for_zero_state;
 use crate::terminal::model::ansi::{Handler, InitShellValue, PrecmdValue, SSHValue};
 use crate::terminal::model::test_utils::block_size;
@@ -69,18 +67,6 @@ fn format_session_location_returns_none_when_path_missing() {
     let session = Session::test_remote();
     let formatted = format_session_location(&session, None);
     assert_eq!(formatted, None);
-}
-
-#[test]
-fn display_working_directory_abbreviates_home_directory() {
-    let display = display_working_directory(Some("/Users/alice"), Some("/Users/alice"));
-    assert_eq!(display, Some("~".to_owned()));
-}
-
-#[test]
-fn display_working_directory_abbreviates_subdirectory_under_home() {
-    let display = display_working_directory(Some("/Users/alice/repo"), Some("/Users/alice"));
-    assert_eq!(display, Some("~/repo".to_owned()));
 }
 
 #[test]

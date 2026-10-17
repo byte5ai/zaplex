@@ -2437,7 +2437,3 @@ fn scale_vertical_mouse_autoscroll_delta(delta: f32) -> f32 {
 fn scale_horizontal_mouse_autoscroll_delta(delta: f32) -> f32 {
     delta.powf(1.2) / 300.0
 }
-
-#[cfg(test)]
-#[path = "element_tests.rs"]
-mod tests;

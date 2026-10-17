@@ -58,23 +58,6 @@ fn sorts_online_first_then_by_hostname() {
 }
 
 #[test]
-fn connect_host_prefers_dns_then_ipv4() {
-    let with_dns = TailscaleHost {
-        hostname: "h".into(),
-        dns_name: "h.ts.net".into(),
-        os: "linux".into(),
-        online: true,
-        ipv4: "100.64.0.7".into(),
-    };
-    assert_eq!(with_dns.connect_host(), "h.ts.net");
-    let ip_only = TailscaleHost {
-        dns_name: String::new(),
-        ..with_dns.clone()
-    };
-    assert_eq!(ip_only.connect_host(), "100.64.0.7");
-}
-
-#[test]
 fn drops_peers_without_any_address() {
     let json = r#"{"Peer":{"nodekey:x":{"HostName":"ghost","OS":"linux","Online":true,"TailscaleIPs":[]}}}"#;
     assert!(

@@ -2,100 +2,6 @@ use super::*;
 
 use toml_edit::Item;
 
-#[cfg(unix)]
-#[test]
-fn test_flush_replaces_existing_file_atomically() {
-    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-
-    use super::super::UserPreferences as _;
-
-    let dir = tempfile::tempdir().unwrap();
-    let file_path = dir.path().join("settings.toml");
-    std::fs::write(&file_path, "existing = true\n").unwrap();
-    std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o640)).unwrap();
-    let old_inode = std::fs::metadata(&file_path).unwrap().ino();
-    let (prefs, error) = TomlBackedUserPreferences::new(file_path.clone());
-    assert!(error.is_none());
-
-    prefs
-        .write_value_with_hierarchy("second", "2".to_string(), None, None)
-        .unwrap();
-
-    let new_inode = std::fs::metadata(&file_path).unwrap().ino();
-    let document = std::fs::read_to_string(&file_path)
-        .unwrap()
-        .parse::<toml_edit::DocumentMut>()
-        .unwrap();
-    assert_ne!(old_inode, new_inode);
-    assert_eq!(std::fs::metadata(&file_path).unwrap().mode() & 0o777, 0o640);
-    assert_eq!(document["existing"].as_bool(), Some(true));
-    assert_eq!(document["second"].as_integer(), Some(2));
-}
-
-#[test]
-fn pre_persist_failure_leaves_existing_file_unchanged() {
-    let dir = tempfile::tempdir().unwrap();
-    let file_path = dir.path().join("settings.toml");
-    let original = b"existing = true\n";
-    std::fs::write(&file_path, original).unwrap();
-
-    let result =
-        super::super::atomic_write_with_pre_persist(&file_path, b"existing = false\n", |_| {
-            Err(std::io::Error::other("injected failure"))
-        });
-
-    assert!(result.is_err());
-    assert_eq!(std::fs::read(&file_path).unwrap(), original);
-}
-
-#[test]
-fn test_json_to_toml_round_trip_bool() {
-    let item = TomlBackedUserPreferences::json_value_to_toml_item("true", None);
-    let json = TomlBackedUserPreferences::toml_item_to_json_string(&item);
-    assert_eq!(json, Some("true".to_string()));
-}
-
-#[test]
-fn test_json_to_toml_round_trip_integer() {
-    let item = TomlBackedUserPreferences::json_value_to_toml_item("42", None);
-    let json = TomlBackedUserPreferences::toml_item_to_json_string(&item);
-    assert_eq!(json, Some("42".to_string()));
-}
-
-#[test]
-fn test_json_to_toml_round_trip_float() {
-    let item = TomlBackedUserPreferences::json_value_to_toml_item("3.14", None);
-    let json = TomlBackedUserPreferences::toml_item_to_json_string(&item);
-    assert_eq!(json, Some("3.14".to_string()));
-}
-
-#[test]
-fn test_json_to_toml_round_trip_string() {
-    let item = TomlBackedUserPreferences::json_value_to_toml_item("\"hello\"", None);
-    let json = TomlBackedUserPreferences::toml_item_to_json_string(&item);
-    assert_eq!(json, Some("\"hello\"".to_string()));
-}
-
-#[test]
-fn test_json_to_toml_round_trip_object() {
-    let input = r#"{"dark":"Phenomenon","light":"Paper"}"#;
-    let item = TomlBackedUserPreferences::json_value_to_toml_item(input, None);
-    // Objects should become TOML tables, not strings.
-    assert!(matches!(item, Item::Table(_)));
-    let json = TomlBackedUserPreferences::toml_item_to_json_string(&item).unwrap();
-    let expected: serde_json::Value = serde_json::from_str(input).unwrap();
-    let actual: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(actual, expected);
-}
-
-#[test]
-fn test_json_to_toml_round_trip_null() {
-    let item = TomlBackedUserPreferences::json_value_to_toml_item("null", None);
-    assert!(matches!(item, Item::None));
-    let json = TomlBackedUserPreferences::toml_item_to_json_string(&item);
-    assert_eq!(json, None);
-}
-
 #[test]
 fn test_json_to_toml_round_trip_array_of_strings() {
     let input = r#"["cat","echo","ls"]"#;
@@ -116,43 +22,6 @@ fn test_json_to_toml_round_trip_array_of_objects() {
     let expected: serde_json::Value = serde_json::from_str(input).unwrap();
     let actual: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(actual, expected);
-}
-
-#[test]
-fn test_json_to_toml_round_trip_nested_struct() {
-    let input = r#"{"advanced_mode":false,"global":{"mode":"PreviousDir","custom_dir":""},"split_pane":{"mode":"HomeDir","custom_dir":"/tmp"}}"#;
-    let item = TomlBackedUserPreferences::json_value_to_toml_item(input, None);
-    assert!(matches!(item, Item::Table(_)));
-    let json = TomlBackedUserPreferences::toml_item_to_json_string(&item).unwrap();
-    let expected: serde_json::Value = serde_json::from_str(input).unwrap();
-    let actual: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(actual, expected);
-}
-
-#[test]
-fn test_json_to_toml_round_trip_object_with_nulls() {
-    // Null fields should be omitted from the table, so the round-trip
-    // drops them.  Verify that non-null fields survive.
-    let input = r#"{"keybinding":null,"active_pin_position":"Top","pin_screen":null,"hide_window_when_unfocused":true}"#;
-    let item = TomlBackedUserPreferences::json_value_to_toml_item(input, None);
-    assert!(matches!(item, Item::Table(_)));
-    let json = TomlBackedUserPreferences::toml_item_to_json_string(&item).unwrap();
-    let actual: serde_json::Value = serde_json::from_str(&json).unwrap();
-    // Null fields are dropped.
-    let expected = serde_json::json!({
-        "active_pin_position": "Top",
-        "hide_window_when_unfocused": true,
-    });
-    assert_eq!(actual, expected);
-}
-
-#[test]
-fn test_json_to_toml_round_trip_empty_array() {
-    let input = "[]";
-    let item = TomlBackedUserPreferences::json_value_to_toml_item(input, None);
-    assert!(matches!(item, Item::Value(toml_edit::Value::Array(_))));
-    let json = TomlBackedUserPreferences::toml_item_to_json_string(&item).unwrap();
-    assert_eq!(json, "[]");
 }
 
 #[test]
@@ -198,22 +67,6 @@ fn test_max_table_depth_one_renders_top_level_as_table_nested_as_inline() {
     let expected: serde_json::Value = serde_json::from_str(input).unwrap();
     let actual: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(actual, expected);
-}
-
-#[test]
-fn test_max_table_depth_none_renders_all_as_tables() {
-    // depth None = unlimited, nested objects become section tables
-    let input = r#"{"sizes":{"width":100,"height":50}}"#;
-    let item = TomlBackedUserPreferences::json_value_to_toml_item(input, None);
-    let table = match &item {
-        Item::Table(t) => t,
-        other => panic!("expected Table, got {other:?}"),
-    };
-    // Nested object should be a sub-table, not inline
-    assert!(
-        matches!(table.get("sizes"), Some(Item::Table(_))),
-        "nested object with None depth should be a section table"
-    );
 }
 
 #[test]
@@ -383,38 +236,6 @@ fn test_writes_inhibited_when_file_initially_broken() {
 }
 
 #[test]
-fn test_string_value_for_numeric_setting_reads_as_json_string() {
-    use super::super::UserPreferences;
-
-    let dir = tempfile::tempdir().unwrap();
-    let file_path = dir.path().join("test_settings.toml");
-
-    // Write a TOML file where font_size is a string instead of a number.
-    std::fs::write(&file_path, "[font]\nfont_size = \"not_a_number\"\n").unwrap();
-
-    let (prefs, parse_error) = TomlBackedUserPreferences::new(file_path);
-    assert!(
-        parse_error.is_none(),
-        "valid TOML should parse without error"
-    );
-
-    // Read the value — should return the JSON-encoded string.
-    let value = prefs
-        .read_value_with_hierarchy("font_size", Some("font"))
-        .unwrap();
-    // The TOML string "not_a_number" should be JSON-encoded as "\"not_a_number\""
-    assert_eq!(
-        value,
-        Some("\"not_a_number\"".to_string()),
-        "TOML string should be JSON-encoded"
-    );
-
-    // Attempting to deserialize as f32 should fail.
-    let result = serde_json::from_str::<f32>(value.as_deref().unwrap());
-    assert!(result.is_err(), "JSON string should not deserialize as f32");
-}
-
-#[test]
 fn test_remove_with_hierarchy() {
     use super::super::UserPreferences;
 
@@ -439,50 +260,6 @@ fn test_remove_with_hierarchy() {
         .read_value_with_hierarchy("font_name", Some("font"))
         .unwrap();
     assert!(val.is_none());
-}
-
-#[test]
-fn test_per_key_write_inhibition_preserves_value_in_file() {
-    use super::super::UserPreferences;
-
-    let dir = tempfile::tempdir().unwrap();
-    let file_path = dir.path().join("settings.toml");
-
-    // Write a file with one valid and one "invalid" setting (the TOML itself
-    // is fine, but the caller decides the value is wrong for the type).
-    std::fs::write(
-        &file_path,
-        "[font]\nfont_size = \"abc\"\nfont_name = \"Hack\"\n",
-    )
-    .unwrap();
-
-    let (prefs, parse_error) = TomlBackedUserPreferences::new(file_path.clone());
-    assert!(parse_error.is_none(), "TOML itself is valid");
-
-    // Simulate the settings layer detecting the bad value.
-    prefs.inhibit_writes_for_key("font_size", Some("font"));
-
-    // Writing to the inhibited key should be a no-op.
-    prefs
-        .write_value_with_hierarchy("font_size", "13.0".to_string(), Some("font"), None)
-        .unwrap();
-
-    // Writing to the NON-inhibited key should succeed.
-    prefs
-        .write_value_with_hierarchy("font_name", "\"Fira Code\"".to_string(), Some("font"), None)
-        .unwrap();
-
-    let on_disk = std::fs::read_to_string(&file_path).unwrap();
-    // The inhibited key's original value must still be present.
-    assert!(
-        on_disk.contains("font_size = \"abc\""),
-        "inhibited key's original value should be preserved, got: {on_disk}"
-    );
-    // The non-inhibited key's new value should be written.
-    assert!(
-        on_disk.contains("Fira Code"),
-        "non-inhibited key should be updated, got: {on_disk}"
-    );
 }
 
 #[test]

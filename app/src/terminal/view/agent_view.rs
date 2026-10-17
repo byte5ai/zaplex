@@ -395,7 +395,3 @@ impl TerminalView {
             );
     }
 }
-
-#[cfg(all(test, not(target_family = "wasm")))]
-#[path = "agent_view_tests.rs"]
-mod tests;

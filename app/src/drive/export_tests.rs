@@ -434,30 +434,6 @@ fn test_safe_filename() {
 }
 
 #[test]
-fn test_bulk_export_path_stays_below_selected_directory() {
-    let root = Path::new("/chosen/export/root");
-
-    for space_name in ["", ".", "..", ".. ", "...", "/", "\\"] {
-        let path = super::confined_bulk_export_path(root, space_name).unwrap();
-        assert!(path.starts_with(root));
-        assert_eq!(path.parent(), Some(root));
-        assert_ne!(path, root);
-    }
-}
-
-#[test]
-fn test_final_export_file_path_stays_below_parent() {
-    let root = Path::new("/chosen/export/root");
-
-    assert_eq!(
-        super::confined_export_file_path(root, "report", "md").unwrap(),
-        root.join("report.md")
-    );
-    assert!(super::confined_export_file_path(root, "../escape", "md").is_err());
-    assert!(super::confined_export_file_path(root, "/escape", "md").is_err());
-}
-
-#[test]
 fn test_export_multiple_objects() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

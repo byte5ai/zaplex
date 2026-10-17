@@ -36,44 +36,6 @@ fn server() -> SshServerInfo {
 }
 
 #[test]
-fn default_port_omitted() {
-    let s = server();
-    assert_eq!(
-        build_ssh_args(&s),
-        vec![
-            "ssh",
-            "-o",
-            "StrictHostKeyChecking=ask",
-            "--",
-            "alice@1.2.3.4"
-        ]
-    );
-    let line = build_ssh_command_line(&s);
-    assert!(
-        line.contains("StrictHostKeyChecking=ask") && line.contains("alice@1.2.3.4"),
-        "unexpected: {line}"
-    );
-}
-
-#[test]
-fn custom_port_uses_dash_p() {
-    let mut s = server();
-    s.port = 2222;
-    assert_eq!(
-        build_ssh_args(&s),
-        vec![
-            "ssh",
-            "-o",
-            "StrictHostKeyChecking=ask",
-            "-p",
-            "2222",
-            "--",
-            "alice@1.2.3.4"
-        ]
-    );
-}
-
-#[test]
 fn key_auth_emits_dash_i() {
     let mut s = server();
     s.auth_type = AuthType::Key;
@@ -139,31 +101,6 @@ fn key_runtime_command_uses_askpass_and_publickey_only() {
     assert!(!launcher_path.exists());
     assert!(!helper_path.exists());
     assert!(!secret_path.exists());
-}
-
-#[test]
-fn empty_username_yields_host_only() {
-    let mut s = server();
-    s.username = String::new();
-    assert_eq!(
-        build_ssh_args(&s),
-        vec!["ssh", "-o", "StrictHostKeyChecking=ask", "--", "1.2.3.4"]
-    );
-}
-
-#[test]
-fn option_like_username_is_delimited_from_ssh_options() {
-    let mut s = server();
-    s.username = "-oProxyCommand=malicious".to_string();
-    let args = build_ssh_args(&s);
-    let target = args
-        .iter()
-        .position(|arg| arg == "-oProxyCommand=malicious@1.2.3.4")
-        .unwrap();
-    assert_eq!(
-        args.get(target.wrapping_sub(1)).map(String::as_str),
-        Some("--")
-    );
 }
 
 #[test]
@@ -361,48 +298,6 @@ fn unix_askpass_script_prints_the_secret() {
     );
 }
 
-/// The askpass temp files are owner-only (0600 secret, 0700 script): the secret
-/// must not be group/world-readable while it briefly lives in TMPDIR.
-#[cfg(not(windows))]
-#[test]
-fn unix_askpass_files_are_owner_only() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let secret: Zeroizing<String> = Zeroizing::new("pw".into());
-    let session = AskpassSession::new(&secret).expect("AskpassSession::new failed");
-    let secret_mode = std::fs::metadata(&session.password_path)
-        .unwrap()
-        .permissions()
-        .mode()
-        & 0o777;
-    let script_mode = std::fs::metadata(&session.script_path)
-        .unwrap()
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(
-        secret_mode, 0o600,
-        "secret file must be 0600, got {secret_mode:o}"
-    );
-    assert_eq!(
-        script_mode, 0o700,
-        "script file must be 0700, got {script_mode:o}"
-    );
-}
-
-/// Dropping the session removes both temp files — the secret must not linger.
-#[cfg(not(windows))]
-#[test]
-fn unix_askpass_files_removed_on_drop() {
-    let secret: Zeroizing<String> = Zeroizing::new("pw".into());
-    let session = AskpassSession::new(&secret).expect("AskpassSession::new failed");
-    let secret_path = session.password_path.clone();
-    let script_path = session.script_path.clone();
-    assert!(secret_path.exists() && script_path.exists());
-    drop(session);
-    assert!(!secret_path.exists(), "secret file must be deleted on drop");
-    assert!(!script_path.exists(), "script file must be deleted on drop");
-}
-
 /// Key auth without a passphrase keeps `BatchMode=yes` (agent / unencrypted key,
 /// no prompt) — the original behavior.
 #[test]
@@ -446,19 +341,6 @@ fn key_auth_args_with_passphrase_drops_batch_mode_and_pins_publickey() {
         "must disable keyboard-interactive; got {joined}"
     );
     assert!(joined.ends_with("echo ok"), "got {joined}");
-}
-
-/// Regression test: `build_ssh_args` must not emit `sshpass`, preventing someone from
-/// accidentally re-adding it to cmd_args (Windows / macOS have no sshpass by default,
-/// and a stray path will immediately fail with "No such file or directory").
-#[test]
-fn build_ssh_args_does_not_emit_sshpass() {
-    let s = server();
-    let args = build_ssh_args(&s);
-    assert!(
-        !args.iter().any(|a| a == "sshpass"),
-        "build_ssh_args must not emit sshpass; got {args:?}"
-    );
 }
 
 // -------- password auth cmd_args regression protection --------

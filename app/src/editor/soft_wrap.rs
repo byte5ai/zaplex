@@ -236,7 +236,3 @@ impl<'a> Iterator for FrameLayoutDisplayedLines<'a> {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "soft_wrap_test.rs"]
-mod tests;

@@ -4,36 +4,6 @@ use crate::model::grid::{cell::Flags, row::Row};
 
 use super::{grapheme::Grapheme, FlatStorage};
 
-pub fn assert_rows_equal(actual: &[Row], expected: &[Row]) {
-    assert_eq!(
-        actual.len(),
-        expected.len(),
-        "Expected to have {} rows but got {}.  Got: {actual:?}; expected {expected:?}",
-        expected.len(),
-        actual.len()
-    );
-    actual.iter().zip(expected.iter())
-        .enumerate()
-        .for_each(|(row_idx, (actual, expected))| {
-            assert_eq!(actual.occ, expected.occ, "Expected row {row_idx} to have {} occupied cells but got {}", expected.occ, actual.occ);
-            for col_idx in 0..actual.occ {
-                let actual = &actual[col_idx];
-                let expected = &expected[col_idx];
-
-                let actual_content = actual.raw_content();
-                let expected_content = expected.raw_content();
-                assert_eq!(actual_content, expected_content, "Expected ({row_idx}, {col_idx}) to contain {expected_content:?} but got {actual_content:?}");
-
-                assert_eq!(actual.fg, expected.fg, "Expected ({row_idx}, {col_idx}) to have fg {:?} but got {:?}", expected.fg, actual.fg);
-                assert_eq!(actual.bg, expected.bg, "Expected ({row_idx}, {col_idx}) to have bg {:?} but got {:?}", expected.bg, actual.bg);
-
-                assert_eq!(actual.flags(), expected.flags(), "Expected ({row_idx}, {col_idx}) to have flags {:?} but got {:?}", expected.flags(), actual.flags());
-
-                // TODO(vorporeal): Check CellExtra::end_of_prompt.
-            }
-        })
-}
-
 /// Extra functions on [`FlatStorage`] that are useful for testing purposes.
 impl FlatStorage {
     pub fn push_rows_from_string(&mut self, string: &str) {

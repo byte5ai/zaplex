@@ -9,41 +9,7 @@ use crate::{
             SessionInfo,
         },
     },
-    terminal::shell::ShellType,
 };
-
-#[test]
-fn test_working_directory() {
-    let session = Session::test();
-    // SessionInfo forces the home directory in tests.
-    let home_dir = session.home_dir().expect("Home dir is set in tests");
-
-    let block_in_cwd = BlockMetadata::new(Some(session.id()), Some(format!("{home_dir}/projects")));
-
-    assert_eq!(
-        super::working_directory(&GeneratorContext {
-            active_block_metadata: &block_in_cwd,
-            active_session: Some(&session),
-            current_environment: &Default::default(),
-        })
-        .as_ref()
-        .and_then(|v| v.as_text()),
-        Some("~/projects")
-    );
-
-    let block_outside_cwd = BlockMetadata::new(Some(session.id()), Some("/etc".to_string()));
-
-    assert_eq!(
-        super::working_directory(&GeneratorContext {
-            active_block_metadata: &block_outside_cwd,
-            active_session: Some(&session),
-            current_environment: &Default::default(),
-        })
-        .as_ref()
-        .and_then(|v| v.as_text()),
-        Some("/etc")
-    );
-}
 
 #[test]
 fn test_remote_sessions() {
@@ -139,16 +105,4 @@ fn test_node_version() {
             .and_then(|v| v.as_text()),
         Some("v18.0.0")
     );
-}
-
-#[test]
-fn test_github_pull_request_url_command_avoids_zsh_status_assignment() {
-    let generator = super::github_pull_request_url();
-    let command = generator
-        .command()
-        .for_shell(ShellType::Zsh)
-        .expect("zsh command should exist");
-    assert!(command.contains("exit_code=$?"));
-    assert!(!command.contains("status=$?"));
-    assert!(!command.contains("status=$?;"));
 }

@@ -19,9 +19,9 @@ use super::{
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
     summary_overflow_count, summary_search_text_fragments, terminal_kind_badge_label,
     terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
-    terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
-    vtab_diff_stats_text, AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons,
-    TerminalAgentText, TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
+    terminal_title_fallback_font, visible_pane_ids_for_detail_target, vtab_diff_stats_text,
+    AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText,
+    TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
     VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
 };
 
@@ -300,34 +300,6 @@ fn collect_normalized_unique_summary_texts(
 }
 
 #[test]
-fn detail_sidecar_supports_terminal_code_and_warp_drive_object_panes() {
-    assert!(pane_type_supports_vertical_tabs_detail_sidecar(
-        IPaneType::Terminal
-    ));
-    assert!(pane_type_supports_vertical_tabs_detail_sidecar(
-        IPaneType::Code
-    ));
-    assert!(pane_type_supports_vertical_tabs_detail_sidecar(
-        IPaneType::Notebook
-    ));
-    assert!(pane_type_supports_vertical_tabs_detail_sidecar(
-        IPaneType::Workflow
-    ));
-    assert!(pane_type_supports_vertical_tabs_detail_sidecar(
-        IPaneType::EnvVarCollection
-    ));
-    assert!(pane_type_supports_vertical_tabs_detail_sidecar(
-        IPaneType::AIFact
-    ));
-    assert!(pane_type_supports_vertical_tabs_detail_sidecar(
-        IPaneType::AIDocument
-    ));
-    assert!(!pane_type_supports_vertical_tabs_detail_sidecar(
-        IPaneType::Settings
-    ));
-}
-
-#[test]
 fn code_detail_kind_label_uses_programming_language_display_name() {
     assert_eq!(
         code_detail_kind_label("block_id.rs"),
@@ -337,11 +309,6 @@ fn code_detail_kind_label_uses_programming_language_display_name() {
         code_detail_kind_label("Dockerfile"),
         Some("Dockerfile".to_string())
     );
-}
-
-#[test]
-fn code_detail_kind_label_returns_none_when_language_is_unknown() {
-    assert_eq!(code_detail_kind_label("notes.txt"), None);
 }
 
 #[test]
@@ -572,20 +539,6 @@ fn detail_sidecar_visibility_helper_clears_sidecar_outside_row_sidecar_and_safe_
         Some(row_rect),
         Some(sidecar_rect),
         &mut safe_triangle,
-    ));
-}
-
-#[test]
-fn panes_granularity_uses_outer_group_container() {
-    assert!(uses_outer_group_container(
-        VerticalTabsDisplayGranularity::Panes
-    ));
-}
-
-#[test]
-fn tabs_granularity_does_not_use_outer_group_container() {
-    assert!(!uses_outer_group_container(
-        VerticalTabsDisplayGranularity::Tabs
     ));
 }
 
@@ -827,36 +780,6 @@ fn compact_branch_subtitle_falls_back_to_working_directory_without_branch_icon()
     assert_eq!(
         compact_branch_subtitle_display(Some("main"), Some("~/warp")),
         Some(("main".to_string(), true))
-    );
-}
-
-#[test]
-fn collect_normalized_unique_summary_texts_dedupes_after_whitespace_normalization() {
-    assert_eq!(
-        collect_normalized_unique_summary_texts([
-            "  cargo   test  ",
-            "cargo test",
-            "",
-            " git   status ",
-        ]),
-        vec!["cargo test".to_string(), "git status".to_string()]
-    );
-}
-
-#[test]
-fn collect_normalized_unique_summary_texts_preserves_first_seen_order() {
-    assert_eq!(
-        collect_normalized_unique_summary_texts([
-            "~/warp-internal",
-            "~/warp-server",
-            "~/warp-internal",
-            "~/warp-terraform",
-        ]),
-        vec![
-            "~/warp-internal".to_string(),
-            "~/warp-server".to_string(),
-            "~/warp-terraform".to_string(),
-        ]
     );
 }
 

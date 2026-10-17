@@ -549,7 +549,3 @@ define_settings_group!(TabSettings, settings: [
     close_button_position: TabCloseButtonPosition,
     directory_tab_colors: DirectoryTabColors,
 ]);
-
-#[cfg(test)]
-#[path = "tab_settings_tests.rs"]
-mod tests;

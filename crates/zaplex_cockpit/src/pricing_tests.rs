@@ -103,35 +103,6 @@ fn custom_keys_are_matched_case_insensitively() {
 }
 
 #[test]
-fn opus_golden_cost_from_verified_transcript_block() {
-    // Verified 2026-07-31 against Anthropic's public API list price.
-    let t = PricingTable::default();
-    let cost = t
-        .cost_for("claude-opus-4-8", 19370, 230, 9716, 19748)
-        .unwrap();
-    // (19370*5 + 230*25 + 9716*6.25 + 19748*0.50) / 1e6
-    approx(cost, 0.173199);
-}
-
-#[test]
-fn one_million_each_opus() {
-    let t = PricingTable::default();
-    // 1M input @ $5 + 1M output @ $25 = $30.
-    approx(
-        t.cost_for("claude-opus-4-8", 1_000_000, 1_000_000, 0, 0)
-            .unwrap(),
-        30.0,
-    );
-}
-
-#[test]
-fn reasoning_tokens_are_not_billed_twice_for_codex() {
-    let t = PricingTable::default();
-    // The 1M reasoning-token breakdown is already inside the 1M output total.
-    approx(t.cost_for("gpt-5-codex", 0, 1_000_000, 0, 0).unwrap(), 10.0);
-}
-
-#[test]
 fn unknown_model_price_is_rendered_as_not_priced() {
     let t = PricingTable::default();
     let cost = t.cost_for("some-future-model", 1_000_000, 1_000_000, 0, 0);

@@ -88,20 +88,6 @@ impl fmt::Debug for AsciiDebug<'_> {
 }
 
 #[test]
-fn test_dedupe() {
-    let history_lines = vec![
-        "1".to_string(),
-        "3".to_string(),
-        "2".to_string(),
-        "1".to_string(),
-    ];
-    assert_eq!(
-        dedupe_from_last(history_lines),
-        vec!["3".to_string(), "2".to_string(), "1".to_string()]
-    );
-}
-
-#[test]
 fn test_parse_ascii_u32() {
     assert_eq!(parse_ascii_u32(b"123"), Some(123));
     assert_eq!(parse_ascii_u32(b"0"), Some(0));

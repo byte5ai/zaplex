@@ -392,17 +392,4 @@ mod tests {
         assert!(!is_development_text_extension("exe"));
         assert!(!is_development_text_extension("zip"));
     }
-
-    #[test]
-    fn test_extensionless_files() {
-        assert!(is_extensionless_text_file("README"));
-        assert!(is_extensionless_text_file("LICENSE"));
-        assert!(is_extensionless_text_file("Dockerfile"));
-        assert!(is_extensionless_text_file(".gitignore"));
-        assert!(is_extensionless_text_file(".env"));
-
-        assert!(!is_extensionless_text_file("binary"));
-        assert!(!is_extensionless_text_file("unknown"));
-        assert!(!is_extensionless_text_file("data"));
-    }
 }

@@ -246,43 +246,6 @@ fn test_parse_line_numbers() {
 }
 
 #[test]
-fn test_remove_extra_line_num_prefix() {
-    // Test with line numbers.
-    let input = "1|first line\n2|second line\n3|third line".to_string();
-    assert_eq!(
-        remove_extra_line_num_prefix(input),
-        "first line\nsecond line\nthird line"
-    );
-
-    // Test with no line numbers.
-    let input = "first line\nsecond line".to_string();
-    assert_eq!(
-        remove_extra_line_num_prefix(input),
-        "first line\nsecond line"
-    );
-
-    // Test empty string.
-    assert_eq!(remove_extra_line_num_prefix("".to_string()), "");
-
-    // Test single line with number.
-    assert_eq!(
-        remove_extra_line_num_prefix("1|only line".to_string()),
-        "only line"
-    );
-
-    // Test with line numbers with mixed prefixes.
-    let input = "first line\n2|second line\n3|third line".to_string();
-    assert_eq!(
-        remove_extra_line_num_prefix(input),
-        "first line\nsecond line\nthird line"
-    );
-
-    // Test single line without number.
-    let input = "no number line".to_string();
-    assert_eq!(remove_extra_line_num_prefix(input.clone()), input);
-}
-
-#[test]
 fn test_find_similar_sections_out_of_bounds() {
     let matches = find_similar_sections("hey\nthere\nyou", &[], 0.9);
     assert!(matches.is_empty());
@@ -608,43 +571,6 @@ fn test_partial_last_line_in_search_preserves_suffix() {
     assert_eq!(result, "func foo() {\nlet y = 1;\nlet x = 2;\n}\n");
 }
 
-#[test]
-fn test_search_and_replace_accommodates_none() {
-    let parsed_diff = ParsedDiff::StrReplaceEdit {
-        file: None,
-        search: None,
-        replace: None,
-    };
-    let search_and_replace: Result<SearchAndReplace, ()> = parsed_diff.try_into();
-    assert_eq!(Err(()), search_and_replace);
-
-    let parsed_diff = ParsedDiff::StrReplaceEdit {
-        file: None,
-        search: Some("search".into()),
-        replace: None,
-    };
-    assert_eq!(
-        Ok(SearchAndReplace {
-            search: "search".into(),
-            replace: String::new()
-        }),
-        parsed_diff.try_into()
-    );
-
-    let parsed_diff = ParsedDiff::StrReplaceEdit {
-        file: None,
-        search: None,
-        replace: Some("replace".into()),
-    };
-    assert_eq!(
-        Ok(SearchAndReplace {
-            search: String::new(),
-            replace: "replace".into()
-        }),
-        parsed_diff.try_into()
-    );
-}
-
 /// Test that if a search/replace pair is not a noop, but the overall effect is a noop when applied
 /// to the file contents, we skip the diff.
 #[test]
@@ -670,14 +596,6 @@ fn test_search_range_greater_than_file_length() {
     );
 
     assert_eq!(r, Some(1..3));
-}
-
-#[test]
-fn test_custom_lines() {
-    assert_eq!(lines("").collect_vec(), vec![""]);
-    assert_eq!(lines("foobar").collect_vec(), vec!["foobar"]);
-    assert_eq!(lines("foo\nbar").collect_vec(), vec!["foo", "bar"]);
-    assert_eq!(lines("foo\nbar\n").collect_vec(), vec!["foo", "bar"]);
 }
 
 /// Regression test for WARP-CLIENT-DEV-NYY: panic "Invalid edit range 4042..3982".

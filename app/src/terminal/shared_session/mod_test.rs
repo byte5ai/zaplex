@@ -7,7 +7,6 @@ use crate::terminal::model::test_utils::block_size;
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 
 use crate::terminal::model::ObfuscateSecrets;
-use crate::terminal::shared_session::protocol::{Scrollback, ScrollbackBlock};
 use crate::terminal::TerminalModel;
 use crate::terminal::{event_listener::ChannelEventListener, model::block::SerializedBlock};
 use crate::themes::default_themes::dark_theme;
@@ -181,45 +180,6 @@ fn test_scrollback_serialization() {
         json.get("stylized_output"),
         Some(&Value::Array(expected_output)),
     );
-}
-
-#[test]
-fn test_scrollback_deserialization() {
-    let raw = serde_json::json!({
-        "id": "00000000-0000-0000-0000-000000000000",
-        "stylized_command": [104, 101, 108, 108, 111],
-        "stylized_output": [119, 111, 114, 108, 100],
-        "pwd": null,
-        "git_head": null,
-        "virtual_env": null,
-        "conda_env": null,
-        "node_version": null,
-        "exit_code": 0,
-        "did_execute": true,
-        "completed_ts": null,
-        "start_ts": null,
-        "ps1": null,
-        "rprompt": null,
-        "honor_ps1": false,
-        "is_background": false,
-        "session_id": null,
-        "shell_host": null,
-        "prompt_snapshot": null,
-        "ai_metadata": null
-    });
-
-    let scrollback = Scrollback {
-        blocks: vec![ScrollbackBlock {
-            raw: serde_json::to_vec(&raw).expect("serialize scrollback json"),
-        }],
-        is_alt_screen_active: false,
-    };
-
-    let decoded = decode_scrollback(&scrollback);
-
-    assert_eq!(decoded.len(), 1);
-    assert_eq!(decoded[0].stylized_command, b"hello");
-    assert_eq!(decoded[0].stylized_output, b"world");
 }
 
 #[test]

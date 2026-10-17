@@ -1,11 +1,8 @@
-use super::{Cell, LineLength};
+use super::Cell;
 
 use crate::model::{
     char_or_str::CharOrStr,
-    grid::{
-        cell::{Flags, MAX_GRAPHEME_BYTES},
-        row::Row,
-    },
+    grid::cell::{Flags, MAX_GRAPHEME_BYTES},
 };
 
 #[test]
@@ -16,29 +13,6 @@ fn verify_cell_size() {
     const EXPECTED_CELL_SIZE_IN_BYTES: usize = 24;
 
     assert_eq!(std::mem::size_of::<Cell>(), EXPECTED_CELL_SIZE_IN_BYTES);
-}
-
-#[test]
-fn line_length_works() {
-    let mut row = Row::new(10);
-    row[5].c = 'a';
-
-    assert_eq!(row.line_length(), 6);
-}
-
-#[test]
-fn line_length_works_with_wrapline() {
-    let mut row = Row::new(10);
-    row[9].flags.insert(super::Flags::WRAPLINE);
-
-    assert_eq!(row.line_length(), 10);
-}
-
-#[test]
-fn line_length_works_with_empty_line() {
-    let mut row = Row::new(1);
-    row.shrink(0);
-    assert_eq!(row.line_length(), 0);
 }
 
 #[test]

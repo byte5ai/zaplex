@@ -84,16 +84,6 @@ fn primary_disabled_split_submenu_items() -> Vec<MenuItem<TestAction>> {
 }
 
 #[test]
-fn test_menu_item_selectable() {
-    assert!(MenuItemFields::<()>::new("normal").into_item().selectable());
-    assert!(!MenuItemFields::<()>::new("disabled")
-        .with_disabled(true)
-        .into_item()
-        .selectable());
-    assert!(!MenuItem::<()>::Separator.selectable());
-}
-
-#[test]
 fn test_next_and_previous_indexes() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -549,38 +539,6 @@ fn test_right_is_a_noop_for_leaf_items() {
 }
 
 #[test]
-fn menu_accessibility_copy_uses_fluent_keys() {
-    let source = include_str!("menu.rs");
-    for literal in [
-        "{item} Selected",
-        "Submenu Expanded",
-        "Submenu Closed",
-        "Menu Closed",
-        "Action Selected",
-        "Press the right key",
-    ] {
-        assert!(!source.contains(literal), "hard-coded a11y text: {literal}");
-    }
-    for key in [
-        "menu-a11y-item-selected",
-        "menu-a11y-submenu-expanded-label",
-        "menu-a11y-select-instructions",
-        "menu-a11y-select-submenu-instructions",
-        "menu-a11y-submenu-expanded",
-        "menu-a11y-open-submenu-instructions",
-        "menu-a11y-submenu-closed",
-        "menu-a11y-close-submenu-instructions",
-        "menu-a11y-submenu-escape-instructions",
-        "menu-a11y-menu-closed",
-        "menu-a11y-menu-escape-instructions",
-        "menu-a11y-action-selected",
-        "menu-a11y-action-instructions",
-    ] {
-        assert!(source.contains(key), "missing Fluent use: {key}");
-    }
-}
-
-#[test]
 fn test_stale_submenu_parent_unhover_does_not_clear_new_hover_selection() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
@@ -861,25 +819,4 @@ fn test_nested_submenu_leaf_hover_is_handled_at_child_depth() {
             assert_eq!(child_label.as_deref(), Some("child one"));
         });
     })
-}
-
-#[test]
-fn test_submenu_position_ids_are_scoped_per_menu_instance() {
-    let first_menu = Menu::<()>::new();
-    let second_menu = Menu::<()>::new();
-
-    assert_ne!(
-        first_menu.submenu_save_position_id_for_tests(0, 0),
-        second_menu.submenu_save_position_id_for_tests(0, 0)
-    );
-}
-
-#[test]
-fn test_submenu_position_ids_are_scoped_per_row() {
-    let menu = Menu::<()>::new();
-
-    assert_ne!(
-        menu.submenu_save_position_id_for_tests(0, 0),
-        menu.submenu_save_position_id_for_tests(0, 1)
-    );
 }

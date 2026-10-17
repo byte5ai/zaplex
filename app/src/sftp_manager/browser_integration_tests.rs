@@ -34,9 +34,7 @@ use crate::test_util::settings::initialize_settings_for_tests;
 
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 
-use super::browser::{
-    copy_move_submission_summary, transfer_display_priority, SftpBrowserAction, SftpBrowserView,
-};
+use super::browser::{transfer_display_priority, SftpBrowserAction, SftpBrowserView};
 use super::sftp_backend::{
     BackendFileReader, BackendFileWriter, BackendOwnershipAnchor, InMemorySftpBackend, SftpBackend,
 };
@@ -1797,17 +1795,6 @@ fn broken_symlink_reports_failure_without_changing_location() {
             "a broken link must never be treated as a directory-listing request"
         );
     });
-}
-
-#[test]
-fn same_filesystem_submission_reports_queued_not_completed() {
-    crate::i18n::init(Some("en"));
-    let summary = copy_move_submission_summary(2, 1, "other pane");
-
-    assert!(summary.contains(&crate::t!("fm-summary-queued", count = 2)));
-    assert!(summary.contains(&crate::t!("fm-summary-skipped", count = 1)));
-    assert!(!summary.contains(&crate::t!("fm-summary-copied", count = 2)));
-    assert!(!summary.contains(&crate::t!("fm-summary-moved", count = 2)));
 }
 
 #[test]

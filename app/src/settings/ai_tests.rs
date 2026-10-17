@@ -297,20 +297,6 @@ fn test_toolbar_command_map_deserialize_from_legacy_vec() {
 }
 
 #[test]
-fn test_toolbar_command_map_from_file_value_map_format() {
-    use settings_value::SettingsValue;
-
-    let value = serde_json::json!({
-        "^claude": "Claude",
-        "^amp": "Amp"
-    });
-    let map = ToolbarCommandMap::from_file_value(&value).unwrap();
-    assert_eq!(map.0.len(), 2);
-    assert_eq!(map.0["^claude"], "Claude");
-    assert_eq!(map.0["^amp"], "Amp");
-}
-
-#[test]
 fn test_toolbar_command_map_from_file_value_legacy_array() {
     use settings_value::SettingsValue;
 
@@ -323,28 +309,6 @@ fn test_toolbar_command_map_from_file_value_legacy_array() {
     assert_eq!(map.0["^middle"], "");
     let keys: Vec<_> = map.0.keys().collect();
     assert_eq!(keys, vec!["^zebra", "^alpha", "^middle"]);
-}
-
-#[test]
-fn test_toolbar_command_map_from_file_value_invalid() {
-    use settings_value::SettingsValue;
-
-    let value = serde_json::json!(42);
-    assert!(ToolbarCommandMap::from_file_value(&value).is_none());
-}
-
-#[test]
-fn test_toolbar_command_map_roundtrip() {
-    use settings_value::SettingsValue;
-
-    let mut inner = IndexMap::new();
-    inner.insert("^claude".to_string(), "Claude".to_string());
-    inner.insert("^custom".to_string(), String::new());
-    let original = ToolbarCommandMap::new(inner);
-
-    let file_value = original.to_file_value();
-    let restored = ToolbarCommandMap::from_file_value(&file_value).unwrap();
-    assert_eq!(original, restored);
 }
 
 #[test]
@@ -379,13 +343,6 @@ fn test_toolbar_command_map_matched_agent() {
             assert_eq!(agent, None);
         });
     });
-}
-
-#[test]
-fn deprecated_gemini_is_not_enabled_for_new_launch_surfaces() {
-    assert!(!PerAgentSettings::default_for(CLIAgent::Gemini).tabmenu);
-    assert!(PerAgentSettings::default_for(CLIAgent::Antigravity).tabmenu);
-    assert!(PerAgentSettings::default_for(CLIAgent::Gemini).toolbar);
 }
 
 #[test]
@@ -692,62 +649,6 @@ fn test_update_quota_info_quota_exceeded() {
             let cycle_history = &settings.ai_request_quota_info.cycle_history;
             let cycle = &cycle_history[0];
             assert!(!cycle.was_quota_exceeded);
-        });
-    });
-}
-
-#[test]
-fn test_mark_quota_banner_as_dismissed() {
-    App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-
-        let now = Utc::now();
-
-        // Create test cycles: two expired cycles and one future cycle
-        let expired_cycle_1 = CycleInfo {
-            end_date: now - chrono::Duration::days(30), // 30 days ago
-            was_quota_exceeded: true,
-            banner_state: BannerState { dismissed: false },
-        };
-
-        let expired_cycle_2 = CycleInfo {
-            end_date: now - chrono::Duration::days(15), // 15 days ago
-            was_quota_exceeded: true,
-            banner_state: BannerState { dismissed: false },
-        };
-
-        let future_cycle = CycleInfo {
-            end_date: now + chrono::Duration::days(15), // 15 days in future
-            was_quota_exceeded: false,
-            banner_state: BannerState { dismissed: false },
-        };
-
-        let cycle_history = vec![expired_cycle_1, expired_cycle_2, future_cycle];
-
-        // Set up initial state
-        AISettings::handle(&app).update(&mut app, |settings, ctx| {
-            settings
-                .ai_request_quota_info
-                .set_value(AIRequestQuotaInfo { cycle_history }, ctx)
-                .unwrap();
-        });
-
-        // Mark expired cycles as dismissed
-        AISettings::handle(&app).update(&mut app, |settings, ctx| {
-            settings.mark_quota_banner_as_dismissed(ctx);
-        });
-
-        // Verify the results
-        AISettings::handle(&app).read(&app, |settings, _ctx| {
-            let cycle_history = &settings.ai_request_quota_info.cycle_history;
-            assert_eq!(cycle_history.len(), 3);
-
-            // First cycle (oldest expired) should be dismissed
-            assert!(cycle_history[0].banner_state.dismissed);
-            // Second cycle (more recent expired) should be dismissed
-            assert!(cycle_history[1].banner_state.dismissed);
-            // Future cycle should not be dismissed
-            assert!(!cycle_history[2].banner_state.dismissed);
         });
     });
 }

@@ -6,14 +6,14 @@ use async_trait::async_trait;
 mod driver;
 mod message_hydrator;
 
-#[cfg(test)]
-pub(crate) use driver::{
-    agent_event_backoff, agent_event_failures_exceeded_threshold, AgentEventDriverState,
-    DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
-};
 pub(crate) use driver::{
     run_agent_event_driver, AgentEventConsumer, AgentEventConsumerControlFlow,
     AgentEventDriverConfig, AgentEventSource, AgentEventSourceItem,
+};
+#[cfg(test)]
+pub(crate) use driver::{
+    AgentEventDriverState, DEFAULT_AGENT_EVENT_FAILURES_BEFORE_ERROR_LOG,
+    DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS,
 };
 pub(crate) use message_hydrator::MessageHydrator;
 

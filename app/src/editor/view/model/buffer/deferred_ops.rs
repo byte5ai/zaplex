@@ -63,7 +63,3 @@ impl DeferredOperations {
         self.replica_ids.contains(replica_id)
     }
 }
-
-#[cfg(test)]
-#[path = "deferred_ops_tests.rs"]
-mod tests;

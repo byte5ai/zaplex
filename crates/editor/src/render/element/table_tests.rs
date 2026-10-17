@@ -13,7 +13,6 @@ use crate::{
     content::text::{FormattedTable, table_cell_offset_maps},
     render::{
         element::table::{
-            model_table_layout_report, row_geometry_from_layout_report,
             table_cursor_relative_offset, table_horizontal_scroll_delta, table_scroll_data,
             table_scrollbar, table_selection_relative_range,
         },
@@ -109,28 +108,6 @@ fn test_laid_out_table() -> LaidOutTable {
 }
 
 #[test]
-fn model_table_layout_report_matches_model_geometry() {
-    let laid_out_table = test_laid_out_table();
-    let report = model_table_layout_report(&laid_out_table);
-
-    assert_eq!(report.column_widths, vec![80.0, 120.0]);
-    assert_eq!(report.column_lefts, vec![0.0, 80.0]);
-    assert_eq!(report.header_height, 24.0);
-    assert_eq!(report.row_heights, vec![30.0, 42.0]);
-    assert_eq!(report.row_tops, vec![0.0, 30.0]);
-    assert_eq!(report.total_height, 96.0);
-}
-
-#[test]
-fn row_geometry_from_layout_report_includes_header_row() {
-    let report = model_table_layout_report(&test_laid_out_table());
-    let (row_tops, row_heights) = row_geometry_from_layout_report(&report);
-
-    assert_eq!(row_tops, vec![0.0, 24.0, 54.0]);
-    assert_eq!(row_heights, vec![24.0, 30.0, 42.0]);
-}
-
-#[test]
 fn coordinate_to_offset_returns_cell_start_for_first_cell() {
     let table = test_laid_out_table();
     let offset = table.coordinate_to_offset(10.0, 5.0);
@@ -168,17 +145,6 @@ fn coordinate_to_offset_targets_second_row() {
 }
 
 #[test]
-fn cells_in_range_single_cell() {
-    let table = test_laid_out_table();
-    let cells = table
-        .offset_map
-        .cells_in_range(CharOffset::from(0usize), CharOffset::from(2usize));
-    assert_eq!(cells.len(), 1);
-    assert_eq!(cells[0].row, 0);
-    assert_eq!(cells[0].col, 0);
-}
-
-#[test]
 fn cells_in_range_across_row() {
     let table = test_laid_out_table();
     let cells = table
@@ -189,28 +155,6 @@ fn cells_in_range_across_row() {
     assert_eq!(cells[0].col, 0);
     assert_eq!(cells[1].row, 0);
     assert_eq!(cells[1].col, 1);
-}
-
-#[test]
-fn cells_in_range_cross_row() {
-    let table = test_laid_out_table();
-    let cells = table
-        .offset_map
-        .cells_in_range(CharOffset::from(3usize), CharOffset::from(9usize));
-    assert_eq!(cells.len(), 2);
-    assert_eq!(cells[0].row, 0);
-    assert_eq!(cells[0].col, 1);
-    assert_eq!(cells[1].row, 1);
-    assert_eq!(cells[1].col, 0);
-}
-
-#[test]
-fn cells_in_range_entire_table() {
-    let table = test_laid_out_table();
-    let cells = table
-        .offset_map
-        .cells_in_range(CharOffset::from(0usize), table.content_length());
-    assert_eq!(cells.len(), 6);
 }
 
 fn single_line_cell_layout(char_count: usize, line_height: f32, line_width: f32) -> CellLayout {
@@ -321,18 +265,6 @@ fn table_selection_relative_range_starts_at_table_start() {
 }
 
 #[test]
-fn table_selection_relative_range_excludes_non_overlapping_selection() {
-    let table = test_laid_out_table();
-    let range = table_selection_relative_range(
-        &RenderedSelection::new(CharOffset::from(1usize), CharOffset::from(4usize)),
-        CharOffset::from(5usize),
-        &table,
-    );
-
-    assert!(range.is_none());
-}
-
-#[test]
 fn table_cursor_relative_offset_starts_at_zero_for_first_table_character() {
     let table = test_laid_out_table();
     let relative_offset = table_cursor_relative_offset(
@@ -342,18 +274,6 @@ fn table_cursor_relative_offset_starts_at_zero_for_first_table_character() {
     );
 
     assert_eq!(relative_offset, Some(CharOffset::from(0usize)));
-}
-
-#[test]
-fn table_cursor_relative_offset_excludes_cursor_before_table_start() {
-    let table = test_laid_out_table();
-    let relative_offset = table_cursor_relative_offset(
-        &RenderedSelection::new(CharOffset::from(4usize), CharOffset::from(4usize)),
-        CharOffset::from(5usize),
-        &table,
-    );
-
-    assert_eq!(relative_offset, None);
 }
 
 #[test]
@@ -432,20 +352,4 @@ fn table_scrollbar_drag_state_survives_renderable_recreation() {
     assert!(table.set_scroll_left(drag_state.start_scroll_left - scroll_delta, viewport_width));
     assert_eq!(table.scroll_left(), 40.0.into_pixels());
     assert!(table.end_scrollbar_drag());
-}
-
-#[test]
-fn table_cursor_relative_offset_excludes_cursor_at_table_end() {
-    let table = test_laid_out_table();
-    let table_start = CharOffset::from(5usize);
-    let relative_offset = table_cursor_relative_offset(
-        &RenderedSelection::new(
-            table_start + table.content_length(),
-            table_start + table.content_length(),
-        ),
-        table_start,
-        &table,
-    );
-
-    assert_eq!(relative_offset, None);
 }

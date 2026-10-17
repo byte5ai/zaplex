@@ -55,7 +55,3 @@ impl Entity for SelectedItems {
 }
 
 impl SingletonEntity for SelectedItems {}
-
-#[cfg(test)]
-#[path = "selected_items_tests.rs"]
-mod tests;

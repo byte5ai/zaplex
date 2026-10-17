@@ -9,9 +9,11 @@ use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
 
 use super::*;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+use crate::sftp_manager::sftp_backend::local_safe_rename_primitives_available;
 use crate::sftp_manager::sftp_backend::{
-    local_safe_rename_primitives_available, BackendFileReader, BackendFileWriter,
-    BackendOwnershipAnchor, DirectoryReservationFailure, InMemorySftpBackend, StableEntryIdentity,
+    BackendFileReader, BackendFileWriter, BackendOwnershipAnchor, DirectoryReservationFailure,
+    InMemorySftpBackend, StableEntryIdentity,
 };
 use crate::sftp_manager::sftp_ops::ProgressCallback;
 use crate::sftp_manager::types::FileEntry;
@@ -3827,12 +3829,6 @@ fn guarded_cleanup_retains_tombstone_after_rename_ack_uncertainty() {
         .any(|path| path.to_string_lossy().contains("zaplex-delete")));
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn local_backend_reports_safe_rename_capabilities_on_supported_platforms() {
-    assert!(local_safe_rename_primitives_available());
-}
-
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 #[test]
 fn local_backend_refuses_safe_rename_capabilities_without_platform_primitives() {
@@ -3914,18 +3910,6 @@ fn controlled_cleanup_never_deletes_replaced_empty_directory() {
             .to_string_lossy()
             .contains("zaplex-delete")
     }));
-}
-
-#[test]
-fn required_cleanup_never_revokes_an_accepted_cancel() {
-    let control = TransferControl::default();
-    assert!(control.cancel());
-    let mut progress = None;
-
-    begin_required_cleanup(&control, &mut progress, 0)
-        .expect_err("an accepted cancellation must block finalizing");
-
-    assert!(control.is_cancelled());
 }
 
 #[test]

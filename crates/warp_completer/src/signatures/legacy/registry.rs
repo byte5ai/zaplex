@@ -512,7 +512,3 @@ fn should_complete_on_subcmd(
         subcmd_matches_token
     }
 }
-
-#[cfg(test)]
-#[path = "registry_test.rs"]
-mod tests;

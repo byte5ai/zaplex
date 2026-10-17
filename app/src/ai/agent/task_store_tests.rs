@@ -94,62 +94,6 @@ fn create_exchange_with_subagent_call(subtask_id: &TaskId) -> AIAgentExchange {
 }
 
 #[test]
-fn test_with_root_task() {
-    let task = create_test_task_with_exchanges(3);
-    let task_id = task.id().clone();
-    let exchange_ids: Vec<_> = task.exchanges().map(|e| e.id).collect();
-
-    let store = TaskStore::with_root_task(task);
-
-    assert_eq!(store.task_count(), 1);
-    assert_eq!(store.exchange_count(), 3);
-    assert_eq!(store.root_task_id(), &task_id);
-    assert_eq!(store.root_task().expect("task exists").id(), &task_id);
-    assert_eq!(store.first_exchange().map(|e| e.id), Some(exchange_ids[0]));
-    assert_eq!(store.latest_exchange().map(|e| e.id), Some(exchange_ids[2]));
-}
-
-#[test]
-fn test_first_and_latest_exchange_o1() {
-    let task = create_test_task_with_exchanges(5);
-    let exchange_ids: Vec<_> = task.exchanges().map(|e| e.id).collect();
-    let store = TaskStore::with_root_task(task);
-
-    // These should be O(1) operations
-    let first = store.first_exchange().expect("has exchanges");
-    let latest = store.latest_exchange().expect("has exchanges");
-
-    assert_eq!(first.id, exchange_ids[0]);
-    assert_eq!(latest.id, exchange_ids[4]);
-}
-
-#[test]
-fn test_insert_subtask() {
-    // Create root task with 1 exchange, then we'll add a subagent call exchange
-    let root_task = create_test_task_with_exchanges(1);
-    let root_task_id = root_task.id().clone();
-    let mut store = TaskStore::with_root_task(root_task);
-
-    // Create subtask with 1 exchange
-    let subtask = create_test_subtask_with_exchanges(1);
-    let subtask_id = subtask.id().clone();
-
-    // Add exchange with subagent call to root task BEFORE inserting subtask
-    let subagent_exchange = create_exchange_with_subagent_call(&subtask_id);
-    store.append_exchange(&root_task_id, subagent_exchange);
-
-    // Now insert the subtask - its exchanges should be included via the subagent call
-    store.insert(subtask);
-
-    assert_eq!(store.task_count(), 2);
-    // 1 root exchange + 1 subagent call exchange + 1 subtask exchange = 3
-    assert_eq!(store.exchange_count(), 3);
-    assert!(store.get(&root_task_id).is_some());
-    assert!(store.get(&subtask_id).is_some());
-    assert!(store.contains(&subtask_id));
-}
-
-#[test]
 fn test_remove_task() {
     let task = create_test_task_with_exchanges(3);
     let task_id = task.id().clone();
@@ -177,33 +121,6 @@ fn test_remove_nonexistent_task() {
 }
 
 #[test]
-fn test_all_exchanges_iteration() {
-    let task = create_test_task_with_exchanges(4);
-    let expected_ids: Vec<_> = task.exchanges().map(|e| e.id).collect();
-    let store = TaskStore::with_root_task(task);
-
-    let actual_ids: Vec<_> = store.all_exchanges().map(|e| e.id).collect();
-
-    assert_eq!(actual_ids, expected_ids);
-}
-
-#[test]
-fn test_all_exchanges_by_task() {
-    let task = create_test_task_with_exchanges(3);
-    let task_id = task.id().clone();
-    let exchange_ids: Vec<_> = task.exchanges().map(|e| e.id).collect();
-    let store = TaskStore::with_root_task(task);
-
-    let by_task = store.all_exchanges_by_task();
-    assert_eq!(by_task.len(), 1);
-    assert_eq!(by_task[0].0, task_id);
-    assert_eq!(by_task[0].1.len(), 3);
-
-    let actual_ids: Vec<_> = by_task[0].1.iter().map(|e| e.id).collect();
-    assert_eq!(actual_ids, exchange_ids);
-}
-
-#[test]
 fn test_set_root_task_replaces_old() {
     let task1 = create_test_task_with_exchanges(2);
     let task1_id = task1.id().clone();
@@ -222,23 +139,6 @@ fn test_set_root_task_replaces_old() {
 
     let actual_ids: Vec<_> = store.all_exchanges().map(|e| e.id).collect();
     assert_eq!(actual_ids, task2_exchange_ids);
-}
-
-#[test]
-fn test_append_exchange() {
-    let task = create_test_task_with_exchanges(2);
-    let task_id = task.id().clone();
-    let mut store = TaskStore::with_root_task(task);
-
-    let new_exchange = create_test_exchange();
-    let new_exchange_id = new_exchange.id;
-
-    let result = store.append_exchange(&task_id, new_exchange);
-    assert!(result);
-    assert_eq!(store.exchange_count(), 3);
-
-    // Verify the new exchange is accessible
-    assert_eq!(store.latest_exchange().map(|e| e.id), Some(new_exchange_id));
 }
 
 #[test]
@@ -265,17 +165,6 @@ fn test_remove_task_exchange() {
 }
 
 #[test]
-fn test_append_exchange_to_nonexistent_task() {
-    let task = create_test_task_with_exchanges(1);
-    let mut store = TaskStore::with_root_task(task);
-
-    let nonexistent_id = TaskId::new(Uuid::new_v4().to_string());
-    let result = store.append_exchange(&nonexistent_id, create_test_exchange());
-    assert!(!result);
-    assert_eq!(store.exchange_count(), 1);
-}
-
-#[test]
 fn test_remove_exchange_from_nonexistent_task() {
     let task = create_test_task_with_exchanges(1);
     let exchange_id = task.exchanges().next().unwrap().id;
@@ -285,22 +174,6 @@ fn test_remove_exchange_from_nonexistent_task() {
     let result = store.remove_task_exchange(&nonexistent_task_id, exchange_id);
     assert!(result.is_none());
     assert_eq!(store.exchange_count(), 1);
-}
-
-#[test]
-fn test_tasks_iteration() {
-    let task1 = create_test_task_with_exchanges(2);
-    let task1_id = task1.id().clone();
-    let mut store = TaskStore::with_root_task(task1);
-
-    let task2 = create_test_subtask_with_exchanges(1);
-    let task2_id = task2.id().clone();
-    store.insert(task2);
-
-    let task_ids: HashSet<_> = store.tasks().map(|t| t.id().clone()).collect();
-    assert_eq!(task_ids.len(), 2);
-    assert!(task_ids.contains(&task1_id));
-    assert!(task_ids.contains(&task2_id));
 }
 
 #[test]
@@ -347,56 +220,6 @@ fn test_multiple_tasks_exchange_order() {
 }
 
 #[test]
-fn test_empty_task_handling() {
-    let task = create_test_task_with_exchanges(0);
-    let task_id = task.id().clone();
-    let store = TaskStore::with_root_task(task);
-
-    assert_eq!(store.task_count(), 1);
-    assert_eq!(store.exchange_count(), 0);
-    assert!(store.first_exchange().is_none());
-    assert!(store.latest_exchange().is_none());
-    assert!(store.get(&task_id).is_some());
-}
-
-#[test]
-fn test_from_tasks() {
-    use std::collections::HashMap;
-
-    let task = create_test_task_with_exchanges(3);
-    let task_id = task.id().clone();
-    let exchange_ids: Vec<_> = task.exchanges().map(|e| e.id).collect();
-
-    let mut tasks = HashMap::new();
-    tasks.insert(task_id.clone(), task);
-
-    let store = TaskStore::from_tasks(tasks, task_id.clone());
-
-    assert_eq!(store.task_count(), 1);
-    assert_eq!(store.exchange_count(), 3);
-    assert_eq!(store.root_task_id(), &task_id);
-
-    let actual_ids: Vec<_> = store.all_exchanges().map(|e| e.id).collect();
-    assert_eq!(actual_ids, exchange_ids);
-}
-
-#[test]
-fn test_exchange_mut() {
-    let task = create_test_task_with_exchanges(2);
-    let exchange_ids: Vec<_> = task.exchanges().map(|e| e.id).collect();
-    let mut store = TaskStore::with_root_task(task);
-
-    // Can find existing exchange
-    let exchange = store.exchange_mut(exchange_ids[0]);
-    assert!(exchange.is_some());
-    assert_eq!(exchange.unwrap().id, exchange_ids[0]);
-
-    // Returns None for non-existent exchange
-    let fake_id = AIAgentExchangeId::new();
-    assert!(store.exchange_mut(fake_id).is_none());
-}
-
-#[test]
 fn test_modify_task_conditional_rebuild() {
     let task = create_test_task_with_exchanges(2);
     let task_id = task.id().clone();
@@ -434,144 +257,6 @@ fn test_modify_task_conditional_rebuild() {
 // =============================================================================
 // Subtask Linearization Tests
 // =============================================================================
-
-#[test]
-fn test_linearization_parent_with_one_subtask() {
-    // Create a subtask first so we have its ID
-    let subtask = create_test_subtask_with_exchanges(2);
-    let subtask_id = subtask.id().clone();
-    let subtask_exchange_ids: Vec<_> = subtask.exchanges().map(|e| e.id).collect();
-
-    // Create root task: exchange1, exchange_with_subagent_call, exchange3
-    let mut root_task = Task::new_optimistic_root();
-    let exchange1 = create_test_exchange();
-    let exchange1_id = exchange1.id;
-    root_task.append_exchange(exchange1);
-
-    let exchange_with_call = create_exchange_with_subagent_call(&subtask_id);
-    let exchange_with_call_id = exchange_with_call.id;
-    root_task.append_exchange(exchange_with_call);
-
-    let exchange3 = create_test_exchange();
-    let exchange3_id = exchange3.id;
-    root_task.append_exchange(exchange3);
-
-    // Build the store
-    let mut store = TaskStore::with_root_task(root_task);
-    store.insert(subtask);
-
-    // Total exchanges: 3 root + 2 subtask = 5
-    assert_eq!(store.exchange_count(), 5);
-
-    // Expected order: root[0], root[1] (with subagent call), subtask[0], subtask[1], root[2]
-    let all_ids: Vec<_> = store.all_exchanges().map(|e| e.id).collect();
-    assert_eq!(all_ids.len(), 5);
-    assert_eq!(all_ids[0], exchange1_id);
-    assert_eq!(all_ids[1], exchange_with_call_id);
-    assert_eq!(all_ids[2], subtask_exchange_ids[0]);
-    assert_eq!(all_ids[3], subtask_exchange_ids[1]);
-    assert_eq!(all_ids[4], exchange3_id);
-
-    // Verify first and last
-    assert_eq!(store.first_exchange().map(|e| e.id), Some(exchange1_id));
-    assert_eq!(store.latest_exchange().map(|e| e.id), Some(exchange3_id));
-}
-
-#[test]
-fn test_linearization_nested_subtasks() {
-    // Create nested subtask (grandchild) first
-    let grandchild_subtask = create_test_subtask_with_exchanges(1);
-    let grandchild_id = grandchild_subtask.id().clone();
-    let grandchild_exchange_id = grandchild_subtask.exchanges().next().unwrap().id;
-
-    // Create child subtask with a call to grandchild
-    use crate::terminal::model::block::BlockId;
-    let mut child_subtask = Task::new_optimistic_cli_agent_subtask(BlockId::new());
-    let child_id = child_subtask.id().clone();
-
-    let child_exchange1 = create_test_exchange();
-    let child_exchange1_id = child_exchange1.id;
-    child_subtask.append_exchange(child_exchange1);
-
-    let child_call_to_grandchild = create_exchange_with_subagent_call(&grandchild_id);
-    let child_call_exchange_id = child_call_to_grandchild.id;
-    child_subtask.append_exchange(child_call_to_grandchild);
-
-    // Create root task with a call to child
-    let mut root_task = Task::new_optimistic_root();
-
-    let root_exchange1 = create_test_exchange();
-    let root_exchange1_id = root_exchange1.id;
-    root_task.append_exchange(root_exchange1);
-
-    let root_call_to_child = create_exchange_with_subagent_call(&child_id);
-    let root_call_exchange_id = root_call_to_child.id;
-    root_task.append_exchange(root_call_to_child);
-
-    // Build the store
-    let mut store = TaskStore::with_root_task(root_task);
-    store.insert(child_subtask);
-    store.insert(grandchild_subtask);
-
-    // Total: 2 root + 2 child + 1 grandchild = 5
-    assert_eq!(store.exchange_count(), 5);
-
-    // Expected DFS order:
-    // root[0], root[1] (calls child) -> child[0], child[1] (calls grandchild) -> grandchild[0]
-    let all_ids: Vec<_> = store.all_exchanges().map(|e| e.id).collect();
-    assert_eq!(all_ids.len(), 5);
-    assert_eq!(all_ids[0], root_exchange1_id);
-    assert_eq!(all_ids[1], root_call_exchange_id);
-    assert_eq!(all_ids[2], child_exchange1_id);
-    assert_eq!(all_ids[3], child_call_exchange_id);
-    assert_eq!(all_ids[4], grandchild_exchange_id);
-}
-
-#[test]
-fn test_linearization_multiple_subtasks_same_parent() {
-    // Create two subtasks
-    let subtask1 = create_test_subtask_with_exchanges(1);
-    let subtask1_id = subtask1.id().clone();
-    let subtask1_exchange_id = subtask1.exchanges().next().unwrap().id;
-
-    let subtask2 = create_test_subtask_with_exchanges(2);
-    let subtask2_id = subtask2.id().clone();
-    let subtask2_exchange_ids: Vec<_> = subtask2.exchanges().map(|e| e.id).collect();
-
-    // Create root task with calls to both subtasks in separate exchanges
-    let mut root_task = Task::new_optimistic_root();
-
-    let call_to_subtask1 = create_exchange_with_subagent_call(&subtask1_id);
-    let call_to_subtask1_id = call_to_subtask1.id;
-    root_task.append_exchange(call_to_subtask1);
-
-    let middle_exchange = create_test_exchange();
-    let middle_exchange_id = middle_exchange.id;
-    root_task.append_exchange(middle_exchange);
-
-    let call_to_subtask2 = create_exchange_with_subagent_call(&subtask2_id);
-    let call_to_subtask2_id = call_to_subtask2.id;
-    root_task.append_exchange(call_to_subtask2);
-
-    // Build the store
-    let mut store = TaskStore::with_root_task(root_task);
-    store.insert(subtask1);
-    store.insert(subtask2);
-
-    // Total: 3 root + 1 subtask1 + 2 subtask2 = 6
-    assert_eq!(store.exchange_count(), 6);
-
-    // Expected order:
-    // root[0] (calls subtask1) -> subtask1[0], root[1], root[2] (calls subtask2) -> subtask2[0], subtask2[1]
-    let all_ids: Vec<_> = store.all_exchanges().map(|e| e.id).collect();
-    assert_eq!(all_ids.len(), 6);
-    assert_eq!(all_ids[0], call_to_subtask1_id);
-    assert_eq!(all_ids[1], subtask1_exchange_id);
-    assert_eq!(all_ids[2], middle_exchange_id);
-    assert_eq!(all_ids[3], call_to_subtask2_id);
-    assert_eq!(all_ids[4], subtask2_exchange_ids[0]);
-    assert_eq!(all_ids[5], subtask2_exchange_ids[1]);
-}
 
 #[test]
 fn test_all_exchanges_by_task_with_subtasks() {

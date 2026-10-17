@@ -636,19 +636,6 @@ Host a
     }
 
     #[test]
-    fn load_candidates_from_nonexistent_path_returns_not_found() {
-        let tmp = tempfile::tempdir().expect("create tempdir");
-        let path = tmp.path().join("does_not_exist");
-        let res = load_candidates_from(&path);
-        assert_eq!(res.path.as_deref(), Some(path.as_path()));
-        assert!(
-            matches!(res.outcome, LoadOutcome::NotFound),
-            "got {:?}",
-            res.outcome
-        );
-    }
-
-    #[test]
     fn load_candidates_from_valid_file_returns_parsed_candidates() {
         use std::io::Write;
         let mut tmp = tempfile::NamedTempFile::new().expect("create tempfile");

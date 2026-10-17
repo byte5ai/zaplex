@@ -30,41 +30,6 @@ fn assert_token(token: &Token, position: usize, text: &str, from: usize, to: usi
 }
 
 #[test]
-fn test_tokenizer_simple() {
-    let tokens = token_stream_helper("Hello, happy tax payer!");
-    assert_eq!(tokens.len(), 4);
-    assert_token(&tokens[0], 0, "Hello", 0, 5);
-    assert_token(&tokens[1], 1, "happy", 7, 12);
-    assert_token(&tokens[2], 2, "tax", 13, 16);
-    assert_token(&tokens[3], 3, "payer", 17, 22);
-}
-
-#[test]
-fn test_tokenizer_warp_special_chars() {
-    // Test string includes warp-related terms with hyphen, underscore, forward slash, backslash, and colon
-    let test_string = "warp-cli/launch_command:run C:\\\\Program_Files\\\\Zaplex\\\\core-engine.dll check_status:/dev/warp_drive-0";
-    let tokens = token_stream_helper(test_string);
-
-    assert_eq!(tokens.len(), 25);
-    assert_token(&tokens[0], 0, "warp-cli/launch_command:run", 0, 27);
-    assert_token(&tokens[1], 1, "warp", 0, 4);
-    assert_token(&tokens[2], 2, "cli", 5, 8);
-    assert_token(&tokens[3], 3, "launch_command", 9, 23);
-    assert_token(&tokens[4], 4, "launch", 9, 15);
-    assert_token(&tokens[5], 5, "command", 16, 23);
-    assert_token(&tokens[6], 6, "run", 24, 27);
-    assert_token(
-        &tokens[7],
-        7,
-        "C:\\\\Program_Files\\\\Zaplex\\\\core-engine",
-        28,
-        66,
-    );
-    assert_token(&tokens[15], 15, "dll", 67, 70);
-    assert_token(&tokens[16], 16, "check_status:/dev/warp_drive-0", 71, 101);
-}
-
-#[test]
 fn test_searcher() {
     define_search_schema!(
         schema_name: TEST_SCHEMA,

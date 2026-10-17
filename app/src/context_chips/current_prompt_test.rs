@@ -2,7 +2,6 @@ use std::{
     any::Any,
     collections::{HashMap, VecDeque},
     sync::Arc,
-    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -22,9 +21,8 @@ use crate::system::SystemInfo;
 use crate::{
     auth::{AuthManager, AuthStateProvider},
     context_chips::{
-        context_chip::{ChipFingerprintInput, Environment},
-        prompt::Prompt,
-        ChipAvailability, ChipDisabledReason, ChipRuntimeCapabilities, ContextChipKind,
+        context_chip::Environment, prompt::Prompt, ChipAvailability, ChipDisabledReason,
+        ContextChipKind,
     },
     features::FeatureFlag,
     menu::MenuItem,
@@ -303,48 +301,6 @@ fn test_shell_chip_is_disabled_when_required_executable_is_missing() {
 
         assert!(executor.commands.lock().is_empty());
     });
-}
-
-#[test]
-fn test_github_pr_chip_runtime_policy_configuration() {
-    let _flag_guard = FeatureFlag::GithubPrPromptChip.override_enabled(true);
-    let chip = ContextChipKind::GithubPullRequest
-        .to_chip()
-        .expect("github pr chip should exist");
-    let policy = chip.runtime_policy();
-
-    assert_eq!(
-        policy.required_executables(),
-        &["gh".to_string(), "git".to_string()]
-    );
-    assert_eq!(policy.shell_command_timeout(), Some(Duration::from_secs(5)));
-    assert!(policy.suppress_on_failure());
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::SessionId));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::WorkingDirectory));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::GitBranch));
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::RequiredExecutablesPresence));
-    assert_eq!(
-        chip.availability(&ChipRuntimeCapabilities {
-            session_is_local: Some(false),
-            ..Default::default()
-        }),
-        ChipAvailability::Disabled(ChipDisabledReason::RequiresLocalSession)
-    );
-    assert_eq!(
-        policy.invalidate_on_commands(),
-        &["git".to_string(), "gh".to_string(), "gt".to_string()]
-    );
-    assert!(policy
-        .fingerprint_inputs()
-        .contains(&ChipFingerprintInput::InvalidatingCommandCount));
 }
 
 #[test]

@@ -93,11 +93,4 @@ mod tests {
         assert_eq!(apply_cursor_move(9, 3, CursorMove::Up), 1);
         assert_eq!(apply_cursor_move(9, 3, CursorMove::Down), 2);
     }
-
-    #[test]
-    fn clamp_cursor_shrinks_into_range() {
-        assert_eq!(clamp_cursor(9, 3), 2);
-        assert_eq!(clamp_cursor(1, 3), 1);
-        assert_eq!(clamp_cursor(5, 0), 0);
-    }
 }

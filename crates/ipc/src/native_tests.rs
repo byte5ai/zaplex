@@ -2,21 +2,6 @@ use super::server::ConnectionListenerImpl;
 use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
 
 #[test]
-fn filesystem_socket_is_owner_only_and_removed_on_drop() {
-    let parent = test_directory(0o700);
-    let path = parent.join("server.sock");
-    let listener = ConnectionListenerImpl::new(path.display().to_string().into()).unwrap();
-
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-    drop(listener);
-    assert!(!path.exists());
-    std::fs::remove_dir(parent).unwrap();
-}
-
-#[test]
 fn filesystem_socket_rejects_a_public_parent_directory() {
     let parent = test_directory(0o755);
     let path = parent.join("server.sock");

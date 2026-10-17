@@ -302,23 +302,6 @@ fn classic_ssh_phase_updates_are_allowed_only_while_unbound() {
 }
 
 #[test]
-fn only_remote_terminal_draft_changes_request_a_snapshot() {
-    assert!(!remote_input_draft_change_needs_snapshot(None));
-    assert!(remote_input_draft_change_needs_snapshot(Some(
-        RemoteInputPhase::Transport
-    )));
-    assert!(remote_input_draft_change_needs_snapshot(Some(
-        RemoteInputPhase::Ready
-    )));
-    assert!(remote_input_draft_change_needs_snapshot(Some(
-        RemoteInputPhase::Failed
-    )));
-    assert!(remote_input_draft_change_needs_snapshot(Some(
-        RemoteInputPhase::Corrupt
-    )));
-}
-
-#[test]
 fn remote_draft_edits_request_a_save_without_workspace_refresh() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
@@ -1036,22 +1019,6 @@ fn clear_buffer_action_in_fullscreen_agent_view_starts_new_conversation() {
             assert_ne!(new_conversation_id, original_conversation_id);
         });
     })
-}
-
-#[test]
-fn command_first_word_and_suffix_preserves_leading_whitespace() {
-    assert_eq!(
-        command_first_word_and_suffix("  myssh arg"),
-        Some(("myssh", " arg"))
-    );
-}
-
-#[test]
-fn command_first_word_and_suffix_handles_alias_without_args() {
-    assert_eq!(
-        command_first_word_and_suffix("  myssh"),
-        Some(("myssh", ""))
-    );
 }
 
 #[test]

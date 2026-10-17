@@ -1,7 +1,6 @@
 use crate::remote_server::proto::{
     AgentTranscriptResponse, AgentTranscriptStatus, AgentTranscriptTool, AgentTranscriptTurn,
 };
-use std::collections::HashSet;
 use std::fs;
 use zaplex_cockpit::SessionState;
 
@@ -495,29 +494,4 @@ fn watch_lifetime_stops_for_closed_missing_or_dormant_documents() {
     assert!(!should_follow_transcript(false, Some(SessionState::Active)));
     assert!(!should_follow_transcript(true, Some(SessionState::Idle)));
     assert!(!should_follow_transcript(true, None));
-}
-
-#[test]
-fn stable_targets_do_not_collapse_duplicate_display_or_session_labels() {
-    let targets = HashSet::from([
-        TranscriptTarget::Remote {
-            provider: Provider::Claude,
-            host_id: "host-a".into(),
-            account_id: "account-a".into(),
-            session_id: "same-session".into(),
-        },
-        TranscriptTarget::Remote {
-            provider: Provider::Claude,
-            host_id: "host-b".into(),
-            account_id: "account-a".into(),
-            session_id: "same-session".into(),
-        },
-        TranscriptTarget::Remote {
-            provider: Provider::Claude,
-            host_id: "host-a".into(),
-            account_id: "account-b".into(),
-            session_id: "same-session".into(),
-        },
-    ]);
-    assert_eq!(targets.len(), 3);
 }

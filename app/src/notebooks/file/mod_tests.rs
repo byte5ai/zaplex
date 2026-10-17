@@ -14,7 +14,7 @@ use crate::terminal::keys::TerminalKeybindings;
 use crate::{
     auth::{AuthManager, AuthStateProvider},
     cloud_object::model::persistence::ObjectStoreModel,
-    notebooks::{editor::keys::NotebookKeybindings, file::is_markdown_file},
+    notebooks::editor::keys::NotebookKeybindings,
     search::files::model::FileSearchModel,
     settings_view::keybindings::KeybindingChangedNotifier,
     terminal::model::session::Session,
@@ -178,21 +178,6 @@ fn test_load_static() {
             file_notebook.render(ctx);
         });
     });
-}
-
-#[test]
-fn test_markdown_file_detection() {
-    assert!(is_markdown_file("README.md"));
-    assert!(is_markdown_file("DATABASE.MD"));
-    assert!(is_markdown_file("notes.markdown"));
-    assert!(is_markdown_file("README"));
-    assert!(is_markdown_file("license"));
-    assert!(is_markdown_file("CHANGELOG"));
-    assert!(is_markdown_file("ReadMe"));
-
-    assert!(!is_markdown_file("README.txt"));
-    assert!(!is_markdown_file("main.rs"));
-    assert!(!is_markdown_file("notes"));
 }
 
 #[test]

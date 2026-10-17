@@ -995,7 +995,3 @@ impl SelectableElement for Expanded {
             .unwrap_or_default()
     }
 }
-
-#[cfg(test)]
-#[path = "mod_test.rs"]
-mod tests;

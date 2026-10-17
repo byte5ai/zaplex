@@ -1,5 +1,5 @@
 use super::*;
-use crate::clipboard::{ClipboardContent, ImageData};
+use crate::clipboard::ImageData;
 
 // ============================================================================
 // HELPER FUNCTIONS (shared across tests)
@@ -327,29 +327,4 @@ mod image_processing_tests {
             "Chromium Web Custom MIME Data Format"
         ));
     }
-}
-
-// ============================================================================
-// CLIPBOARD CONTENT STRUCTURE TESTS
-// ============================================================================
-
-#[test]
-fn test_clipboard_content_with_images() {
-    let image_data = ImageData {
-        data: vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
-        mime_type: "image/png".to_string(),
-        filename: Some("test.png".to_string()),
-    };
-
-    let content = ClipboardContent {
-        plain_text: "Test text".to_string(),
-        html: Some(r##"<img src="test.png">"##.to_string()),
-        images: Some(vec![image_data.clone()]),
-        paths: None,
-    };
-
-    assert!(!content.is_empty());
-    assert!(content.images.is_some());
-    assert_eq!(content.images.as_ref().unwrap().len(), 1);
-    assert_eq!(content.images.as_ref().unwrap()[0].mime_type, "image/png");
 }

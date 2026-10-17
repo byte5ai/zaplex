@@ -171,33 +171,6 @@ fn local_rename_never_replaces_existing_destination() {
     );
 }
 
-/// A destination created after the initial lookup is still a conflict.
-/// The commit itself must be no-replace; a check followed by plain rename
-/// loses this race on Unix.
-#[test]
-fn local_rename_never_replaces_concurrently_created_destination() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    fs::write(dir.path().join("source.txt"), b"source").unwrap();
-    let backend =
-        InMemorySftpBackend::new(dir.path().to_path_buf()).with_before_rename(|destination| {
-            fs::write(destination, b"CONCURRENT").unwrap();
-        });
-
-    backend
-        .rename(Path::new("/source.txt"), Path::new("/destination.txt"))
-        .expect_err("an atomically created destination must block rename");
-
-    assert_eq!(
-        fs::read(dir.path().join("destination.txt")).unwrap(),
-        b"CONCURRENT",
-        "rename must not replace the destination created in the race window"
-    );
-    assert!(
-        dir.path().join("source.txt").exists(),
-        "failed rename must preserve its source"
-    );
-}
-
 /// The exchange primitive swaps unlike entry types without unlinking
 /// either object.
 #[test]

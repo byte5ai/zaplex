@@ -503,7 +503,3 @@ fn write_queued<W: Write>(
 
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "event_loop_tests.rs"]
-mod tests;

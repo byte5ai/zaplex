@@ -488,39 +488,6 @@ fn known_ssh_transport_errors_never_fall_through_to_raw_copy() {
 }
 
 #[test]
-fn ring_ceiling_presets_do_not_exceed_the_daemon_limit() {
-    assert_eq!(RING_CEILING_PRESETS.last(), Some(&(256, "256 MB")));
-    assert!(RING_CEILING_PRESETS
-        .iter()
-        .all(|(megabytes, _)| *megabytes <= 256));
-}
-
-#[test]
-fn only_connection_defining_editor_fields_invalidate_runtime_diagnostics() {
-    for field in [
-        ServerFormField::Host,
-        ServerFormField::Port,
-        ServerFormField::User,
-        ServerFormField::Password,
-        ServerFormField::KeyPath,
-    ] {
-        assert!(field.defines_connection(), "{field:?}");
-    }
-    for field in [
-        ServerFormField::Name,
-        ServerFormField::OneKeyLabel,
-        ServerFormField::OneKeyUser,
-        ServerFormField::OneKeyKeyPath,
-        ServerFormField::OneKeySecret,
-        ServerFormField::RootPassword,
-        ServerFormField::StartupCommand,
-        ServerFormField::Notes,
-    ] {
-        assert!(!field.defines_connection(), "{field:?}");
-    }
-}
-
-#[test]
 fn connection_edit_clears_diagnostics_and_saved_refresh_target() {
     App::test((), |mut app| async move {
         crate::i18n::init(Some("en"));

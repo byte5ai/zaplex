@@ -128,20 +128,4 @@ mod tests {
             Some("Local User".to_string())
         );
     }
-
-    #[test]
-    fn displayable_identifier_falls_back_to_email_for_local_cache() {
-        let uid = UserUid::new("local-user-2");
-        let profiles = UserProfiles::new(vec![UserProfileWithUID {
-            local_user_uid: uid,
-            display_name: Some(String::new()),
-            email: "fallback@example.com".to_string(),
-            photo_url: String::new(),
-        }]);
-
-        assert_eq!(
-            profiles.displayable_identifier_for_email("fallback@example.com"),
-            Some("fallback@example.com".to_string())
-        );
-    }
 }

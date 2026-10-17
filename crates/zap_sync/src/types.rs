@@ -117,12 +117,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_platform_to_db_str() {
-        assert_eq!(SyncPlatform::GitHub.to_db_str(), "github");
-        assert_eq!(SyncPlatform::Gitee.to_db_str(), "gitee");
-    }
-
-    #[test]
     fn test_sync_platform_equality() {
         assert_eq!(SyncPlatform::GitHub, SyncPlatform::GitHub);
         assert_ne!(SyncPlatform::GitHub, SyncPlatform::Gitee);

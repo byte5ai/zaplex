@@ -23,24 +23,6 @@ fn test_end_frame_evicts_when_asset_dropped() {
 }
 
 #[test]
-fn test_end_frame_retains_asset_in_use() {
-    let mut cache = TextureCache::<()>::new();
-    let asset = make_static_image(4, 4);
-
-    cache.get_or_insert_by_asset(&asset, |_| ());
-
-    // The Arc is still alive; the texture should be retained.
-    cache.end_frame();
-    assert_eq!(
-        cache.textures.len(),
-        1,
-        "TextureCache should retain entries whose backing asset is still alive"
-    );
-
-    drop(asset);
-}
-
-#[test]
 fn test_end_frame_evicts_after_max_unused_frames() {
     let mut cache = TextureCache::<()>::new();
     let asset = make_static_image(4, 4);

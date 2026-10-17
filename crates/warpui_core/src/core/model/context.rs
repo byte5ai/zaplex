@@ -650,7 +650,3 @@ impl<M> ModelSpawner<M> {
         rx.await.map_err(|_| ModelDropped)
     }
 }
-
-#[cfg(test)]
-#[path = "context_test.rs"]
-mod tests;

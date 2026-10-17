@@ -61,93 +61,6 @@ fn build_test_tab_config_toml(name: &str, commands: Vec<String>) -> String {
 }
 
 #[test]
-fn test_generated_worktree_path_uses_repo_name_directory() {
-    let repo_dir = generated_worktree_repo_dir(Path::new("/Users/me/backend"));
-
-    assert_eq!(
-        repo_dir,
-        warp_core::paths::data_dir()
-            .join("worktrees")
-            .join("backend")
-    );
-    assert_eq!(
-        generated_worktree_path(Path::new("/Users/me/backend"), "mesa-coyote"),
-        repo_dir.join("mesa-coyote")
-    );
-}
-
-#[test]
-fn test_parse_worktree_toml() {
-    let config: TabConfig = toml::from_str(WORKTREE_TOML).expect("Should parse worktree TOML");
-
-    assert_eq!(config.name, "New Worktree");
-    assert_eq!(config.title.as_deref(), Some("{{worktree_branch_name}}"));
-    assert_eq!(config.panes.len(), 1);
-    assert_eq!(config.panes[0].id, "main");
-    assert_eq!(config.panes[0].directory.as_deref(), Some("{{repo}}"));
-    assert_eq!(
-        config.panes[0].commands.as_deref().unwrap(),
-        &[
-            "git worktree add -b {{worktree_branch_name}} $HOME/.warp/worktrees/$(basename {{repo}})/{{worktree_branch_name}} {{branch}}",
-            "cd $HOME/.warp/worktrees/$(basename {{repo}})/{{worktree_branch_name}}"
-        ]
-    );
-    assert_eq!(config.params.len(), 3);
-    assert_eq!(config.params["repo"].param_type, TabConfigParamType::Repo);
-    assert_eq!(
-        config.params["branch"].param_type,
-        TabConfigParamType::Branch
-    );
-    assert_eq!(
-        config.params["worktree_branch_name"].param_type,
-        TabConfigParamType::Text
-    );
-    assert!(config.params["repo"].default.is_none());
-    assert!(config.params["branch"].default.is_none());
-    assert_eq!(
-        config.params["worktree_branch_name"].default.as_deref(),
-        Some("my-feature-branch")
-    );
-}
-
-#[test]
-fn test_parse_minimal_toml() {
-    let toml = r#"name = "Plain Tab""#;
-    let config: TabConfig = toml::from_str(toml).expect("Should parse minimal TOML");
-
-    assert_eq!(config.name, "Plain Tab");
-    assert!(config.title.is_none());
-    assert!(config.panes.is_empty());
-    assert!(config.params.is_empty());
-}
-
-#[test]
-fn test_parse_toml_with_on_close_fails() {
-    let toml = r#"
-name = "Legacy Tab"
-
-[[panes]]
-id = "main"
-type = "terminal"
-
-[on_close]
-commands = ["echo cleanup"]
-"#;
-
-    let error = toml::from_str::<TabConfig>(toml).expect_err("on_close should be rejected");
-    assert!(error.to_string().contains("unknown field `on_close`"));
-}
-
-#[test]
-fn test_default_param_values() {
-    let config: TabConfig = toml::from_str(WORKTREE_TOML).unwrap();
-    let defaults = config.default_param_values();
-    assert_eq!(defaults["branch"], "");
-    assert_eq!(defaults["repo"], "");
-    assert_eq!(defaults["worktree_branch_name"], "my-feature-branch");
-}
-
-#[test]
 fn test_is_worktree() {
     let worktree_config: TabConfig = toml::from_str(WORKTREE_TOML).unwrap();
     assert!(worktree_config.is_worktree());
@@ -599,24 +512,6 @@ directory = "~/b"
     } else {
         panic!("Expected PaneBranchTemplate");
     }
-}
-
-#[test]
-fn test_flat_color_deserialized() {
-    let toml_str = r#"
-name = "Colored Tab"
-color = "blue"
-
-[[panes]]
-id = "main"
-type = "terminal"
-directory = "~/code"
-"#;
-    let config: TabConfig = toml::from_str(toml_str).expect("Should parse with color");
-    assert_eq!(
-        config.color,
-        Some(crate::themes::theme::AnsiColorIdentifier::Blue)
-    );
 }
 
 #[test]

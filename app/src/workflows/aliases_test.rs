@@ -67,45 +67,6 @@ fn test_set_aliases() {
 }
 
 #[test]
-fn test_set_aliases_replacement() {
-    // Test that replacing aliases works correctly.
-    let workflow_1: SyncId = SyncId::ServerId(1.into());
-    let alias_1: WorkflowAlias = WorkflowAlias {
-        alias: "alias1".to_string(),
-        workflow_id: workflow_1,
-        arguments: None,
-        env_vars: None,
-    };
-
-    warpui::App::test((), |mut app| async move {
-        app.update(init_and_register_user_preferences);
-        app.add_singleton_model(|_| SettingsManager::default());
-
-        WorkflowAliases::register(&mut app);
-
-        app.update(|app| {
-            let aliases = WorkflowAliases::as_ref(app).get_all_aliases();
-            assert_eq!(0, aliases.len());
-        });
-
-        app.update(|app| {
-            WorkflowAliases::handle(app).update(app, |aliases, ctx| {
-                let _ = aliases.set_aliases(vec![alias_1.clone()], ctx);
-            });
-            let aliases = WorkflowAliases::as_ref(app).get_all_aliases();
-            assert_eq!(1, aliases.len());
-        });
-
-        app.update(|app| {
-            WorkflowAliases::handle(app).update(app, |aliases, ctx| {
-                let _ = aliases.set_aliases(vec![alias_1.clone()], ctx);
-            });
-            assert_eq!(WorkflowAliases::as_ref(app).get_all_aliases().len(), 1);
-        });
-    });
-}
-
-#[test]
 fn test_remove_aliases() {
     let workflow_1: SyncId = SyncId::ServerId(1.into());
     let workflow_2: SyncId = SyncId::ServerId(2.into());

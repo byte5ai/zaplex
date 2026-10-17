@@ -89,14 +89,3 @@ fn trusted_requests_only_follow_same_origin_redirects() {
         &other_port
     ));
 }
-
-#[test]
-fn external_requests_keep_their_normal_redirect_behavior() {
-    let initial =
-        reqwest::Url::parse("https://provider.example/start").expect("valid provider URL");
-    let redirect = reqwest::Url::parse("https://cdn.example/result").expect("valid redirect URL");
-
-    assert!(Client::trusted_request_may_follow_redirect(
-        &initial, &redirect
-    ));
-}

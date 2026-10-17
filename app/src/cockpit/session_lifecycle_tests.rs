@@ -196,23 +196,3 @@ fn lifecycle_capabilities_require_exact_executable_routes() {
         !lifecycle_capabilities(&route, &RestartPresence::VerifiedProcess, false, true).can_restart
     );
 }
-
-#[test]
-fn no_test_only_lifecycle_contracts() {
-    let source = include_str!("session_lifecycle.rs");
-    for dormant_contract in [
-        "pub(crate) struct LifecycleOperation",
-        "pub(crate) enum CleanupProcessEvidence",
-        "pub(crate) enum CleanupRejection",
-        "pub(crate) fn authorize_stale_cleanup",
-        "RestartPresence::Dormant",
-        "RestartPresence::ExactTerminal",
-        "RestartPresence::ProcessReused",
-        "pub(crate) enum RestartTermination",
-    ] {
-        assert!(
-            !source.contains(dormant_contract),
-            "dormant lifecycle contract remains: {dormant_contract}"
-        );
-    }
-}

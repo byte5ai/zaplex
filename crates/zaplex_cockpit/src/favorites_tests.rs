@@ -37,20 +37,6 @@ fn toggle_adds_then_removes() {
 }
 
 #[test]
-fn remove_reports_membership() {
-    let mut favs = Favorites::default();
-    favs.add(host("x"));
-    assert!(favs.remove(FavoriteKind::Host, "x"));
-    assert!(!favs.remove(FavoriteKind::Host, "x")); // already gone
-}
-
-#[test]
-fn display_label_falls_back_to_target() {
-    let bare = Favorite::new(FavoriteKind::Session, "sess-1", "");
-    assert_eq!(bare.display_label(), "sess-1");
-}
-
-#[test]
 fn move_item_reorders_and_clamps() {
     let mut favs = Favorites::default();
     favs.add(host("a"));

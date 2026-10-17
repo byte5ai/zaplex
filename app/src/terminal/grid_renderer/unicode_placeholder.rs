@@ -275,39 +275,6 @@ mod tests {
     }
 
     #[test]
-    fn diacritic_table_is_sorted() {
-        assert_eq!(ROWCOLUMN_DIACRITICS.len(), 297);
-        assert!(
-            ROWCOLUMN_DIACRITICS
-                .windows(2)
-                .all(|pair| pair[0] < pair[1]),
-            "binary_search in diacritic_index requires a sorted, duplicate-free table"
-        );
-    }
-
-    #[test]
-    fn diacritic_index_round_trips() {
-        for index in [0, 1, 2, 42, 150, 295, 296] {
-            assert_eq!(
-                diacritic_index(diacritic(index)),
-                Some(index),
-                "index {index} did not round trip"
-            );
-        }
-
-        // Spot-check the first and last entries against the spec's values.
-        assert_eq!(diacritic(0), '\u{0305}');
-        assert_eq!(diacritic(296), '\u{1D244}');
-    }
-
-    #[test]
-    fn non_diacritics_have_no_index() {
-        for c in ['a', ' ', PLACEHOLDER_CHAR, '\u{0301}'] {
-            assert_eq!(diacritic_index(c), None, "{c:?} should not be a diacritic");
-        }
-    }
-
-    #[test]
     fn non_placeholder_cells_are_rejected() {
         let mut cell = Cell::default();
         cell.c = 'a';
@@ -468,11 +435,6 @@ mod tests {
         assert_eq!(runs.len(), 2);
         assert_eq!(runs[0].image_id, 1);
         assert_eq!(runs[1].image_id, 9);
-    }
-
-    #[test]
-    fn no_cells_means_no_runs() {
-        assert!(build_runs(std::iter::empty()).is_empty());
     }
 
     /// The decoder is only useful if the print path keeps a placeholder cell

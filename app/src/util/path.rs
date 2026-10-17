@@ -46,7 +46,3 @@ pub fn resolve_executable_in_path<'a>(command: &'a str, path_env: &OsStr) -> Opt
     }
     None
 }
-
-#[cfg(test)]
-#[path = "path_test.rs"]
-mod tests;

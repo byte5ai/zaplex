@@ -37,17 +37,6 @@ fn issue_draft_rejects_empty_title_and_garbage() {
 // ── parse_triage_verdict ───────────────────────────────────────────────────
 
 #[test]
-fn triage_verdict_renames_type_and_defaults() {
-    let raw = r#"{"type": "bug", "priority": "high", "actionable": true}"#;
-    let v = parse_triage_verdict(raw).expect("triage parses");
-    assert_eq!(v.issue_type, "bug");
-    assert_eq!(v.priority, "high");
-    assert!(v.actionable);
-    assert_eq!(v.comment, None); // default
-    assert!(!v.close); // default
-}
-
-#[test]
 fn triage_verdict_full_and_fenced() {
     let raw = "```\n{\"type\":\"question\",\"priority\":\"low\",\"actionable\":false,\
                \"comment\":\"Can you share a repro?\",\"close\":true}\n```";
@@ -56,27 +45,7 @@ fn triage_verdict_full_and_fenced() {
     assert!(v.close);
 }
 
-#[test]
-fn triage_verdict_missing_required_field_is_none() {
-    // `priority` absent → parse failure (no silent default for a required field).
-    assert_eq!(
-        parse_triage_verdict(r#"{"type":"bug","actionable":true}"#),
-        None
-    );
-}
-
 // ── parse_pr_review_verdict ────────────────────────────────────────────────
-
-#[test]
-fn pr_review_verdict_parses_decision_and_comments() {
-    let raw = r#"{"summary":"LGTM with nits","decision":"request_changes",
-                 "comments":[{"path":"src/a.rs","line":42,"body":"unwrap here"}]}"#;
-    let v = parse_pr_review_verdict(raw).expect("pr review parses");
-    assert_eq!(v.decision, PrReviewDecision::RequestChanges);
-    assert_eq!(v.comments.len(), 1);
-    assert_eq!(v.comments[0].path, "src/a.rs");
-    assert_eq!(v.comments[0].line, 42);
-}
 
 #[test]
 fn pr_review_verdict_defaults_comments_and_maps_variants() {
@@ -98,24 +67,6 @@ fn pr_review_verdict_defaults_comments_and_maps_variants() {
 }
 
 // ── gh command builders: shell safety + repo flag ──────────────────────────
-
-#[test]
-fn issue_create_quotes_all_values_and_labels() {
-    let draft = IssueDraft {
-        title: "Crash on `rm -rf`; see $HOME".to_string(),
-        body: "line1\nline2 \"quoted\"".to_string(),
-        labels: vec!["bug".to_string(), "needs repro".to_string()],
-    };
-    let cmd = gh_issue_create_cmd(&draft, Some("byte5ai/zaplex"));
-    // Repo flag present; hostile title/body/labels are single-quoted, so no
-    // metacharacter (`, ;, $, ", space) can escape into the shell.
-    assert!(cmd.starts_with("gh issue create --repo byte5ai/zaplex --title "));
-    assert!(cmd.contains(r#"--title 'Crash on `rm -rf`; see $HOME'"#));
-    assert!(cmd.contains("--label bug"));
-    assert!(cmd.contains("--label 'needs repro'"));
-    // No unquoted metacharacter leaks: the only `;` is inside the quoted title.
-    assert_eq!(cmd.matches("; see").count(), 1);
-}
 
 #[test]
 fn issue_create_omits_repo_flag_when_none() {

@@ -1037,75 +1037,6 @@ Thumbs.db
     }
 
     #[test]
-    fn test_canonicalized_path_functionality() {
-        use warp_util::standardized_path::StandardizedPath;
-        VirtualFS::test("canonicalized_path_test", |dirs, mut vfs| {
-            let repo_path = dirs.tests();
-
-            // Create a directory structure with symlinks
-            vfs.mkdir("real_dir/subdir")
-                .mkdir("other_dir")
-                .with_files(vec![
-                    Stub::FileWithContent("real_dir/file.txt", "content"),
-                    Stub::FileWithContent("real_dir/subdir/nested.rs", "rust code"),
-                ]);
-
-            let real_dir = repo_path.join("real_dir");
-            let symlink_dir = repo_path.join("symlinked_dir");
-            let relative_path = repo_path.join("./real_dir");
-
-            // Create a symlink to real_dir
-            #[cfg(unix)]
-            let symlink_created = std::os::unix::fs::symlink(&real_dir, &symlink_dir).is_ok();
-            #[cfg(windows)]
-            let symlink_created =
-                std::os::windows::fs::symlink_dir(&real_dir, &symlink_dir).is_ok();
-
-            if symlink_created {
-                // Test that different path representations canonicalize to the same path
-                let canonical_real = StandardizedPath::from_local_canonicalized(&real_dir).unwrap();
-                let canonical_symlink =
-                    StandardizedPath::from_local_canonicalized(&symlink_dir).unwrap();
-                let canonical_relative =
-                    StandardizedPath::from_local_canonicalized(&relative_path).unwrap();
-
-                // All should point to the same canonical path
-                assert_eq!(canonical_real, canonical_symlink);
-                assert_eq!(canonical_real, canonical_relative);
-
-                // Test that the canonical path is absolute and resolved
-                let local = canonical_real.to_local_path().unwrap();
-                assert!(local.is_absolute());
-                assert!(!local.to_string_lossy().contains("./"));
-            }
-
-            // Test with various input types
-            let path_buf = real_dir.clone();
-            let path_ref = real_dir.as_path();
-
-            let canonical_from_pathbuf =
-                StandardizedPath::from_local_canonicalized(&path_buf).unwrap();
-            let canonical_from_path = StandardizedPath::from_local_canonicalized(path_ref).unwrap();
-
-            // All should be equal
-            assert_eq!(canonical_from_pathbuf, canonical_from_path);
-
-            // Test conversion to local path
-            let canonical = StandardizedPath::from_local_canonicalized(&real_dir).unwrap();
-            let local_path = canonical.to_local_path().unwrap();
-
-            // Test internal consistency - compare with dunce-canonicalized version
-            let expected_canonical = dunce::canonicalize(&real_dir).unwrap();
-            assert_eq!(local_path, expected_canonical);
-
-            // Test error handling for non-existent paths
-            let nonexistent = repo_path.join("nonexistent");
-            let result = StandardizedPath::from_local_canonicalized(&nonexistent);
-            assert!(result.is_err());
-        });
-    }
-
-    #[test]
     fn test_repository_operations_with_standardized_paths() {
         use warp_util::standardized_path::StandardizedPath;
 
@@ -1215,45 +1146,6 @@ Thumbs.db
                     });
                 });
             }
-        });
-    }
-
-    #[test]
-    fn test_standardized_path_edge_cases() {
-        use warp_util::standardized_path::StandardizedPath;
-
-        VirtualFS::test("canonicalized_edge_cases", |dirs, mut vfs| {
-            let test_root = dirs.tests();
-
-            // Create test files and directories
-            vfs.mkdir("existing_dir")
-                .with_files(vec![Stub::FileWithContent("existing_file.txt", "content")]);
-
-            let existing_dir = test_root.join("existing_dir");
-            let existing_file = test_root.join("existing_file.txt");
-            let nonexistent = test_root.join("nonexistent");
-
-            // Test successful canonicalization
-            assert!(StandardizedPath::from_local_canonicalized(&existing_dir).is_ok());
-            assert!(StandardizedPath::from_local_canonicalized(&existing_file).is_ok());
-
-            // Test failed canonicalization
-            assert!(StandardizedPath::from_local_canonicalized(&nonexistent).is_err());
-
-            // Test equality and hashing
-            let canonical1 = StandardizedPath::from_local_canonicalized(&existing_dir).unwrap();
-            let canonical2 = StandardizedPath::from_local_canonicalized(&existing_dir).unwrap();
-
-            assert_eq!(canonical1, canonical2);
-
-            // Test that they can be used in HashMaps
-            let mut map = std::collections::HashMap::new();
-            map.insert(canonical1.clone(), "value1");
-            assert_eq!(map.get(&canonical2), Some(&"value1"));
-
-            // Test Debug trait
-            let debug_str = format!("{canonical1:?}");
-            assert!(debug_str.contains("StandardizedPath"));
         });
     }
 

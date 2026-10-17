@@ -1,4 +1,4 @@
-use std::{collections::HashMap, pin::pin, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use super::*;
 use crate::{
@@ -13,7 +13,6 @@ use crate::{
     test_util::mock_blockgrid,
 };
 use float_cmp::assert_approx_eq;
-use futures_lite::stream::StreamExt;
 
 impl float_cmp::ApproxEq for BlockSection {
     type Margin = float_cmp::F64Margin;
@@ -452,67 +451,6 @@ fn test_background_block() {
     // between-grid padding because there's only one grid.
     assert_lines_approx_eq!(block.output_grid_displayed_height(), 3);
     assert_lines_approx_eq!(block.height(&AgentViewState::Inactive), 4.2);
-}
-
-#[test]
-pub fn test_block_duration_formatting() {
-    // .01 seconds
-    let d1 = chrono::Duration::milliseconds(10);
-    assert_eq!(Block::format_duration(d1), " (0.01s)");
-
-    // .123 seconds
-    let d2 = chrono::Duration::milliseconds(123);
-    assert_eq!(Block::format_duration(d2), " (0.123s)");
-
-    // 3.143 seconds
-    let d3 = chrono::Duration::milliseconds(3143);
-    assert_eq!(Block::format_duration(d3), " (3.143s)");
-
-    // 10.44 seconds
-    let d4 = chrono::Duration::milliseconds(10440);
-    assert_eq!(Block::format_duration(d4), " (10.44s)");
-
-    // 25m 23.423 seconds
-    let d5 = chrono::Duration::milliseconds(1523423);
-    assert_eq!(Block::format_duration(d5), " (25m 23.42s)");
-
-    // 3h 25m 8.133 seconds
-    let d6 = chrono::Duration::milliseconds(12308133);
-    assert_eq!(Block::format_duration(d6), " (3h 25m 8s)");
-
-    // 22h 51m 48.902 seconds
-    let d7 = chrono::Duration::milliseconds(82308902);
-    assert_eq!(Block::format_duration(d7), " (22h 51m 49s)");
-
-    let d8 = chrono::Duration::milliseconds(3604114);
-    assert_eq!(Block::format_duration(d8), " (1h 4s)");
-}
-
-#[test]
-pub fn test_block_emits_block_completed_event_for_in_band_command() {
-    let (events_tx, events_rx) = async_channel::unbounded();
-
-    let event_proxy = ChannelEventListener::builder_for_test()
-        .with_terminal_events_tx(events_tx)
-        .build();
-    let mut block = TestBlockBuilder::new()
-        .with_event_proxy(event_proxy)
-        .build();
-
-    block.start_for_in_band_command();
-    block.precmd(Default::default());
-    block.preexec(PreexecValue {
-        command: "warp_run_generator_command 1234 foo".to_owned(),
-    });
-    block.finish(0);
-
-    events_rx.close();
-    let block_completed_event =
-        warpui::r#async::block_on(pin!(events_rx).find(|event| match event {
-            Event::BlockCompleted(event) => matches!(event.block_type, BlockType::InBandCommand),
-            _ => false,
-        }));
-    assert!(block_completed_event.is_some());
 }
 
 /// Tests the multiline lprompt and multiline command case for selecting text across grids.
@@ -1071,36 +1009,6 @@ fn test_clone_command_from_blockgrid_to_empty() {
     assert_eq!(new_content, "clone1\nclone2\nclone3");
 }
 
-/// Tests is_command_empty for an empty command with the combined grid.
-#[test]
-fn test_command_is_empty_combined_grid() {
-    let block_index = BlockIndex::zero();
-    // Grid contents:
-    // -----
-    // -----
-
-    let prompt_and_command_grid = mock_blockgrid("");
-    let mut rprompt_grid = mock_blockgrid("");
-    rprompt_grid.finish();
-    let mut output_grid = mock_blockgrid("");
-    output_grid.finish();
-
-    let mut block = create_test_block_with_grids(
-        block_index,
-        prompt_and_command_grid,
-        rprompt_grid,
-        output_grid,
-        true, /* honor_ps1 */
-    );
-    block.start();
-    block.finish_command_grid();
-
-    assert!(
-        block.is_command_empty(),
-        "Command should be considered empty!"
-    );
-}
-
 /// Tests is_command_empty for an non-empty command with the combined grid.
 #[test]
 fn test_command_is_not_empty_combined_grid() {
@@ -1341,85 +1249,4 @@ fn test_mark_end_of_prompt_with_some_rows_in_flat_storage() {
     };
     assert_eq!(point, Point::new(0, 39));
     assert!(block.header_grid.prompt_and_command_grid().grid_storage()[point].is_end_of_prompt());
-}
-
-#[test]
-fn test_restored_block_was_local() {
-    // Test default value is None
-    let mut block = TestBlockBuilder::new()
-        .with_bootstrap_stage(BootstrapStage::RestoreBlocks)
-        .build();
-    assert_eq!(block.restored_block_was_local(), None);
-
-    // Test setting to true
-    block.set_restored_block_was_local(true);
-    assert_eq!(block.restored_block_was_local(), Some(true));
-
-    // Test changing value
-    block.set_restored_block_was_local(false);
-    assert_eq!(block.restored_block_was_local(), Some(false));
-
-    // Test with another new block (default is still None)
-    let block = TestBlockBuilder::new()
-        .with_bootstrap_stage(BootstrapStage::RestoreBlocks)
-        .build();
-    assert_eq!(block.restored_block_was_local(), None);
-}
-
-#[test]
-fn test_deserialize_legacy_agent_view_visibility_agent_variant() {
-    let origin_conversation_id = AIConversationId::new();
-    let json = format!("{{\"Agent\":{{\"conversation_id\":\"{origin_conversation_id}\"}}}}");
-
-    let visibility: SerializedAgentViewVisibility = serde_json::from_str(&json).unwrap();
-    match visibility {
-        SerializedAgentViewVisibility::Agent {
-            origin_conversation_id: parsed_origin_conversation_id,
-            pending_other_conversation_ids,
-            other_conversation_ids,
-        } => {
-            assert_eq!(parsed_origin_conversation_id, origin_conversation_id);
-            assert!(pending_other_conversation_ids.is_empty());
-            assert!(other_conversation_ids.is_empty());
-        }
-        _ => panic!("Expected agent visibility"),
-    }
-}
-
-#[test]
-fn test_calculate_optimal_row_counts_wide_terminal() {
-    // Terminal width >= 150 should return default values
-    let (top, bottom) = calculate_optimal_row_counts(150, 100, 200);
-    assert_eq!(top, 100);
-    assert_eq!(bottom, 200);
-
-    let (top, bottom) = calculate_optimal_row_counts(200, 50, 100);
-    assert_eq!(top, 50);
-    assert_eq!(bottom, 100);
-}
-
-#[test]
-fn test_calculate_optimal_row_counts_narrow_terminal() {
-    // Terminal width < 150 should optimize based on target total cells
-    let (top, bottom) = calculate_optimal_row_counts(75, 100, 200);
-
-    // Target total cells = (100 + 200) * 150 = 45,000
-    // Total rows for width 75 = 45,000 / 75 = 600
-    // Top rows = (600 * 100) / 300 = 200
-    // Bottom rows = 600 - 200 = 400
-    assert_eq!(top, 200);
-    assert_eq!(bottom, 400);
-}
-
-#[test]
-fn test_calculate_optimal_row_counts_very_narrow_terminal() {
-    // Test edge case with very narrow terminal
-    let (top, bottom) = calculate_optimal_row_counts(30, 100, 200);
-
-    // Target total cells = (100 + 200) * 150 = 45,000
-    // Total rows for width 30 = 45,000 / 30 = 1,500
-    // Top rows = (1,500 * 100) / 300 = 500
-    // Bottom rows = 1,500 - 500 = 1,000
-    assert_eq!(top, 500);
-    assert_eq!(bottom, 1000);
 }

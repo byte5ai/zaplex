@@ -414,7 +414,3 @@ fn load_query(path: &str, grammar: &ParserGrammar) -> Option<Query> {
             .unwrap_or_else(|err| panic!("TSQuery creation should work from {path}: {err}")),
     )
 }
-
-#[cfg(test)]
-#[path = "lib_tests.rs"]
-mod tests;

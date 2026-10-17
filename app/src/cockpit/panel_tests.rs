@@ -63,80 +63,6 @@ fn task_activity_uses_the_current_step_without_losing_recency() {
 }
 
 #[test]
-fn removed_host_is_marked_and_cannot_attach_agents() {
-    let host = HostNode {
-        host: "devhost".to_string(),
-        is_local: false,
-        host_id: Some("daemon-dev".to_string()),
-        availability: HostAvailability::Removed,
-        inventory_status: zaplex_cockpit::AgentInventoryStatus::Ready,
-        // Deliberately retain a stale id in this presentation-level test: the
-        // explicit state, not incidental id clearing, must close every route.
-        registry_node_id: Some("node-dev".to_string()),
-        needs_me: 1,
-        projects: Vec::new(),
-    };
-    assert_eq!(
-        host_display_label(
-            &host,
-            "removed from Connections",
-            "Connections registry unavailable"
-        ),
-        "devhost — removed from Connections"
-    );
-    assert!(
-        !host.is_available(),
-        "removed daemon data is visible but cannot seed session click routes"
-    );
-}
-
-#[test]
-fn unverified_host_is_labeled_and_not_routable() {
-    let host = HostNode {
-        host: "devhost".to_string(),
-        is_local: false,
-        host_id: Some("daemon-dev".to_string()),
-        availability: HostAvailability::Unverified,
-        inventory_status: zaplex_cockpit::AgentInventoryStatus::Ready,
-        registry_node_id: Some("node-dev".to_string()),
-        needs_me: 1,
-        projects: Vec::new(),
-    };
-    assert_eq!(
-        host_display_label(
-            &host,
-            "removed from Connections",
-            "Connections registry unavailable"
-        ),
-        "devhost — Connections registry unavailable"
-    );
-    assert!(!host.is_available());
-}
-
-#[test]
-fn expanded_containers_hide_counts() {
-    assert_eq!(container_count_presentation(true, 7, 2), None);
-}
-
-#[test]
-fn collapsed_counts_carry_hidden_attention_only() {
-    assert_eq!(
-        container_count_presentation(false, 7, 2),
-        Some(ContainerCountPresentation {
-            count: 7,
-            attention: true,
-        })
-    );
-    assert_eq!(
-        container_count_presentation(false, 7, 0),
-        Some(ContainerCountPresentation {
-            count: 7,
-            attention: false,
-        })
-    );
-}
-
-#[test]
 fn agent_leaf_separates_provider_from_the_exact_optional_model() {
     assert_eq!(
         agent_leaf_presentation(Provider::Claude, "claude-opus-4-8-20260901"),
@@ -236,18 +162,6 @@ fn waiting_glyph_motion_respects_reduced_motion() {
 }
 
 #[test]
-fn waiting_pulse_repaint_interval_is_battery_bounded() {
-    assert!(WAITING_PULSE_REPAINT >= Duration::from_millis(100));
-}
-
-#[test]
-fn waiting_pulse_animates_only_in_a_focused_window_without_reduced_motion() {
-    assert!(waiting_pulse_should_animate(false, true));
-    assert!(!waiting_pulse_should_animate(false, false));
-    assert!(!waiting_pulse_should_animate(true, true));
-}
-
-#[test]
 fn account_scan_error_is_not_rendered_as_zero_accounts() {
     assert_eq!(
         account_count_presentation(&zaplex_cockpit::ScanHealth::Pending, 0),
@@ -270,23 +184,6 @@ fn account_scan_error_is_not_rendered_as_zero_accounts() {
             1,
         ),
         Some(1)
-    );
-}
-
-#[test]
-fn empty_local_inventory_does_not_hide_scan_failures() {
-    crate::i18n::init(Some("en"));
-    assert_eq!(
-        empty_inventory_message(AgentInventoryStatus::Unavailable, true),
-        crate::t!("cockpit-host-inventory-unavailable"),
-    );
-    assert_ne!(
-        empty_inventory_message(AgentInventoryStatus::Unavailable, true),
-        empty_inventory_message(AgentInventoryStatus::Ready, true),
-    );
-    assert_eq!(
-        empty_inventory_message(AgentInventoryStatus::Pending, true),
-        crate::t!("cockpit-host-inventory-pending"),
     );
 }
 

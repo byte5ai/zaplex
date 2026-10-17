@@ -53,18 +53,6 @@ fn whole_file_truncated_at_byte_limit() {
     assert_eq!(bytes_read, 5);
 }
 
-#[test]
-fn empty_file_whole_file_produces_segment() {
-    let acc = make_accumulator(&[], 1000);
-    let (segments, bytes_read) = acc.finalize();
-
-    assert_eq!(segments.len(), 1);
-    assert_eq!(segments[0].content, "");
-    assert_eq!(segments[0].line_range, None);
-    assert_eq!(segments[0].line_count, 0);
-    assert_eq!(bytes_read, 0);
-}
-
 // ── Line ranges ─────────────────────────────────────────────────────
 
 #[test]

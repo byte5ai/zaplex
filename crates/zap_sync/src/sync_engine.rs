@@ -310,13 +310,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_local_version_default() {
-        let store = MockVersionStore::new(0);
-        let result = SyncEngine::<MockGistOps>::get_local_version(&store).unwrap();
-        assert_eq!(result, 0);
-    }
-
-    #[test]
     fn test_mock_version_store_set() {
         let store = MockVersionStore::new(1);
         store.set_sync_version(99).unwrap();

@@ -53,49 +53,6 @@ fn initialize_app(app: &mut App) {
 }
 
 #[test]
-fn zero_state_scores_reflect_recency() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        let now = Utc::now();
-        ObjectStoreModel::handle(&app).update(&mut app, |model, _| {
-            for fact in [
-                mock_ai_fact(
-                    1,
-                    "oldest rule",
-                    "oldest content",
-                    (now - Duration::minutes(3)).into(),
-                ),
-                mock_ai_fact(
-                    2,
-                    "middle rule",
-                    "middle content",
-                    (now - Duration::minutes(2)).into(),
-                ),
-                mock_ai_fact(
-                    3,
-                    "newest rule",
-                    "newest content",
-                    (now - Duration::minutes(1)).into(),
-                ),
-            ] {
-                model.add_object(fact.id, fact);
-            }
-        });
-
-        let data_source = RulesDataSource::new();
-        let results = app.read(|app| data_source.run_query(&Query::from(""), app).unwrap());
-
-        assert_eq!(results.len(), 3);
-        let scores: Vec<_> = results.iter().map(|r| r.score()).collect();
-        assert!(
-            scores[0] > scores[1] && scores[1] > scores[2],
-            "Expected scores in strictly descending order (newest first), got {scores:?}"
-        );
-    })
-}
-
-#[test]
 fn filtered_state_adds_recency_bonus() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

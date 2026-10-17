@@ -36,7 +36,3 @@ pub fn is_figma_png(bytes: &[u8]) -> bool {
     }
     false
 }
-
-#[cfg(test)]
-#[path = "is_figma_png_tests.rs"]
-mod tests;

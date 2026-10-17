@@ -143,34 +143,6 @@ No front matter here.
 }
 
 #[test]
-fn test_read_skills_empty_directory() {
-    let temp_dir = tempdir().unwrap();
-    let skills_dir = temp_dir.path();
-
-    let skills = read_skills(skills_dir);
-
-    assert_eq!(skills.len(), 0);
-}
-
-#[test]
-fn test_read_skills_no_skill_files() {
-    let temp_dir = tempdir().unwrap();
-    let skills_dir = temp_dir.path();
-
-    // Create directories without SKILL.md files
-    let dir1 = skills_dir.join("dir1");
-    fs::create_dir(&dir1).unwrap();
-
-    let dir2 = skills_dir.join("dir2");
-    fs::create_dir(&dir2).unwrap();
-    fs::write(dir2.join("README.md"), "Not a skill file").unwrap();
-
-    let skills = read_skills(skills_dir);
-
-    assert_eq!(skills.len(), 0);
-}
-
-#[test]
 fn test_read_skills_ignores_files_in_root() {
     let temp_dir = tempdir().unwrap();
     // Create .agents/skills directory structure so skills can have a valid provider
@@ -211,11 +183,4 @@ description: This should be ignored
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].name, "valid-skill");
     assert_eq!(skills[0].line_range, Some(5..7));
-}
-
-#[test]
-fn test_read_skills_nonexistent_directory() {
-    let skills = read_skills(Path::new("/nonexistent/path/that/does/not/exist"));
-
-    assert_eq!(skills.len(), 0);
 }

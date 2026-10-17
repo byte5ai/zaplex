@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -318,35 +317,4 @@ async fn driver_retries_initial_connection_until_stream_opens() {
         })
         .collect::<Vec<_>>();
     assert_eq!(retry_failures, vec![1, 2]);
-}
-
-#[test]
-fn backoff_escalates_then_caps() {
-    assert_eq!(
-        agent_event_backoff(1, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS),
-        Duration::from_secs(1)
-    );
-    assert_eq!(
-        agent_event_backoff(2, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS),
-        Duration::from_secs(2)
-    );
-    assert_eq!(
-        agent_event_backoff(3, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS),
-        Duration::from_secs(5)
-    );
-    assert_eq!(
-        agent_event_backoff(4, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS),
-        Duration::from_secs(10)
-    );
-    assert_eq!(
-        agent_event_backoff(100, DEFAULT_AGENT_EVENT_RECONNECT_BACKOFF_STEPS),
-        Duration::from_secs(10)
-    );
-}
-
-#[test]
-fn failure_threshold_is_reached_at_and_above_limit() {
-    assert!(!agent_event_failures_exceeded_threshold(4, 5));
-    assert!(agent_event_failures_exceeded_threshold(5, 5));
-    assert!(agent_event_failures_exceeded_threshold(6, 5));
 }

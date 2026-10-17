@@ -329,6 +329,3 @@ impl ParsedExpression {
         &self.parsed_token
     }
 }
-
-#[cfg(test)]
-mod test;

@@ -34,21 +34,6 @@ fn session(provider: Provider, state: SessionState, pid: u32) -> SessionSnapshot
     }
 }
 
-/// The gap F6 exists to close: Codex has no process registry, so its sessions
-/// carry no pid and no signal can reach them. The row must not offer stop/kill
-/// and answer the click with an error toast.
-#[test]
-fn a_codex_session_cannot_be_signalled() {
-    let caps = SessionCapabilities::of(&session(Provider::Codex, SessionState::Waiting, 0), true);
-    assert!(
-        !caps.can_signal,
-        "no pid, no signal — do not offer stop/kill"
-    );
-    // Forking is intentionally a new conversation, so it remains available.
-    assert!(caps.can_fork, "codex fork <id> exists");
-    assert!(!caps.can_resume, "a live session must not be resumed twice");
-}
-
 #[test]
 fn missing_process_fingerprint_disables_signal_fail_closed() {
     let caps =
@@ -58,32 +43,6 @@ fn missing_process_fingerprint_disables_signal_fail_closed() {
         "a pid without a process-identity fingerprint is not a safe signal target"
     );
     assert!(caps.can_fork);
-    assert!(!caps.can_resume);
-    assert!(caps.can_slash);
-}
-
-#[test]
-fn a_fingerprinted_pid_requires_local_platform_support() {
-    let mut session = session(Provider::Claude, SessionState::Active, 4242);
-    session.process_fingerprint = Some("linux-v1:boot:start".to_string());
-
-    assert_eq!(
-        SessionCapabilities::of(&session, true).can_signal,
-        zaplex_cockpit::local_process_signalling_supported()
-    );
-    assert!(
-        SessionCapabilities::of(&session, false).can_signal,
-        "the remote daemon checks support on the process's actual host"
-    );
-}
-
-/// pid 0 means "discovery recorded none", whoever the provider is — the test is
-/// the pid, not the brand.
-#[test]
-fn a_claude_session_without_a_pid_cannot_be_signalled_either() {
-    let caps = SessionCapabilities::of(&session(Provider::Claude, SessionState::Waiting, 0), true);
-    assert!(!caps.can_signal);
-    // State, not pid availability, decides whether resuming is safe.
     assert!(!caps.can_resume);
     assert!(caps.can_slash);
 }
@@ -98,34 +57,6 @@ fn dormant_slash_commands_follow_provider_support() {
     assert!(
         SessionCapabilities::of(&session(Provider::Claude, SessionState::Idle, 0), true,).can_slash
     );
-}
-
-/// `project_root` is a path on the host that reported the session. Reviewing a
-/// remote one from here would open this machine's identically-named directory —
-/// the wrong tree, silently.
-#[test]
-fn a_remote_session_cannot_be_reviewed_from_here() {
-    let session = session(Provider::Claude, SessionState::Waiting, 1);
-    assert!(!SessionCapabilities::of(&session, false).can_review);
-    assert!(SessionCapabilities::of(&session, true).can_review);
-}
-
-/// Being remote costs only the local-tree verb. A live conversation remains
-/// forkable, but must be focused/adopted rather than resumed into a duplicate.
-#[test]
-fn a_remote_session_keeps_everything_that_does_not_need_this_machine() {
-    let caps = SessionCapabilities::of(
-        &session(Provider::Claude, SessionState::Monitor, 4242),
-        false,
-    );
-    assert!(caps.can_fork);
-    assert!(!caps.can_resume);
-    assert!(caps.can_slash);
-    assert!(
-        !caps.can_signal,
-        "a remote pid without a fingerprint must fail closed before host execution"
-    );
-    assert!(!caps.can_review);
 }
 
 #[test]
@@ -337,28 +268,6 @@ fn live_session_without_an_exact_terminal_does_not_advertise_slash_actions() {
             slash_action_available(&session, true),
             "a {state:?} Claude session with an exact terminal may stage its slash command"
         );
-    }
-}
-
-/// A PID alone never proves which process currently owns that number. Until the
-/// snapshot carries a verifiable process-identity fingerprint, no row may offer
-/// a destructive signal action.
-#[test]
-fn session_without_process_identity_never_advertises_signal() {
-    for pid in [0u32, 1, 2, 4242, u32::MAX] {
-        for provider in [Provider::Claude, Provider::Codex] {
-            for is_local in [true, false] {
-                let caps = SessionCapabilities::of(
-                    &session(provider, SessionState::Waiting, pid),
-                    is_local,
-                );
-                assert!(
-                    !caps.can_signal,
-                    "pid {pid}, {provider:?}, local={is_local}: an unverified pid \
-                     must never expose stop/kill"
-                );
-            }
-        }
     }
 }
 

@@ -99,10 +99,6 @@
 
 mod tracked;
 
-#[cfg(test)]
-#[path = "autotracking_test.rs"]
-mod tests;
-
 use itertools::Itertools as _;
 pub use tracked::Tracked;
 

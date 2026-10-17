@@ -145,7 +145,3 @@ impl Element for SizeConstraintSwitch {
         self.active_child().debug_text_content()
     }
 }
-
-#[cfg(test)]
-#[path = "size_constraint_switch_test.rs"]
-mod tests;

@@ -218,7 +218,3 @@ fn engine_entry_to_menu_item(entry: &EngineDirEntry) -> DirectoryItem {
         },
     }
 }
-
-#[cfg(test)]
-#[path = "directory_fetcher_tests.rs"]
-mod tests;

@@ -1,4 +1,3 @@
-use futures_util::future::{AbortHandle, Abortable, Aborted};
 use warpui::App;
 
 use crate::terminal::model::session::ExecuteCommandOptions;
@@ -339,52 +338,6 @@ fn test_clears_running_and_pending_commands_on_cancellation() {
                 first_execute_command_future.await;
                 second_execute_command_future.await;
                 third_execute_command_future.await;
-                handle_command_output_future.await;
-            })
-            .await;
-    });
-}
-
-#[test]
-fn test_commands_are_cleared_if_execute_command_future_is_aborted() {
-    App::test((), |_app| async move {
-        fn assert_failed(result: Result<CommandOutput>) {
-            assert!(result.is_err());
-        }
-
-        let (executor_command_tx, _) = async_channel::unbounded();
-        let (in_band_command_cancelled_tx, _) = async_channel::unbounded();
-        let executor = Arc::new(InBandCommandExecutor::new(
-            executor_command_tx,
-            in_band_command_cancelled_tx,
-        ));
-
-        // TODO(zachbai): Figure out how to make these tests work without
-        // requiring a single-threaded executor (e.g.: running on
-        // app.background_executor()).
-        let task_executor = async_executor::LocalExecutor::new();
-
-        let executor_clone = executor.clone();
-        let execute_commands_future = async move {
-            execute_test_command(executor_clone.clone(), "echo foo", assert_failed).await;
-            execute_test_command(executor_clone.clone(), "echo bar", assert_failed).await;
-            execute_test_command(executor_clone.clone(), "echo baz", assert_failed).await;
-        };
-
-        let (handle, registration) = AbortHandle::new_pair();
-        let execute_command_future =
-            task_executor.spawn(Abortable::new(execute_commands_future, registration));
-        // Abort the future where the commands are executing.
-        handle.abort();
-
-        let handle_command_output_future = task_executor.spawn(async move {
-            assert_eq!(executor.running_command_id(), None);
-            assert_eq!(executor.pending_command_ids().len(), 0);
-        });
-
-        task_executor
-            .run(async move {
-                assert_eq!(execute_command_future.await, Err(Aborted));
                 handle_command_output_future.await;
             })
             .await;

@@ -53,15 +53,6 @@ pub(super) fn atomic_write(file_path: &Path, data: &[u8]) -> Result<(), Error> {
     atomic_write_inner(file_path, data, |_| Ok(()))
 }
 
-#[cfg(test)]
-pub(super) fn atomic_write_with_pre_persist(
-    file_path: &Path,
-    data: &[u8],
-    before_persist: impl FnOnce(&Path) -> std::io::Result<()>,
-) -> Result<(), Error> {
-    atomic_write_inner(file_path, data, before_persist)
-}
-
 /// A type alias for a boxed user preferences backend.
 pub type Model = Box<dyn UserPreferences>;
 

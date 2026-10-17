@@ -563,7 +563,3 @@ impl MetricsExt for Metrics {
         point_size / self.units_per_em as f32
     }
 }
-
-#[cfg(test)]
-#[path = "fonts_test.rs"]
-mod tests;

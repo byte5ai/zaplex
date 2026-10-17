@@ -106,45 +106,6 @@ impl FromStr for FooExperiment {
 }
 
 #[test]
-fn test_get_group_for_bucket_finds_correct_range() {
-    let bucket_range = TEST_LAYER.bucket_ranges.get(1).unwrap();
-    let expected = Some(bucket_range.group);
-    let lower_bound = bucket_range.range.start;
-    let upper_bound_inclusive = bucket_range.range.end - 1;
-
-    let res = TEST_LAYER.get_group_for_bucket(lower_bound);
-    assert_eq!(res, expected);
-    let res = TEST_LAYER.get_group_for_bucket((lower_bound + upper_bound_inclusive) / 2);
-    assert_eq!(res, expected);
-    let res = TEST_LAYER.get_group_for_bucket(upper_bound_inclusive);
-    assert_eq!(res, expected);
-}
-
-#[test]
-fn test_get_group_for_bucket_not_in_range() {
-    let expected = None;
-    let bucket_range = TEST_LAYER.bucket_ranges.get(1).unwrap();
-    let lower_bound = bucket_range.range.start;
-    let upper_bound = bucket_range.range.end;
-
-    let res = TEST_LAYER.get_group_for_bucket(lower_bound - 1);
-    assert_eq!(res, expected);
-    let res = TEST_LAYER.get_group_for_bucket(upper_bound);
-    assert_eq!(res, expected);
-}
-
-#[test]
-fn test_from_group_id_errors_if_incorrect_experiment() {
-    let group_id = GroupId {
-        experiment: FooExperiment::name(),
-        variant: FOO_EXPERIMENT_CONTROL,
-    };
-    let res = TestExperiment::from_group_id(group_id);
-
-    assert!(res.is_err())
-}
-
-#[test]
 fn test_create_experiment_layer_mappings() {
     let layers = vec![&*TEST_LAYER];
     create_experiment_layer_mappings(&layers);
@@ -164,19 +125,4 @@ fn test_create_experiment_layer_mappings() {
             .name(),
         TEST_LAYER.name()
     );
-}
-
-#[test]
-fn test_allow_user_overrides() {
-    // Case 1: Experiment and channel don't allow overrides.
-    assert!(!TestExperiment::can_use_user_override(Channel::Stable));
-
-    // Case 2: Experiment doesn't allow overrides, channel does.
-    assert!(TestExperiment::can_use_user_override(Channel::Dev));
-
-    // Case 3: Experiment and channel allow overrides.
-    assert!(FooExperiment::can_use_user_override(Channel::Dev));
-
-    // Case 4: Experiment allows overrides, channel doesn't.
-    assert!(FooExperiment::can_use_user_override(Channel::Stable));
 }

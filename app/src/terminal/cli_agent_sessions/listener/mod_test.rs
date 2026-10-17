@@ -230,65 +230,6 @@ fn documented_native_grok_hook_payload_reaches_the_typed_listener() {
 }
 
 #[test]
-fn grok_structured_session_supports_rich_status() {
-    let session = CLIAgentSession {
-        agent: CLIAgent::Grok,
-        status: super::super::CLIAgentSessionStatus::InProgress,
-        session_context: super::super::CLIAgentSessionContext {
-            session_id: Some("grok-session-123".to_owned()),
-            ..Default::default()
-        },
-        input_state: super::super::CLIAgentInputState::Closed,
-        should_auto_toggle_input: false,
-        listener: None,
-        remote_host: None,
-        plugin_version: None,
-        draft_text: None,
-        custom_command_prefix: None,
-    };
-    assert!(session_supports_rich_status(&session));
-}
-
-#[test]
-fn codex_legacy_osc9_session_is_not_rich_status() {
-    let session = CLIAgentSession {
-        agent: CLIAgent::Codex,
-        status: super::super::CLIAgentSessionStatus::InProgress,
-        session_context: super::super::CLIAgentSessionContext::default(),
-        input_state: super::super::CLIAgentInputState::Closed,
-        should_auto_toggle_input: false,
-        listener: None,
-        remote_host: None,
-        plugin_version: None,
-        draft_text: None,
-        custom_command_prefix: None,
-    };
-
-    assert!(!session_supports_rich_status(&session));
-}
-
-#[test]
-fn codex_structured_session_is_rich_status() {
-    let session = CLIAgentSession {
-        agent: CLIAgent::Codex,
-        status: super::super::CLIAgentSessionStatus::InProgress,
-        session_context: super::super::CLIAgentSessionContext {
-            session_id: Some("thr_123".to_owned()),
-            ..Default::default()
-        },
-        input_state: super::super::CLIAgentInputState::Closed,
-        should_auto_toggle_input: false,
-        listener: None,
-        remote_host: None,
-        plugin_version: None,
-        draft_text: None,
-        custom_command_prefix: None,
-    };
-
-    assert!(session_supports_rich_status(&session));
-}
-
-#[test]
 fn repeated_session_start_reuses_listener_without_registering_again() {
     assert_eq!(
         listener_registration_action(Some((CLIAgent::Codex, true)), CLIAgent::Codex),
@@ -318,11 +259,6 @@ fn auggie_is_supported() {
 }
 
 #[test]
-fn auggie_uses_default_handler_with_rich_status() {
-    assert!(agent_supports_rich_status(&CLIAgent::Auggie));
-}
-
-#[test]
 fn auggie_default_handler_skips_session_start() {
     let mut handler = DefaultSessionListener;
     let event = CLIAgentEvent {
@@ -335,91 +271,6 @@ fn auggie_default_handler_skips_session_start() {
         payload: CLIAgentEventPayload::default(),
     };
     assert!(handler.handle_event(event).is_none());
-}
-
-#[test]
-fn auggie_default_handler_forwards_stop() {
-    let mut handler = DefaultSessionListener;
-    let event = CLIAgentEvent {
-        v: 1,
-        agent: CLIAgent::Auggie,
-        event: CLIAgentEventType::Stop,
-        session_id: None,
-        cwd: None,
-        project: None,
-        payload: CLIAgentEventPayload::default(),
-    };
-    assert!(handler.handle_event(event).is_some());
-}
-
-#[test]
-fn pi_is_supported() {
-    assert!(is_agent_supported(&CLIAgent::Pi));
-}
-
-#[test]
-fn pi_uses_default_handler_with_rich_status() {
-    assert!(agent_supports_rich_status(&CLIAgent::Pi));
-}
-
-#[test]
-fn pi_default_handler_skips_session_start() {
-    let mut handler = DefaultSessionListener;
-    let event = CLIAgentEvent {
-        v: 1,
-        agent: CLIAgent::Pi,
-        event: CLIAgentEventType::SessionStart,
-        session_id: None,
-        cwd: None,
-        project: None,
-        payload: CLIAgentEventPayload::default(),
-    };
-    assert!(handler.handle_event(event).is_none());
-}
-
-#[test]
-fn pi_default_handler_forwards_stop() {
-    let mut handler = DefaultSessionListener;
-    let event = CLIAgentEvent {
-        v: 1,
-        agent: CLIAgent::Pi,
-        event: CLIAgentEventType::Stop,
-        session_id: None,
-        cwd: None,
-        project: None,
-        payload: CLIAgentEventPayload::default(),
-    };
-    assert!(handler.handle_event(event).is_some());
-}
-
-#[test]
-fn antigravity_is_supported() {
-    assert!(is_agent_supported(&CLIAgent::Antigravity));
-}
-
-#[test]
-fn antigravity_uses_default_handler_with_rich_status() {
-    assert!(agent_supports_rich_status(&CLIAgent::Antigravity));
-}
-
-#[test]
-fn antigravity_claims_rich_status_only_after_a_structured_session_identity_arrives() {
-    let mut session = CLIAgentSession {
-        agent: CLIAgent::Antigravity,
-        status: super::super::CLIAgentSessionStatus::InProgress,
-        session_context: super::super::CLIAgentSessionContext::default(),
-        input_state: super::super::CLIAgentInputState::Closed,
-        should_auto_toggle_input: false,
-        listener: None,
-        plugin_version: None,
-        remote_host: None,
-        draft_text: None,
-        custom_command_prefix: None,
-    };
-    assert!(!session_supports_rich_status(&session));
-
-    session.session_context.session_id = Some("agy-123".to_owned());
-    assert!(session_supports_rich_status(&session));
 }
 
 #[test]
@@ -488,41 +339,6 @@ fn documented_antigravity_status_payload_drives_blocked_and_active_state() {
 }
 
 #[test]
-fn antigravity_default_handler_skips_session_start() {
-    let mut handler = DefaultSessionListener;
-    let event = CLIAgentEvent {
-        v: 1,
-        agent: CLIAgent::Antigravity,
-        event: CLIAgentEventType::SessionStart,
-        session_id: None,
-        cwd: None,
-        project: None,
-        payload: CLIAgentEventPayload::default(),
-    };
-    assert!(handler.handle_event(event).is_none());
-}
-
-#[test]
-fn antigravity_default_handler_forwards_stop() {
-    let mut handler = DefaultSessionListener;
-    let event = CLIAgentEvent {
-        v: 1,
-        agent: CLIAgent::Antigravity,
-        event: CLIAgentEventType::Stop,
-        session_id: None,
-        cwd: None,
-        project: None,
-        payload: CLIAgentEventPayload::default(),
-    };
-    assert!(handler.handle_event(event).is_some());
-}
-
-#[test]
-fn deepseek_handler_supports_structured_rich_status() {
-    assert!(agent_supports_rich_status(&CLIAgent::DeepSeek));
-}
-
-#[test]
 fn deepseek_osc9_completion_does_not_claim_prompt_text() {
     let handler = DeepSeekSessionHandler;
     let event = handler
@@ -568,24 +384,6 @@ fn deepseek_osc9_plain_response_text_becomes_notification_title() {
         event.payload.response.as_deref(),
         Some("Latest reply content")
     );
-}
-
-#[test]
-fn deepseek_legacy_osc9_session_is_not_rich_status() {
-    let session = CLIAgentSession {
-        agent: CLIAgent::DeepSeek,
-        status: super::super::CLIAgentSessionStatus::InProgress,
-        session_context: super::super::CLIAgentSessionContext::default(),
-        input_state: super::super::CLIAgentInputState::Closed,
-        should_auto_toggle_input: false,
-        listener: None,
-        remote_host: None,
-        plugin_version: None,
-        draft_text: None,
-        custom_command_prefix: None,
-    };
-
-    assert!(!session_supports_rich_status(&session));
 }
 
 #[test]

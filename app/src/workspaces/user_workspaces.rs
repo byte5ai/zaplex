@@ -828,15 +828,3 @@ impl SingletonEntity for UserWorkspaces {}
 
 // Zaplex (localized, Phase 5): `user_workspaces_tests.rs` entirely targets team RPC paths (`MockTeamClient` / `mockall::Sequence`);
 // after localization these paths are unreachable, so the entire file was physically deleted.
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_team_allows_ai_in_remote_sessions() {
-        let workspaces = UserWorkspaces::new(vec![], None);
-
-        assert!(workspaces.is_ai_allowed_in_remote_sessions());
-    }
-}

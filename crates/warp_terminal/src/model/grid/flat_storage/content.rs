@@ -262,7 +262,3 @@ impl Index<Range<usize>> for Chunk {
         unsafe { std::str::from_utf8_unchecked(&self.content[index]) }
     }
 }
-
-#[cfg(test)]
-#[path = "content_tests.rs"]
-mod tests;

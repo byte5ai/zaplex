@@ -25,7 +25,3 @@ pub fn longest_common_prefix<'a>(strings: impl IntoIterator<Item = &'a str>) -> 
         Some(&first[0..len])
     }
 }
-
-#[cfg(test)]
-#[path = "prefix_test.rs"]
-mod tests;

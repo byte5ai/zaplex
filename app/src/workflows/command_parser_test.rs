@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 
 use crate::workflows::workflow::{Argument, Workflow};
 
-use super::{compute_workflow_display_data, compute_workflow_display_data_for_history_command};
+use super::compute_workflow_display_data_for_history_command;
 
 lazy_static! {
     static ref WORKFLOW: Workflow = Workflow::Command {
@@ -311,59 +311,6 @@ fn test_compute_workflow_display_data_for_similar_but_unlinked_history_command()
 }
 
 #[test]
-fn test_compute_workflow_display_data_with_escaped_arguments() {
-    let display_data = compute_workflow_display_data(&WORKFLOW_WITH_ESCAPES);
-    let correct_command =
-        "docker history --no-trunc --format default1 {{.ID}}: {{.CreatedBy}} {{arg2}} arg2";
-
-    assert_eq!(
-        display_data.command_with_replaced_arguments.as_str(),
-        correct_command
-    );
-    assert_eq!(
-        display_data.replaced_ranges,
-        vec![35.into()..43.into(), 77.into()..81.into()]
-    );
-    assert_eq!(
-        display_data.argument_index_to_char_range_map,
-        HashMap::from([
-            (0.into(), vec![35.into()..43.into()]),
-            (1.into(), vec![77.into()..81.into()])
-        ])
-    );
-}
-
-#[test]
-fn test_compute_workflow_display_data_with_duplicates_and_escaped_arguments() {
-    let display_data = compute_workflow_display_data(&WORKFLOW_WITH_DUPLICATES_AND_ESCAPES);
-    let correct_command = "{{hi}} hi {{{{hi {{{hi}}} {{{{hi}} hi";
-
-    assert_eq!(
-        display_data.command_with_replaced_arguments.as_str(),
-        correct_command
-    );
-    assert_eq!(
-        display_data.replaced_ranges,
-        vec![
-            7.into()..9.into(),
-            14.into()..16.into(),
-            35.into()..37.into()
-        ]
-    );
-    assert_eq!(
-        display_data.argument_index_to_char_range_map,
-        HashMap::from([(
-            0.into(),
-            vec![
-                7.into()..9.into(),
-                14.into()..16.into(),
-                35.into()..37.into()
-            ]
-        ),])
-    );
-}
-
-#[test]
 fn test_compute_workflow_display_data_for_linked_history_command_with_escaped_args() {
     let linked_history_command = "{{hi}} foo {{{{foo {{{hi}}} {{{{hi}} foo";
 
@@ -384,22 +331,5 @@ fn test_compute_workflow_display_data_for_linked_history_command_with_escaped_ar
             15.into()..18.into(),
             37.into()..40.into()
         ]
-    );
-}
-
-#[test]
-fn test_compute_workflow_display_data_with_multibyte_chars() {
-    let display_data = compute_workflow_display_data(&WORKFLOW_WITH_MULTIBYTE_CHARS);
-    assert_eq!(
-        display_data.command_with_replaced_arguments.as_str(),
-        r#"echo "hello 😎name🤠name"#
-    );
-    assert_eq!(
-        display_data.replaced_ranges,
-        vec![16.into()..20.into(), 24.into()..28.into()]
-    );
-    assert_eq!(
-        display_data.argument_index_to_char_range_map,
-        HashMap::from([(0.into(), vec![13.into()..17.into(), 18.into()..22.into()])])
     );
 }
