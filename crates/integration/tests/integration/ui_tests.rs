@@ -355,7 +355,7 @@ integration_tests! {
     test_sftp_toolbar_new_folder,
     test_sftp_toolbar_upload,
     test_sftp_toolbar_up,
-    test_sftp_click_file_row_selects,
+    test_sftp_click_file_row_moves_cursor,
     test_sftp_right_click_opens_menu,
     test_sftp_ctx_menu_delete,
     test_sftp_ctx_menu_rename,

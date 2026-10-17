@@ -97,3 +97,8 @@ pub fn row_position_id(app: &App, window_id: WindowId, index: usize) -> String {
         view.layout_position_id_for_test(&format!("row:{index}"))
     })
 }
+
+/// The entry index under the browser's keyboard cursor; `None` on the `..` row.
+pub fn cursor_entry_index(app: &App, window_id: WindowId) -> Option<usize> {
+    sftp_browser_view(app, window_id).read(app, |view, _| view.cursor_entry_index())
+}
