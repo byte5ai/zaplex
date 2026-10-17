@@ -83,6 +83,39 @@ runs:
           echo "is-workspace-root=false" >> $GITHUB_OUTPUT
         fi
 
+    # The own macOS runner (`macrunner`) starts a fresh VM without Rust. Install
+    # a digest-pinned rustup-init there; rust-toolchain.toml then selects the
+    # pinned toolchain on first use. Runners that already ship rustup skip this.
+    - name: Install rustup (macOS runners without Rust)
+      if: ${{ inputs.target_os == 'macos' }}
+      shell: bash
+      run: |
+        if command -v rustup >/dev/null 2>&1; then
+          exit 0
+        fi
+        version=1.29.1
+        case "$(uname -m)" in
+          arm64)
+            triple=aarch64-apple-darwin
+            digest=ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a
+            ;;
+          x86_64)
+            triple=x86_64-apple-darwin
+            digest=259e2b84274434085163fe8d556510571772cda2aa6d87ca6aa664f57bc644e3
+            ;;
+          *)
+            echo "::error::No pinned rustup-init for $(uname -m)"
+            exit 1
+            ;;
+        esac
+        installer="$RUNNER_TEMP/rustup-init"
+        curl --proto '=https' --tlsv1.2 -fsSL -o "$installer" \
+          "https://static.rust-lang.org/rustup/archive/$version/$triple/rustup-init"
+        echo "$digest  $installer" | shasum -a 256 -c -
+        chmod +x "$installer"
+        "$installer" -y --no-modify-path --profile minimal --default-toolchain none
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
     - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       if: ${{ inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
       with:
