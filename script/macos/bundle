@@ -909,34 +909,18 @@ if [[ "$ARTIFACT" = app ]]; then
     rm "$DMG_DIR/$DMG_NAME" || true
     local source_folder="$1"
 
-    local args=(
-      --volname "$ZAPLEX_APP_NAME"
-      # For --no-internet-enable, see https://github.com/create-dmg/create-dmg/issues/179
-      --no-internet-enable
-      --background app/assets/resources/mac/zaplex_install_image.png
-      --icon-size 128
-      --window-size 700 500
-      --format UDZO
-      --app-drop-link 550 250
-      --icon "$ZAPLEX_APP_NAME.app" 150 250
-      # macOS 26.4 Beta has issues with mounting HFS+ DMGs, so we're using APFS instead.
-      # APFS has been supported as a DMG filesystem since macOS 10.13, and we target 12.0
-      # as our minimum version.
-      #
-      # See: https://developer.apple.com/documentation/macos-release-notes/macos-26_4-release-notes#External-Media
-      --filesystem APFS
-    )
-
-    # Skip running an AppleScript to format the DMG contents if running in Namespace or on a
-    # self-hosted runner VM: Finder automation is not granted there, so it consistently times out.
-    # See https://github.com/create-dmg/create-dmg/issues/72
-    if [[ "${RUNNER_NAME:-}" == nsc-* || "${RUNNER_ENVIRONMENT:-}" == self-hosted ]]; then
-      args+=(--skip-jenkins)
+    # dmgbuild (script/macos/dmgbuild-requirements.txt) writes the installer
+    # window layout itself; script/macos/dmg_settings.py holds the layout.
+    if ! command -v dmgbuild >/dev/null 2>&1; then
+      echo "dmgbuild is required to create the DMG; install script/macos/dmgbuild-requirements.txt." >&2
+      exit 1
     fi
-
-    args+=("$DMG_DIR/$DMG_NAME" "$source_folder")
-
-    create-dmg "${args[@]}"
+    dmgbuild \
+      -s script/macos/dmg_settings.py \
+      -D app="$source_folder/$ZAPLEX_APP_NAME.app" \
+      -D background=app/assets/resources/mac/zaplex_install_image.png \
+      "$ZAPLEX_APP_NAME" \
+      "$DMG_DIR/$DMG_NAME"
   }
 
   # If we're codesigning, stage the signed app and use that to create the DMG.
