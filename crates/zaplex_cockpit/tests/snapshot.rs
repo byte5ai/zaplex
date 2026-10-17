@@ -56,10 +56,20 @@ fn build_snapshot_aggregates_both_providers() {
     let snap = build_snapshot(home, codex_home, None, now, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK, &pricing);
 
     assert_eq!(snap.generated_at, now);
-    assert_eq!(snap.accounts.len(), 2, "one Claude + one Codex account");
-
-    let claude = snap
+    // Discovery also picks up accounts of Claude processes running on the test
+    // host, so only the accounts from this fixture's homes are asserted.
+    let fixture_roots = [home.canonicalize().unwrap(), codex_home.canonicalize().unwrap()];
+    let fixture_accounts: Vec<_> = snap
         .accounts
+        .iter()
+        .filter(|a| {
+            let config_dir = a.account.config_dir.canonicalize().unwrap_or_default();
+            fixture_roots.iter().any(|root| config_dir.starts_with(root))
+        })
+        .collect();
+    assert_eq!(fixture_accounts.len(), 2, "one Claude + one Codex account");
+
+    let claude = fixture_accounts
         .iter()
         .find(|a| a.account.provider == Provider::Claude)
         .unwrap();
@@ -68,8 +78,7 @@ fn build_snapshot_aggregates_both_providers() {
     assert_eq!(claude.block5h.input, 1000);
     assert!(claude.block5h.cost_usd > 0.0);
 
-    let codex = snap
-        .accounts
+    let codex = fixture_accounts
         .iter()
         .find(|a| a.account.provider == Provider::Codex)
         .unwrap();
