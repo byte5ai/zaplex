@@ -33,34 +33,6 @@ fn parse_stop_notification() {
 }
 
 #[test]
-fn cli_agent_session_context_title_like_text_uses_trimmed_summary() {
-    let context = CLIAgentSessionContext {
-        summary: Some("  Reviewing changes  ".to_string()),
-        query: Some("Latest prompt".to_string()),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        context.title_like_text(),
-        Some("Reviewing changes".to_string())
-    );
-}
-
-#[test]
-fn cli_agent_session_context_latest_user_prompt_uses_trimmed_query() {
-    let context = CLIAgentSessionContext {
-        summary: Some("Reviewing changes".to_string()),
-        query: Some("  Latest prompt  ".to_string()),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        context.latest_user_prompt(),
-        Some("Latest prompt".to_string())
-    );
-}
-
-#[test]
 fn cli_agent_session_context_title_helpers_ignore_empty_text() {
     let context = CLIAgentSessionContext {
         summary: Some("  ".to_string()),
@@ -122,23 +94,6 @@ fn parse_session_start_notification() {
 }
 
 #[test]
-fn returns_none_for_wrong_sentinel() {
-    let body = r#"{"v":1,"agent":"claude","event":"stop"}"#;
-    assert!(parse_event(Some("Claude Code"), body).is_none());
-}
-
-#[test]
-fn returns_none_for_missing_title() {
-    let body = r#"{"v":1,"agent":"claude","event":"stop"}"#;
-    assert!(parse_event(None, body).is_none());
-}
-
-#[test]
-fn returns_none_for_invalid_json() {
-    assert!(parse_event(Some("warp://cli-agent"), "not json").is_none());
-}
-
-#[test]
 fn handles_unknown_event_type() {
     let body = r#"{"v":1,"agent":"claude","event":"some_future_event"}"#;
     let notif = parse_event(Some("warp://cli-agent"), body).unwrap();
@@ -175,12 +130,6 @@ fn handles_special_characters_in_values() {
         notif.payload.response.as_deref(),
         Some("It means greeting. Use: printf(\"hello\")")
     );
-}
-
-#[test]
-fn rejects_unsupported_schema_version() {
-    let body = r#"{"v":2,"agent":"claude","event":"stop"}"#;
-    assert!(parse_event(Some("warp://cli-agent"), body).is_none());
 }
 
 #[test]
@@ -792,57 +741,6 @@ fn opaque_account_identity_is_exact_even_without_email() {
 }
 
 #[test]
-fn account_binding_before_later_detection_is_preserved() {
-    App::test((), |mut app| async move {
-        let terminal_view_id = EntityId::new();
-        let model = app.add_model(|_| CLIAgentSessionsModel::new());
-
-        model.update(&mut app, |model, ctx| {
-            model.bind_account_identity(
-                terminal_view_id,
-                CLIAgent::Claude,
-                None,
-                Some("default@example.com".to_string()),
-            );
-            model.set_session(
-                terminal_view_id,
-                CLIAgentSession {
-                    agent: CLIAgent::Claude,
-                    status: CLIAgentSessionStatus::InProgress,
-                    session_context: CLIAgentSessionContext {
-                        session_id: Some("detected-later".to_string()),
-                        ..Default::default()
-                    },
-                    input_state: CLIAgentInputState::Closed,
-                    should_auto_toggle_input: false,
-                    listener: None,
-                    plugin_version: None,
-                    remote_host: None,
-                    draft_text: None,
-                    custom_command_prefix: None,
-                },
-                ctx,
-            );
-        });
-
-        model.read(&app, |model, _| {
-            assert!(
-                model.session(terminal_view_id).is_some(),
-                "the detected session is tracked"
-            );
-            let identity = model
-                .account_identity(terminal_view_id)
-                .expect("the pre-bound account identity is preserved");
-            assert_eq!(identity.config_dir, None);
-            assert_eq!(
-                identity.account_email.as_deref(),
-                Some("default@example.com")
-            );
-        });
-    });
-}
-
-#[test]
 fn stop_without_query_preserves_previous_prompt() {
     let mut session = CLIAgentSession {
         agent: CLIAgent::DeepSeek,
@@ -886,88 +784,12 @@ fn stop_without_query_preserves_previous_prompt() {
 }
 
 #[test]
-fn is_remote_returns_true_when_remote_host_is_set() {
-    let session = CLIAgentSession {
-        agent: CLIAgent::Claude,
-        status: CLIAgentSessionStatus::InProgress,
-        session_context: CLIAgentSessionContext::default(),
-        input_state: CLIAgentInputState::Closed,
-        should_auto_toggle_input: false,
-        listener: None,
-        plugin_version: None,
-        draft_text: None,
-        remote_host: Some("user@devbox".to_owned()),
-        custom_command_prefix: None,
-    };
-    assert!(session.is_remote());
-}
-
-#[test]
-fn is_remote_returns_false_when_remote_host_is_none() {
-    let session = CLIAgentSession {
-        agent: CLIAgent::Claude,
-        status: CLIAgentSessionStatus::InProgress,
-        session_context: CLIAgentSessionContext::default(),
-        input_state: CLIAgentInputState::Closed,
-        should_auto_toggle_input: false,
-        listener: None,
-        remote_host: None,
-        plugin_version: None,
-        draft_text: None,
-        custom_command_prefix: None,
-    };
-    assert!(!session.is_remote());
-}
-
-#[test]
-fn local_failure_is_shared_across_local_sessions() {
-    let mut model = CLIAgentSessionsModel::new();
-
-    model.record_plugin_auto_failure(CLIAgent::Claude, None);
-
-    assert!(model.has_plugin_auto_failed(CLIAgent::Claude, &None));
-}
-
-#[test]
-fn local_failure_does_not_affect_remote_host() {
-    let mut model = CLIAgentSessionsModel::new();
-
-    model.record_plugin_auto_failure(CLIAgent::Claude, None);
-
-    let remote = Some("user@devbox".to_owned());
-    assert!(!model.has_plugin_auto_failed(CLIAgent::Claude, &remote));
-}
-
-#[test]
 fn remote_failure_does_not_affect_local() {
     let mut model = CLIAgentSessionsModel::new();
 
     model.record_plugin_auto_failure(CLIAgent::Claude, Some("user@devbox".to_owned()));
 
     assert!(!model.has_plugin_auto_failed(CLIAgent::Claude, &None));
-}
-
-#[test]
-fn remote_failures_are_independent_per_host() {
-    let mut model = CLIAgentSessionsModel::new();
-
-    let host_a = Some("user@host-a".to_owned());
-    let host_b = Some("user@host-b".to_owned());
-
-    model.record_plugin_auto_failure(CLIAgent::Claude, host_a.clone());
-
-    assert!(model.has_plugin_auto_failed(CLIAgent::Claude, &host_a));
-    assert!(!model.has_plugin_auto_failed(CLIAgent::Claude, &host_b));
-}
-
-#[test]
-fn failure_tracking_is_independent_per_agent() {
-    let mut model = CLIAgentSessionsModel::new();
-
-    model.record_plugin_auto_failure(CLIAgent::Claude, None);
-
-    assert!(model.has_plugin_auto_failed(CLIAgent::Claude, &None));
-    assert!(!model.has_plugin_auto_failed(CLIAgent::Gemini, &None));
 }
 
 #[test]

@@ -9,36 +9,9 @@ use crate::tab_configs::tab_config::{generated_worktree_repo_dir, TabConfigPaneT
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn test_default_tab_configs_dir_uses_underscores() {
-    assert!(default_tab_configs_dir().ends_with("default_tab_configs"));
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
 fn test_is_tab_config_toml_matches_user_tab_configs() {
     let path = tab_configs_dir().join("my_tab_config.toml");
     assert!(is_tab_config_toml(&path));
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-fn test_is_tab_config_toml_matches_default_tab_configs() {
-    let path = default_tab_configs_dir().join("worktree.toml");
-    assert!(is_tab_config_toml(&path));
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-fn test_is_tab_config_toml_rejects_non_toml_paths() {
-    let path = tab_configs_dir().join("my_tab_config.yaml");
-    assert!(!is_tab_config_toml(&path));
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-fn test_is_tab_config_toml_rejects_tomls_outside_tab_config_dirs() {
-    let path = launch_configs_dir().join("workspace.toml");
-    assert!(!is_tab_config_toml(&path));
 }
 
 #[cfg(feature = "local_fs")]

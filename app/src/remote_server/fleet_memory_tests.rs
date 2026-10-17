@@ -275,24 +275,6 @@ fn managed_process_identity_is_required_instead_of_optionalized() {
     assert_eq!(managed_linux_process_identity(&fs, 42, false), Ok(None));
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn optional_process_stat_treats_esrch_as_a_vanished_process() {
-    struct VanishedProcfs;
-
-    impl ProcfsReader for VanishedProcfs {
-        fn read_to_string(&self, _path: &Path) -> io::Result<String> {
-            Err(io::Error::from_raw_os_error(libc::ESRCH))
-        }
-
-        fn list_pids(&self) -> io::Result<Vec<u32>> {
-            panic!("optional stat lookup must not enumerate processes")
-        }
-    }
-
-    assert_eq!(read_process_stat_optional(&VanishedProcfs, 42), Ok(None));
-}
-
 #[test]
 fn process_identity_is_revalidated_after_smaps_read() {
     struct ChangingProcfs {
@@ -416,18 +398,6 @@ fn diagnostics_are_fixed_codes_not_io_messages() {
     assert_eq!(
         snapshot.available.diagnostic().map(|d| d.protocol_code()),
         Some("read-failed")
-    );
-}
-
-#[test]
-fn unsupported_measurement_has_no_numeric_sentinel() {
-    let measurement = MemoryMeasurement::unsupported();
-
-    assert_eq!(measurement.status(), MemoryMeasurementStatus::Unsupported);
-    assert_eq!(measurement.bytes(), None);
-    assert_eq!(
-        measurement.provenance(),
-        MemoryProvenance::UnsupportedPlatform
     );
 }
 

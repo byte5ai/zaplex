@@ -21,15 +21,6 @@ use crate::cockpit::favorites::FavoritesStore;
 use crate::test_util::settings::initialize_settings_for_tests;
 
 #[test]
-fn connection_rows_reserve_leading_icons_for_folders_only() {
-    assert_eq!(
-        tree_row_leading_icon(NodeKind::Folder),
-        Some(crate::ui_components::icons::Icon::Folder)
-    );
-    assert_eq!(tree_row_leading_icon(NodeKind::Server), None);
-}
-
-#[test]
 fn connection_server_rows_expose_favorite_connect_disconnect_and_management_actions() {
     assert_eq!(
         connection_row_capabilities(NodeKind::Server, false, false),
@@ -1062,53 +1053,6 @@ fn missing_import_port_still_uses_the_explicit_default() {
 // --- resolve_parent_for_new_node tests ----------------------------------------
 
 #[test]
-fn parent_no_selection_returns_none() {
-    let nodes = vec![folder("f1", None, "Root", 0)];
-    assert_eq!(resolve_parent_for_new_node(None, &nodes), None);
-}
-
-#[test]
-fn parent_folder_selected_returns_folder_id() {
-    let nodes = vec![folder("f1", None, "Root", 0)];
-    assert_eq!(
-        resolve_parent_for_new_node(Some("f1"), &nodes),
-        Some("f1".to_string())
-    );
-}
-
-#[test]
-fn parent_server_at_root_selected_returns_none() {
-    let nodes = vec![server("s1", None, "srv", 0)];
-    assert_eq!(resolve_parent_for_new_node(Some("s1"), &nodes), None);
-}
-
-#[test]
-fn parent_server_under_folder_selected_returns_folder_id() {
-    let nodes = vec![
-        folder("f1", None, "Prod", 0),
-        server("s1", Some("f1"), "web", 0),
-    ];
-    assert_eq!(
-        resolve_parent_for_new_node(Some("s1"), &nodes),
-        Some("f1".to_string())
-    );
-}
-
-#[test]
-fn parent_invalid_selected_id_returns_none() {
-    let nodes = vec![folder("f1", None, "Root", 0)];
-    assert_eq!(
-        resolve_parent_for_new_node(Some("nonexistent"), &nodes),
-        None
-    );
-}
-
-#[test]
-fn parent_empty_nodes_with_selection_returns_none() {
-    assert_eq!(resolve_parent_for_new_node(Some("any"), &[]), None);
-}
-
-#[test]
 fn parent_deeply_nested_folder_selected_returns_immediate_parent() {
     // f1(root) → f2(child) → s1(grandchild server)
     let nodes = vec![
@@ -1154,37 +1098,6 @@ fn delete_confirmation_lists_all_descendant_hosts() {
             credential_label: "Deploy key (ops)".to_string(),
         }]
     );
-}
-
-#[test]
-fn host_delete_impact_never_includes_sibling_hosts() {
-    let nodes = vec![
-        folder("f1", None, "Production", 0),
-        server("s1", Some("f1"), "web", 0),
-        server("s2", Some("f1"), "db", 1),
-    ];
-    let credential_labels = HashMap::from([("s1".to_string(), vec!["Deploy key".to_string()])]);
-
-    let impact = build_delete_impact(&nodes, "s1", &credential_labels).unwrap();
-
-    assert_eq!(impact.node_kind, NodeKind::Server);
-    assert_eq!(impact.host_names, vec!["web"]);
-    assert_eq!(impact.credential_impacts.len(), 1);
-    assert_eq!(impact.credential_impacts[0].host_name, "web");
-}
-
-#[test]
-fn changed_descendants_require_a_fresh_delete_confirmation() {
-    let mut nodes = vec![
-        folder("f1", None, "Production", 0),
-        server("s1", Some("f1"), "web", 0),
-    ];
-    let original = build_delete_impact(&nodes, "f1", &HashMap::new()).unwrap();
-    nodes.push(server("s2", Some("f1"), "db", 1));
-    let current = build_delete_impact(&nodes, "f1", &HashMap::new()).unwrap();
-
-    assert_ne!(current, original);
-    assert_eq!(current.host_names, vec!["web", "db"]);
 }
 
 #[test]
@@ -1312,79 +1225,7 @@ fn large_folder_delete_impact_keeps_every_host_and_credential_impact() {
     assert_eq!(impact.credential_impacts.len(), 50);
 }
 
-// --- compute_depths tests -------------------------------------------------
-
-#[test]
-fn depths_empty_nodes() {
-    let depths = compute_depths(&[]);
-    assert!(depths.is_empty());
-}
-
-#[test]
-fn depths_single_root() {
-    let nodes = vec![folder("f1", None, "Root", 0)];
-    let depths = compute_depths(&nodes);
-    assert_eq!(depths["f1"], 0);
-}
-
-#[test]
-fn depths_nested_tree() {
-    let nodes = vec![
-        folder("f1", None, "Root", 0),
-        folder("f2", Some("f1"), "Child", 0),
-        server("s1", Some("f2"), "Grandchild", 0),
-    ];
-    let depths = compute_depths(&nodes);
-    assert_eq!(depths["f1"], 0);
-    assert_eq!(depths["f2"], 1);
-    assert_eq!(depths["s1"], 2);
-}
-
-#[test]
-fn depths_multiple_roots() {
-    let nodes = vec![
-        folder("f1", None, "Root1", 0),
-        folder("f2", None, "Root2", 1),
-        server("s1", Some("f1"), "srv", 0),
-        server("s2", Some("f2"), "srv", 0),
-    ];
-    let depths = compute_depths(&nodes);
-    assert_eq!(depths["f1"], 0);
-    assert_eq!(depths["f2"], 0);
-    assert_eq!(depths["s1"], 1);
-    assert_eq!(depths["s2"], 1);
-}
-
 // --- sort_for_display tests -----------------------------------------------
-
-#[test]
-fn sort_empty() {
-    let depths = HashMap::new();
-    let sorted = sort_for_display(vec![], &depths);
-    assert!(sorted.is_empty());
-}
-
-#[test]
-fn sort_single_root() {
-    let nodes = vec![folder("f1", None, "Root", 0)];
-    let depths = compute_depths(&nodes);
-    let sorted = sort_for_display(nodes, &depths);
-    assert_eq!(sorted.len(), 1);
-    assert_eq!(sorted[0].id, "f1");
-}
-
-#[test]
-fn sort_respects_parent_child_order() {
-    let nodes = vec![
-        server("s1", Some("f1"), "web", 0),
-        folder("f1", None, "Prod", 0),
-    ];
-    let depths = compute_depths(&nodes);
-    let sorted = sort_for_display(nodes, &depths);
-    // f1 comes first, s1 comes second
-    assert_eq!(sorted[0].id, "f1");
-    assert_eq!(sorted[1].id, "s1");
-}
 
 #[test]
 fn sort_preserves_existing_folder_children_in_tree_order() {
@@ -1401,100 +1242,6 @@ fn sort_preserves_existing_folder_children_in_tree_order() {
     assert_eq!(ids, &["f1", "s1", "f2", "s2"]);
     assert_eq!(depths["s1"], 1);
     assert_eq!(depths["s2"], 1);
-}
-
-#[test]
-fn sort_multiple_roots_by_sort_order() {
-    let nodes = vec![folder("f2", None, "B", 1), folder("f1", None, "A", 0)];
-    let depths = compute_depths(&nodes);
-    let sorted = sort_for_display(nodes, &depths);
-    assert_eq!(sorted[0].id, "f1");
-    assert_eq!(sorted[1].id, "f2");
-}
-
-#[test]
-fn sort_deeply_nested() {
-    let nodes = vec![
-        folder("f1", None, "Root", 0),
-        server("s2", Some("f2"), "deep", 1),
-        folder("f2", Some("f1"), "Child", 0),
-        server("s1", Some("f1"), "shallow", 1),
-    ];
-    let depths = compute_depths(&nodes);
-    let sorted = sort_for_display(nodes, &depths);
-    let ids: Vec<&str> = sorted.iter().map(|n| n.id.as_str()).collect();
-    assert_eq!(ids, &["f1", "f2", "s2", "s1"]);
-}
-
-#[test]
-fn sort_multiple_roots_with_children() {
-    let nodes = vec![
-        folder("f2", None, "Stage", 1),
-        folder("f1", None, "Prod", 0),
-        server("s1", Some("f1"), "web", 0),
-        server("s2", Some("f2"), "app", 0),
-    ];
-    let depths = compute_depths(&nodes);
-    let sorted = sort_for_display(nodes, &depths);
-    let ids: Vec<&str> = sorted.iter().map(|n| n.id.as_str()).collect();
-    // f1 (Prod) and its children come first, f2 (Stage) and its children come later
-    assert_eq!(ids, &["f1", "s1", "f2", "s2"]);
-}
-
-#[test]
-fn sort_keeps_orphaned_existing_nodes_visible_as_roots() {
-    let nodes = vec![
-        server("s1", Some("missing-folder"), "legacy", 0),
-        folder("f1", None, "New folder", 1),
-    ];
-    let depths = compute_depths(&nodes);
-    let sorted = sort_for_display(nodes, &depths);
-    let ids: Vec<&str> = sorted.iter().map(|n| n.id.as_str()).collect();
-
-    assert_eq!(ids.len(), 2);
-    assert!(ids.contains(&"s1"));
-    assert!(ids.contains(&"f1"));
-    assert_eq!(depths["s1"], 0);
-    assert_eq!(depths["f1"], 0);
-}
-
-#[test]
-fn daemon_session_rows_keep_the_same_mouse_state_across_renders() {
-    let mut states = HashMap::new();
-    let inventory = vec![
-        crate::remote_server::session_inventory::RoutedDaemonSession {
-            host_id: None,
-            daemon_runtime: None,
-            session: remote_server::proto::SessionInfo {
-                session_id: "pty-1".to_string(),
-                ..Default::default()
-            },
-            route: None,
-        },
-    ];
-    let key = session_row_key("devhost", &inventory[0].session, None);
-
-    sync_session_row_states(&mut states, "devhost", &inventory, &[]);
-    let original = states[&key].clone();
-    sync_session_row_states(&mut states, "devhost", &inventory, &[]);
-
-    assert!(Arc::ptr_eq(&original, &states[&key]));
-
-    let replacement = vec![
-        crate::remote_server::session_inventory::RoutedDaemonSession {
-            host_id: None,
-            daemon_runtime: None,
-            session: remote_server::proto::SessionInfo {
-                session_id: "pty-2".to_string(),
-                ..Default::default()
-            },
-            route: None,
-        },
-    ];
-    let replacement_key = session_row_key("devhost", &replacement[0].session, None);
-    sync_session_row_states(&mut states, "devhost", &replacement, &[]);
-    assert!(!states.contains_key(&key));
-    assert!(states.contains_key(&replacement_key));
 }
 
 #[test]

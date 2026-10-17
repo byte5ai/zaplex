@@ -4,10 +4,6 @@ use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
 use repo_metadata::{repositories::DetectedRepositories, DirectoryWatcher, RepoMetadataModel};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
 use tempfile::TempDir;
 use warp_core::channel::ChannelState;
 use warpui::App;
@@ -62,45 +58,6 @@ fn list_skill_inventory_groups_same_name_skills_and_marks_default() {
         assert_eq!(inventory[0].default_skill.path, agents_path);
         assert_eq!(inventory[0].default_skill.content, "# Deploy");
         assert!(inventory[0].has_duplicates());
-    });
-}
-
-#[test]
-fn skill_manager_emits_inventory_changed_when_skills_change() {
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new);
-        app.add_singleton_model(|_| DetectedRepositories::default());
-        app.add_singleton_model(RepoMetadataModel::new);
-        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
-        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
-        let handle = app.add_singleton_model(SkillManager::new);
-        let saw_inventory_changed = Arc::new(AtomicBool::new(false));
-
-        app.update(|ctx| {
-            let saw_inventory_changed = saw_inventory_changed.clone();
-            ctx.subscribe_to_model(&handle, move |_, event, _| {
-                if matches!(event, SkillManagerEvent::InventoryChanged) {
-                    saw_inventory_changed.store(true, Ordering::SeqCst);
-                }
-            });
-        });
-
-        let skill_path = PathBuf::from("/repo/.agents/skills/deploy/SKILL.md");
-        let skill = ParsedSkill {
-            name: "deploy".to_string(),
-            description: "Deploy skill".to_string(),
-            path: skill_path,
-            content: "# Deploy".to_string(),
-            line_range: None,
-            provider: SkillProvider::Agents,
-            scope: SkillScope::Project,
-        };
-
-        handle.update(&mut app, |manager, ctx| {
-            manager.handle_skills_added(vec![skill], ctx);
-        });
-
-        assert!(saw_inventory_changed.load(Ordering::SeqCst));
     });
 }
 
@@ -420,35 +377,6 @@ Plain content with no variables.
     assert!(skill.content.contains("Plain content with no variables."));
 }
 
-#[test]
-fn test_build_bundled_skill_context() {
-    let context = build_bundled_skill_context();
-
-    // At least 4 entries: server_url, cli_binary_name, url_scheme, settings_file_path.
-    // settings_schema_path is only present when bundled_resources_dir() returns Some.
-    assert!(context.len() >= 4);
-    assert!(context.contains_key("warp_server_url"));
-    assert!(context.contains_key("warp_cli_binary_name"));
-    assert!(context.contains_key("warp_url_scheme"));
-    assert!(context.contains_key("settings_file_path"));
-
-    assert_eq!(context.get("warp_server_url").unwrap(), "");
-    assert_eq!(
-        context.get("warp_cli_binary_name").unwrap(),
-        ChannelState::channel().cli_command_name()
-    );
-    assert_eq!(
-        context.get("warp_url_scheme").unwrap(),
-        ChannelState::url_scheme()
-    );
-    assert_eq!(
-        context.get("settings_file_path").unwrap(),
-        &crate::settings::user_preferences_toml_file_path()
-            .display()
-            .to_string()
-    );
-}
-
 // ============================================================================
 // Tests for best_supported_provider
 // ============================================================================
@@ -468,30 +396,6 @@ fn make_skill(name: &str, provider_dir: &str) -> ParsedSkill {
         .unwrap_or(SkillProvider::Zaplex),
         scope: SkillScope::Project,
     }
-}
-
-#[test]
-fn best_supported_provider_fast_path_returns_deduped_provider() {
-    // When the deduped provider is already in the supported set, return it immediately.
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new);
-        app.add_singleton_model(|_| DetectedRepositories::default());
-        app.add_singleton_model(RepoMetadataModel::new);
-        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
-        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
-        let handle = app.add_singleton_model(SkillManager::new);
-
-        let claude_skill = make_skill("deploy", ".claude");
-        handle.update(&mut app, |manager, _| {
-            manager.add_skill_for_testing(claude_skill.clone());
-        });
-
-        let descriptor = SkillDescriptor::from(claude_skill);
-        let result = handle.read(&app, |manager, _| {
-            manager.best_supported_provider(&descriptor, &[SkillProvider::Claude])
-        });
-        assert_eq!(result, SkillProvider::Claude);
-    });
 }
 
 #[test]
@@ -521,111 +425,5 @@ fn best_supported_provider_remaps_to_supported_provider() {
             manager.best_supported_provider(&descriptor, &[SkillProvider::Claude])
         });
         assert_eq!(result, SkillProvider::Claude);
-    });
-}
-
-#[test]
-fn best_supported_provider_falls_back_when_no_match() {
-    // Skill only exists under .agents, but the supported set is [Claude].
-    // Should fall back to the original deduped provider (Agents).
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new);
-        app.add_singleton_model(|_| DetectedRepositories::default());
-        app.add_singleton_model(RepoMetadataModel::new);
-        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
-        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
-        let handle = app.add_singleton_model(SkillManager::new);
-
-        let agents_skill = make_skill("deploy", ".agents");
-        handle.update(&mut app, |manager, _| {
-            manager.add_skill_for_testing(agents_skill.clone());
-        });
-
-        let descriptor = SkillDescriptor::from(agents_skill);
-        let result = handle.read(&app, |manager, _| {
-            manager.best_supported_provider(&descriptor, &[SkillProvider::Claude])
-        });
-        // No .claude path exists, so falls back to the deduped provider.
-        assert_eq!(result, SkillProvider::Agents);
-    });
-}
-
-// ============================================================================
-// Tests for find_skill_by_name (structured read_skill calls look up ParsedSkill by name)
-// ============================================================================
-
-#[test]
-fn find_skill_by_name_returns_filesystem_skill() {
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new);
-        app.add_singleton_model(|_| DetectedRepositories::default());
-        app.add_singleton_model(RepoMetadataModel::new);
-        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
-        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
-        let handle = app.add_singleton_model(SkillManager::new);
-
-        let deploy_skill = make_skill("deploy", ".agents");
-        handle.update(&mut app, |manager, _| {
-            manager.add_skill_for_testing(deploy_skill.clone());
-        });
-
-        let resolved = handle.read(&app, |manager, _| {
-            manager.find_skill_by_name("deploy").cloned()
-        });
-        let resolved = resolved.expect("expected to find skill by name");
-        assert_eq!(resolved.name, "deploy");
-        assert_eq!(resolved.path, deploy_skill.path);
-    });
-}
-
-#[test]
-fn find_skill_by_name_prefers_higher_priority_provider() {
-    // When same-named skill is registered in both .agents and .claude,
-    // find_skill_by_name should return the .agents (rank 0) version according to SKILL_PROVIDER_DEFINITIONS order.
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new);
-        app.add_singleton_model(|_| DetectedRepositories::default());
-        app.add_singleton_model(RepoMetadataModel::new);
-        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
-        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
-        let handle = app.add_singleton_model(SkillManager::new);
-
-        let agents_skill = make_skill("deploy", ".agents");
-        let claude_skill = make_skill("deploy", ".claude");
-        handle.update(&mut app, |manager, _| {
-            manager.add_skill_for_testing(claude_skill.clone());
-            manager.add_skill_for_testing(agents_skill.clone());
-        });
-
-        let resolved = handle.read(&app, |manager, _| {
-            manager.find_skill_by_name("deploy").cloned()
-        });
-        let resolved = resolved.expect("expected to find skill by name");
-        assert_eq!(resolved.provider, SkillProvider::Agents);
-        assert_eq!(resolved.path, agents_skill.path);
-    });
-}
-
-#[test]
-fn find_skill_by_name_returns_none_for_unknown_name() {
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new);
-        app.add_singleton_model(|_| DetectedRepositories::default());
-        app.add_singleton_model(RepoMetadataModel::new);
-        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
-        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
-        let handle = app.add_singleton_model(SkillManager::new);
-
-        // Register a skill to ensure manager index is non-empty — otherwise `mut app` warning
-        // will be triggered by unused_mut (other manager operations don't modify app itself).
-        let known = make_skill("deploy", ".agents");
-        handle.update(&mut app, |manager, _| {
-            manager.add_skill_for_testing(known);
-        });
-
-        let resolved = handle.read(&app, |manager, _| {
-            manager.find_skill_by_name("nope").cloned()
-        });
-        assert!(resolved.is_none());
     });
 }

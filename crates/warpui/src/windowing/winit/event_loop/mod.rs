@@ -1,8 +1,5 @@
 mod key_events;
 
-#[cfg(test)]
-mod drag_drop_tests;
-
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 

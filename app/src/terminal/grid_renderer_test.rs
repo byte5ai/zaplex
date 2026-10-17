@@ -1,6 +1,5 @@
-use super::{active_or_next_match, CachedBackgroundColor};
+use super::CachedBackgroundColor;
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
-use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
 use crate::terminal::{grid_renderer, SizeInfo};
 use pathfinder_geometry::rect::RectF;
@@ -33,92 +32,6 @@ fn test_calculate_grid_baseline_position() {
         19., /* cell_size_y */
     );
     assert_eq!(baseline_position, vec2f(0., 15.));
-}
-
-#[test]
-fn test_next_match_same_row_matches() {
-    let match_1 = Point::new(0, 0)..=Point::new(0, 4);
-    let match_2 = Point::new(1, 0)..=Point::new(1, 4);
-    let matches = [match_1.clone(), match_2.clone()];
-    let mut filter_match_iter = matches.iter();
-
-    let mut current_match = None;
-
-    // The first match should return for points (0,0) through (0,4).
-    for i in 0..=4 {
-        current_match =
-            active_or_next_match(&mut filter_match_iter, current_match, &Point::new(0, i));
-        assert_eq!(current_match, Some(&match_1));
-    }
-
-    // The second match should return for points (1,0) through (1,4).
-    for i in 0..=4 {
-        current_match =
-            active_or_next_match(&mut filter_match_iter, current_match, &Point::new(1, i));
-        assert_eq!(current_match, Some(&match_2));
-    }
-
-    // There should be no more matches left after we advance to point (2,0).
-    current_match = active_or_next_match(&mut filter_match_iter, current_match, &Point::new(2, 0));
-    assert_eq!(current_match, None);
-}
-
-#[test]
-fn test_next_match_multi_row_matches() {
-    let match_1 = Point::new(0, 0)..=Point::new(1, 2);
-    let match_2 = Point::new(2, 0)..=Point::new(3, 2);
-    let matches = [match_1.clone(), match_2.clone()];
-    let mut match_iter = matches.iter();
-
-    let mut current_match = None;
-
-    // The first match should be returned for all points from (0,0) to (1,2).
-    let points_1 = [
-        Point::new(0, 0),
-        Point::new(0, 1),
-        Point::new(0, 2),
-        Point::new(1, 0),
-        Point::new(1, 1),
-        Point::new(1, 2),
-    ];
-    for point in points_1.iter() {
-        current_match = active_or_next_match(&mut match_iter, current_match, point);
-        assert_eq!(current_match, Some(&match_1));
-    }
-
-    // The second match should be returned for all points from (2,0) to (3,2).
-    let points_2 = [
-        Point::new(2, 0),
-        Point::new(2, 1),
-        Point::new(2, 2),
-        Point::new(3, 0),
-        Point::new(3, 1),
-        Point::new(3, 2),
-    ];
-    for point in points_2.iter() {
-        current_match = active_or_next_match(&mut match_iter, current_match, point);
-        assert_eq!(current_match, Some(&match_2));
-    }
-
-    // There should be no more matches left after we advance to point (4,0).
-    current_match = active_or_next_match(&mut match_iter, current_match, &Point::new(4, 0));
-    assert_eq!(current_match, None);
-}
-
-#[test]
-fn test_active_or_next_match_point_before_next_match() {
-    let match_1 = Point::new(1, 0)..=Point::new(1, 4);
-    let match_2 = Point::new(3, 0)..=Point::new(3, 4);
-    let matches = [match_1.clone(), match_2.clone()];
-    let mut match_iter = matches.iter();
-
-    // The match for (0,0) should be the first match.
-    let mut current_match = active_or_next_match(&mut match_iter, None, &Point::new(0, 0));
-    assert_eq!(current_match, Some(&match_1));
-
-    // The match for (2,0) should be the second match.
-    current_match = active_or_next_match(&mut match_iter, current_match, &Point::new(2, 0));
-    assert_eq!(current_match, Some(&match_2));
 }
 
 #[test]

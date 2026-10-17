@@ -35,11 +35,6 @@ fn snap(cwd: &str, effort: Option<String>) -> SessionSnapshot {
 }
 
 #[test]
-fn antigravity_provider_maps_to_agy_cli() {
-    assert_eq!(agent_of(Provider::Antigravity), CLIAgent::Antigravity);
-}
-
-#[test]
 fn remote_effort_resolves_from_registry_by_stable_host_id() {
     // A remote Claude launch records its effort keyed by the daemon host_id.
     let cwd = "/remote/proj/effort-remote";

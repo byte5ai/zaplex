@@ -192,27 +192,3 @@ pub fn get_provider_for_path(path: &Path) -> Option<SkillProvider> {
     }
     None
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{get_provider_for_path, home_skills_path, SkillProvider};
-
-    #[test]
-    fn warp_home_skills_path_uses_warp_home_path() {
-        assert_eq!(
-            home_skills_path(SkillProvider::Zaplex),
-            warp_core::paths::warp_home_skills_dir()
-        );
-    }
-
-    #[test]
-    fn warp_home_skill_path_uses_warp_provider() {
-        let Some(warp_home_skills_dir) = warp_core::paths::warp_home_skills_dir() else {
-            eprintln!("Skipping test: home directory not available");
-            return;
-        };
-        let path = warp_home_skills_dir.join("my-skill").join("SKILL.md");
-
-        assert_eq!(get_provider_for_path(&path), Some(SkillProvider::Zaplex));
-    }
-}

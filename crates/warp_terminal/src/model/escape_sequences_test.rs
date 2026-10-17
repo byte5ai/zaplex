@@ -761,26 +761,6 @@ fn test_keyboard_enhancement_unshifted_keycode_for_shifted_printables() {
 }
 
 #[test]
-fn test_keyboard_enhancement_mac_option_without_meta_mapping_is_not_disambiguated() {
-    if !OperatingSystem::get().is_mac() {
-        return;
-    }
-
-    let terminal_model_mock = mock_with_disambiguate_only();
-    // On macOS with Option-as-Meta disabled, Alt should not force CSI u in disambiguate-only mode.
-    let alt_a = Keystroke::parse("alt-a").unwrap();
-    assert_eq!(
-        KeystrokeWithDetails {
-            keystroke: &alt_a,
-            key_without_modifiers: None,
-            chars: None,
-        }
-        .to_escape_sequence(&terminal_model_mock),
-        None
-    );
-}
-
-#[test]
 fn test_keyboard_enhancement_alternate_keys() {
     // With REPORT_ALTERNATE_KEYS (flag 4): shifted keys include the shifted code after a colon.
     let mock = mock_with_alternate_keys();

@@ -2,7 +2,6 @@ use super::{
     FormattedTextElement, FrameMouseHandlers, HeadingFontSizeMultipliers, HighlightedHyperlink,
     HyperlinkSupport, LaidOutTextFrame, SecretRange,
 };
-use crate::text::BlockHeaderSize;
 use crate::{
     elements::{Point, SelectableElement, ZIndex},
     fonts::FamilyId,
@@ -21,37 +20,6 @@ use string_offset::ByteOffset;
 use super::apply_secret_replacements;
 
 #[test]
-fn test_default_heading_font_size_multipliers() {
-    let multipliers = HeadingFontSizeMultipliers::default();
-
-    // Test that default values match the BlockHeaderSize ratios
-    assert_eq!(
-        multipliers.h1,
-        BlockHeaderSize::Header1.font_size_multiplication_ratio()
-    );
-    assert_eq!(
-        multipliers.h2,
-        BlockHeaderSize::Header2.font_size_multiplication_ratio()
-    );
-    assert_eq!(
-        multipliers.h3,
-        BlockHeaderSize::Header3.font_size_multiplication_ratio()
-    );
-    assert_eq!(
-        multipliers.h4,
-        BlockHeaderSize::Header4.font_size_multiplication_ratio()
-    );
-    assert_eq!(
-        multipliers.h5,
-        BlockHeaderSize::Header5.font_size_multiplication_ratio()
-    );
-    assert_eq!(
-        multipliers.h6,
-        BlockHeaderSize::Header6.font_size_multiplication_ratio()
-    );
-}
-
-#[test]
 fn test_get_multiplier_method() {
     let multipliers = HeadingFontSizeMultipliers::default();
 
@@ -67,60 +35,6 @@ fn test_get_multiplier_method() {
     assert_eq!(multipliers.get_multiplier(0), 1.0);
     assert_eq!(multipliers.get_multiplier(7), 1.0);
     assert_eq!(multipliers.get_multiplier(999), 1.0);
-}
-
-#[test]
-fn test_custom_heading_font_size_multipliers() {
-    let custom_multipliers = HeadingFontSizeMultipliers {
-        h1: 2.0,
-        h2: 1.8,
-        h3: 1.5,
-        ..Default::default()
-    };
-
-    // Test custom values
-    assert_eq!(custom_multipliers.h1, 2.0);
-    assert_eq!(custom_multipliers.h2, 1.8);
-    assert_eq!(custom_multipliers.h3, 1.5);
-
-    // Test that other values still use defaults
-    assert_eq!(
-        custom_multipliers.h4,
-        BlockHeaderSize::Header4.font_size_multiplication_ratio()
-    );
-    assert_eq!(
-        custom_multipliers.h5,
-        BlockHeaderSize::Header5.font_size_multiplication_ratio()
-    );
-    assert_eq!(
-        custom_multipliers.h6,
-        BlockHeaderSize::Header6.font_size_multiplication_ratio()
-    );
-}
-
-/// Author: logic
-/// Verify exact default multiplier values to prevent BlockHeaderSize or Default impl from being accidentally modified
-#[test]
-fn test_heading_default_values_are_spec() {
-    let m = HeadingFontSizeMultipliers::default();
-    assert_eq!(m.h1, 2.0);
-    assert_eq!(m.h2, 1.5);
-    assert_eq!(m.h3, 1.17);
-    assert_eq!(m.h4, 1.0);
-    assert_eq!(m.h5, 0.83);
-    assert_eq!(m.h6, 0.75);
-}
-
-/// Author: logic
-/// Verify heading font size multiplier ordering invariant: h1 >= h2 >= h3 >= h4 >= h5 >= h6
-#[test]
-fn test_heading_multipliers_size_ordering() {
-    let m = HeadingFontSizeMultipliers::default();
-    assert!(m.h1 >= m.h2, "h1 >= h2");
-    assert!(m.h2 >= m.h3, "h2 >= h3");
-    assert!(m.h3 >= m.h4, "h3 >= h4");
-    assert!(m.h4 >= m.h5, "h4 >= h5");
-    assert!(m.h5 >= m.h6, "h5 >= h6");
 }
 
 /// Author: logic

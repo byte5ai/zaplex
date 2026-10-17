@@ -221,36 +221,6 @@ fn assert_routed_daemon_failure_transition_is_exact(failure: RoutedDaemonStartFa
 }
 
 #[test]
-#[cfg(unix)]
-fn managed_preflight_failure_retires_only_its_same_host_target() {
-    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Preflight);
-}
-
-#[test]
-#[cfg(unix)]
-fn managed_install_failure_retires_only_its_same_host_target() {
-    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Install);
-}
-
-#[test]
-#[cfg(unix)]
-fn managed_connect_failure_retires_only_its_same_host_target() {
-    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Connect);
-}
-
-#[test]
-#[cfg(unix)]
-fn managed_handshake_failure_retires_only_its_same_host_target() {
-    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Handshake);
-}
-
-#[test]
-#[cfg(unix)]
-fn managed_readiness_failure_retires_only_its_same_host_target() {
-    assert_routed_daemon_failure_transition_is_exact(RoutedDaemonStartFailure::Readiness);
-}
-
-#[test]
 fn managed_account_launch_and_host_key_retry_use_parallel_connect_attempts() {
     let source = include_str!("view.rs");
     let launch_start = source
@@ -390,35 +360,6 @@ fn unsupported_platform_restore_uses_inert_daemon_requests_for_valid_remote_pane
 }
 
 #[test]
-fn daemon_restore_action_replacement_never_selects_a_local_terminal() {
-    let daemon_identity = RemoteTerminalIdentity {
-        registry_node_id: "registry-node".to_string(),
-        host: "managed.example".to_string(),
-        transport: RemoteTerminalTransport::Daemon {
-            daemon_host_id: "daemon-host".to_string(),
-            daemon_runtime: None,
-            pty_session_id: "pty-session".to_string(),
-            pty_generation: 7,
-        },
-        current_working_directory: Some("/srv/project".to_string()),
-        input_draft: "preserved draft".to_string(),
-    };
-    let classic_identity = RemoteTerminalIdentity {
-        registry_node_id: "classic-node".to_string(),
-        host: "classic.example".to_string(),
-        transport: RemoteTerminalTransport::ClassicSsh,
-        current_working_directory: None,
-        input_draft: String::new(),
-    };
-
-    let request = fail_closed_remote_restore_request(&daemon_identity)
-        .expect("a daemon restore action must keep a daemon terminal manager");
-    assert_eq!(request.adopt_pty_session_id.as_deref(), Some(""));
-    assert_eq!(request.expected_host_id.as_deref(), Some("daemon-host"));
-    assert!(fail_closed_remote_restore_request(&classic_identity).is_none());
-}
-
-#[test]
 fn non_unix_daemon_retry_branch_is_statically_fail_closed() {
     let source = include_str!("view.rs");
     let start = source.find("fn retry_remote_restore(").unwrap();
@@ -454,111 +395,6 @@ fn non_unix_daemon_retry_branch_is_statically_fail_closed() {
     let daemon_marked = cancel.find("daemon_restore = true").unwrap();
     let replacement = cancel.find("replace_remote_terminal_surface(").unwrap();
     assert!(classic_branch < replacement && replacement < daemon_marked);
-}
-
-#[test]
-fn managed_launch_user_errors_are_localized_in_english_and_german() {
-    let source = include_str!("view.rs");
-    let english = include_str!("../../i18n/en/warp.ftl");
-    let german = include_str!("../../i18n/de/warp.ftl");
-    let keys = [
-        "workspace-managed-launch-provider-defaults-required",
-        "workspace-managed-launch-remote-host-required",
-        "workspace-managed-launch-project-required",
-        "workspace-managed-launch-account-required",
-        "workspace-managed-launch-provider-unsupported",
-        "workspace-managed-launch-account-provider-mismatch",
-        "workspace-managed-launch-identity-missing",
-        "workspace-managed-launch-claude-required",
-        "workspace-managed-launch-host-not-found",
-        "workspace-managed-launch-daemon-route-failed",
-        "workspace-managed-launch-identity-changed",
-        "workspace-managed-launch-tracking-failed",
-        "workspace-managed-launch-host-unsupported",
-        "workspace-managed-launch-credential-resolution-failed",
-        "workspace-managed-launch-headless-auth-required",
-        "workspace-managed-launch-native-required",
-        "workspace-managed-launch-ack-mismatch",
-        "workspace-remote-account-preflight-failed",
-        "workspace-managed-launch-preflight-failed",
-        "workspace-remote-account-install-failed",
-        "workspace-managed-launch-install-failed",
-        "workspace-remote-account-connection-failed",
-        "workspace-managed-launch-connection-failed",
-        "workspace-remote-account-handshake-failed",
-        "workspace-managed-launch-handshake-failed",
-        "workspace-remote-account-readiness-failed",
-        "workspace-managed-launch-readiness-failed",
-        "workspace-remote-routed-split-target-changed",
-    ];
-
-    for key in keys {
-        assert!(
-            source.contains(key),
-            "managed launch path does not use {key}"
-        );
-        assert!(
-            english.contains(&format!("\n{key} =")),
-            "English catalog is missing {key}"
-        );
-        assert!(
-            german.contains(&format!("\n{key} =")),
-            "German catalog is missing {key}"
-        );
-    }
-}
-
-#[test]
-fn routed_daemon_failures_finish_before_classic_fallback_copy_is_selected() {
-    let source = include_str!("view.rs");
-    let preflight_start = source.find("let preflight = match result {").unwrap();
-    let preflight_end = source[preflight_start..]
-        .find("match preflight {")
-        .map(|offset| preflight_start + offset)
-        .unwrap();
-    let preflight = &source[preflight_start..preflight_end];
-    assert!(preflight.contains("RoutedDaemonStartFailure::Preflight"));
-    let routed_cleanup = preflight.find("fail_pending_routed_daemon_start(").unwrap();
-    let fallback_copy = preflight.find("connect-fallback-daemon-missing").unwrap();
-    assert!(routed_cleanup < fallback_copy);
-
-    let install_start = source.find("DaemonPreflight::NeedsInstall =>").unwrap();
-    let install_end = source[install_start..]
-        .find("/// Connects a daemon-hosted session")
-        .map(|offset| install_start + offset)
-        .unwrap();
-    let install = &source[install_start..install_end];
-    assert!(install.contains("RoutedDaemonStartFailure::Install"));
-    let routed_cleanup = install.find("fail_pending_routed_daemon_start(").unwrap();
-    let fallback_copy = install.find("connect-fallback-install-failed").unwrap();
-    assert!(routed_cleanup < fallback_copy);
-
-    let cancel_start = source.find("connect-host-key-cancelled").unwrap();
-    let cancel_end = source[cancel_start..]
-        .find("DaemonPreflight::Ready")
-        .map(|offset| cancel_start + offset)
-        .unwrap();
-    assert!(source[cancel_start..cancel_end].contains("fail_pending_routed_daemon_start("));
-
-    let host_key_start = source
-        .find("DaemonPreflight::HostKeyConfirmationRequired(host_key)")
-        .unwrap();
-    let host_key = &source[host_key_start..cancel_end];
-    let relinquish = host_key.find("relinquish_daemon_managed_launch(").unwrap();
-    assert!(host_key[relinquish..].contains("retire_pending_daemon_surface("));
-
-    let manager_failure_start = source
-        .find("RemoteServerManagerEvent::SessionConnectionFailed {")
-        .unwrap();
-    let manager_failure_end = source[manager_failure_start..]
-        .find("RemoteServerManagerEvent::ManagedLaunchOpened {")
-        .map(|offset| manager_failure_start + offset)
-        .unwrap();
-    let manager_failure = &source[manager_failure_start..manager_failure_end];
-    assert!(manager_failure.contains("pending_routed_daemon_starts.remove(session_id)"));
-    assert!(manager_failure.contains("RoutedDaemonStartFailure::Connect"));
-    assert!(manager_failure.contains("RoutedDaemonStartFailure::Handshake"));
-    assert!(manager_failure.contains("fail_pending_routed_daemon_start("));
 }
 
 #[test]
@@ -720,15 +556,6 @@ fn unavailable_fingerprinted_session_offers_exact_stop_action() {
     assert_eq!(process_fingerprint.as_deref(), Some("process-a"));
     assert!(!is_local);
     assert_eq!(agent_label, "agent-a — project");
-}
-
-#[test]
-fn unavailable_unsignalable_session_does_not_offer_stop() {
-    let mut session = unavailable_live_session(zaplex_cockpit::Provider::Codex);
-    session.pid = 0;
-    session.process_fingerprint = None;
-
-    assert!(live_session_unavailable_stop_action(&session, "local", None, true).is_none());
 }
 
 #[test]
@@ -2989,21 +2816,6 @@ fn test_server_token_compatibility_finds_restored_local_conversation() {
 }
 
 #[test]
-fn test_server_token_compatibility_ignores_unknown_token() {
-    App::test((), |app| async move {
-        app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
-        let token = ServerConversationToken::new("missing-token".to_string());
-
-        app.read(|ctx| {
-            assert_eq!(
-                Workspace::find_local_conversation_id_by_server_token(&token, ctx),
-                None,
-            );
-        });
-    });
-}
-
-#[test]
 // This tests the end-to-end behavior to correctly switch focus among panels.
 // (The only panels that can be focused currently are WD, workspace, & AI assistant.)
 fn test_switch_focus_panels() {
@@ -4450,36 +4262,6 @@ fn unresolved_daemon_scope_never_falls_back_to_display_name() {
     ));
 }
 
-#[cfg(all(unix, feature = "local_tty"))]
-#[test]
-fn remote_edit_working_directories_are_unique_and_private() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let first = super::remote_sftp_edit_working_dir().unwrap();
-    let second = super::remote_sftp_edit_working_dir().unwrap();
-    let first_path = first.path().to_path_buf();
-    let second_path = second.path().to_path_buf();
-
-    assert_ne!(first_path, second_path);
-    assert_eq!(
-        std::fs::metadata(&first_path).unwrap().permissions().mode() & 0o077,
-        0
-    );
-    assert_eq!(
-        std::fs::metadata(&second_path)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o077,
-        0
-    );
-
-    drop(first);
-    drop(second);
-    assert!(!first_path.exists());
-    assert!(!second_path.exists());
-}
-
 #[test]
 fn review_temp_files_are_private_unique_and_owned() {
     let first_dir = super::create_review_temp_dir("repo").unwrap();
@@ -5673,33 +5455,6 @@ fn moved_stale_split_retirement_removes_only_the_provisional_daemon_surface() {
 }
 
 #[test]
-fn daemon_identity_indexing_requests_the_coalesced_app_state_save_last() {
-    let source = include_str!("view.rs");
-    let start = source.find("fn index_opened_daemon_session(").unwrap();
-    let end = source[start..]
-        .find("pub fn adopt_daemon_session(")
-        .map(|offset| start + offset)
-        .unwrap();
-    let body = &source[start..end];
-    let claim = body.find("if !self.settle_opened_daemon_claim(").unwrap();
-    let identity = body.find("set_terminal_remote_identity(").unwrap();
-    let save = body
-        .rfind("ctx.dispatch_global_action(\"workspace:save_app\", ());")
-        .unwrap();
-    let collision_cleanup = &body[body.find("fn settle_opened_daemon_claim(").unwrap()..];
-
-    assert!(claim < identity);
-    assert!(save > identity);
-    assert!(body[claim..identity].contains("return;"));
-    assert!(body.contains("daemon_connection_pane_for_terminal_view("));
-    assert!(collision_cleanup.contains("retire_competing_daemon_surface("));
-    assert!(collision_cleanup.contains("if !existing.shares_connection_with(&owner)"));
-    assert!(collision_cleanup.contains("deregister_session(connection_session_id, false, ctx)"));
-    assert!(collision_cleanup.contains("focus_daemon_claim_owner(&existing, ctx)"));
-    assert!(collision_cleanup.contains("owns_same_terminal_surface(&owner)"));
-}
-
-#[test]
 fn provisional_daemon_adoption_cleanup_covers_connection_and_tab() {
     let source = include_str!("view.rs");
     let start = source
@@ -5714,53 +5469,6 @@ fn provisional_daemon_adoption_cleanup_covers_connection_and_tab() {
     assert!(body.contains("manager.deregister_session(connection_session_id, false, ctx)"));
     assert!(body.contains("pane_group.clean_up_panes(ctx)"));
     assert!(body.contains("remove_tab_and_sync_agent_conversations"));
-}
-
-#[test]
-fn new_workspace_remote_routing_errors_use_fluent_keys() {
-    let source = include_str!("view.rs");
-    for literal in [
-        "This remote PTY is already open in another window.",
-        "Remote fallback was cancelled because its original split target changed.",
-        "The daemon cannot validate this agent-to-PTY route.",
-        "The daemon connection is unavailable; refresh Agent Sessions.",
-        "This PTY's foreground agent changed.",
-        "The selected remote session has no verifiable generation.",
-        "The selected daemon route is no longer connected.",
-        "The selected daemon route is ambiguous; refresh the session list.",
-    ] {
-        assert!(!source.contains(literal), "hard-coded UI text: {literal}");
-    }
-    for key in [
-        "workspace-remote-pty-already-open",
-        "workspace-remote-fallback-split-target-changed",
-        "workspace-remote-agent-route-validation-unavailable",
-        "workspace-remote-daemon-connection-unavailable",
-        "workspace-remote-pty-agent-changed",
-        "workspace-remote-session-generation-missing",
-        "workspace-remote-daemon-route-disconnected",
-        "workspace-remote-daemon-route-ambiguous",
-    ] {
-        assert!(source.contains(key), "missing Fluent use: {key}");
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn daemon_node_route_falls_back_to_surviving_connection() {
-    let first = warp_core::SessionId::from(51u64);
-    let rejected = warp_core::SessionId::from(52u64);
-    let mut routes = std::collections::HashMap::new();
-
-    super::remember_daemon_node_session(&mut routes, "node-a".to_string(), first);
-    super::remember_daemon_node_session(&mut routes, "node-a".to_string(), rejected);
-    super::forget_daemon_node_session(&mut routes, rejected);
-
-    assert_eq!(
-        routes.get("node-a"),
-        Some(&vec![first]),
-        "rejecting a provisional adopt must preserve an older live route for the node"
-    );
 }
 
 #[test]

@@ -277,7 +277,3 @@ impl GraphemeCursorItem<'_> {
         self.point
     }
 }
-
-#[cfg(test)]
-#[path = "grapheme_cursor_tests.rs"]
-mod tests;

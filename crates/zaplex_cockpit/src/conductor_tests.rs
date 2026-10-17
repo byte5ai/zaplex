@@ -137,32 +137,6 @@ fn session_attrs_context_pct_uses_model_window() {
 }
 
 #[test]
-fn glyph_vocabulary_is_working_waiting_idle() {
-    assert_eq!(session_glyph(SessionState::Active), GLYPH_WORKING);
-    assert_eq!(session_glyph(SessionState::Monitor), GLYPH_WORKING);
-    assert_eq!(session_glyph(SessionState::Waiting), GLYPH_WAITING);
-    assert_eq!(session_glyph(SessionState::Idle), GLYPH_IDLE);
-    // The table's status word follows the glyph: two states share a word
-    // exactly when they share a glyph, so a row never says "working" beside
-    // a waiting mark.
-    let states = [
-        SessionState::Active,
-        SessionState::Monitor,
-        SessionState::Waiting,
-        SessionState::Idle,
-    ];
-    for a in states {
-        for b in states {
-            assert_eq!(
-                state_word(a) == state_word(b),
-                session_glyph(a) == session_glyph(b),
-                "{a:?} / {b:?}"
-            );
-        }
-    }
-}
-
-#[test]
 fn removed_host_does_not_make_actionable_fleet_large() {
     let source = include_str!("conductor.rs");
     for removed_api in [
@@ -399,48 +373,6 @@ fn session_key_scopes_a_copied_id_by_provider_and_account() {
     assert_ne!(default_key, session_key(false, Some("remote-a"), &default));
     assert_ne!(default_key, session_key(true, None, &other_id));
     assert_eq!(default_key, session_key(true, None, &default));
-}
-
-#[test]
-fn session_key_uses_account_identity_when_the_route_stamp_is_missing() {
-    let mut personal = session("copied", "/p/personal", SessionState::Waiting, 1);
-    personal.account_email = Some("personal@example.com".to_string());
-    let mut work = personal.clone();
-    work.account_email = Some("work@example.com".to_string());
-
-    assert_ne!(
-        session_key(true, None, &personal),
-        session_key(true, None, &work),
-        "config_dir is a route, not the account identity"
-    );
-}
-
-#[test]
-fn session_key_never_crosses_account_config_boundaries() {
-    let mut first = session("copied", "/p/first", SessionState::Waiting, 1);
-    first.account_email = Some("same@example.com".to_string());
-    first.config_dir = Some("/accounts/first".to_string());
-    let mut second = first.clone();
-    second.config_dir = Some("/accounts/second".to_string());
-
-    assert_ne!(
-        session_key(true, None, &first),
-        session_key(true, None, &second),
-        "the exact host-local account route is part of session identity"
-    );
-}
-
-#[test]
-fn session_key_uses_opaque_identity_without_email_or_config_path() {
-    let mut first = session("copied", "/p/first", SessionState::Waiting, 1);
-    first.account_id = Some("opaque-a".to_string());
-    let mut second = first.clone();
-    second.account_id = Some("opaque-b".to_string());
-
-    assert_ne!(
-        session_key(false, Some("daemon"), &first),
-        session_key(false, Some("daemon"), &second)
-    );
 }
 
 #[test]

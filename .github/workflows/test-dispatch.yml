@@ -293,6 +293,10 @@ jobs:
         env:
           CARGO_LLVM_COV_TARGET_DIR: ${{ runner.temp }}/suite-coverage-target
         run: |
+          if [ ! -f script/test-suite-pruning-candidates.tsv ]; then
+            echo "No suite-pruning candidates listed; nothing to measure."
+            exit 0
+          fi
           evidence="$RUNNER_TEMP/suite-evidence"
           candidate="$evidence/without-pruning-candidates"
           aside="$RUNNER_TEMP/pruning-candidate-profiles"

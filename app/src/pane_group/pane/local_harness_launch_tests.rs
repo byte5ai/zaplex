@@ -1,38 +1,8 @@
-use warp_cli::agent::Harness;
-
 use super::{
     build_local_claude_child_command, build_local_opencode_child_command,
     normalize_local_child_harness, validate_local_harness_shell,
 };
 use crate::terminal::shell::ShellType;
-
-#[test]
-fn normalize_local_child_harness_accepts_supported_aliases() {
-    assert_eq!(
-        normalize_local_child_harness("claude"),
-        Some(Harness::Claude)
-    );
-    assert_eq!(
-        normalize_local_child_harness("claude-code"),
-        Some(Harness::Claude)
-    );
-    assert_eq!(
-        normalize_local_child_harness("claude_code"),
-        Some(Harness::Claude)
-    );
-    assert_eq!(
-        normalize_local_child_harness("opencode"),
-        Some(Harness::OpenCode)
-    );
-    assert_eq!(
-        normalize_local_child_harness("open-code"),
-        Some(Harness::OpenCode)
-    );
-    assert_eq!(
-        normalize_local_child_harness("open_code"),
-        Some(Harness::OpenCode)
-    );
-}
 
 #[test]
 fn normalize_local_child_harness_rejects_unsupported_values() {

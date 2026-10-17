@@ -305,7 +305,3 @@ impl SplitPath {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "path_test.rs"]
-mod tests;

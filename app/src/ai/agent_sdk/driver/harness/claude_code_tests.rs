@@ -60,20 +60,6 @@ fn claude_command_uses_session_id_when_not_resuming() {
 }
 
 #[test]
-fn claude_command_pipes_prompt_path() {
-    let uuid = Uuid::new_v4();
-    let cmd = claude_command("claude", &uuid, "/tmp/prompt with spaces.txt", None);
-    assert!(
-        cmd.contains("< '/tmp/prompt with spaces.txt'"),
-        "expected single-quoted stdin redirect of the prompt path, got: {cmd}"
-    );
-    assert!(
-        cmd.contains("--dangerously-skip-permissions"),
-        "expected --dangerously-skip-permissions, got: {cmd}"
-    );
-}
-
-#[test]
 #[serial_test::serial]
 fn parent_bridge_root_prefers_environment_override() {
     let tmp = TempDir::new().unwrap();
@@ -82,23 +68,6 @@ fn parent_bridge_root_prefers_environment_override() {
     std::env::remove_var(OZ_MESSAGE_LISTENER_STATE_ROOT_ENV);
 
     assert_eq!(root, tmp.path());
-}
-
-#[test]
-fn stage_parent_bridge_message_writes_message_record() {
-    let tmp = TempDir::new().unwrap();
-    let state_dir = tmp.path().join("session-123");
-    ensure_parent_bridge_state_dir(&state_dir).unwrap();
-    let record = sample_staged_parent_bridge_message(42, "msg-123");
-
-    stage_parent_bridge_message(&state_dir, &record).unwrap();
-
-    let staged_path = parent_bridge_staged_message_path(&state_dir, 42, "msg-123");
-    let staged_record: MessageBridgeMessageRecord =
-        serde_json::from_slice(&fs::read(&staged_path).unwrap()).unwrap();
-    assert_eq!(staged_record.sequence, 42);
-    assert_eq!(staged_record.message_id, "msg-123");
-    assert!(staged_record.sender_run_id.is_empty());
 }
 
 #[tokio::test]

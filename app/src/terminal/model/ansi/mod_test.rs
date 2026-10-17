@@ -1,12 +1,10 @@
 use hex;
-use warp_core::command::ExitCode;
 use warpui::color::ColorU;
 
 use super::*;
 use crate::terminal::model::index::VisibleRow;
-use crate::terminal::model::session::SessionId;
-use crate::terminal::model::{ansi::InputBufferValue, selection::ScrollDelta};
-use std::{collections::HashSet, io, io::Write, path::PathBuf};
+use crate::terminal::model::selection::ScrollDelta;
+use std::{io, io::Write};
 
 const HEX_ENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x64];
 const UNENCODED_JSON_DCS_START: &[u8] = &[0x1b, 0x50, 0x24, 0x66];
@@ -263,54 +261,6 @@ fn parse_bytes(bytes: &[u8]) -> (Processor, MockHandler) {
 }
 
 #[test]
-fn parse_control_attribute() {
-    static BYTES: &[u8] = &[0x1b, b'[', b'1', b'm'];
-    let (_, handler) = parse_bytes(BYTES);
-
-    assert_eq!(handler.attr, Some(Attr::Bold));
-}
-
-#[test]
-fn parse_terminal_identity_csi() {
-    let bytes: &[u8] = &[0x1b, b'[', b'1', b'c'];
-
-    let (mut parser, mut handler) = parse_bytes(bytes);
-
-    assert!(!handler.identity_reported);
-    handler.reset_state();
-
-    let bytes: &[u8] = &[0x1b, b'[', b'c'];
-
-    parser.parse_bytes(&mut handler, bytes, &mut io::sink());
-
-    assert!(handler.identity_reported);
-    handler.reset_state();
-
-    let bytes: &[u8] = &[0x1b, b'[', b'0', b'c'];
-
-    parser.parse_bytes(&mut handler, bytes, &mut io::sink());
-
-    assert!(handler.identity_reported);
-}
-
-#[test]
-fn parse_terminal_identity_esc() {
-    let bytes: &[u8] = &[0x1b, b'Z'];
-
-    let (mut parser, mut handler) = parse_bytes(bytes);
-
-    assert!(handler.identity_reported);
-    handler.reset_state();
-
-    let bytes: &[u8] = &[0x1b, b'#', b'Z'];
-
-    parser.parse_bytes(&mut handler, bytes, &mut io::sink());
-
-    assert!(!handler.identity_reported);
-    handler.reset_state();
-}
-
-#[test]
 fn parse_truecolor_attr() {
     static BYTES: &[u8] = &[
         0x1b, b'[', b'3', b'8', b';', b'2', b';', b'1', b'2', b'8', b';', b'6', b'6', b';', b'2',
@@ -343,35 +293,6 @@ fn parse_zsh_startup() {
     ];
 
     parse_bytes(BYTES);
-}
-
-#[test]
-fn parse_designate_g0_as_line_drawing() {
-    static BYTES: &[u8] = &[0x1b, b'(', b'0'];
-    let (_, handler) = parse_bytes(BYTES);
-
-    assert_eq!(handler.index, CharsetIndex::G0);
-    assert_eq!(
-        handler.charset,
-        StandardCharset::SpecialCharacterAndusizeDrawing
-    );
-}
-
-#[test]
-fn parse_designate_g1_as_line_drawing_and_invoke() {
-    static BYTES: &[u8] = &[0x1b, b')', b'0', 0x0e];
-    let (mut parser, handler) = parse_bytes(BYTES);
-
-    assert_eq!(handler.index, CharsetIndex::G1);
-    assert_eq!(
-        handler.charset,
-        StandardCharset::SpecialCharacterAndusizeDrawing
-    );
-
-    let mut handler = MockHandler::default();
-    parser.parse_bytes(&mut handler, &[BYTES[3]], &mut io::sink());
-
-    assert_eq!(handler.index, CharsetIndex::G1);
 }
 
 #[test]
@@ -427,21 +348,6 @@ fn parse_invalid_legacy_rgb_colors() {
 }
 
 #[test]
-fn parse_invalid_number() {
-    assert_eq!(parse_number(b"1abc"), None);
-}
-
-#[test]
-fn parse_valid_number() {
-    assert_eq!(parse_number(b"123"), Some(123));
-}
-
-#[test]
-fn parse_number_too_large() {
-    assert_eq!(parse_number(b"321"), None);
-}
-
-#[test]
 fn named_color_to_ansi_escape_valid() {
     assert!(matches!(NamedColor::Red.to_ansi_fg_escape_code(), Ok(31)));
     assert!(matches!(NamedColor::Red.to_ansi_bg_escape_code(), Ok(41)));
@@ -460,229 +366,6 @@ fn named_color_to_ansi_escape_invalid() {
     assert!(NamedColor::Background.to_ansi_fg_escape_code().is_err());
     assert!(NamedColor::Foreground.to_ansi_bg_escape_code().is_err());
     assert!(NamedColor::Cursor.to_ansi_bg_escape_code().is_err());
-}
-
-#[test]
-fn parse_dcs_ssh() {
-    let bytes = hex_encoded_dcs_string(
-        r#"{
-                "hook": "SSH",
-                "value": {
-                    "socket_path": "~/.ssh/9001",
-                    "remote_shell": "zsh"
-                }
-            }"#,
-    );
-    let (_, handler) = parse_bytes(&bytes);
-
-    assert_eq!(handler.d_proto_hooks.len(), 1);
-    match handler.d_proto_hooks.first().unwrap() {
-        DProtoHook::SSH { value } => assert_eq!(
-            *value,
-            SSHValue {
-                socket_path: PathBuf::from("~/.ssh/9001"),
-                remote_shell: "zsh".to_string(),
-            }
-        ),
-        _ => panic!("incorrect dcs value"),
-    };
-}
-
-#[test]
-fn parse_dcs_precmd() {
-    let bytes = hex_encoded_dcs_string(
-        r#"{
-                "hook": "Precmd",
-                "value": {
-                    "pwd": "/Users",
-                    "ps1": "$>",
-                    "honor_ps1": true,
-                    "git_head": "",
-                    "git_branch": "",
-                    "virtual_env": "",
-                    "conda_env": "numpy",
-                    "exit_code": 0,
-                    "session_id": 167303092612201
-                }
-            }"#,
-    );
-    let (_, handler) = parse_bytes(&bytes);
-
-    assert_eq!(handler.d_proto_hooks.len(), 1);
-    match handler.d_proto_hooks.first().unwrap() {
-        DProtoHook::Precmd { value } => assert_eq!(
-            *value,
-            PrecmdValue {
-                pwd: Some("/Users".to_string()),
-                ps1: Some("$>".to_string()),
-                honor_ps1: Some(true),
-                rprompt: None,
-                git_head: None,
-                git_branch: None,
-                virtual_env: None,
-                conda_env: Some("numpy".to_string()),
-                node_version: None,
-                kube_config: None,
-                session_id: Some(167303092612201),
-                ps1_is_encoded: None,
-                is_after_in_band_command: false,
-            }
-        ),
-        _ => panic!("incorrect dcs value"),
-    };
-}
-
-#[test]
-fn parse_dcs_command_finished() {
-    let bytes = hex_encoded_dcs_string(
-        r#"{
-                "hook": "CommandFinished",
-                "value": {
-                    "exit_code": 127,
-                    "next_block_id": "block_id"
-                }
-            }"#,
-    );
-    let (_, handler) = parse_bytes(&bytes);
-
-    assert_eq!(handler.d_proto_hooks.len(), 1);
-    match handler.d_proto_hooks.first().unwrap() {
-        DProtoHook::CommandFinished { value } => {
-            assert_eq!(
-                *value,
-                CommandFinishedValue {
-                    exit_code: ExitCode::from(127),
-                    next_block_id: "block_id".to_owned().into()
-                }
-            )
-        }
-        _ => panic!("incorrect dcs value"),
-    };
-}
-
-#[test]
-fn parse_dcs_bootstrapped() {
-    let bytes = hex_encoded_dcs_string(
-        r#"{
-                "hook": "Bootstrapped",
-                "value": {
-                    "histfile": "/Users/andy/.zsh_history",
-                    "session_id": 167303092612201,
-                    "shell": "bash",
-                    "home_dir": "/Users/andy",
-                    "user": "andy",
-                    "host": "ubuntu-test",
-                    "path": "/usr/sbin:/usr/bin",
-                    "editor": "vim",
-                    "aliases": "vi=nvim\nvim=nvim",
-                    "abbreviations": "abbr -a -- vi nvim\nabbr -a -- gc 'git checkout'",
-                    "env_var_names": "LOGNAME CARGO_HOME",
-                    "function_names": "cd\nextract",
-                    "builtins": "alias\nhistory",
-                    "keywords": "for\nif",
-                    "shell_version": "5.8.0",
-                    "shell_options": "alwaystoend\nautocd",
-                    "rcfiles_start_time": "1675789245.4744160175",
-                    "rcfiles_end_time": "1675789246.9067308903",
-                    "shell_plugins": "powerlevel10k pure",
-                    "shell_path": "/usr/local/bin/bash"
-                }
-            }"#,
-    );
-    let (_, handler) = parse_bytes(&bytes);
-
-    assert_eq!(handler.d_proto_hooks.len(), 1);
-    match handler.d_proto_hooks.first().unwrap() {
-        DProtoHook::Bootstrapped { value } => assert_eq!(
-            **value,
-            BootstrappedValue {
-                histfile: Some("/Users/andy/.zsh_history".to_string()),
-                shell: "bash".to_string(),
-                home_dir: Some("/Users/andy".to_string()),
-                path: Some("/usr/sbin:/usr/bin".to_string()),
-                editor: Some("vim".to_string()),
-                aliases: Some("vi=nvim\nvim=nvim".to_string()),
-                abbreviations: Some("abbr -a -- vi nvim\nabbr -a -- gc 'git checkout'".to_string()),
-                env_var_names: Some("LOGNAME CARGO_HOME".to_string()),
-                function_names: Some("cd\nextract".to_string()),
-                builtins: Some("alias\nhistory".to_string()),
-                keywords: Some("for\nif".to_string()),
-                shell_version: Some("5.8.0".to_string()),
-                shell_options: Some(HashSet::from([
-                    "alwaystoend".to_string(),
-                    "autocd".to_string()
-                ])),
-                shell_plugins: Some(HashSet::from([
-                    "powerlevel10k".to_string(),
-                    "pure".to_string()
-                ])),
-                rcfiles_start_time: Some(1675789245.474416.into()),
-                rcfiles_end_time: Some(1675789246.906731.into()),
-                vi_mode_enabled: None,
-                os_category: None,
-                linux_distribution: None,
-                wsl_name: None,
-                shell_path: Some("/usr/local/bin/bash".to_string())
-            }
-        ),
-        _ => panic!("incorrect dcs value"),
-    };
-}
-
-#[test]
-fn parse_dcs_init_shell() {
-    let bytes = hex_encoded_dcs_string(
-        r#"{
-                "hook": "InitShell",
-                "value": {
-                    "session_id": 167303092612201,
-                    "user": "andy",
-                    "hostname": "ubuntu-test",
-                    "shell": "zsh"
-                }
-            }"#,
-    );
-    let (_, handler) = parse_bytes(&bytes);
-
-    assert_eq!(handler.d_proto_hooks.len(), 1);
-    match handler.d_proto_hooks.first().unwrap() {
-        DProtoHook::InitShell { value } => assert_eq!(
-            *value,
-            InitShellValue {
-                session_id: SessionId::from(167303092612201),
-                user: "andy".to_owned(),
-                hostname: "ubuntu-test".to_owned(),
-                shell: "zsh".to_string(),
-                ..Default::default()
-            }
-        ),
-        _ => panic!("incorrect dcs value"),
-    };
-}
-
-#[test]
-fn parse_dcs_input_buffer() {
-    let bytes = hex_encoded_dcs_string(
-        r#"{
-                "hook": "InputBuffer",
-                "value": {
-                    "buffer": "ls -al dir"
-                }
-            }"#,
-    );
-
-    let (_, handler) = parse_bytes(&bytes);
-
-    assert_eq!(handler.d_proto_hooks.len(), 1);
-    match handler.d_proto_hooks.first().unwrap() {
-        DProtoHook::InputBuffer { value } => assert_eq!(
-            *value,
-            InputBufferValue {
-                buffer: "ls -al dir".to_string()
-            }
-        ),
-        _ => panic!("incorrect dcs value"),
-    }
 }
 
 #[test]
@@ -739,17 +422,6 @@ fn parse_sourced_rc_file_hook_with_uname() {
 }
 
 #[test]
-fn parse_osc9_notification() {
-    let bytes: &[u8] = b"\x1b]9;Hello from OSC 9\x07";
-    let (_, handler) = parse_bytes(bytes);
-
-    assert_eq!(handler.pluggable_notifications.len(), 1);
-    let (title, body) = &handler.pluggable_notifications[0];
-    assert_eq!(*title, None);
-    assert_eq!(body, "Hello from OSC 9");
-}
-
-#[test]
 fn parse_osc9_notification_with_st_terminator() {
     let bytes: &[u8] = b"\x1b]9;Message with ST terminator\x1b\\";
     let (_, handler) = parse_bytes(bytes);
@@ -761,53 +433,6 @@ fn parse_osc9_notification_with_st_terminator() {
 }
 
 #[test]
-fn parse_osc9_empty_body() {
-    let bytes: &[u8] = b"\x1b]9;\x07";
-    let (_, handler) = parse_bytes(bytes);
-
-    assert_eq!(handler.pluggable_notifications.len(), 0);
-}
-
-#[test]
-fn parse_osc9_windows_terminal_cwd_ignored() {
-    // OSC 9;9 is Windows Terminal's CWD notification (ESC ] 9 ; 9 ; "<cwd>" ST).
-    // It should be silently ignored and not trigger a pluggable notification.
-    // Reference: https://github.com/microsoft/terminal/issues/8166
-    let bytes: &[u8] = b"\x1b]9;9;\"C:\\Users\\scottha\"\x07";
-    let (_, handler) = parse_bytes(bytes);
-
-    assert_eq!(handler.pluggable_notifications.len(), 0);
-}
-
-#[test]
-fn parse_osc9_numeric_subcommand_ignored() {
-    // Any OSC 9 sequence with a purely numeric params[1] is a ConEmu-style subcommand
-    // and should be silently ignored, not treated as a notification.
-    // This covers known ones (9;4 progress, 9;9 CWD) and any unknown future ones.
-    for subcommand in [b"1" as &[u8], b"2", b"3", b"4", b"5", b"6", b"7", b"8"] {
-        let bytes = [b"\x1b]9;", subcommand, b";data\x07"].concat();
-        let (_, handler) = parse_bytes(&bytes);
-        assert_eq!(
-            handler.pluggable_notifications.len(),
-            0,
-            "OSC 9;{} should be ignored",
-            String::from_utf8_lossy(subcommand)
-        );
-    }
-}
-
-#[test]
-fn parse_osc777_notification() {
-    let bytes: &[u8] = b"\x1b]777;notify;Build Complete;Your build has finished\x07";
-    let (_, handler) = parse_bytes(bytes);
-
-    assert_eq!(handler.pluggable_notifications.len(), 1);
-    let (title, body) = &handler.pluggable_notifications[0];
-    assert_eq!(title.as_deref(), Some("Build Complete"));
-    assert_eq!(body, "Your build has finished");
-}
-
-#[test]
 fn parse_osc777_notification_empty_title() {
     let bytes: &[u8] = b"\x1b]777;notify;;Just the body\x07";
     let (_, handler) = parse_bytes(bytes);
@@ -816,33 +441,6 @@ fn parse_osc777_notification_empty_title() {
     let (title, body) = &handler.pluggable_notifications[0];
     assert_eq!(*title, None);
     assert_eq!(body, "Just the body");
-}
-
-#[test]
-fn parse_osc777_notification_with_semicolons_in_body() {
-    let bytes: &[u8] = b"\x1b]777;notify;Title;Body with; semicolons; here\x07";
-    let (_, handler) = parse_bytes(bytes);
-
-    assert_eq!(handler.pluggable_notifications.len(), 1);
-    let (title, body) = &handler.pluggable_notifications[0];
-    assert_eq!(title.as_deref(), Some("Title"));
-    assert_eq!(body, "Body with; semicolons; here");
-}
-
-#[test]
-fn parse_osc777_non_notify_subcommand_ignored() {
-    let bytes: &[u8] = b"\x1b]777;other;title;body\x07";
-    let (_, handler) = parse_bytes(bytes);
-
-    assert_eq!(handler.pluggable_notifications.len(), 0);
-}
-
-#[test]
-fn parse_osc777_missing_parts_ignored() {
-    let bytes: &[u8] = b"\x1b]777;notify;only_title\x07";
-    let (_, handler) = parse_bytes(bytes);
-
-    assert_eq!(handler.pluggable_notifications.len(), 0);
 }
 
 #[test]

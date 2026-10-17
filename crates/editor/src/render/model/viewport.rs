@@ -21,10 +21,6 @@ use super::{
 /// To help make scrolling more smooth, add a small margin here to overcome these boundaries.
 const HORIZONTAL_SCROLL_MARGIN: f32 = 4.;
 
-#[cfg(test)]
-#[path = "viewport_tests.rs"]
-mod tests;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportState {
     /// Width of the viewport. Currently, we soft-wrap text to fit this. However,

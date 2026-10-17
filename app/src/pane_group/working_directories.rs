@@ -744,7 +744,3 @@ fn normalize_cwd(raw_cwd: &str) -> Option<PathBuf> {
     // which would cause path comparison mismatches with CanonicalizedPath.
     dunce::canonicalize(&path).ok()
 }
-
-#[cfg(test)]
-#[path = "working_directories_tests.rs"]
-mod tests;

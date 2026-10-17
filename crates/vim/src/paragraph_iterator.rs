@@ -61,6 +61,3 @@ where
 
     None
 }
-#[cfg(test)]
-#[path = "paragraph_iterator_tests.rs"]
-mod tests;

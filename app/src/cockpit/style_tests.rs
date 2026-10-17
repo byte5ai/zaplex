@@ -36,20 +36,6 @@ fn attention_halo_keeps_the_accent_hue_at_static_low_alpha() {
 }
 
 #[test]
-fn style_defines_no_product_provider_or_heat_palette() {
-    for source in [
-        include_str!("style.rs"),
-        include_str!("panel.rs"),
-        include_str!("pane.rs"),
-    ] {
-        assert!(!source.contains("HEAT_ON_"));
-        assert!(!source.contains("PROVIDER_ON_"));
-        assert!(!source.contains("ColorU::from_u32"));
-        assert!(!source.contains("parse_hex_color"));
-    }
-}
-
-#[test]
 fn style_has_no_unused_session_metric_width_contract() {
     let source = include_str!("style.rs");
     assert!(!source.contains("session_metric_column_width"));

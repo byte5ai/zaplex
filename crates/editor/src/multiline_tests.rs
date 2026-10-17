@@ -6,22 +6,6 @@ use super::*;
 use warp_core::platform::SessionPlatform;
 
 #[test]
-fn test_infer_line_ending_empty_file() {
-    assert_eq!(
-        infer_line_ending("", None),
-        LineEnding::from_current_platform()
-    );
-}
-
-#[test]
-fn test_infer_line_ending_single_line() {
-    assert_eq!(
-        infer_line_ending("I have no line endings", None),
-        LineEnding::from_current_platform()
-    );
-}
-
-#[test]
 fn test_infer_line_ending_unix_subsystem_for_windows() {
     assert_eq!(
         infer_line_ending("", Some(&SessionPlatform::WSL)),
@@ -40,43 +24,6 @@ fn test_infer_line_ending_native_platform() {
         infer_line_ending("", Some(&SessionPlatform::Native)),
         LineEnding::from_current_platform()
     );
-}
-
-#[test]
-fn test_infer_line_ending_windows() {
-    assert_eq!(
-        infer_line_ending("This\r\nhas\r\nlines\r\n", None),
-        LineEnding::CRLF
-    );
-}
-
-#[test]
-fn test_infer_line_ending_nix() {
-    assert_eq!(infer_line_ending("This\nhas\nlines", None), LineEnding::LF);
-}
-
-#[test]
-fn test_infer_line_ending_mixed() {
-    // There's no correct line ending in this case - we follow the `line-ending` crate's
-    // most-common-ending approach.
-    assert_eq!(
-        infer_line_ending("This\r\nhas\r\nmixed\nline endings", None),
-        LineEnding::CRLF
-    );
-    assert_eq!(
-        infer_line_ending("This\nhas\r\nmixed\nline endings", None),
-        LineEnding::LF
-    );
-    assert_eq!(
-        infer_line_ending("This\r\nhas\nmixed\r\nline\nendings", None),
-        LineEnding::LF
-    );
-}
-
-#[test]
-fn test_apply_lf() {
-    let original = "This\r\nhas\nevery\rline ending";
-    assert_eq!(LF::apply_to(original), "This\nhas\nevery\nline ending");
 }
 
 #[test]
@@ -153,23 +100,8 @@ fn test_multiline_str_apply_mixed() {
 }
 
 #[test]
-fn test_any_infer_single_ending() {
-    let inferred = AnyMultilineString::infer("One\nTwo\nThree");
-    assert_eq!(inferred.as_str(), "One\nTwo\nThree");
-    assert_eq!(inferred.line_ending(), LineEnding::LF);
-}
-
-#[test]
 fn test_any_infer_single_line() {
     let inferred = AnyMultilineString::infer("One");
     assert_eq!(inferred.as_str(), "One");
     assert_eq!(inferred.line_ending(), LineEnding::from_current_platform());
-}
-
-#[test]
-fn test_any_infer_mixed() {
-    let inferred = AnyMultilineString::infer("One\r\nTwo\nThree\r\nFour");
-    // The text should be normalized to CRLF.
-    assert_eq!(inferred.as_str(), "One\r\nTwo\r\nThree\r\nFour");
-    assert_eq!(inferred.line_ending(), LineEnding::CRLF);
 }

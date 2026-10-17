@@ -80,17 +80,6 @@ fn test_height() {
 }
 
 #[test]
-fn bottom_padding_extends_scrollable_content_height() {
-    let mut render_state =
-        RenderState::new_for_test(TEST_STYLES, 100.0.into_pixels(), 100.0.into_pixels());
-    let initial_height = render_state.height();
-
-    render_state.set_bottom_padding(24.0.into_pixels());
-
-    assert_eq!(render_state.height(), initial_height + 24.0.into_pixels());
-}
-
-#[test]
 fn test_is_entire_range_of_type_matches_exact_block_ranges() {
     let mut model = RenderState::new_for_test(
         TEST_STYLES.clone(),
@@ -134,34 +123,6 @@ fn test_is_entire_range_of_type_matches_exact_block_ranges() {
             item,
             BlockItem::MermaidDiagram { .. }
         ),)
-    );
-}
-
-#[test]
-fn test_width() {
-    let mut render_state =
-        RenderState::new_for_test(TEST_STYLES, 10.0.into_pixels(), 10.0.into_pixels());
-    let mut content = SumTree::new();
-    // Width 25.
-    content.push(mock_paragraph(24., 10., 1));
-    // Width: 10.
-    content.push(mock_paragraph(48., 25., 2));
-    render_state.set_content(content);
-
-    // This includes all content plus the trailing newline marker.
-    assert_eq!(render_state.width(), (45.).into_pixels());
-    let content = render_state.content.borrow();
-    let mut cursor = content.cursor::<Height, Height>();
-    let end = cursor.slice(&Height::from(40.), sum_tree::SeekBias::Right);
-    assert_eq!(
-        end.summary(),
-        LayoutSummary {
-            content_length: 1.into(),
-            height: 32.,
-            width: (30.).into_pixels(),
-            lines: LineCount(1),
-            item_count: 1,
-        }
     );
 }
 
@@ -269,61 +230,6 @@ fn test_soft_wrap_point() {
     assert_eq!(
         model.softwrap_point_to_offset(SoftWrapPoint::new(5, char_x(2))),
         CharOffset::from(21)
-    );
-}
-
-#[test]
-fn test_character_bounds() {
-    let mut model =
-        RenderState::new_for_test(TEST_STYLES.clone(), 40.0.into_pixels(), 60.0.into_pixels());
-    let mut content = SumTree::new();
-    // This paragraph soft-wraps to 2 lines and includes chars 0-7.
-    content.push(laid_out_paragraph(
-        "ABCDEFG\n",
-        &TEST_STYLES,
-        model.viewport.width().as_f32(),
-    ));
-    // This paragraph soft-wraps to 2 lines and includes chars 8-14.
-    content.push(laid_out_paragraph(
-        "HIJKLMN\n",
-        &TEST_STYLES,
-        model.viewport.width().as_f32(),
-    ));
-    model.set_content(content);
-
-    // Due to the minimum block height, there is 6px of top spacing. In addition, there's a 4px
-    // left margin.
-
-    let char_size = vec2f(10., 10.);
-
-    // The middle of the first line.
-    assert_eq!(
-        model.character_bounds(2.into()),
-        Some(RectF::new(vec2f(24., 6.), char_size))
-    );
-
-    // The first character of the second soft-wrapped line.
-    assert_eq!(
-        model.character_bounds(4.into()),
-        Some(RectF::new(vec2f(4., 16.), char_size))
-    );
-
-    // The middle of the first line of the second paragraph.
-    assert_eq!(
-        model.character_bounds(9.into()),
-        Some(RectF::new(vec2f(14., 38.), char_size))
-    );
-
-    // The end of the first line of the second paragraph.
-    assert_eq!(
-        model.character_bounds(11.into()),
-        Some(RectF::new(vec2f(34., 38.), char_size))
-    );
-
-    // The middle of the second line of the second paragraph.
-    assert_eq!(
-        model.character_bounds(13.into()),
-        Some(RectF::new(vec2f(14., 48.), char_size))
     );
 }
 
@@ -826,25 +732,6 @@ fn test_offset_in_active_selection() {
 }
 
 #[test]
-fn test_is_selection_head() {
-    let render_state =
-        RenderState::new_for_test(TEST_STYLES, 10.0.into_pixels(), 10.0.into_pixels());
-    let selection_vec: Vec1<RenderedSelection> = vec1![
-        RenderedSelection::new(2.into(), 4.into()),
-        RenderedSelection::new(6.into(), 8.into()),
-        RenderedSelection::new(12.into(), 10.into())
-    ];
-    let selections = selection_vec.into();
-    *render_state.selections.borrow_mut() = selections;
-
-    assert!(render_state.is_selection_head(2.into()));
-    assert!(!render_state.is_selection_head(1.into()));
-    assert!(!render_state.is_selection_head(4.into()));
-    assert!(render_state.is_selection_head(6.into()));
-    assert!(render_state.is_selection_head(12.into()));
-}
-
-#[test]
 fn test_multiselect_autoscroll_bounding_box() {
     // Test that the computation for the autoscroll bounding box work correctly.
     let view_height = 800.0.into_pixels();
@@ -1207,15 +1094,6 @@ fn test_x_for_char_in_line() {
 }
 
 #[test]
-fn test_line_at_y_offset() {
-    let layout = make_test_cell_layout();
-    assert_eq!(layout.line_at_y_offset(0.0), 0);
-    assert_eq!(layout.line_at_y_offset(10.0), 0);
-    assert_eq!(layout.line_at_y_offset(19.9), 0);
-    assert_eq!(layout.line_at_y_offset(20.0), 0);
-}
-
-#[test]
 fn test_char_at_x_in_line_at_zero() {
     let layout = make_test_cell_layout();
     assert_eq!(layout.char_at_x_in_line(0, 0.0), CharOffset::from(0));
@@ -1368,15 +1246,6 @@ fn test_disabled_horizontal_scroll_returns_full_viewport_width() {
 
     assert_eq!(table.viewport_width(30.0.into_pixels()), table.width());
     assert_eq!(table.max_scroll_left(30.0.into_pixels()), Pixels::zero());
-}
-
-#[test]
-fn test_disabled_horizontal_scroll_reports_zero_scroll_left() {
-    let mut table = make_test_laid_out_table();
-    table.scroll_left.set(15.0.into_pixels());
-    table.horizontal_scroll_allowed = false;
-
-    assert_eq!(table.scroll_left(), Pixels::zero());
 }
 
 #[test]

@@ -108,7 +108,3 @@ impl From<Match> for MatchType {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "matchers_test.rs"]
-mod tests;

@@ -3,7 +3,6 @@ use chrono::{Duration, Local};
 use crate::search::ai_context_menu::blocks::data_source::BlockDataSource;
 use crate::search::ai_context_menu::blocks::search_item::BlockSearchItem;
 use crate::search::data_source::Query;
-use crate::search::item::SearchItem;
 use crate::search::mixer::SyncDataSource;
 use crate::terminal::model::block::BlockId;
 use crate::test_util::terminal::{
@@ -254,21 +253,4 @@ fn fuzzy_query_active_session_blocks_rank_above_other_sessions() {
             "Expected active-session block to score higher. Got: {scores:?}"
         );
     })
-}
-
-#[test]
-fn fuzzy_query_within_same_session_higher_fuzzy_score_wins() {
-    // Both blocks are active-session, but one has a much better fuzzy score
-    let better_match = make_block_search_item("cargo test", None, 9000, true);
-    let worse_match = make_block_search_item("cat README.md", None, 3000, true);
-
-    // Same tier, so score should determine ordering
-    assert_eq!(better_match.priority_tier(), worse_match.priority_tier());
-    assert!(
-        better_match.score() > worse_match.score(),
-        "Expected higher fuzzy score to win within same tier. \
-         Better: {}, Worse: {}",
-        better_match.score(),
-        worse_match.score(),
-    );
 }

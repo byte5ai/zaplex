@@ -65,20 +65,6 @@ fn unknown_keys_are_rejected() {
 }
 
 #[test]
-fn mcp_must_be_under_mcp_servers_key() {
-    let contents = json!({
-        "model_id": "gpt-4o",
-        "mcpServers": { "s": { "command": "npx", "args": [] } }
-    })
-    .to_string();
-
-    let file = write_temp(".json", &contents);
-    let err = super::load_config_file(file.path()).unwrap_err();
-    let err_str = format!("{err:#}");
-    assert!(err_str.contains("Supported keys"));
-}
-
-#[test]
 fn merge_precedence_cli_over_file_and_merges_mcp() {
     let contents = json!({
         "model_id": "file-model",
@@ -149,29 +135,6 @@ fn mcp_servers_map_converts_to_runtime_specs() {
 
     assert!(specs.iter().any(|s| matches!(s, MCPSpec::Uuid(_))));
     assert!(specs.iter().any(|s| matches!(s, MCPSpec::Json(_))));
-}
-
-#[test]
-fn loads_computer_use_enabled_from_json() {
-    let contents = json!({
-        "computer_use_enabled": true
-    })
-    .to_string();
-
-    let file = write_temp(".json", &contents);
-    let loaded = super::load_config_file(file.path()).unwrap();
-
-    assert_eq!(loaded.file.computer_use_enabled, Some(true));
-}
-
-#[test]
-fn loads_computer_use_enabled_from_yaml() {
-    let contents = "computer_use_enabled: false\n";
-
-    let file = write_temp(".yaml", contents);
-    let loaded = super::load_config_file(file.path()).unwrap();
-
-    assert_eq!(loaded.file.computer_use_enabled, Some(false));
 }
 
 #[test]

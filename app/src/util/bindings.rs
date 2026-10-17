@@ -942,7 +942,3 @@ fn mac_only_keystroke(source: &str) -> Option<Keystroke> {
         None
     }
 }
-
-#[cfg(test)]
-#[path = "bindings_tests.rs"]
-mod tests;

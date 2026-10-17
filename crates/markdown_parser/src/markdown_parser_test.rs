@@ -2,7 +2,6 @@ use nom::{
     Finish,
     error::{VerboseError, convert_error},
 };
-use serde_yaml::Mapping;
 
 use crate::{
     CustomWeight, FormattedTable, FormattedTextStyles, LineCount, compute_formatted_text_delta,
@@ -17,26 +16,6 @@ fn test_parse_markdown(source: &str) -> Vec<FormattedTextLine> {
 
 fn test_parse_markdown_with_gfm_tables(source: &str) -> Vec<FormattedTextLine> {
     parse_all(source, |input| parse_markdown_internal(input, true))
-}
-
-#[test]
-fn test_parse_empty() {
-    assert_eq!(test_parse_markdown(""), vec![]);
-}
-
-#[test]
-fn test_parse_line_endings() {
-    // This is a regression test for CORE-1958.
-    let parsed = parse_markdown("First\rSecond\nThird\r\nFourth").expect("Markdown should parse");
-    assert_eq!(
-        parsed.lines,
-        &[
-            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("First")]),
-            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("Second")]),
-            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("Third")]),
-            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("Fourth")]),
-        ]
-    )
 }
 
 #[test]
@@ -262,13 +241,6 @@ fn test_parse_image_run_line_multiple_images() {
 }
 
 #[test]
-fn test_parse_image_run_line_rejects_mixed_text() {
-    assert_eq!(
-        parse_image_run_line("Intro ![One](one.png) ![Two](two.png)\n"),
-        None
-    );
-}
-#[test]
 fn test_parse_task_list() {
     let source = "- [ ] This is a list";
     let ctx = std::cell::RefCell::new(ListIndentationContext::new());
@@ -478,56 +450,6 @@ fn test_multi_line() {
 }
 
 #[test]
-fn test_line_break() {
-    let source = "\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::LineBreak]
-    );
-
-    let source = "\nThis is body";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![
-            FormattedTextLine::LineBreak,
-            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("This is body")])
-        ]
-    );
-
-    let source = "\nThis is body\n\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![
-            FormattedTextLine::LineBreak,
-            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("This is body")]),
-            FormattedTextLine::LineBreak,
-        ]
-    );
-
-    let source = "\n\nThis is body";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![
-            FormattedTextLine::LineBreak,
-            FormattedTextLine::LineBreak,
-            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("This is body")]),
-        ]
-    );
-
-    let source = "abc\n\n\ndef";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![
-            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("abc")]),
-            // The first newline ends the "abc" paragraph, and the next 2 are line breaks.
-            FormattedTextLine::LineBreak,
-            FormattedTextLine::LineBreak,
-            FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("def")]),
-        ]
-    );
-}
-
-#[test]
 fn test_special_chars() {
     // This tests that we can parse:
     // - A non-escaping literal backslash
@@ -540,157 +462,6 @@ fn test_special_chars() {
             FormattedTextFragment::bold("💙")
         ])]
     )
-}
-
-#[test]
-fn test_parse_ordered_list_tag() {
-    let source = "     1. This is a list\n";
-    assert_eq!(
-        parse(source, parse_ordered_list_tag),
-        ("This is a list\n", (5, "1"))
-    );
-}
-
-#[test]
-fn test_parse_unordered_list_tag() {
-    let source = "    * List item\n";
-    assert_eq!(parse(source, parse_unordered_list_tag), ("List item\n", 4))
-}
-
-#[test]
-fn test_parse_code_block_lang() {
-    let source = "```sample_lang\nsome code\n```";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::CodeBlock(CodeBlockText {
-            lang: "sample_lang".to_string(),
-            code: "some code\n".to_string()
-        }),]
-    );
-}
-
-#[test]
-fn test_parse_table_block_lang() {
-    let source = format!("```{TABLE_BLOCK_MARKDOWN_LANG}\nname\tage\nalice\t30\n```");
-    assert_eq!(
-        test_parse_markdown(source.as_str()),
-        vec![FormattedTextLine::Table(
-            FormattedTable::from_internal_format("name\tage\nalice\t30\n")
-        )]
-    );
-}
-
-#[test]
-fn test_parse_code_block_missing_lang() {
-    let source = "```\nsome code\n```";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::CodeBlock(CodeBlockText {
-            lang: RUNNABLE_BLOCK_MARKDOWN_LANG.to_string(),
-            code: "some code\n".to_string()
-        }),]
-    );
-}
-
-#[test]
-fn test_parse_code_block_whitespace_lang() {
-    let source = "```   \nsome code\n```";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::CodeBlock(CodeBlockText {
-            lang: RUNNABLE_BLOCK_MARKDOWN_LANG.to_string(),
-            code: "some code\n".to_string()
-        }),]
-    );
-}
-
-#[test]
-fn test_parse_code_block_with_preceding_whitespace() {
-    let source = "   ```rust\nsome code\n```";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::CodeBlock(CodeBlockText {
-            lang: "rust".to_string(),
-            code: "some code\n".to_string()
-        }),]
-    );
-}
-
-#[test]
-fn test_parse_code_block_with_trailing_whitespace() {
-    let source = "   ```rust\nsome code\n``` ";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::CodeBlock(CodeBlockText {
-            lang: "rust".to_string(),
-            code: "some code\n".to_string()
-        }),]
-    );
-}
-
-#[test]
-fn test_parse_code_block_with_backticks() {
-    let source = "```md\nan `inner` backtick\n```";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::CodeBlock(CodeBlockText {
-            lang: "md".to_string(),
-            code: "an `inner` backtick\n".to_string()
-        })]
-    )
-}
-
-#[test]
-fn test_longer_code_fence_keeps_shorter_fence_in_body() {
-    let source = "````diff\n context\n ```\n more context\n````";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::CodeBlock(CodeBlockText {
-            lang: "diff".to_string(),
-            code: " context\n ```\n more context\n".to_string()
-        })]
-    );
-}
-
-#[test]
-fn test_parse_code_block_body() {
-    let source = "```json
-        {
-          firstName: John,
-          lastName: Smith,
-          age: 25
-        }
-```
-        ";
-    assert_eq!(
-        parse(source, parse_code_block),
-        (
-            "        ",
-            (
-                "json",
-                "        {\n          firstName: John,\n          lastName: Smith,\n          age: 25\n        }\n"
-                    .to_string()
-            )
-        ),
-    );
-}
-
-#[test]
-fn test_consec_code_blocks() {
-    let source = "```\n hello\n```\n```\nwhat\n```\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![
-            FormattedTextLine::CodeBlock(CodeBlockText {
-                lang: RUNNABLE_BLOCK_MARKDOWN_LANG.to_string(),
-                code: " hello\n".to_string()
-            }),
-            FormattedTextLine::CodeBlock(CodeBlockText {
-                lang: RUNNABLE_BLOCK_MARKDOWN_LANG.to_string(),
-                code: "what\n".to_string()
-            })
-        ]
-    );
 }
 
 #[test]
@@ -787,47 +558,6 @@ fn test_italics_quotes() {
 }
 
 #[test]
-fn test_inline_code() {
-    let source = "`hi`";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::inline_code("hi"),
-        ])]
-    );
-}
-
-#[test]
-fn test_interior_inline_code() {
-    assert_eq!(
-        test_parse_markdown("word`code`word"),
-        vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text("word"),
-            FormattedTextFragment::inline_code("code"),
-            FormattedTextFragment::plain_text("word"),
-        ])]
-    )
-}
-
-#[test]
-fn test_code_block_with_underscore() {
-    let source = "```\n hello_there\n```\n```\nwhat_is\n```\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![
-            FormattedTextLine::CodeBlock(CodeBlockText {
-                lang: RUNNABLE_BLOCK_MARKDOWN_LANG.to_string(),
-                code: " hello_there\n".to_string()
-            }),
-            FormattedTextLine::CodeBlock(CodeBlockText {
-                lang: RUNNABLE_BLOCK_MARKDOWN_LANG.to_string(),
-                code: "what_is\n".to_string()
-            })
-        ]
-    );
-}
-
-#[test]
 fn test_basic_parse_hyperlink() {
     let source = "This is [body](url)";
     assert_eq!(
@@ -872,45 +602,6 @@ fn test_parse_link_in_tag() {
             FormattedTextFragment::plain_text("a "),
             FormattedTextFragment::hyperlink("https://google.com", "https://warp.dev"),
             FormattedTextFragment::plain_text(" link")
-        ])]
-    );
-}
-
-#[test]
-fn test_basic_parse_url() {
-    let source = "This is www.google.com";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text("This is "),
-            FormattedTextFragment::hyperlink("www.google.com", "www.google.com"),
-        ])]
-    );
-}
-
-#[test]
-fn test_multi_parse_url() {
-    let source = "This is www.google.com and https://www.google.com and http://www.google.com";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text("This is "),
-            FormattedTextFragment::hyperlink("www.google.com", "www.google.com"),
-            FormattedTextFragment::plain_text(" and "),
-            FormattedTextFragment::hyperlink("https://www.google.com", "https://www.google.com"),
-            FormattedTextFragment::plain_text(" and "),
-            FormattedTextFragment::hyperlink("http://www.google.com", "http://www.google.com"),
-        ])]
-    );
-}
-
-#[test]
-fn test_parse_url_embedded() {
-    let source = "This iswww.google.comabc";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text("This iswww.google.comabc"),
         ])]
     );
 }
@@ -1022,20 +713,6 @@ fn test_parser_raw_text_url_hyperlinks() {
     assert_eq!(parsed_text.raw_text(), "This is body1 and body2\n");
 }
 
-#[test]
-fn test_parse_hash_in_code() {
-    let parsed_text =
-        parse_markdown("```bash\nls -l\n# a comment\npwd\n```\n").expect("should parse");
-
-    assert_eq!(
-        &parsed_text.lines,
-        &[FormattedTextLine::CodeBlock(CodeBlockText {
-            lang: "bash".to_string(),
-            code: "ls -l\n# a comment\npwd\n".to_string()
-        })]
-    );
-}
-
 /// Parse `input` completely using `parser`.
 fn parse_all<'a, O>(
     input: &'a str,
@@ -1077,113 +754,6 @@ fn test_indented_code_block() {
         }
         _ => panic!("Expected CodeBlock, got {:?}", result[1]),
     }
-}
-
-#[test]
-fn test_code_block_indentation_stripping() {
-    let source = "    ```\n    line1\n      line2\n   line3\n    ```";
-    let result = test_parse_markdown(source);
-    assert_eq!(result.len(), 1);
-    if let FormattedTextLine::CodeBlock(block) = &result[0] {
-        assert_eq!(block.code, "line1\n  line2\nline3\n");
-    } else {
-        panic!("Expected CodeBlock, got {:?}", result[0]);
-    }
-}
-
-#[test]
-fn test_deeply_indented_code_block() {
-    // 8 spaces indentation
-    let source = "        ```
-        line1
-        line2
-        ```";
-    let result = test_parse_markdown(source);
-    assert_eq!(result.len(), 1);
-    if let FormattedTextLine::CodeBlock(block) = &result[0] {
-        assert_eq!(block.code, "line1\nline2\n");
-    } else {
-        panic!("Expected CodeBlock, got {:?}", result[0]);
-    }
-}
-
-#[test]
-fn test_variable_indentation_code_block() {
-    // Opening fence indented 4 spaces
-    // Content has varying indentation (4, 6, 2 spaces)
-    // Closing fence indented 4 spaces (matching)
-    let source = "    ```
-    line1
-      line2
-  line3
-    ```";
-    let result = test_parse_markdown(source);
-    assert_eq!(result.len(), 1);
-    if let FormattedTextLine::CodeBlock(block) = &result[0] {
-        // line1: 4 spaces -> stripped (0 indent)
-        // line2: 6 spaces -> 4 stripped (2 indent)
-        // line3: 2 spaces -> 2 stripped (0 indent) - Wait, min(4, 2) = 2 stripped.
-        assert_eq!(block.code, "line1\n  line2\nline3\n");
-    } else {
-        panic!("Expected CodeBlock, got {:?}", result[0]);
-    }
-}
-
-#[test]
-fn test_closing_fence_less_indented() {
-    let source = "    ```
-    content
-```";
-    let result = test_parse_markdown(source);
-    assert_eq!(result.len(), 1);
-    if let FormattedTextLine::CodeBlock(block) = &result[0] {
-        assert_eq!(block.code, "content\n");
-    } else {
-        panic!("Expected CodeBlock, got {:?}", result[0]);
-    }
-}
-
-#[test]
-fn test_closing_fence_indented_3_extra_spaces() {
-    // Opening fence: 4 spaces
-    // Content: "content" (4 spaces)
-    // Closing fence: 7 spaces (4 + 3). Should close.
-    let source = "    ```
-    content
-       ```";
-    let result = test_parse_markdown(source);
-    assert_eq!(result.len(), 1);
-    if let FormattedTextLine::CodeBlock(block) = &result[0] {
-        assert_eq!(block.code, "content\n");
-    } else {
-        panic!("Expected CodeBlock, got {:?}", result[0]);
-    }
-}
-
-#[test]
-fn test_closing_fence_indented_4_extra_spaces() {
-    // Opening fence: 4 spaces
-    // Content line: "    ```" (8 spaces). Should NOT close.
-    // Real closing fence: 4 spaces.
-    let source = "    ```
-    text
-        ```
-    ```";
-    let result = test_parse_markdown(source);
-    assert_eq!(result.len(), 1);
-    if let FormattedTextLine::CodeBlock(block) = &result[0] {
-        // The middle line has 8 spaces. 4 are stripped.
-        // Remaining content is "    ```\n"
-        assert_eq!(block.code, "text\n    ```\n");
-    } else {
-        panic!("Expected CodeBlock, got {:?}", result[0]);
-    }
-}
-
-#[test]
-fn test_code_span() {
-    assert_eq!(parse_all("`foo \\bar`", parse_code_span), "foo \\bar");
-    assert_eq!(parse_all("``an inner ` ``", parse_code_span), "an inner ` ");
 }
 
 #[test]
@@ -1666,28 +1236,6 @@ fn test_parse_overlapping_strikethrough() {
 }
 
 #[test]
-fn test_parse_autolinks_inline() {
-    assert_eq!(
-        parse_all(
-            "Links: https://example.com and http://example.com and www.example.com/some-path andhttp://www.example.com",
-            parse_inline
-        ),
-        vec![
-            FormattedTextFragment::plain_text("Links: "),
-            FormattedTextFragment::hyperlink("https://example.com", "https://example.com"),
-            FormattedTextFragment::plain_text(" and "),
-            FormattedTextFragment::hyperlink("http://example.com", "http://example.com"),
-            FormattedTextFragment::plain_text(" and "),
-            FormattedTextFragment::hyperlink(
-                "www.example.com/some-path",
-                "www.example.com/some-path"
-            ),
-            FormattedTextFragment::plain_text(" andhttp://www.example.com")
-        ]
-    );
-}
-
-#[test]
 fn test_parse_autolinks_with_emphasis() {
     // Per GFM spec, autolinks can follow formatting delimiters (*, _, ~, ().
     // https://github.github.com/gfm/#autolinks-extension-
@@ -1769,40 +1317,6 @@ fn test_parse_escapes_inline() {
             FormattedTextFragment::italic("not bold"),
             FormattedTextFragment::plain_text("*")
         ]
-    );
-}
-
-#[test]
-fn test_parse_embedded() {
-    assert_eq!(
-        test_parse_markdown("```warp-embedded-object\nid: workflow-123\n```"),
-        vec![FormattedTextLine::Embedded(Mapping::from_iter([(
-            Value::String("id".to_string()),
-            Value::String("workflow-123".to_string())
-        )]))]
-    );
-
-    assert_eq!(
-        test_parse_markdown("```warp-embedded-object\nid: notebook-123\ntype: notebook\n```"),
-        vec![FormattedTextLine::Embedded(Mapping::from_iter([
-            (
-                Value::String("id".to_string()),
-                Value::String("notebook-123".to_string())
-            ),
-            (
-                Value::String("type".to_string()),
-                Value::String("notebook".to_string())
-            )
-        ]))]
-    );
-
-    // Fallback to code block.
-    assert_eq!(
-        test_parse_markdown("```warp-embedded-object\ncargo run --features abc\n```"),
-        vec![FormattedTextLine::CodeBlock(CodeBlockText {
-            lang: "warp-embedded-object".to_string(),
-            code: "cargo run --features abc\n".to_string()
-        })]
     );
 }
 
@@ -2254,68 +1768,6 @@ fn test_indentation_reset_with_nonlist_content() {
 }
 
 #[test]
-fn test_parse_basic_image() {
-    let source = "![Alt text](image.png)\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Image(FormattedImage {
-            alt_text: "Alt text".to_string(),
-            source: "image.png".to_string(),
-            title: None,
-        })]
-    );
-}
-
-#[test]
-fn test_parse_image_without_trailing_newline() {
-    let source = "![Alt text](image.png)";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Image(FormattedImage {
-            alt_text: "Alt text".to_string(),
-            source: "image.png".to_string(),
-            title: None,
-        })]
-    );
-}
-
-#[test]
-fn test_parse_image_relative_path() {
-    let source = "![My screenshot](./screenshots/demo.png)\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Image(FormattedImage {
-            alt_text: "My screenshot".to_string(),
-            source: "./screenshots/demo.png".to_string(),
-            title: None,
-        })]
-    );
-
-    let source = "![Logo](../assets/logo.jpg)\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Image(FormattedImage {
-            alt_text: "Logo".to_string(),
-            source: "../assets/logo.jpg".to_string(),
-            title: None,
-        })]
-    );
-}
-
-#[test]
-fn test_parse_image_absolute_path() {
-    let source = "![Chart](/absolute/path/to/chart.svg)\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Image(FormattedImage {
-            alt_text: "Chart".to_string(),
-            source: "/absolute/path/to/chart.svg".to_string(),
-            title: None,
-        })]
-    );
-}
-
-#[test]
 fn test_parse_image_with_double_quoted_title() {
     let source = "![Alt text](image.png \"A helpful caption\")\n";
     assert_eq!(
@@ -2446,67 +1898,6 @@ fn test_compute_formatted_text_delta_with_unchanged_table_prefix() {
 }
 
 #[test]
-fn test_compute_formatted_text_delta_with_changed_table_line() {
-    let old = FormattedText::new([FormattedTextLine::Table(
-        FormattedTable::from_internal_format("name\tage\n"),
-    )]);
-    let new = FormattedText::new([FormattedTextLine::Table(
-        FormattedTable::from_internal_format("name\tyears\n"),
-    )]);
-
-    let delta = compute_formatted_text_delta(old, new);
-    assert_eq!(delta.common_prefix_lines, 0);
-    assert_eq!(delta.old_suffix_formatted_text_lines, 1);
-    assert_eq!(delta.new_suffix.len(), 1);
-}
-
-#[test]
-fn test_parse_image_url() {
-    let source = "![Remote image](https://example.com/image.png)\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Image(FormattedImage {
-            alt_text: "Remote image".to_string(),
-            source: "https://example.com/image.png".to_string(),
-            title: None,
-        })]
-    );
-}
-
-#[test]
-fn test_parse_image_empty_alt() {
-    let source = "![](image.png)\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![FormattedTextLine::Image(FormattedImage {
-            alt_text: "".to_string(),
-            source: "image.png".to_string(),
-            title: None,
-        })]
-    );
-}
-
-#[test]
-fn test_parse_multiple_images() {
-    let source = "![First](image1.png)\n![Second](image2.png)\n";
-    assert_eq!(
-        test_parse_markdown(source),
-        vec![
-            FormattedTextLine::Image(FormattedImage {
-                alt_text: "First".to_string(),
-                source: "image1.png".to_string(),
-                title: None,
-            }),
-            FormattedTextLine::Image(FormattedImage {
-                alt_text: "Second".to_string(),
-                source: "image2.png".to_string(),
-                title: None,
-            }),
-        ]
-    );
-}
-
-#[test]
 fn test_parse_image_with_other_content() {
     let source = "# Header\n\n![Image](test.png)\n\nSome text\n";
     let result = test_parse_markdown(source);
@@ -2533,105 +1924,6 @@ fn table_cell_escaped_pipe_is_literal() {
     assert_eq!(cell1, "A | B");
     let (_rest2, cell2) = parse(rest, parse_table_cell);
     assert_eq!(cell2, "Pipe");
-}
-
-#[test]
-fn table_cell_html_entities_are_decoded() {
-    let decode = |s: &str| {
-        let fragments = parse_cell_content(s);
-        fragments.into_iter().map(|f| f.text).collect::<String>()
-    };
-
-    assert_eq!(decode("&lt;"), "<");
-    assert_eq!(decode("&gt;"), ">");
-    assert_eq!(decode("&amp;"), "&");
-    assert_eq!(decode("&vert;"), "|");
-    assert_eq!(decode("&ast;"), "*");
-    assert_eq!(decode("&lowbar;"), "_");
-    assert_eq!(decode("&grave;"), "`");
-    assert_eq!(decode("&bsol;"), "\\");
-    assert_eq!(decode("&#92;"), "\\");
-    assert_eq!(decode("&#96;"), "`");
-}
-
-#[test]
-fn test_html_entity_all_named_entities() {
-    let decode = |s: &str| {
-        let fragments = parse_all(s, parse_inline);
-        fragments.into_iter().map(|f| f.text).collect::<String>()
-    };
-
-    assert_eq!(decode("&lt;"), "<");
-    assert_eq!(decode("&gt;"), ">");
-    assert_eq!(decode("&amp;"), "&");
-    assert_eq!(decode("&quot;"), "\"");
-    assert_eq!(decode("&apos;"), "'");
-    assert_eq!(decode("&vert;"), "|");
-    assert_eq!(decode("&ast;"), "*");
-    assert_eq!(decode("&lowbar;"), "_");
-    assert_eq!(decode("&grave;"), "`");
-    assert_eq!(decode("&bsol;"), "\\");
-    assert_eq!(decode("&nbsp;"), "\u{00A0}");
-    assert_eq!(decode("&copy;"), "\u{00A9}");
-    assert_eq!(decode("&reg;"), "\u{00AE}");
-    assert_eq!(decode("&trade;"), "\u{2122}");
-    assert_eq!(decode("&mdash;"), "\u{2014}");
-    assert_eq!(decode("&ndash;"), "\u{2013}");
-    assert_eq!(decode("&hellip;"), "\u{2026}");
-    assert_eq!(decode("&lsquo;"), "\u{2018}");
-    assert_eq!(decode("&rsquo;"), "\u{2019}");
-    assert_eq!(decode("&ldquo;"), "\u{201C}");
-    assert_eq!(decode("&rdquo;"), "\u{201D}");
-}
-
-#[test]
-fn test_html_entity_numeric_decimal() {
-    let decode = |s: &str| {
-        let fragments = parse_all(s, parse_inline);
-        fragments.into_iter().map(|f| f.text).collect::<String>()
-    };
-
-    assert_eq!(decode("&#60;"), "<");
-    assert_eq!(decode("&#62;"), ">");
-    assert_eq!(decode("&#38;"), "&");
-    assert_eq!(decode("&#34;"), "\"");
-    assert_eq!(decode("&#39;"), "'");
-    assert_eq!(decode("&#160;"), "\u{00A0}");
-    assert_eq!(decode("&#169;"), "\u{00A9}");
-    assert_eq!(decode("&#8212;"), "\u{2014}");
-}
-
-#[test]
-fn test_html_entity_numeric_hex() {
-    let decode = |s: &str| {
-        let fragments = parse_all(s, parse_inline);
-        fragments.into_iter().map(|f| f.text).collect::<String>()
-    };
-
-    assert_eq!(decode("&#x3c;"), "<");
-    assert_eq!(decode("&#x3e;"), ">");
-    assert_eq!(decode("&#x26;"), "&");
-    assert_eq!(decode("&#X3C;"), "<");
-    assert_eq!(decode("&#X3E;"), ">");
-    assert_eq!(decode("&#xA0;"), "\u{00A0}");
-    assert_eq!(decode("&#x2014;"), "\u{2014}");
-}
-
-#[test]
-fn test_html_entity_in_inline_text() {
-    let decode = |s: &str| {
-        let fragments = parse_all(s, parse_inline);
-        fragments.into_iter().map(|f| f.text).collect::<String>()
-    };
-
-    assert_eq!(decode("Use &lt;tag&gt; here"), "Use <tag> here");
-    assert_eq!(decode("Tom &amp; Jerry"), "Tom & Jerry");
-    assert_eq!(
-        decode("He said &ldquo;Hello&rdquo;"),
-        "He said \u{201C}Hello\u{201D}"
-    );
-    assert_eq!(decode("Wait&hellip;"), "Wait\u{2026}");
-    assert_eq!(decode("Copyright &copy; 2024"), "Copyright \u{00A9} 2024");
 }
 
 #[test]

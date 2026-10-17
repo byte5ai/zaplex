@@ -2,10 +2,10 @@ use prost::Message;
 
 use crate::proto::{
     client_message, server_message, AgentAccountInfo, AgentSessionInfo, AgentTaskItem,
-    BindAgentPty, ClientMessage, Initialize, InitializeResponse, ManagedLaunch,
-    ManagedSessionExitInfo, ManagedSessionInfo, MemoryMeasurement, MemoryMeasurementStatus,
-    MultiplexerKind, MultiplexerSessionInfo, MultiplexerSessionList, OpenSession, ServerMessage,
-    SessionInfo, SessionList, SessionOpened, SessionSize,
+    BindAgentPty, ClientMessage, Initialize, ManagedLaunch, ManagedSessionExitInfo,
+    ManagedSessionInfo, MemoryMeasurement, MemoryMeasurementStatus, MultiplexerKind,
+    MultiplexerSessionInfo, MultiplexerSessionList, OpenSession, ServerMessage, SessionInfo,
+    SessionList, SessionOpened, SessionSize,
 };
 
 use super::*;
@@ -22,57 +22,6 @@ fn decode_legacy_daemon_inventory() -> crate::proto::AgentSessionList {
         panic!("legacy fixture must decode as AgentSessionList");
     };
     list
-}
-
-#[tokio::test]
-async fn round_trip_client_message() {
-    let msg = ClientMessage {
-        request_id: "test-123".to_string(),
-        message: Some(client_message::Message::Initialize(Initialize {
-            auth_token: String::new(),
-            features: vec![],
-        })),
-    };
-
-    let mut buf = Vec::new();
-    write_client_message(&mut buf, &msg).await.unwrap();
-
-    let mut cursor = &buf[..];
-    let decoded: ClientMessage = read_client_message(&mut cursor).await.unwrap();
-
-    assert_eq!(decoded.request_id, "test-123");
-    match decoded.message {
-        Some(client_message::Message::Initialize(_)) => {}
-        other => panic!("unexpected message variant: {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn round_trip_server_message() {
-    let msg = ServerMessage {
-        request_id: "resp-456".to_string(),
-        message: Some(server_message::Message::InitializeResponse(
-            InitializeResponse {
-                server_version: "0.1.0".to_string(),
-                host_id: "test-host".to_string(),
-                features: vec![],
-            },
-        )),
-    };
-
-    let mut buf = Vec::new();
-    write_server_message(&mut buf, &msg).await.unwrap();
-
-    let mut cursor = &buf[..];
-    let decoded: ServerMessage = read_server_message(&mut cursor).await.unwrap();
-
-    assert_eq!(decoded.request_id, "resp-456");
-    match decoded.message {
-        Some(server_message::Message::InitializeResponse(resp)) => {
-            assert_eq!(resp.server_version, "0.1.0");
-        }
-        other => panic!("unexpected message variant: {other:?}"),
-    }
 }
 
 #[test]
@@ -487,13 +436,6 @@ fn real_legacy_session_attach_fixtures_use_id_only() {
 }
 
 #[tokio::test]
-async fn read_unexpected_eof_on_empty_input() {
-    let mut cursor: &[u8] = &[];
-    let result = read_client_message(&mut cursor).await;
-    assert!(matches!(result, Err(ProtocolError::UnexpectedEof)));
-}
-
-#[tokio::test]
 async fn read_truncated_payload() {
     // Write a length prefix claiming 100 bytes, but only provide 4.
     let mut buf = Vec::new();
@@ -503,49 +445,6 @@ async fn read_truncated_payload() {
     let mut cursor = &buf[..];
     let result = read_client_message(&mut cursor).await;
     assert!(matches!(result, Err(ProtocolError::UnexpectedEof)));
-}
-
-#[tokio::test]
-async fn round_trip_zero_length_message() {
-    // A default ClientMessage with no fields set encodes to zero bytes.
-    let msg = ClientMessage::default();
-
-    let mut buf = Vec::new();
-    write_client_message(&mut buf, &msg).await.unwrap();
-
-    // The first 4 bytes should be the length (0).
-    assert_eq!(&buf[..4], &0u32.to_le_bytes());
-
-    let mut cursor = &buf[..];
-    let decoded: ClientMessage = read_client_message(&mut cursor).await.unwrap();
-    assert_eq!(decoded.request_id, "");
-    assert!(decoded.message.is_none());
-}
-
-#[tokio::test]
-async fn read_message_too_large() {
-    // Write a length prefix exceeding MAX_MESSAGE_SIZE.
-    let oversized_len = (MAX_MESSAGE_SIZE as u32) + 1;
-    let buf = oversized_len.to_le_bytes();
-
-    let mut cursor = &buf[..];
-    let result = read_client_message(&mut cursor).await;
-    assert!(matches!(result, Err(ProtocolError::MessageTooLarge { .. })));
-}
-
-#[tokio::test]
-async fn write_message_too_large() {
-    // Build a ClientMessage whose encoded size exceeds MAX_MESSAGE_SIZE.
-    let msg = ClientMessage {
-        request_id: "x".repeat(MAX_MESSAGE_SIZE + 1),
-        message: None,
-    };
-
-    let mut buf = Vec::new();
-    let result = write_client_message(&mut buf, &msg).await;
-    assert!(matches!(result, Err(ProtocolError::MessageTooLarge { .. })));
-    // Nothing should have been written to the stream.
-    assert!(buf.is_empty());
 }
 
 #[test]

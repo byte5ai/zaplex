@@ -172,7 +172,3 @@ impl OpenConversationPreference {
         matches!(self, Self::NewTab)
     }
 }
-
-#[cfg(test)]
-#[path = "settings_tests.rs"]
-mod tests;

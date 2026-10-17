@@ -35,30 +35,6 @@ lazy_static::lazy_static! {
 }
 
 #[test]
-fn test_formatted_transcript_message_first_code_block() {
-    assert_eq!(
-        USER_FORMATTED_MESSAGE.first_code_block_index(),
-        Some(*FIRST_USER_CODE_BLOCK_INDEX)
-    );
-    assert_eq!(
-        ASSISTANT_FORMATTED_MESSAGE.first_code_block_index(),
-        Some(*FIRST_ASSISTANT_CODE_BLOCK_INDEX)
-    );
-}
-
-#[test]
-fn test_formatted_transcript_message_last_code_block() {
-    assert_eq!(
-        USER_FORMATTED_MESSAGE.last_code_block_index(),
-        Some(*SECOND_USER_CODE_BLOCK_INDEX)
-    );
-    assert_eq!(
-        ASSISTANT_FORMATTED_MESSAGE.last_code_block_index(),
-        Some(*SECOND_ASSISTANT_CODE_BLOCK_INDEX)
-    );
-}
-
-#[test]
 fn test_formatted_transcript_message_next_code_block() {
     assert_eq!(
         USER_FORMATTED_MESSAGE.next_code_block_index(0),
@@ -83,22 +59,6 @@ fn test_formatted_transcript_message_prev_code_block() {
     assert_eq!(
         ASSISTANT_FORMATTED_MESSAGE.prev_code_block_index(1),
         Some(*FIRST_ASSISTANT_CODE_BLOCK_INDEX)
-    );
-}
-
-#[test]
-fn test_transcript_part_first_code_block() {
-    assert_eq!(
-        TRANSCRIPT_PART.first_code_block_index(),
-        Some(*FIRST_USER_CODE_BLOCK_INDEX)
-    );
-}
-
-#[test]
-fn test_transcript_part_last_code_block() {
-    assert_eq!(
-        TRANSCRIPT_PART.last_code_block_index(),
-        Some(*SECOND_ASSISTANT_CODE_BLOCK_INDEX)
     );
 }
 

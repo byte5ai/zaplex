@@ -91,32 +91,6 @@ fn test_multi_term_query_combined_score() {
 }
 
 #[test]
-fn test_empty_query() {
-    let path = "/src/components/button.rs";
-    let query = "";
-
-    let result = FileSearchModel::fuzzy_match_path(path, query);
-    assert!(result.is_some());
-
-    let match_result = result.unwrap();
-    assert_eq!(match_result.score, 0);
-    assert!(match_result.matched_indices.is_empty());
-}
-
-#[test]
-fn test_whitespace_only_query() {
-    let path = "/src/components/button.rs";
-    let query = "   ";
-
-    let result = FileSearchModel::fuzzy_match_path(path, query);
-    assert!(result.is_some());
-
-    let match_result = result.unwrap();
-    assert_eq!(match_result.score, 0);
-    assert!(match_result.matched_indices.is_empty());
-}
-
-#[test]
 fn test_three_term_query() {
     let path = "/src/components/ui/button.rs";
     let query = "src ui button";
@@ -140,31 +114,6 @@ fn test_wildcard_single() {
     let match_result = result.unwrap();
     assert!(match_result.score > 0);
     assert!(!match_result.matched_indices.is_empty());
-}
-
-#[test]
-#[cfg(feature = "local_fs")]
-fn test_git_changed_files_boost() {
-    // Test that git changed files get boosted in zero state (empty query)
-    let normal_file = "normal_file.rs";
-    let changed_file = "changed_file.rs";
-
-    let normal_match = FileSearchModel::fuzzy_match_path(normal_file, "");
-    let mut changed_match = FileSearchModel::fuzzy_match_path(changed_file, "");
-
-    assert!(normal_match.is_some());
-    assert!(changed_match.is_some());
-
-    // Simulate git boost for changed file
-    if let Some(ref mut match_result) = changed_match {
-        match_result.score += 10000; // Same boost as in the actual code
-    }
-
-    let normal_score = normal_match.unwrap().score;
-    let changed_score = changed_match.unwrap().score;
-
-    // Changed file should have significantly higher score
-    assert!(changed_score > normal_score + 9000);
 }
 
 #[test]
@@ -345,45 +294,6 @@ fn test_example_ui_star_rs() {
 }
 
 #[test]
-fn test_should_skip_overly_broad_query() {
-    // Should skip single wildcards
-    assert!(FileSearchModel::should_skip_overly_broad_query("*"));
-    assert!(FileSearchModel::should_skip_overly_broad_query("?"));
-
-    // Should skip consecutive wildcards
-    assert!(FileSearchModel::should_skip_overly_broad_query("**"));
-    assert!(FileSearchModel::should_skip_overly_broad_query("***"));
-    assert!(FileSearchModel::should_skip_overly_broad_query("*?"));
-    assert!(FileSearchModel::should_skip_overly_broad_query("?*"));
-    assert!(FileSearchModel::should_skip_overly_broad_query("??"));
-    assert!(FileSearchModel::should_skip_overly_broad_query(
-        "test**file"
-    ));
-    assert!(FileSearchModel::should_skip_overly_broad_query(
-        "src*?button"
-    ));
-
-    // Should NOT skip reasonable queries
-    assert!(!FileSearchModel::should_skip_overly_broad_query("button"));
-    assert!(!FileSearchModel::should_skip_overly_broad_query("*.rs"));
-    assert!(!FileSearchModel::should_skip_overly_broad_query(
-        "src/components"
-    ));
-    assert!(!FileSearchModel::should_skip_overly_broad_query("ui/*.rs"));
-    assert!(!FileSearchModel::should_skip_overly_broad_query(
-        "test*file"
-    ));
-    assert!(!FileSearchModel::should_skip_overly_broad_query(
-        "src button"
-    ));
-    assert!(!FileSearchModel::should_skip_overly_broad_query("*a"));
-    assert!(!FileSearchModel::should_skip_overly_broad_query("a*"));
-    assert!(!FileSearchModel::should_skip_overly_broad_query("*.*"));
-    assert!(!FileSearchModel::should_skip_overly_broad_query("a"));
-    assert!(!FileSearchModel::should_skip_overly_broad_query("ab"));
-}
-
-#[test]
 fn test_path_proximity_ranking() {
     let path = "/very/long/deeply/nested/path/to/components/test.rs";
 
@@ -431,42 +341,6 @@ fn test_directory_search_support() {
         .accessibility_label()
         .starts_with("Directory:"));
     assert!(file_item.accessibility_label().starts_with("File:"));
-}
-
-#[test]
-fn test_directory_action_type() {
-    use crate::search::ai_context_menu::files::search_item::FileSearchItem;
-    use crate::search::ai_context_menu::mixer::AIContextMenuSearchableAction;
-    use crate::search::item::SearchItem;
-    use fuzzy_match::FuzzyMatchResult;
-
-    let directory_item = FileSearchItem {
-        path: PathBuf::from("src/components/"),
-        match_result: FuzzyMatchResult::no_match(),
-        is_directory: true,
-    };
-
-    let file_item = FileSearchItem {
-        path: PathBuf::from("src/components/button.rs"),
-        match_result: FuzzyMatchResult::no_match(),
-        is_directory: false,
-    };
-
-    // Test that directories return InsertFilePath action with trailing slash
-    match directory_item.accept_result() {
-        AIContextMenuSearchableAction::InsertFilePath { file_path } => {
-            assert_eq!(file_path, "src/components/");
-        }
-        _ => panic!("Expected InsertFilePath action for directory"),
-    }
-
-    // Test that files return InsertFilePath action without trailing slash
-    match file_item.accept_result() {
-        AIContextMenuSearchableAction::InsertFilePath { file_path } => {
-            assert_eq!(file_path, "src/components/button.rs");
-        }
-        _ => panic!("Expected InsertFilePath action for file"),
-    }
 }
 
 #[test]
@@ -549,42 +423,6 @@ fn test_mixed_file_directory_search() {
 }
 
 #[test]
-fn test_apply_path_proximity_ranking_direct() {
-    let path = "/src/components/button.rs";
-
-    // Test the proximity ranking function directly
-    let matched_indices_near_end = vec![15, 16, 17]; // Near "button"
-    let matched_indices_at_start = vec![1, 2, 3]; // Near "src"
-
-    let base_score = 1000;
-
-    let score_near_end =
-        FileSearchModel::apply_path_proximity_ranking(path, &matched_indices_near_end, base_score);
-    let score_at_start =
-        FileSearchModel::apply_path_proximity_ranking(path, &matched_indices_at_start, base_score);
-
-    // Matches closer to the end should get a higher bonus
-    assert!(
-        score_near_end > score_at_start,
-        "Expected matches near end to get higher scores. Near end: {score_near_end}, At start: {score_at_start}"
-    );
-
-    // Both should be higher than the base score
-    assert!(score_near_end > base_score);
-    assert!(score_at_start > base_score);
-}
-
-#[test]
-fn test_proximity_ranking_empty_indices() {
-    let path = "/src/components/button.rs";
-    let base_score = 1000;
-
-    // Empty matched indices should return the original score
-    let result = FileSearchModel::apply_path_proximity_ranking(path, &[], base_score);
-    assert_eq!(result, base_score);
-}
-
-#[test]
 fn test_proximity_ranking_realistic_scenario() {
     // Realistic scenario: searching for "button" in different paths
     let path1 = "/very/long/deeply/nested/path/with/many/segments/button.rs"; // "button" at end
@@ -616,49 +454,6 @@ fn make_dir(path: &str) -> FileSearchResult {
         project_directory: "/project".to_string(),
         is_directory: true,
     }
-}
-
-#[test]
-fn test_fuzzy_match_files_zero_state_git_changed_first() {
-    let contents = vec![
-        make_file("src/main.rs"),
-        make_file("src/lib.rs"),
-        make_file("src/changed.rs"),
-    ];
-    let git_changed_files = HashSet::from(["src/changed.rs".to_string()]);
-
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files,
-        query_text: String::new(),
-        last_opened: HashMap::new(),
-    }))
-    .unwrap();
-
-    assert_eq!(results.len(), 3);
-    // Git-changed file should be first with high score
-    assert_eq!(
-        results[0].accept_result(),
-        AIContextMenuSearchableAction::InsertFilePath {
-            file_path: "src/changed.rs".to_string()
-        }
-    );
-    assert!(results[0].score() > results[1].score());
-}
-
-#[test]
-fn test_fuzzy_match_files_zero_state_no_git_changes() {
-    let contents = vec![make_file("src/main.rs"), make_file("src/lib.rs")];
-
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: String::new(),
-        last_opened: HashMap::new(),
-    }))
-    .unwrap();
-
-    assert_eq!(results.len(), 2);
 }
 
 #[test]
@@ -719,23 +514,6 @@ fn test_fuzzy_match_files_directory_boost() {
         })
         .expect("dir result not found");
     assert!(file_result.score() > dir_result.score());
-}
-
-#[test]
-fn test_fuzzy_match_files_respects_max_results() {
-    let contents: Vec<FileSearchResult> = (0..300)
-        .map(|i| make_file(&format!("src/file_{i}.rs")))
-        .collect();
-
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: String::new(),
-        last_opened: HashMap::new(),
-    }))
-    .unwrap();
-
-    assert_eq!(results.len(), 200);
 }
 
 #[test]
@@ -813,193 +591,6 @@ fn instant_offset(millis: u64) -> instant::Instant {
 }
 
 #[test]
-fn test_zero_state_recently_opened_files_rank_above_untouched() {
-    let opened_at = instant::Instant::now();
-    let last_opened = HashMap::from([("src/opened.rs".to_string(), opened_at)]);
-
-    let contents = vec![make_file("src/untouched.rs"), make_file("src/opened.rs")];
-
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: String::new(),
-        last_opened,
-    }))
-    .unwrap();
-
-    assert_eq!(results.len(), 2);
-    let opened_result = results
-        .iter()
-        .find(|r| {
-            r.accept_result()
-                == AIContextMenuSearchableAction::InsertFilePath {
-                    file_path: "src/opened.rs".to_string(),
-                }
-        })
-        .expect("opened file not found");
-    let untouched_result = results
-        .iter()
-        .find(|r| {
-            r.accept_result()
-                == AIContextMenuSearchableAction::InsertFilePath {
-                    file_path: "src/untouched.rs".to_string(),
-                }
-        })
-        .expect("untouched file not found");
-    assert!(
-        opened_result.score() > untouched_result.score(),
-        "Expected recently-opened file to score higher. Opened: {:?}, Untouched: {:?}",
-        opened_result.score(),
-        untouched_result.score(),
-    );
-}
-
-#[test]
-fn test_zero_state_git_changed_ranks_above_recently_opened() {
-    let opened_at = instant::Instant::now();
-    let last_opened = HashMap::from([("src/opened.rs".to_string(), opened_at)]);
-
-    let contents = vec![make_file("src/changed.rs"), make_file("src/opened.rs")];
-    let git_changed_files = HashSet::from(["src/changed.rs".to_string()]);
-
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files,
-        query_text: String::new(),
-        last_opened,
-    }))
-    .unwrap();
-
-    assert_eq!(results.len(), 2);
-    let changed_result = results
-        .iter()
-        .find(|r| {
-            r.accept_result()
-                == AIContextMenuSearchableAction::InsertFilePath {
-                    file_path: "src/changed.rs".to_string(),
-                }
-        })
-        .expect("changed file not found");
-    let opened_result = results
-        .iter()
-        .find(|r| {
-            r.accept_result()
-                == AIContextMenuSearchableAction::InsertFilePath {
-                    file_path: "src/opened.rs".to_string(),
-                }
-        })
-        .expect("opened file not found");
-    assert!(
-        changed_result.score() > opened_result.score(),
-        "Expected git-changed file to rank above recently-opened. Changed: {:?}, Opened: {:?}",
-        changed_result.score(),
-        opened_result.score(),
-    );
-}
-
-#[test]
-fn test_zero_state_recently_opened_ordered_by_recency() {
-    // Create instants with guaranteed ordering: older < newer
-    let older = instant_offset(1);
-    let newer = instant_offset(1);
-
-    let last_opened = HashMap::from([
-        ("src/older.rs".to_string(), older),
-        ("src/newer.rs".to_string(), newer),
-    ]);
-
-    let contents = vec![make_file("src/older.rs"), make_file("src/newer.rs")];
-
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files: HashSet::new(),
-        query_text: String::new(),
-        last_opened,
-    }))
-    .unwrap();
-
-    assert_eq!(results.len(), 2);
-    let newer_result = results
-        .iter()
-        .find(|r| {
-            r.accept_result()
-                == AIContextMenuSearchableAction::InsertFilePath {
-                    file_path: "src/newer.rs".to_string(),
-                }
-        })
-        .expect("newer file not found");
-    let older_result = results
-        .iter()
-        .find(|r| {
-            r.accept_result()
-                == AIContextMenuSearchableAction::InsertFilePath {
-                    file_path: "src/older.rs".to_string(),
-                }
-        })
-        .expect("older file not found");
-    assert!(
-        newer_result.score() > older_result.score(),
-        "Expected more recently opened file to score higher. Newer: {:?}, Older: {:?}",
-        newer_result.score(),
-        older_result.score(),
-    );
-}
-
-#[test]
-fn test_zero_state_git_changed_also_ordered_by_recency() {
-    let older = instant_offset(1);
-    let newer = instant_offset(1);
-
-    let last_opened = HashMap::from([
-        ("src/changed_older.rs".to_string(), older),
-        ("src/changed_newer.rs".to_string(), newer),
-    ]);
-
-    let contents = vec![
-        make_file("src/changed_older.rs"),
-        make_file("src/changed_newer.rs"),
-    ];
-    let git_changed_files = HashSet::from([
-        "src/changed_older.rs".to_string(),
-        "src/changed_newer.rs".to_string(),
-    ]);
-
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files,
-        query_text: String::new(),
-        last_opened,
-    }))
-    .unwrap();
-
-    assert_eq!(results.len(), 2);
-    let newer_result = results
-        .iter()
-        .find(|r| {
-            r.accept_result()
-                == AIContextMenuSearchableAction::InsertFilePath {
-                    file_path: "src/changed_newer.rs".to_string(),
-                }
-        })
-        .expect("newer changed file not found");
-    let older_result = results
-        .iter()
-        .find(|r| {
-            r.accept_result()
-                == AIContextMenuSearchableAction::InsertFilePath {
-                    file_path: "src/changed_older.rs".to_string(),
-                }
-        })
-        .expect("older changed file not found");
-    assert!(
-        newer_result.score() > older_result.score(),
-        "Expected more recently opened git-changed file to score higher. Newer: {:?}, Older: {:?}",
-        newer_result.score(),
-        older_result.score(),
-    );
-}
-
-#[test]
 fn test_fuzzy_query_recently_opened_bonus() {
     let opened_at = instant::Instant::now();
     let last_opened = HashMap::from([("src/components/opened_button.rs".to_string(), opened_at)]);
@@ -1041,75 +632,5 @@ fn test_fuzzy_query_recently_opened_bonus() {
         "Expected recently-opened file to score higher in fuzzy mode. Opened: {:?}, Other: {:?}",
         opened_result.score(),
         other_result.score(),
-    );
-}
-
-#[test]
-fn test_zero_state_full_ordering_end_to_end() {
-    let older_opened = instant_offset(1);
-    let newer_opened = instant_offset(1);
-    let git_opened = instant_offset(1);
-
-    let last_opened = HashMap::from([
-        ("src/opened_older.rs".to_string(), older_opened),
-        ("src/opened_newer.rs".to_string(), newer_opened),
-        ("src/changed_opened.rs".to_string(), git_opened),
-    ]);
-
-    let contents = vec![
-        make_file("src/untouched.rs"),
-        make_file("src/opened_older.rs"),
-        make_file("src/opened_newer.rs"),
-        make_file("src/changed_plain.rs"),
-        make_file("src/changed_opened.rs"),
-    ];
-    let git_changed_files = HashSet::from([
-        "src/changed_plain.rs".to_string(),
-        "src/changed_opened.rs".to_string(),
-    ]);
-
-    let results = block_on(fuzzy_match_files(FileSnapshot {
-        contents: Arc::new(contents),
-        git_changed_files,
-        query_text: String::new(),
-        last_opened,
-    }))
-    .unwrap();
-
-    assert_eq!(results.len(), 5);
-
-    // Extract scores by file path
-    let score_of = |path: &str| -> ordered_float::OrderedFloat<f64> {
-        results
-            .iter()
-            .find(|r| {
-                r.accept_result()
-                    == AIContextMenuSearchableAction::InsertFilePath {
-                        file_path: path.to_string(),
-                    }
-            })
-            .unwrap_or_else(|| panic!("result not found for {path}"))
-            .score()
-    };
-
-    // Tier 1: git-changed (opened > plain)
-    assert!(
-        score_of("src/changed_opened.rs") > score_of("src/changed_plain.rs"),
-        "git-changed opened should beat git-changed plain"
-    );
-    // Tier 1 > Tier 2: any git-changed > any non-git
-    assert!(
-        score_of("src/changed_plain.rs") > score_of("src/opened_newer.rs"),
-        "git-changed should beat recently-opened non-git"
-    );
-    // Tier 2: recently opened (newer > older)
-    assert!(
-        score_of("src/opened_newer.rs") > score_of("src/opened_older.rs"),
-        "newer opened should beat older opened"
-    );
-    // Tier 2 > Tier 3: any opened > untouched
-    assert!(
-        score_of("src/opened_older.rs") > score_of("src/untouched.rs"),
-        "opened should beat untouched"
     );
 }

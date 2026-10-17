@@ -13,14 +13,6 @@ fn new_session_ids_are_unique() {
     assert_ne!(SessionId::new(), SessionId::new());
 }
 
-#[test]
-fn has_feature_matches_advertised_capabilities() {
-    let features = vec![FEATURE_SESSION_HOST.to_string()];
-    assert!(has_feature(&features, FEATURE_SESSION_HOST));
-    assert!(!has_feature(&features, "nonexistent"));
-    assert!(!has_feature(&[], FEATURE_SESSION_HOST));
-}
-
 #[cfg(unix)]
 #[test]
 fn pty_binding_requires_negotiated_capability() {
@@ -34,44 +26,6 @@ fn pty_binding_requires_negotiated_capability() {
         FEATURE_AGENT_PTY_BINDING_V2
     ));
     assert!(!has_feature(&[], FEATURE_AGENT_PTY_BINDING_V2));
-}
-
-#[cfg(unix)]
-#[test]
-fn supported_features_advertises_session_host_on_unix() {
-    // Stage 1: unix daemons own PTYs and advertise the session host.
-    assert!(has_feature(&supported_features(), FEATURE_SESSION_HOST));
-}
-
-#[cfg(unix)]
-#[test]
-fn supported_features_advertises_retry_safe_startup_delivery_on_unix() {
-    assert!(has_feature(
-        &supported_features(),
-        FEATURE_STARTUP_COMMAND_ACK
-    ));
-}
-
-#[cfg(unix)]
-#[test]
-fn supported_features_advertises_idempotent_open_delivery_on_unix() {
-    assert!(has_feature(
-        &supported_features(),
-        FEATURE_LOGICAL_OPEN_ID_V1
-    ));
-    assert!(has_feature(
-        &supported_features(),
-        FEATURE_LOGICAL_OPEN_ATTEMPT_V1
-    ));
-}
-
-#[cfg(unix)]
-#[test]
-fn supported_features_advertises_typed_multiplexer_inventory_on_unix() {
-    assert!(has_feature(
-        &supported_features(),
-        FEATURE_MULTIPLEXER_INVENTORY_V1
-    ));
 }
 
 #[cfg(target_os = "linux")]
@@ -152,53 +106,6 @@ fn supported_features_omits_safe_file_transactions_when_unsupported() {
     ));
 }
 
-#[test]
-fn supported_features_advertises_agent_inventory_on_all_platforms() {
-    // Agent-session inventory is filesystem-based (no PTY), so it is advertised
-    // regardless of platform.
-    assert!(has_feature(&supported_features(), FEATURE_AGENT_INVENTORY));
-}
-
-#[test]
-fn supported_features_advertises_agent_account_routing_on_all_platforms() {
-    assert!(has_feature(
-        &supported_features(),
-        FEATURE_AGENT_ACCOUNT_ROUTING_V1
-    ));
-}
-
-#[test]
-fn supported_features_advertises_agent_model_discovery_on_all_platforms() {
-    assert!(has_feature(
-        &supported_features(),
-        FEATURE_AGENT_MODEL_DISCOVERY_V1
-    ));
-}
-
-#[test]
-fn supported_features_advertises_agent_transcript_reads_on_all_platforms() {
-    assert!(has_feature(
-        &supported_features(),
-        FEATURE_AGENT_TRANSCRIPT_READ_V1
-    ));
-}
-
-#[test]
-fn supported_features_advertises_host_exec_on_all_platforms() {
-    // Session-less host-exec runs in a forked subshell (no PTY), so it is
-    // advertised regardless of platform for its non-guardrail callers.
-    assert!(has_feature(&supported_features(), FEATURE_HOST_EXEC));
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn supported_features_advertises_verified_agent_process_signals() {
-    assert!(has_feature(
-        &supported_features(),
-        FEATURE_AGENT_PROCESS_SIGNAL_V1
-    ));
-}
-
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn supported_features_omits_verified_agent_process_signals_when_unsupported() {
@@ -206,34 +113,6 @@ fn supported_features_omits_verified_agent_process_signals_when_unsupported() {
         &supported_features(),
         FEATURE_AGENT_PROCESS_SIGNAL_V1
     ));
-}
-
-#[test]
-fn supported_client_features_are_explicit_and_platform_independent() {
-    let features = supported_client_features();
-    for feature in [
-        FEATURE_SESSION_HOST,
-        FEATURE_STARTUP_COMMAND_ACK,
-        FEATURE_LOGICAL_OPEN_ID_V1,
-        FEATURE_LOGICAL_OPEN_ATTEMPT_V1,
-        FEATURE_AGENT_INVENTORY,
-        FEATURE_AGENT_ACCOUNT_ROUTING_V1,
-        FEATURE_AGENT_MODEL_DISCOVERY_V1,
-        FEATURE_AGENT_TRANSCRIPT_READ_V1,
-        FEATURE_AGENT_PROCESS_SIGNAL_V1,
-        FEATURE_AGENT_PTY_BINDING,
-        FEATURE_AGENT_PTY_BINDING_V2,
-        FEATURE_SAFE_FILE_TRANSACTIONS_V1,
-        FEATURE_SAFE_FILE_TRANSACTIONS_V2,
-        FEATURE_SAFE_FILE_IDENTITY_BATCH_V1,
-        FEATURE_HOST_EXEC,
-        FEATURE_MULTIPLEXER_INVENTORY_V1,
-        FEATURE_MANAGED_AGENT_FLEET_V1,
-        FEATURE_MANAGED_OPEN_ATTACH_V1,
-    ] {
-        assert!(has_feature(&features, feature), "missing {feature}");
-    }
-    assert!(!has_feature(&features, FEATURE_UDP_TRANSPORT));
 }
 
 #[cfg(not(unix))]

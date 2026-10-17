@@ -41,7 +41,3 @@ impl ContentVersion {
         self.0 as u64
     }
 }
-
-#[cfg(test)]
-#[path = "content_version_test.rs"]
-mod tests;

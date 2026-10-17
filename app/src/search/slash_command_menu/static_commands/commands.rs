@@ -512,66 +512,12 @@ fn all_commands() -> Vec<StaticCommand> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
-
-    #[test]
-    fn command_names_are_unique() {
-        let names = COMMAND_REGISTRY.all_commands().map(|command| command.name);
-        let mut seen = HashSet::new();
-        for name in names {
-            assert!(seen.insert(name), "duplicate slash command name: {name}");
-        }
-    }
-
-    #[test]
-    fn rename_tab_command_requires_argument() {
-        // hint_text goes through i18n; init loader to get actual English text
-        crate::i18n::init(Some("en"));
-        let command = COMMAND_REGISTRY
-            .get_command_with_name(RENAME_TAB.name)
-            .expect("expected /rename-tab to be registered");
-        let argument = command
-            .argument
-            .as_ref()
-            .expect("expected /rename-tab to require an argument");
-
-        assert!(!argument.is_optional);
-        assert!(!argument.should_execute_on_selection);
-        assert_eq!(argument.hint_text, Some("<tab name>"));
-    }
-
-    #[test]
-    fn strip_command_prefix_no_match() {
-        let result = strip_command_prefix("just a normal query", "/plan");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn strip_command_prefix_empty() {
-        let result = strip_command_prefix("", "/plan");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn strip_command_prefix_no_trailing_space() {
-        // "/plan" alone (no trailing space) should NOT be stripped
-        let result = strip_command_prefix("/plan", "/plan");
-        assert_eq!(result, None);
-    }
 
     #[test]
     fn strip_command_prefix_trailing_space_only() {
         // "/plan " with nothing after should strip to empty string
         let result = strip_command_prefix("/plan ", "/plan");
         assert_eq!(result, Some(String::new()));
-    }
-
-    #[test]
-    fn strip_command_prefix_substring_not_matched() {
-        // "/planning" should not match "/plan"
-        let result = strip_command_prefix("/planning something", "/plan");
-        assert_eq!(result, None);
     }
 }

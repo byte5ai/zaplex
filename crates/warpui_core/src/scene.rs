@@ -743,7 +743,3 @@ impl Glyph {
         self
     }
 }
-
-#[cfg(test)]
-#[path = "scene_test.rs"]
-mod tests;

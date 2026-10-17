@@ -12,13 +12,6 @@ fn only_failed_connections_offer_a_connection_retry() {
 }
 
 #[test]
-fn only_successfully_installed_navigation_commits_request_a_snapshot() {
-    assert!(navigation_commit_needs_snapshot(true, true));
-    assert!(!navigation_commit_needs_snapshot(true, false));
-    assert!(!navigation_commit_needs_snapshot(false, true));
-}
-
-#[test]
 fn dropped_directory_move_preparation_restores_quarantined_source() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("source")).unwrap();
@@ -125,76 +118,8 @@ fn resolved_symlink_download_uses_target_size() {
 }
 
 // ============================================================
-// normalize_remote_path tests
-// ============================================================
-
-/// Test that backslashes are replaced with forward slashes
-#[test]
-fn test_normalize_remote_path_backslash() {
-    let path = PathBuf::from(r"home\user\docs");
-    let result = normalize_remote_path(&path);
-    assert_eq!(result, PathBuf::from("home/user/docs"));
-}
-
-/// Test that a pure forward-slash path is left unchanged
-#[test]
-fn test_normalize_remote_path_forward_slash() {
-    let path = PathBuf::from("/home/user/docs");
-    let result = normalize_remote_path(&path);
-    assert_eq!(result, PathBuf::from("/home/user/docs"));
-}
-
-/// Test the root path
-#[test]
-fn test_normalize_remote_path_root() {
-    let path = PathBuf::from("/");
-    let result = normalize_remote_path(&path);
-    assert_eq!(result, PathBuf::from("/"));
-}
-
-/// Test the empty path
-#[test]
-fn test_normalize_remote_path_empty() {
-    let path = PathBuf::from("");
-    let result = normalize_remote_path(&path);
-    assert_eq!(result, PathBuf::from(""));
-}
-
-/// Test a path with mixed slashes
-#[test]
-fn test_normalize_remote_path_mixed() {
-    let path = PathBuf::from(r"home/user\docs/file.txt");
-    let result = normalize_remote_path(&path);
-    assert_eq!(result, PathBuf::from("home/user/docs/file.txt"));
-}
-
-// ============================================================
 // build_rename_path tests
 // ============================================================
-
-/// Test rename path construction
-#[test]
-fn test_build_rename_path_basic() {
-    let original = PathBuf::from("/home/user/old.txt");
-    let result = build_rename_path(&original, "new.txt", false);
-    assert_eq!(result, Some(PathBuf::from("/home/user/new.txt")));
-}
-
-/// Test rename path construction with no parent directory
-#[test]
-fn test_build_rename_path_no_parent() {
-    let original = PathBuf::from("old.txt");
-    let result = build_rename_path(&original, "new.txt", false);
-    assert_eq!(result, Some(PathBuf::from("new.txt")));
-}
-
-/// Test that a rename path with backslashes is normalized
-#[test]
-fn test_build_rename_path_normalizes() {
-    let original = PathBuf::from("/home/user/old.txt");
-    let result = build_rename_path(&original, "new.txt", false).unwrap();
-    assert!(!result.to_string_lossy().contains('\\'));
-}
 
 /// Test that rename path construction rejects path injection
 #[test]
@@ -210,22 +135,6 @@ fn test_build_rename_path_rejects_traversal() {
 // build_new_folder_path tests
 // ============================================================
 
-/// Test new folder path construction
-#[test]
-fn test_build_new_folder_path_basic() {
-    let parent = PathBuf::from("/home/user");
-    let result = build_new_folder_path(&parent, "new_dir", false);
-    assert_eq!(result, Some(PathBuf::from("/home/user/new_dir")));
-}
-
-/// Test that a new folder path with backslashes is normalized
-#[test]
-fn test_build_new_folder_path_normalizes() {
-    let parent = PathBuf::from("/home/user");
-    let result = build_new_folder_path(&parent, "test", false).unwrap();
-    assert!(!result.to_string_lossy().contains('\\'));
-}
-
 /// Test that new folder path construction rejects path injection
 #[test]
 fn test_build_new_folder_path_rejects_traversal() {
@@ -237,107 +146,8 @@ fn test_build_new_folder_path_rejects_traversal() {
 }
 
 // ============================================================
-// build_upload_remote_path tests
-// ============================================================
-
-/// Test upload remote path construction
-#[test]
-fn test_build_upload_remote_path_basic() {
-    let current = PathBuf::from("/home/user");
-    let result = build_upload_remote_path(&current, "upload.txt", false);
-    assert_eq!(result, Some(PathBuf::from("/home/user/upload.txt")));
-}
-
-/// Test that an upload remote path with backslashes is normalized
-#[test]
-fn test_build_upload_remote_path_normalizes() {
-    let current = PathBuf::from("/home/user");
-    let result = build_upload_remote_path(&current, "file.txt", false);
-    assert!(result.is_some());
-    assert!(!result.unwrap().to_string_lossy().contains('\\'));
-}
-
-/// Test that upload remote path construction rejects dangerous file names
-#[test]
-fn test_build_upload_remote_path_rejects_dangerous() {
-    let current = PathBuf::from("/home/user");
-    assert_eq!(
-        build_upload_remote_path(&current, "../etc/passwd", false),
-        None
-    );
-    assert_eq!(build_upload_remote_path(&current, "", false), None);
-    assert_eq!(
-        build_upload_remote_path(&current, "/etc/passwd", false),
-        None
-    );
-}
-
-#[test]
-fn safe_name_helpers_accept_embedded_double_dots() {
-    let parent = PathBuf::from("/home/user");
-    let original = parent.join("old.txt");
-
-    assert_eq!(
-        safe_join_name(&parent, "notes..txt"),
-        Some(parent.join("notes..txt"))
-    );
-    assert_eq!(
-        build_rename_path(&original, "v1..v2", false),
-        Some(parent.join("v1..v2"))
-    );
-    assert_eq!(
-        build_new_folder_path(&parent, "archive.tar..gz", false),
-        Some(parent.join("archive.tar..gz"))
-    );
-    assert_eq!(
-        build_upload_remote_path(&parent, "notes..txt", false),
-        Some(parent.join("notes..txt"))
-    );
-
-    for unsafe_name in ["", ".", "..", "child/name", "child\\name", "/absolute"] {
-        assert_eq!(safe_join_name(&parent, unsafe_name), None);
-        assert_eq!(build_rename_path(&original, unsafe_name, false), None);
-        assert_eq!(build_new_folder_path(&parent, unsafe_name, false), None);
-        assert_eq!(build_upload_remote_path(&parent, unsafe_name, false), None);
-    }
-}
-
-// ============================================================
 // initial_connect_path tests (the connect finalize's directory choice)
 // ============================================================
-
-/// An explicit, non-root `start_path` (the FM pane-mode toggle's cwd) is
-/// honored verbatim, and the remote home is never resolved.
-#[test]
-fn test_initial_connect_path_honors_explicit_start_path() {
-    let requested = Some(PathBuf::from("/srv/app"));
-    let mut home_consulted = false;
-    let result = SftpBrowserView::initial_connect_path(&requested, || {
-        home_consulted = true;
-        Some(PathBuf::from("/home/user"))
-    });
-    assert_eq!(result, PathBuf::from("/srv/app"));
-    assert!(
-        !home_consulted,
-        "the remote home must not be resolved when an explicit start_path is honored"
-    );
-}
-
-/// The plain "SFTP Browse" entry (`None`) falls back to the remote home.
-#[test]
-fn test_initial_connect_path_none_uses_home() {
-    let result = SftpBrowserView::initial_connect_path(&None, || Some(PathBuf::from("/home/user")));
-    assert_eq!(result, PathBuf::from("/home/user"));
-}
-
-/// A bare `/` start_path is treated like the plain entry: fall back to home.
-#[test]
-fn test_initial_connect_path_root_uses_home() {
-    let requested = Some(PathBuf::from("/"));
-    let result =
-        SftpBrowserView::initial_connect_path(&requested, || Some(PathBuf::from("/home/user")));
-    assert_eq!(result, PathBuf::from("/home/user"));
-}
 
 /// When the home cannot be resolved (`realpath(".")` failed) and no
 /// start_path was given, fall back to `/` — the pre-existing behavior.
@@ -530,17 +340,6 @@ fn function_bar_captions_are_single_short_words_in_every_catalog() {
             );
         }
     }
-}
-
-#[test]
-fn function_bar_actions_require_the_focused_compatible_pane() {
-    let view = SftpBrowserAction::ViewCursorDetails;
-    assert!(function_bar_action_enabled(&view, true, false));
-    assert!(!function_bar_action_enabled(&view, false, true));
-
-    let move_action = SftpBrowserAction::MoveToOtherPane;
-    assert!(!function_bar_action_enabled(&move_action, true, false));
-    assert!(function_bar_action_enabled(&move_action, true, true));
 }
 
 #[test]

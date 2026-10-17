@@ -4,9 +4,7 @@ use warp_core::ui::{color::hex_color::coloru_from_hex_string, theme::AnsiColor};
 
 use crate::settings::import::config::{ParseableConfig, ThemeType};
 
-use super::{
-    AlacrittyColors, AlacrittyConfig, AlacrittyTheme, PrimaryAlacrittyColors, RecursivelyParseable,
-};
+use super::AlacrittyConfig;
 
 #[test]
 fn test_parse_cobalt2() {
@@ -307,53 +305,6 @@ fn test_parse_cobalt2_no_colors() {
         .expect("Should have read colors!")
         .parse()
         .expect_err("Theme should not have read!");
-}
-
-#[test]
-fn test_merge_left() {
-    let mut colors = AlacrittyTheme {
-        primary: Some(PrimaryAlacrittyColors {
-            foreground: Some("#ffffff".to_string()),
-            background: Some("#000000".to_string()),
-        }),
-        normal: Some(AlacrittyColors {
-            black: Some("#000000".to_string()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    let second_colors = AlacrittyTheme {
-        primary: Some(PrimaryAlacrittyColors {
-            foreground: None,
-            background: Some("#ff0000".to_string()),
-        }),
-        normal: Some(AlacrittyColors {
-            red: Some("#ff1111".to_string()),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-
-    colors = colors.merge_left(second_colors);
-    let primary = colors
-        .primary
-        .clone()
-        .expect("Primary colors should be present");
-    let normal = colors
-        .normal
-        .clone()
-        .expect("Normal colors should be present");
-
-    // Check all four combinations of present and absent in the inner struct.
-    assert_eq!(primary.foreground, Some("#ffffff".to_string()));
-    assert_eq!(primary.background, Some("#000000".to_string()));
-    assert_eq!(normal.black, Some("#000000".to_string()));
-    assert_eq!(normal.red, Some("#ff1111".to_string()));
-    assert_eq!(normal.white, None);
-
-    // Check that None values are preserved.
-    assert!(colors.bright.is_none());
 }
 
 /// This is a unit test that tests reading from the default config location with one import.

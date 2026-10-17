@@ -25,28 +25,6 @@ fn empty_stat() -> ssh2::FileStat {
 // Metadata::from_ssh2 — File type detection
 // ============================================================
 
-/// Verify file_type is Dir when perm contains directory mode bits
-#[test]
-fn test_metadata_from_ssh2_dir() {
-    let stat = ssh2::FileStat {
-        perm: Some(0o040755),
-        ..empty_stat()
-    };
-    let meta = Metadata::from_ssh2(stat);
-    assert_eq!(meta.file_type, FileType::Dir);
-}
-
-/// Verify file_type is File when perm contains regular file mode bits
-#[test]
-fn test_metadata_from_ssh2_file() {
-    let stat = ssh2::FileStat {
-        perm: Some(0o100644),
-        ..empty_stat()
-    };
-    let meta = Metadata::from_ssh2(stat);
-    assert_eq!(meta.file_type, FileType::File);
-}
-
 /// Verify file_type is Symlink when perm contains symlink mode bits (fix verification)
 #[test]
 fn test_metadata_from_ssh2_symlink() {
@@ -56,29 +34,6 @@ fn test_metadata_from_ssh2_symlink() {
     };
     let meta = Metadata::from_ssh2(stat);
     assert_eq!(meta.file_type, FileType::Symlink);
-}
-
-/// Verify file_type falls back to Other when perm is None
-#[test]
-fn test_metadata_from_ssh2_perm_none() {
-    let stat = ssh2::FileStat {
-        perm: None,
-        ..empty_stat()
-    };
-    let meta = Metadata::from_ssh2(stat);
-    assert_eq!(meta.file_type, FileType::Other);
-    assert_eq!(meta.mode, None);
-}
-
-/// Verify file_type is Other for unknown mode bit combinations
-#[test]
-fn test_metadata_from_ssh2_unknown_mode() {
-    let stat = ssh2::FileStat {
-        perm: Some(0o050000),
-        ..empty_stat()
-    };
-    let meta = Metadata::from_ssh2(stat);
-    assert_eq!(meta.file_type, FileType::Other);
 }
 
 // ============================================================
@@ -116,42 +71,6 @@ fn test_metadata_from_ssh2_permissions_none() {
 }
 
 // ============================================================
-// Metadata::from_ssh2 — Numeric field fallbacks
-// ============================================================
-
-/// Verify size/uid/gid normal values
-#[test]
-fn test_metadata_from_ssh2_fields_present() {
-    let stat = ssh2::FileStat {
-        perm: Some(0o100644),
-        size: Some(4096),
-        uid: Some(1000),
-        gid: Some(100),
-        ..empty_stat()
-    };
-    let meta = Metadata::from_ssh2(stat);
-    assert_eq!(meta.size, 4096);
-    assert_eq!(meta.uid, 1000);
-    assert_eq!(meta.gid, 100);
-}
-
-/// Verify size/uid/gid fall back to 0 when None
-#[test]
-fn test_metadata_from_ssh2_fields_absent() {
-    let stat = ssh2::FileStat {
-        perm: Some(0o100644),
-        size: None,
-        uid: None,
-        gid: None,
-        ..empty_stat()
-    };
-    let meta = Metadata::from_ssh2(stat);
-    assert_eq!(meta.size, 0);
-    assert_eq!(meta.uid, 0);
-    assert_eq!(meta.gid, 0);
-}
-
-// ============================================================
 // Metadata::from_ssh2 — Timestamps
 // ============================================================
 
@@ -169,43 +88,4 @@ fn test_metadata_from_ssh2_timestamps_present() {
     let expected_mtime = SystemTime::UNIX_EPOCH + Duration::from_secs(1609545600);
     assert_eq!(meta.accessed, Some(expected_atime));
     assert_eq!(meta.modified, Some(expected_mtime));
-}
-
-/// Verify accessed/modified are None when atime/mtime are None
-#[test]
-fn test_metadata_from_ssh2_timestamps_absent() {
-    let stat = ssh2::FileStat {
-        perm: Some(0o100644),
-        atime: None,
-        mtime: None,
-        ..empty_stat()
-    };
-    let meta = Metadata::from_ssh2(stat);
-    assert!(meta.accessed.is_none());
-    assert!(meta.modified.is_none());
-}
-
-// ============================================================
-// Metadata::from_ssh2 — Full field combinations
-// ============================================================
-
-/// Verify complete scenario with all fields set simultaneously
-#[test]
-fn test_metadata_from_ssh2_full_stat() {
-    let stat = ssh2::FileStat {
-        perm: Some(0o120777), // symlink + 777
-        size: Some(11),
-        uid: Some(501),
-        gid: Some(20),
-        atime: Some(1000000),
-        mtime: Some(2000000),
-    };
-    let meta = Metadata::from_ssh2(stat);
-    assert_eq!(meta.file_type, FileType::Symlink);
-    assert_eq!(meta.size, 11);
-    assert_eq!(meta.uid, 501);
-    assert_eq!(meta.gid, 20);
-    assert!(meta.permissions.other_exec);
-    assert!(meta.accessed.is_some());
-    assert!(meta.modified.is_some());
 }

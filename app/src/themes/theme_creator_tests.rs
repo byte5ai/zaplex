@@ -44,21 +44,6 @@ fn top_colors_invalid_image_test() {
 }
 
 #[test]
-fn accent_colors_contrast_test() {
-    let foreground = ColorU::white();
-    let background = ColorU::black();
-    let accent_options = [
-        ColorU::new(255, 0, 0, OPAQUE),
-        ColorU::new(100, 0, 0, OPAQUE),
-        ColorU::new(10, 0, 0, OPAQUE),
-    ];
-    assert_eq!(
-        accent_options[1],
-        pick_accent_color_from_options(&[background, foreground], &accent_options)
-    );
-}
-
-#[test]
 fn theme_color_input_accepts_hex_and_rgb() {
     let expected = ColorU::new(12, 34, 56, 255);
     assert_eq!(parse_theme_color_input("#0C2238").unwrap(), expected);

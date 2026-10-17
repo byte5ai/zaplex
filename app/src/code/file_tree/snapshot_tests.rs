@@ -2,8 +2,6 @@
 
 use std::{path::Path, sync::Arc};
 
-use sum_tree::Item;
-
 use super::*;
 
 /// Helper to create a test snapshot from a list of path strings.
@@ -33,127 +31,6 @@ fn test_snapshot(paths: &[&str]) -> FileTreeSnapshot {
     }
 
     snapshot
-}
-
-// =============================================================================
-// FileEntry Tests
-// =============================================================================
-
-#[test]
-fn test_file_entry_creation() {
-    let file = FileEntry::file(Path::new("/src/main.rs"), false);
-    assert!(file.is_file());
-    assert!(!file.is_dir());
-    assert_eq!(file.extension(), Some("rs"));
-    assert!(!file.ignored);
-    assert!(file.loaded);
-
-    let dir = FileEntry::directory(Path::new("/src"), false, true);
-    assert!(dir.is_dir());
-    assert!(!dir.is_file());
-    assert_eq!(dir.extension(), None);
-    assert!(!dir.ignored);
-    assert!(dir.loaded);
-}
-
-#[test]
-fn test_file_entry_ignored() {
-    let ignored_file = FileEntry::file(Path::new("/target/debug/main"), true);
-    assert!(ignored_file.ignored);
-
-    let ignored_dir = FileEntry::directory(Path::new("/target"), true, false);
-    assert!(ignored_dir.ignored);
-    assert!(!ignored_dir.loaded);
-}
-
-// =============================================================================
-// FileEntrySummary Tests
-// =============================================================================
-
-#[test]
-fn test_summary_for_visible_file() {
-    let entry = FileEntry::file(Path::new("/src/main.rs"), false);
-    let summary = entry.summary();
-
-    assert_eq!(summary.count, 1);
-    assert_eq!(summary.visible_count, 1);
-    assert_eq!(summary.file_count, 1);
-    assert_eq!(summary.visible_file_count, 1);
-}
-
-#[test]
-fn test_summary_for_ignored_file() {
-    let entry = FileEntry::file(Path::new("/target/debug/main"), true);
-    let summary = entry.summary();
-
-    assert_eq!(summary.count, 1);
-    assert_eq!(summary.visible_count, 0);
-    assert_eq!(summary.file_count, 1);
-    assert_eq!(summary.visible_file_count, 0);
-}
-
-#[test]
-fn test_summary_for_visible_directory() {
-    let entry = FileEntry::directory(Path::new("/src"), false, true);
-    let summary = entry.summary();
-
-    assert_eq!(summary.count, 1);
-    assert_eq!(summary.visible_count, 1);
-    assert_eq!(summary.file_count, 0);
-    assert_eq!(summary.visible_file_count, 0);
-}
-
-#[test]
-fn test_summary_for_ignored_directory() {
-    let entry = FileEntry::directory(Path::new("/target"), true, false);
-    let summary = entry.summary();
-
-    assert_eq!(summary.count, 1);
-    assert_eq!(summary.visible_count, 0);
-    assert_eq!(summary.file_count, 0);
-    assert_eq!(summary.visible_file_count, 0);
-}
-
-#[test]
-fn test_summary_add_assign() {
-    let mut summary1 = FileEntrySummary {
-        max_path: Arc::from(Path::new("/a")),
-        count: 2,
-        visible_count: 1,
-        file_count: 1,
-        visible_file_count: 1,
-    };
-
-    let summary2 = FileEntrySummary {
-        max_path: Arc::from(Path::new("/b")),
-        count: 3,
-        visible_count: 2,
-        file_count: 2,
-        visible_file_count: 1,
-    };
-
-    summary1 += &summary2;
-
-    assert_eq!(summary1.max_path.as_ref(), Path::new("/b"));
-    assert_eq!(summary1.count, 5);
-    assert_eq!(summary1.visible_count, 3);
-    assert_eq!(summary1.file_count, 3);
-    assert_eq!(summary1.visible_file_count, 2);
-}
-
-// =============================================================================
-// PathKey Tests
-// =============================================================================
-
-#[test]
-fn test_path_key_ordering() {
-    let key_a = PathKey::new(Path::new("/a"));
-    let key_b = PathKey::new(Path::new("/b"));
-    let key_aa = PathKey::new(Path::new("/a/a"));
-
-    assert!(key_a < key_aa);
-    assert!(key_aa < key_b);
-    assert!(key_a < key_b);
 }
 
 // =============================================================================

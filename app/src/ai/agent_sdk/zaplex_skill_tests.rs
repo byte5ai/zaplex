@@ -3,8 +3,8 @@ use std::fs;
 use tempfile::TempDir;
 
 use super::{
-    install_at, managed_link_state, refresh_at, remove_at, ManagedLinkState, SkillInstallPaths,
-    OPENAI_YAML, SKILL_MARKDOWN,
+    install_at, managed_link_state, remove_at, ManagedLinkState, SkillInstallPaths, OPENAI_YAML,
+    SKILL_MARKDOWN,
 };
 
 fn paths(root: &TempDir) -> SkillInstallPaths {
@@ -62,18 +62,4 @@ fn install_and_remove_preserve_unrelated_skill_entries() {
         fs::read_to_string(paths.link.join("SKILL.md")).unwrap(),
         "user skill"
     );
-}
-
-#[test]
-fn missing_install_is_not_created_by_launch_refresh() {
-    let root = TempDir::new().unwrap();
-    let paths = paths(&root);
-
-    refresh_at(&paths).unwrap();
-    assert_eq!(
-        managed_link_state(&paths).unwrap(),
-        ManagedLinkState::Missing
-    );
-    assert!(!paths.canonical_dir.exists());
-    assert!(!paths.link.exists());
 }

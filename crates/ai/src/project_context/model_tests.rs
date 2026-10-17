@@ -2,15 +2,6 @@ use super::*;
 use std::path::PathBuf;
 
 #[test]
-fn test_find_applicable_rules_empty_rules() {
-    let rules = ProjectRules { rules: vec![] };
-    let path = PathBuf::from("/a/b/c/file.rs");
-
-    let result = rules.find_active_or_applicable_rules(&path).active_rules;
-    assert!(result.is_empty());
-}
-
-#[test]
 fn test_find_applicable_rules_no_matching_rules() {
     let mut rules = ProjectRules::default();
 

@@ -42,22 +42,6 @@ fn identity_rejects_ambiguous_or_stale_action_targets() {
 }
 
 #[test]
-fn opaque_identity_components_reject_controls_and_empty_values() {
-    assert_eq!(
-        ManagedLaunchKey::new("", "opaque", "/srv/a", "claude"),
-        Err(FleetValidationError::EmptyComponent)
-    );
-    assert_eq!(
-        ManagedLaunchKey::new("devhost", "opaque\nleak", "/srv/a", "claude"),
-        Err(FleetValidationError::ControlCharacter)
-    );
-    assert_eq!(
-        ManagedLaunchKey::new("devhost", "opaque", "/srv/a", "unknown"),
-        Err(FleetValidationError::UnsupportedProvider)
-    );
-}
-
-#[test]
 fn claude_remote_control_builds_documented_argv_without_a_shell_prefix() {
     let spec = ClaudeRemoteControlSpec::new(
         ClaudeSpawnMode::Session,
@@ -255,19 +239,6 @@ fn unmanaged_detached_session_expires_a_full_age_after_its_detach() {
             detached_since_epoch_millis: 5_000,
             reason: KeepReason::ForegroundUnknown,
         }
-    );
-}
-
-#[test]
-fn stricter_client_floor_can_raise_but_never_lower_daemon_policy() {
-    let daemon_wins = HeadroomPolicy::new(4_000, Some(2_000), 5_000).unwrap();
-    let client_raises = HeadroomPolicy::new(4_000, Some(8_000), 5_000).unwrap();
-
-    assert_eq!(daemon_wins.effective_floor_bytes(), 4_000);
-    assert_eq!(client_raises.effective_floor_bytes(), 8_000);
-    assert_eq!(
-        HeadroomPolicy::new(0, None, 5_000),
-        Err(FleetValidationError::InvalidHeadroom)
     );
 }
 

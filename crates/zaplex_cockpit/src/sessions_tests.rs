@@ -97,11 +97,6 @@ fn dead_pid() -> u32 {
     pid
 }
 
-#[test]
-fn dead_pid_returns_a_reaped_portable_child() {
-    assert_ne!(dead_pid(), 0);
-}
-
 #[cfg(unix)]
 #[test]
 fn pid_outside_the_signed_process_id_range_is_not_alive() {

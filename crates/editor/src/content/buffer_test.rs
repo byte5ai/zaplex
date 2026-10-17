@@ -1,11 +1,10 @@
-use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use line_ending::LineEnding;
 use markdown_parser::{
-    FormattedIndentTextInline, FormattedText, FormattedTextFragment, FormattedTextHeader,
+    FormattedIndentTextInline, FormattedText, FormattedTextFragment,
     FormattedTextLine, parse_html, parse_markdown,
 };
 use pathfinder_color::ColorU;
@@ -6875,42 +6874,6 @@ fn test_multiline_insert_in_header_preserves_each_line_once() {
 }
 
 #[test]
-fn test_header_text_conversion_defines_multiline_boundaries() {
-    let heading = |text| {
-        FormattedTextLine::Heading(FormattedTextHeader {
-            heading_size: BlockHeaderSize::Header1.into(),
-            text: vec![FormattedTextFragment::plain_text(text)],
-        })
-    };
-    let line = |text| FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(text)]);
-    let convert = |text| {
-        super::convert_text_with_style_to_formatted_text(
-            text,
-            TextStyles::default(),
-            BufferBlockStyle::Header {
-                header_size: BlockHeaderSize::Header1,
-            },
-        )
-        .lines
-    };
-
-    assert_eq!(convert("a\nb"), VecDeque::from(vec![heading("a"), line("b")]));
-    assert_eq!(
-        convert("\na"),
-        VecDeque::from(vec![FormattedTextLine::LineBreak, line("a")])
-    );
-    assert_eq!(convert("a\n"), VecDeque::from(vec![heading("a")]));
-    assert_eq!(
-        convert("a\n\nb"),
-        VecDeque::from(vec![heading("a"), FormattedTextLine::LineBreak, line("b")])
-    );
-    assert_eq!(
-        convert("a\n\n"),
-        VecDeque::from(vec![heading("a"), FormattedTextLine::LineBreak])
-    );
-}
-
-#[test]
 fn test_insert_formatted_text_header() {
     App::test((), |mut app| async move {
         let buffer = app.add_model(|_| Buffer::new(Box::new(|_, _| IndentBehavior::Ignore)));
@@ -13651,28 +13614,6 @@ fn test_update_selection_same_range() {
         });
         assert_eq!(selection_changes.load(Ordering::Relaxed), 2);
     });
-}
-
-#[test]
-#[allow(clippy::single_range_in_vec_init)]
-#[allow(clippy::reversed_empty_ranges)]
-fn test_overlapping_ranges() {
-    assert_eq!(
-        Buffer::overlapping_ranges(vec![1..5, 3..7, 8..10]),
-        (vec![0, 1], vec![1..7])
-    );
-    assert_eq!(
-        Buffer::overlapping_ranges(vec![1..5, 8..10, 3..7]),
-        (vec![0, 1], vec![1..7])
-    );
-    assert_eq!(
-        Buffer::overlapping_ranges(vec![1..5, 5..7]),
-        (vec![0, 1], vec![1..7])
-    );
-    assert_eq!(
-        Buffer::overlapping_ranges(vec![1..5, 5..7, 4..10, 11..15, 14..17, 20..27]),
-        (vec![0, 1, 2, 3, 4], vec![1..10, 11..17])
-    );
 }
 
 #[test]

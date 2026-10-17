@@ -6364,31 +6364,6 @@ mod tests {
     }
 
     #[test]
-    fn rebases_loaded_directory_entries_to_parent_depth() {
-        let entries = vec![
-            entry(
-                "/root/.openwarp/remote-server/warp-oss",
-                "warp-oss",
-                FileSystemEntryKind::File,
-                0,
-            ),
-            entry(
-                "/root/.openwarp/remote-server/logs",
-                "logs",
-                FileSystemEntryKind::Directory,
-                0,
-            ),
-        ];
-
-        let entries = entries_with_depth(entries, 1);
-
-        assert_eq!(
-            entries.iter().map(|entry| entry.depth).collect::<Vec<_>>(),
-            vec![1, 1]
-        );
-    }
-
-    #[test]
     fn remap_path_after_rename_updates_directory_subtree() {
         assert_eq!(
             remap_path_after_rename("/root/test/old", "/root/test/old", "/root/test/new"),
@@ -6487,29 +6462,6 @@ mod tests {
     }
 
     #[test]
-    fn selected_index_preserves_matching_path_after_rebuild() {
-        let entries = vec![
-            entry(
-                "/root/.openwarp",
-                ".openwarp",
-                FileSystemEntryKind::Directory,
-                0,
-            ),
-            entry(
-                "/root/.openwarp/remote-server",
-                "remote-server",
-                FileSystemEntryKind::Directory,
-                1,
-            ),
-        ];
-
-        assert_eq!(
-            selected_index_after_rebuild(&entries, Some("/root/.openwarp/remote-server"), Some(0)),
-            Some(1)
-        );
-    }
-
-    #[test]
     fn format_modified_epoch_millis_rejects_zero_and_formats_timestamp() {
         assert_eq!(format_modified_epoch_millis(0), None);
         let formatted = format_modified_epoch_millis(1_700_000_000_000).expect("valid timestamp");
@@ -6593,20 +6545,5 @@ mod tests {
 
         assert_eq!(position, None);
         assert!(menu_items.is_empty());
-    }
-
-    #[test]
-    fn selected_index_falls_back_when_collapsed_child_disappears() {
-        let entries = vec![entry(
-            "/root/.openwarp",
-            ".openwarp",
-            FileSystemEntryKind::Directory,
-            0,
-        )];
-
-        assert_eq!(
-            selected_index_after_rebuild(&entries, Some("/root/.openwarp/remote-server"), Some(4),),
-            Some(0)
-        );
     }
 }

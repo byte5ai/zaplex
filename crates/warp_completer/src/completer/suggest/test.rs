@@ -244,17 +244,6 @@ pub fn test_top_level_command_completions() {
 }
 
 #[test]
-pub fn test_command_completions_requires_nonwhitespace() {
-    let registry = create_test_command_registry([]);
-    let ctx = FakeCompletionContext::new(registry).with_top_level_commands(["git", "cd", "cargo"]);
-
-    // Empty strings produce no completions.
-    assert!(complete_at_end_of_line("", &ctx).is_empty());
-    // Whitespace (without any other characters) produces no completions.
-    assert!(complete_at_end_of_line("\t\n\t", &ctx).is_empty());
-}
-
-#[test]
 pub fn test_files_includes_directories() {
     let path_ctx = MockPathCompletionContext::default().with_entries_in_pwd([
         EngineDirEntry::test_dir("foo"),

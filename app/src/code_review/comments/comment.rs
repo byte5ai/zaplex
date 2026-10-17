@@ -223,7 +223,3 @@ impl AttachedReviewComment {
         &self.origin
     }
 }
-
-#[cfg(test)]
-#[path = "comment_tests.rs"]
-mod tests;

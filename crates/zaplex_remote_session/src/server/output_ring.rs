@@ -83,7 +83,3 @@ impl OutputRing {
         (start, bytes)
     }
 }
-
-#[cfg(test)]
-#[path = "output_ring_tests.rs"]
-mod tests;

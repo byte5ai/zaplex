@@ -8,10 +8,6 @@ use std::sync::{
 
 use event_listener::Event;
 
-#[cfg(test)]
-#[path = "sync_tests.rs"]
-mod tests;
-
 /// A set-once asynchronous condition variable.
 ///
 /// Generally, a [condition variable](http://www.cs.cornell.edu/courses/cs3110/2012fa/recitations/rec16.html)

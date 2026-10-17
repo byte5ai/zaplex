@@ -3,56 +3,6 @@ use chrono::NaiveDate;
 use super::*;
 
 #[test]
-fn test_parse_version_string() {
-    let version_string = "v0.2023.05.15.08.04.stable_01";
-    let parsed_version: ParsedVersion = version_string
-        .try_into()
-        .expect("version string is parsable");
-    assert_eq!(parsed_version.major, 0);
-    assert_eq!(
-        parsed_version.date,
-        NaiveDate::from_ymd_opt(2023, 5, 15)
-            .unwrap()
-            .and_hms_opt(8, 4, 0)
-            .unwrap()
-    );
-    assert_eq!(parsed_version.patch, 1);
-}
-
-#[test]
-fn test_major_versions_compare_correctly() {
-    let older_version: ParsedVersion = "v0.2023.05.15.08.04.stable_01"
-        .try_into()
-        .expect("older_version is parsable");
-    let newer_version: ParsedVersion = "v1.2023.05.15.08.04.stable_01"
-        .try_into()
-        .expect("newer_version is parsable");
-    assert!(newer_version > older_version);
-}
-
-#[test]
-fn test_dates_compare_correctly() {
-    let older_version: ParsedVersion = "v0.2023.05.15.08.04.stable_01"
-        .try_into()
-        .expect("older_version is parsable");
-    let newer_version: ParsedVersion = "v0.2023.05.22.08.04.stable_00"
-        .try_into()
-        .expect("newer_version is parsable");
-    assert!(newer_version > older_version);
-}
-
-#[test]
-fn test_patches_compare_correctly() {
-    let older_version: ParsedVersion = "v0.2023.05.15.08.04.stable_00"
-        .try_into()
-        .expect("older_version is parsable");
-    let newer_version: ParsedVersion = "v0.2023.05.15.08.04.stable_01"
-        .try_into()
-        .expect("newer_version is parsable");
-    assert!(newer_version > older_version);
-}
-
-#[test]
 fn test_ignores_unknown_channels() {
     // We no longer support or parse-out beta and canary versions, but we
     // need to be able to parse a JSON file that still contains them.

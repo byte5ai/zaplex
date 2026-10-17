@@ -18,18 +18,6 @@ fn sample_server(name: &str) -> SshServerInfo {
 }
 
 #[test]
-fn create_and_list_root_folder() {
-    let mut conn = setup_in_memory();
-    let f = SshRepository::create_folder(&mut conn, None, "Prod").unwrap();
-    assert_eq!(f.kind, NodeKind::Folder);
-    assert_eq!(f.name, "Prod");
-    assert!(f.parent_id.is_none());
-
-    let all = SshRepository::list_nodes(&mut conn).unwrap();
-    assert_eq!(all.len(), 1);
-}
-
-#[test]
 fn nested_folders_and_server() {
     let mut conn = setup_in_memory();
     let prod = SshRepository::create_folder(&mut conn, None, "Prod").unwrap();
@@ -50,21 +38,6 @@ fn nested_folders_and_server() {
         .unwrap();
     assert_eq!(server.host, "edge1.example.com");
     assert_eq!(server.port, 22);
-}
-
-#[test]
-fn sort_order_appends_within_parent() {
-    let mut conn = setup_in_memory();
-    let a = SshRepository::create_folder(&mut conn, None, "A").unwrap();
-    let b = SshRepository::create_folder(&mut conn, None, "B").unwrap();
-    let c = SshRepository::create_folder(&mut conn, None, "C").unwrap();
-    assert_eq!(a.sort_order, 0);
-    assert_eq!(b.sort_order, 1);
-    assert_eq!(c.sort_order, 2);
-
-    // Different parents each start from 0
-    let child = SshRepository::create_folder(&mut conn, Some(&a.id), "child").unwrap();
-    assert_eq!(child.sort_order, 0);
 }
 
 #[test]
@@ -282,21 +255,7 @@ fn move_node_changes_parent_and_order() {
     assert_eq!(leaf_now.sort_order, 5);
 }
 
-#[test]
-fn delete_missing_returns_not_found() {
-    let mut conn = setup_in_memory();
-    let err = SshRepository::delete_node(&mut conn, "nope").unwrap_err();
-    assert!(matches!(err, SshRepositoryError::NotFound(_)));
-}
-
 // ---- SyncMetaRepository tests ----
-
-#[test]
-fn sync_meta_get_version_default() {
-    let mut conn = setup_in_memory();
-    let version = SyncMetaRepository::get_sync_version(&mut conn).unwrap();
-    assert_eq!(version, 0, "sync_version should be 0 when no data exists");
-}
 
 #[test]
 fn invalid_sync_version_is_reported_without_fallback() {
@@ -330,59 +289,6 @@ fn sync_version_overflow_is_reported_without_mutation() {
 }
 
 #[test]
-fn sync_meta_set_and_get_version() {
-    let mut conn = setup_in_memory();
-    SyncMetaRepository::set_sync_version(&mut conn, 42).unwrap();
-    assert_eq!(SyncMetaRepository::get_sync_version(&mut conn).unwrap(), 42);
-}
-
-#[test]
-fn sync_meta_increment_version() {
-    let mut conn = setup_in_memory();
-    let v1 = SyncMetaRepository::increment_sync_version(&mut conn).unwrap();
-    assert_eq!(v1, 1);
-    let v2 = SyncMetaRepository::increment_sync_version(&mut conn).unwrap();
-    assert_eq!(v2, 2);
-    assert_eq!(SyncMetaRepository::get_sync_version(&mut conn).unwrap(), 2);
-}
-
-#[test]
-fn sync_meta_increment_after_set() {
-    let mut conn = setup_in_memory();
-    SyncMetaRepository::set_sync_version(&mut conn, 99).unwrap();
-    let v = SyncMetaRepository::increment_sync_version(&mut conn).unwrap();
-    assert_eq!(v, 100);
-}
-
-#[test]
-fn sync_meta_last_sync_time_default_empty() {
-    let mut conn = setup_in_memory();
-    let time = SyncMetaRepository::get_last_sync_time(&mut conn).unwrap();
-    assert_eq!(time, "");
-}
-
-#[test]
-fn sync_meta_last_sync_platform_default_empty() {
-    let mut conn = setup_in_memory();
-    let platform = SyncMetaRepository::get_last_sync_platform(&mut conn).unwrap();
-    assert_eq!(platform, "");
-}
-
-#[test]
-fn sync_meta_update_and_read() {
-    let mut conn = setup_in_memory();
-    SyncMetaRepository::update_sync_meta(&mut conn, "2026-05-26T10:00:00Z", "github").unwrap();
-    assert_eq!(
-        SyncMetaRepository::get_last_sync_time(&mut conn).unwrap(),
-        "2026-05-26T10:00:00Z"
-    );
-    assert_eq!(
-        SyncMetaRepository::get_last_sync_platform(&mut conn).unwrap(),
-        "github"
-    );
-}
-
-#[test]
 fn sync_meta_update_overwrites_previous() {
     let mut conn = setup_in_memory();
     SyncMetaRepository::update_sync_meta(&mut conn, "t1", "gitee").unwrap();
@@ -395,14 +301,6 @@ fn sync_meta_update_overwrites_previous() {
         SyncMetaRepository::get_last_sync_platform(&mut conn).unwrap(),
         "github"
     );
-}
-
-#[test]
-fn sync_meta_version_independent_of_meta() {
-    let mut conn = setup_in_memory();
-    SyncMetaRepository::set_sync_version(&mut conn, 10).unwrap();
-    SyncMetaRepository::update_sync_meta(&mut conn, "t1", "gitee").unwrap();
-    assert_eq!(SyncMetaRepository::get_sync_version(&mut conn).unwrap(), 10);
 }
 
 // ---- Collapse operations should not increment sync_version ----

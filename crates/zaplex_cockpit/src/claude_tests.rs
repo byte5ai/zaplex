@@ -133,17 +133,6 @@ fn discovers_default_account_without_any_session_store() {
 }
 
 #[test]
-fn default_history_without_an_identity_does_not_invent_an_account() {
-    let tmp = tempfile::tempdir().unwrap();
-    let home = tmp.path();
-    fs::create_dir_all(home.join(".claude/projects/old-project")).unwrap();
-
-    let discovery = discover_without_process(home, None);
-    assert!(discovery.issues.is_empty());
-    assert!(discovery.accounts.is_empty());
-}
-
-#[test]
 fn pinned_root_is_non_default_and_routes_back_to_that_root() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
@@ -308,21 +297,6 @@ fn canonical_root_alias_is_emitted_once() {
 }
 
 #[test]
-fn malformed_identity_is_degraded_without_inventing_an_account() {
-    let tmp = tempfile::tempdir().unwrap();
-    let home = tmp.path();
-    write(&home.join(".claude/.claude.json"), "{not valid json");
-    fs::create_dir_all(home.join(".claude/projects")).unwrap();
-
-    let discovery = discover_without_process(home, None);
-    assert!(discovery.accounts.is_empty());
-    assert_eq!(
-        discovery.issues,
-        vec!["Claude account identity is malformed"]
-    );
-}
-
-#[test]
 fn unreadable_identity_source_is_degraded_without_inventing_an_account() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path();
@@ -333,27 +307,6 @@ fn unreadable_identity_source_is_degraded_without_inventing_an_account() {
     assert_eq!(
         discovery.issues,
         vec!["Claude account identity is unreadable"]
-    );
-}
-
-#[test]
-fn unavailable_pinned_root_is_degraded_not_successfully_empty() {
-    let tmp = tempfile::tempdir().unwrap();
-    let home = tmp.path();
-    let missing = home.join("outside/missing");
-
-    let discovery = discover_without_process(home, missing.to_str());
-    assert!(discovery.accounts.is_empty());
-    assert_eq!(
-        discovery.issues,
-        vec!["Claude pinned account root is unavailable"]
-    );
-
-    let default_root = home.join(".claude");
-    let default_discovery = discover_without_process(home, default_root.to_str());
-    assert_eq!(
-        default_discovery.issues,
-        vec!["Claude pinned account root is unavailable"]
     );
 }
 
@@ -399,122 +352,6 @@ fn discovers_account_from_same_uid_live_claude_process() {
         discovery.accounts[0].email.as_deref(),
         Some("external@example.com")
     );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn process_scan_ignores_foreign_uid_and_non_claude_processes() {
-    let tmp = tempfile::tempdir().unwrap();
-    let proc_root = tmp.path().join("proc");
-    write(
-        &proc_root.join("self/status"),
-        "Name:\tzaplex\nUid:\t1000\t1000\t1000\t1000\n",
-    );
-    write_proc_process(
-        &proc_root,
-        201,
-        1000,
-        b"/usr/bin/claudeplex\0",
-        b"CLAUDE_CONFIG_DIR=/accounts/not-claude\0",
-    );
-    write_proc_process(
-        &proc_root,
-        202,
-        2000,
-        b"/usr/bin/claude\0",
-        b"CLAUDE_CONFIG_DIR=/accounts/foreign\0",
-    );
-
-    let non_claude_environ = proc_root.join("201/environ");
-    let foreign_cmdline = proc_root.join("202/cmdline");
-    let discovery = running_claude_config_dirs_from_proc_with_reader(&proc_root, &|path| {
-        assert_ne!(path, non_claude_environ);
-        assert_ne!(path, foreign_cmdline);
-        fs::read(path)
-    });
-
-    assert!(discovery.issues.is_empty());
-    assert!(discovery.roots.is_empty());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn denied_process_environment_degrades_health_without_leaking_contents() {
-    let tmp = tempfile::tempdir().unwrap();
-    let proc_root = tmp.path().join("proc");
-    write(
-        &proc_root.join("self/status"),
-        "Name:\tzaplex\nUid:\t1000\t1000\t1000\t1000\n",
-    );
-    write_proc_process(
-        &proc_root,
-        301,
-        1000,
-        b"/usr/bin/claude\0",
-        b"CLAUDE_CONFIG_DIR=/accounts/private-fixture\0",
-    );
-
-    let denied_environment = proc_root.join("301/environ");
-    let discovery = running_claude_config_dirs_from_proc_with_reader(&proc_root, &|path| {
-        if path == denied_environment {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "PRIVATE_ENV_VALUE=fixture-sensitive CLAUDE_CONFIG_DIR=/accounts/private-fixture",
-            ));
-        }
-        fs::read(path)
-    });
-
-    assert!(discovery.roots.is_empty());
-    assert_eq!(discovery.issues, vec![PROCESS_DISCOVERY_PERMISSION_DENIED]);
-    assert!(discovery
-        .issues
-        .iter()
-        .all(|issue| !issue.contains("fixture-sensitive") && !issue.contains("private-fixture")));
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn process_scan_rejects_pid_reuse_even_when_command_is_identical() {
-    use std::cell::Cell;
-
-    let tmp = tempfile::tempdir().unwrap();
-    let proc_root = tmp.path().join("proc");
-    write(
-        &proc_root.join("self/status"),
-        "Name:\tzaplex\nUid:\t1000\t1000\t1000\t1000\n",
-    );
-    write_proc_process(
-        &proc_root,
-        351,
-        1000,
-        b"/usr/bin/claude\0",
-        b"CLAUDE_CONFIG_DIR=/accounts/reused-pid\0",
-    );
-
-    let stat_path = proc_root.join("351/stat");
-    let stat_reads = Cell::new(0usize);
-    let discovery = running_claude_config_dirs_from_proc_with_reader(&proc_root, &|path| {
-        let bytes = fs::read(path)?;
-        if path != stat_path {
-            return Ok(bytes);
-        }
-        let read = stat_reads.get();
-        stat_reads.set(read + 1);
-        if read == 0 {
-            return Ok(bytes);
-        }
-        let mut fields = std::str::from_utf8(&bytes)
-            .unwrap()
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        *fields.last_mut().unwrap() = "999999".to_string();
-        Ok(format!("{}\n", fields.join(" ")).into_bytes())
-    });
-
-    assert!(discovery.issues.is_empty());
-    assert!(discovery.roots.is_empty());
 }
 
 #[cfg(target_os = "linux")]

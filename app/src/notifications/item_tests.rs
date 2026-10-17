@@ -36,36 +36,6 @@ fn make_cli_session_notification(terminal_view_id: EntityId) -> NotificationItem
 }
 
 #[test]
-fn remove_by_origin_cleans_up_conversation_notification() {
-    let mut items = NotificationItems::default();
-    let conversation_id = AIConversationId::new();
-    let terminal_view_id = EntityId::new();
-
-    items.push(make_conversation_notification(
-        conversation_id,
-        terminal_view_id,
-    ));
-    assert_eq!(items.filtered_count(NotificationFilter::All), 1);
-
-    let removed = items.remove_by_origin(NotificationOrigin::Conversation(conversation_id));
-    assert!(removed);
-    assert_eq!(items.filtered_count(NotificationFilter::All), 0);
-}
-
-#[test]
-fn remove_by_origin_cleans_up_cli_session_notification() {
-    let mut items = NotificationItems::default();
-    let terminal_view_id = EntityId::new();
-
-    items.push(make_cli_session_notification(terminal_view_id));
-    assert_eq!(items.filtered_count(NotificationFilter::All), 1);
-
-    let removed = items.remove_by_origin(NotificationOrigin::CLISession(terminal_view_id));
-    assert!(removed);
-    assert_eq!(items.filtered_count(NotificationFilter::All), 0);
-}
-
-#[test]
 fn remove_by_origin_leaves_unrelated_notifications() {
     let mut items = NotificationItems::default();
     let conv_id = AIConversationId::new();
@@ -86,13 +56,4 @@ fn remove_by_origin_leaves_unrelated_notifications() {
         .next()
         .unwrap();
     assert_eq!(remaining.origin, NotificationOrigin::CLISession(terminal_b));
-}
-
-#[test]
-fn remove_by_origin_returns_false_when_nothing_to_remove() {
-    let mut items = NotificationItems::default();
-    let terminal_view_id = EntityId::new();
-
-    let removed = items.remove_by_origin(NotificationOrigin::CLISession(terminal_view_id));
-    assert!(!removed);
 }

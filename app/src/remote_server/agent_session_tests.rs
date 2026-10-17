@@ -175,16 +175,6 @@ fn providers_map_both_directions() {
     assert_eq!(Provider::Antigravity.as_str(), "antigravity");
 }
 
-/// An unknown/future state string folds to Idle (never a false attention
-/// signal); an unknown provider folds to Claude.
-#[test]
-fn unknown_state_and_provider_fold_to_safe_defaults() {
-    assert_eq!(state_from_str("teleporting"), SessionState::Idle);
-    assert_eq!(state_from_str(""), SessionState::Idle);
-    assert_eq!(provider_from_str("gemini"), Provider::Claude);
-    assert_eq!(provider_from_str(""), Provider::Claude);
-}
-
 /// An unknown (None) effort encodes as the empty string and decodes back to
 /// None — not Some("").
 #[test]

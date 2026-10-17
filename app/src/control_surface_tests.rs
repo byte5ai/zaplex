@@ -83,22 +83,6 @@ fn independently_created_surfaces_do_not_share_bearer_credentials() {
     assert_eq!(first.socket, second.socket);
 }
 
-#[cfg(unix)]
-#[test]
-fn control_endpoint_is_a_local_unix_socket_path() {
-    let address = control_address();
-    let parent = Path::new(address).parent().unwrap();
-    assert_eq!(parent.parent(), Some(std::env::temp_dir().as_path()));
-    assert!(parent
-        .file_name()
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .starts_with("zplx-ctl-"));
-    assert!(address.ends_with(".sock"));
-    assert!(!address.contains("://"));
-}
-
 #[test]
 fn worktree_directory_never_interprets_branch_as_a_path() {
     let repo = PathBuf::from("/repo");

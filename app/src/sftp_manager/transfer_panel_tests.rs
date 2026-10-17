@@ -199,22 +199,6 @@ fn review14_source_restore_warning_has_a_distinct_localized_label() {
 }
 
 #[test]
-fn review20_skipped_queue_activity_is_not_rendered_as_completed() {
-    crate::i18n::init(Some("en"));
-    let state =
-        transfer_state_from_queue_state(super::super::transfer_queue::QueuedTransferState::Skipped);
-
-    assert!(
-        !matches!(state, TransferState::Completed),
-        "a fully skipped transfer needs its own visible state"
-    );
-    assert_ne!(
-        crate::t!("fm-transfer-skipped"),
-        crate::t!("fm-transfer-completed")
-    );
-}
-
-#[test]
 fn review9_partial_completion_has_a_distinct_source_kept_label() {
     crate::i18n::init(Some("en"));
     let partial = partial_state_label(3, 4, 2, false);

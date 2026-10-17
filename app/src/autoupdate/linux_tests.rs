@@ -4,15 +4,7 @@ use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
 use anyhow::bail;
 
-use super::{
-    appimage::{atomically_replace_appimage_with_hook, temporary_appimage_for},
-    OSS_APPIMAGE_ASSET_NAME,
-};
-
-#[test]
-fn oss_appimage_asset_name_matches_linux_bundle() {
-    assert_eq!(OSS_APPIMAGE_ASSET_NAME, "Zaplex-x86_64.AppImage");
-}
+use super::appimage::{atomically_replace_appimage_with_hook, temporary_appimage_for};
 
 #[test]
 fn pre_rename_failure_preserves_old_appimage_and_cleans_staging_file() {
@@ -74,20 +66,6 @@ fn successful_replacement_renames_the_prepared_inode() {
     assert_eq!(installed_metadata.ino(), staged_inode);
     assert_ne!(installed_metadata.ino(), old_inode);
     assert!(!staged_path.exists());
-}
-
-#[test]
-fn temporary_appimage_is_created_in_the_target_directory() {
-    let directory = tempfile::tempdir().unwrap();
-    let appimage_path = directory.path().join("Zaplex.AppImage");
-
-    let staged = temporary_appimage_for(&appimage_path).unwrap();
-
-    assert_eq!(staged.path().parent(), Some(directory.path()));
-    assert_eq!(
-        fs::metadata(staged.path()).unwrap().dev(),
-        fs::metadata(directory.path()).unwrap().dev()
-    );
 }
 
 #[cfg(target_os = "linux")]

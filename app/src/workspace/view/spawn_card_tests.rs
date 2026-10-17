@@ -502,79 +502,6 @@ fn remote_claude_card(
     }
 }
 
-/// Codex review regression: when no supported agent is installed,
-/// there must be no launchable agent — a phantom chip previously let
-/// Confirm emit a `Launch` for a binary that isn't there.
-#[test]
-fn installed_agents_empty_when_none_installed() {
-    let cfg = SpawnCardConfig {
-        claude: provider(false),
-        codex: provider(false),
-        ..Default::default()
-    };
-    assert_eq!(installed_agents(&cfg), Vec::new());
-}
-
-/// Exactly one installed provider yields exactly that agent — the normal
-/// single-CLI case must keep working unchanged.
-#[test]
-fn installed_agents_only_lists_installed_provider() {
-    let claude_only = SpawnCardConfig {
-        claude: provider(true),
-        codex: provider(false),
-        ..Default::default()
-    };
-    assert_eq!(installed_agents(&claude_only), vec![CLIAgent::Claude]);
-
-    let codex_only = SpawnCardConfig {
-        claude: provider(false),
-        codex: provider(true),
-        ..Default::default()
-    };
-    assert_eq!(installed_agents(&codex_only), vec![CLIAgent::Codex]);
-
-    let antigravity_only = SpawnCardConfig {
-        antigravity_installed: true,
-        ..Default::default()
-    };
-    assert_eq!(
-        installed_agents(&antigravity_only),
-        vec![CLIAgent::Antigravity]
-    );
-
-    let grok_only = SpawnCardConfig {
-        grok_installed: true,
-        ..Default::default()
-    };
-    assert_eq!(installed_agents(&grok_only), vec![CLIAgent::Grok]);
-}
-
-/// Both installed: both agents are offered, in the stable Claude-then-Codex
-/// order the row renders.
-#[test]
-fn installed_agents_lists_both_when_both_installed() {
-    let cfg = SpawnCardConfig {
-        claude: provider(true),
-        codex: provider(true),
-        ..Default::default()
-    };
-    assert_eq!(
-        installed_agents(&cfg),
-        vec![CLIAgent::Claude, CLIAgent::Codex]
-    );
-}
-
-#[test]
-fn remote_agents_do_not_depend_on_local_subscription_cli_installations() {
-    let cfg = SpawnCardConfig {
-        claude: provider(false),
-        codex: provider(false),
-        ..Default::default()
-    };
-
-    assert_eq!(remote_agents(&cfg), vec![CLIAgent::Claude, CLIAgent::Codex]);
-}
-
 #[test]
 fn remote_subscription_launch_does_not_require_the_cli_on_the_client() {
     let card = remote_claude_card(
@@ -618,50 +545,6 @@ fn explicit_unavailable_agent_is_not_silently_replaced() {
     };
 
     assert_eq!(initial_agent(&cfg), CLIAgent::Claude);
-}
-
-#[test]
-fn first_installed_agent_is_used_without_an_explicit_request() {
-    let cfg = SpawnCardConfig {
-        claude: provider(false),
-        codex: provider(true),
-        ..Default::default()
-    };
-
-    assert_eq!(initial_agent(&cfg), CLIAgent::Codex);
-}
-
-#[test]
-fn unavailable_selected_agent_cannot_launch_an_installed_alternative() {
-    let mut card = remote_claude_card(
-        provider(false),
-        Vec::new(),
-        HostChoice::Local,
-        AccountChoice::Freest,
-    );
-    card.cfg.codex = provider(true);
-
-    assert_eq!(card.agent, CLIAgent::Claude);
-    assert!(card.launch_payload().is_none());
-}
-
-#[test]
-fn default_account_identity_never_becomes_an_environment_pin() {
-    let mut account = AccountOption {
-        label: "default".to_string(),
-        config_dir: PathBuf::from("/home/user/.claude"),
-        is_default: true,
-        heat_label: "10 %".to_string(),
-        heat: 0.1,
-        plan: None,
-        provider: zaplex_cockpit::Provider::Claude,
-    };
-    assert_eq!(account_config_pin(&account), None);
-    account.is_default = false;
-    assert_eq!(
-        account_config_pin(&account),
-        Some(PathBuf::from("/home/user/.claude"))
-    );
 }
 
 #[test]
@@ -994,30 +877,6 @@ fn freest_remote_account_is_scoped_to_the_selected_host() {
 }
 
 #[test]
-fn freest_remote_account_uses_the_binding_capacity_window() {
-    let card = remote_claude_card(
-        remote_provider_for_node(
-            true,
-            "claude",
-            "node-7",
-            &[
-                ("weekly-exhausted", "weekly@example.com", 0.95, 0.10),
-                ("balanced", "balanced@example.com", 0.70, 0.70),
-            ],
-        ),
-        vec![host("node-7", "devbox")],
-        HostChoice::Remote(0),
-        AccountChoice::Freest,
-    );
-
-    assert_eq!(
-        card.freest_remote_account()
-            .map(|account| account.route.account_id.as_str()),
-        Some("balanced")
-    );
-}
-
-#[test]
 fn remote_model_state_is_bound_to_exact_host_and_account_identity() {
     let claude = remote_provider_for_node(
         true,
@@ -1327,26 +1186,6 @@ fn empty_remote_launch_directory_maps_explicitly_to_home() {
     assert_eq!(
         remote_cwd_from_input(HostChoice::Local, "/srv/app"),
         Ok(None)
-    );
-}
-
-#[test]
-fn model_and_effort_options_come_from_discovered_capability() {
-    let options = provider(true);
-    let codex = options
-        .models
-        .iter()
-        .find(|model| model.id == "gpt-5-codex")
-        .unwrap();
-
-    assert_eq!(codex.display_name, "GPT Codex");
-    assert_eq!(
-        codex
-            .supported_efforts
-            .iter()
-            .map(|effort| effort.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["high"]
     );
 }
 

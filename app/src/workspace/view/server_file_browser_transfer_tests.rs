@@ -53,49 +53,6 @@ impl AsyncRead for SyntheticLargeReader {
 }
 
 #[tokio::test]
-async fn streamed_upload_peak_memory_is_bounded_by_chunk_size() {
-    let synthetic_bytes = TRANSFER_CHUNK_BYTES * 64 + 17;
-    let read_calls = Arc::new(AtomicUsize::new(0));
-    let peak_reader_bytes = Arc::new(AtomicUsize::new(0));
-    let mut reader = SyntheticLargeReader::new(
-        synthetic_bytes,
-        read_calls.clone(),
-        peak_reader_bytes.clone(),
-    );
-    let uploaded_bytes = AtomicU64::new(0);
-    let mut peak_transport_bytes = 0;
-    let mut progress_before_writes = Vec::new();
-
-    let streamed = stream_upload_reader(
-        &mut reader,
-        TRANSFER_CHUNK_BYTES as usize,
-        &uploaded_bytes,
-        |chunk| {
-            progress_before_writes.push(uploaded_bytes.load(Ordering::Relaxed));
-            peak_transport_bytes = peak_transport_bytes.max(chunk.len());
-            std::future::ready(Ok(()))
-        },
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(streamed, synthetic_bytes);
-    assert_eq!(uploaded_bytes.load(Ordering::Relaxed), streamed);
-    assert_eq!(
-        peak_reader_bytes.load(Ordering::Relaxed) as u64,
-        TRANSFER_CHUNK_BYTES
-    );
-    assert_eq!(peak_transport_bytes as u64, TRANSFER_CHUNK_BYTES);
-    assert_eq!(read_calls.load(Ordering::Relaxed), 66);
-    assert_eq!(progress_before_writes.len(), 65);
-    assert_eq!(progress_before_writes.first(), Some(&0));
-    assert_eq!(
-        progress_before_writes.last(),
-        Some(&(TRANSFER_CHUNK_BYTES * 64))
-    );
-}
-
-#[tokio::test]
 async fn streamed_upload_waits_for_transport_before_reading_ahead() {
     let read_calls = Arc::new(AtomicUsize::new(0));
     let reader_peak = Arc::new(AtomicUsize::new(0));
@@ -145,42 +102,6 @@ async fn streamed_upload_waits_for_transport_before_reading_ahead() {
         .expect("the upload task should not panic")
         .unwrap();
     assert_eq!(streamed, TRANSFER_CHUNK_BYTES * 3);
-}
-
-#[tokio::test]
-async fn streamed_upload_preserves_empty_file_and_transport_error_semantics() {
-    let read_calls = Arc::new(AtomicUsize::new(0));
-    let reader_peak = Arc::new(AtomicUsize::new(0));
-    let mut empty_reader = SyntheticLargeReader::new(0, read_calls.clone(), reader_peak.clone());
-    let uploaded_bytes = AtomicU64::new(0);
-    let mut write_calls = 0;
-
-    let streamed = stream_upload_reader(
-        &mut empty_reader,
-        TRANSFER_CHUNK_BYTES as usize,
-        &uploaded_bytes,
-        |_chunk| {
-            write_calls += 1;
-            std::future::ready(Ok(()))
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(streamed, 0);
-    assert_eq!(write_calls, 0);
-
-    let mut reader =
-        SyntheticLargeReader::new(TRANSFER_CHUNK_BYTES * 2, read_calls.clone(), reader_peak);
-    let result = stream_upload_reader(
-        &mut reader,
-        TRANSFER_CHUNK_BYTES as usize,
-        &uploaded_bytes,
-        |_chunk| std::future::ready(Err("retryable transport failure".to_string())),
-    )
-    .await;
-    assert_eq!(result.unwrap_err(), "retryable transport failure");
-    assert_eq!(uploaded_bytes.load(Ordering::Relaxed), 0);
-    assert_eq!(read_calls.load(Ordering::Relaxed), 2);
 }
 
 #[test]

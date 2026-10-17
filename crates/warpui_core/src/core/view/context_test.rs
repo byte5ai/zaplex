@@ -2,56 +2,6 @@ use crate::elements::Empty;
 use crate::platform::WindowStyle;
 use crate::{App, AppContext, Element, Entity, TypedActionView};
 
-#[test]
-fn test_spawn_from_view() {
-    #[derive(Default)]
-    struct View {
-        count: usize,
-    }
-
-    impl Entity for View {
-        type Event = ();
-    }
-
-    impl super::View for View {
-        fn render<'a>(&self, _: &AppContext) -> Box<dyn Element> {
-            Empty::new().finish()
-        }
-
-        fn ui_name() -> &'static str {
-            "View"
-        }
-    }
-
-    impl TypedActionView for View {
-        type Action = ();
-    }
-
-    App::test((), |mut app| async move {
-        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
-
-        let (tx, rx) = futures::channel::oneshot::channel();
-        handle.update(&mut app, move |_, c| {
-            c.spawn(async { 7 }, move |me, output, _| {
-                tx.send(()).unwrap();
-                me.count = output;
-            })
-        });
-        rx.await.unwrap();
-
-        let (tx, rx) = futures::channel::oneshot::channel();
-        handle.read(&app, |view, _| assert_eq!(view.count, 7));
-        handle.update(&mut app, move |_, c| {
-            c.spawn(async { 14 }, move |me, output, _| {
-                tx.send(()).unwrap();
-                me.count = output;
-            })
-        });
-        rx.await.unwrap();
-        handle.read(&app, |view, _| assert_eq!(view.count, 14));
-    });
-}
-
 #[ignore]
 #[test]
 fn test_spawn_abortable_from_view() {

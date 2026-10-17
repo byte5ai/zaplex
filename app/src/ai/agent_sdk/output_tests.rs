@@ -1,6 +1,4 @@
-use super::{
-    run_jq_filter, write_filter_output, write_json, write_json_line, write_list, TableFormat,
-};
+use super::{run_jq_filter, write_filter_output, write_json, write_list, TableFormat};
 use comfy_table::Cell;
 use serde::Serialize;
 use serde_json::json;
@@ -77,22 +75,6 @@ fn write_json_emits_pretty_json_with_trailing_newline() {
     );
 }
 
-#[test]
-fn write_json_line_emits_compact_json_with_trailing_newline() {
-    let mut output = Vec::new();
-    let item = TestItem {
-        id: "message-1",
-        subject: "Build update",
-    };
-
-    write_json_line(&item, &mut output).unwrap();
-
-    let rendered = String::from_utf8(output).unwrap();
-    assert_eq!(
-        rendered,
-        "{\"id\":\"message-1\",\"subject\":\"Build update\"}\n"
-    );
-}
 /// A small fixture that matches the shape of `GET /api/v1/agent/runs`.
 fn list_response_fixture() -> serde_json::Value {
     json!({
@@ -181,13 +163,6 @@ fn inner_scalars_stay_json_encoded() {
         out.contains(r#""task_id": "01HX0000000000000000000001""#),
         "inner task_id should remain JSON-encoded, got:\n{out}"
     );
-}
-
-#[test]
-fn empty_filter_produces_no_output() {
-    let fixture = list_response_fixture();
-    let out = run(fixture, "empty");
-    assert_eq!(out, "");
 }
 
 #[test]

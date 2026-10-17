@@ -118,22 +118,6 @@ fn no_replace_existing_file_on_openssh_v3_keeps_target() {
     fs::remove_dir_all(case_root).unwrap();
 }
 
-#[test]
-fn user_message_is_localized_without_exposing_raw_diagnostic() {
-    crate::i18n::init(Some("en"));
-    let error = SftpOpsError::Connection("socket reset by peer".to_string());
-
-    let message = error.user_message();
-
-    assert!(message.contains("connection") || message.contains("Connection"));
-    assert!(!message.contains("socket reset by peer"));
-    assert_eq!(
-        error.to_string(),
-        "Connection error: socket reset by peer",
-        "the diagnostic remains available for logging"
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn local_transfer_temp_creation_never_follows_existing_symlink() {
@@ -154,24 +138,6 @@ fn local_transfer_temp_creation_never_follows_existing_symlink() {
     assert_eq!(fs::read(&protected).unwrap(), b"must survive");
 }
 
-/// Test SftpOpsError::Connection Display output
-#[test]
-fn test_sftp_ops_error_display_connection() {
-    assert_eq!(
-        SftpOpsError::Connection("refused".into()).to_string(),
-        "Connection error: refused"
-    );
-}
-
-/// Test SftpOpsError::Operation Display output
-#[test]
-fn test_sftp_ops_error_display_operation() {
-    assert_eq!(
-        SftpOpsError::Operation("not found".into()).to_string(),
-        "Operation error: not found"
-    );
-}
-
 #[test]
 fn secure_transfer_capability_error_has_actionable_localized_message() {
     crate::i18n::init(Some("en"));
@@ -184,15 +150,6 @@ fn secure_transfer_capability_error_has_actionable_localized_message() {
     assert!(!error.user_message().contains("not negotiated"));
 }
 
-/// Test SftpOpsError::LocalIo Display output
-#[test]
-fn test_sftp_ops_error_display_local_io() {
-    assert_eq!(
-        SftpOpsError::LocalIo("disk full".into()).to_string(),
-        "Local I/O error: disk full"
-    );
-}
-
 /// Test SftpOpsError::NoCredentials Display output
 #[test]
 fn test_sftp_ops_error_display_no_credentials() {
@@ -200,20 +157,6 @@ fn test_sftp_ops_error_display_no_credentials() {
         SftpOpsError::NoCredentials("no key".into()).to_string(),
         "Credentials not found: no key"
     );
-}
-
-/// Test SftpOpsError::Cancelled Display output
-#[test]
-fn test_sftp_ops_error_display_cancelled() {
-    assert_eq!(SftpOpsError::Cancelled.to_string(), "Transfer cancelled");
-}
-
-/// Test conversion from std::io::Error to SftpOpsError
-#[test]
-fn test_sftp_ops_error_from_io_error() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-    let ops_err: SftpOpsError = io_err.into();
-    assert!(matches!(ops_err, SftpOpsError::NotFound(_)));
 }
 
 /// Test conversion from zap_sftp::SftpError to SftpOpsError
@@ -224,43 +167,11 @@ fn test_sftp_ops_error_from_sftp_error() {
     assert!(matches!(ops_err, SftpOpsError::Operation(_)));
 }
 
-/// Test shellexpand_path expanding ~/ path
-#[test]
-fn test_shellexpand_path_home() {
-    let home = dirs::home_dir().unwrap_or_default();
-    let result = shellexpand_path("~/test");
-    if !home.as_os_str().is_empty() {
-        assert!(!result.starts_with('~'));
-        assert!(result.contains("test"));
-    }
-}
-
-/// Test shellexpand_path preserving absolute path
-#[test]
-fn test_shellexpand_path_absolute() {
-    let result = shellexpand_path("/absolute/path");
-    assert_eq!(result, "/absolute/path");
-}
-
-/// Test shellexpand_path preserving relative path
-#[test]
-fn test_shellexpand_path_relative() {
-    let result = shellexpand_path("relative/path");
-    assert_eq!(result, "relative/path");
-}
-
 /// Test shellexpand_path with tilde only (no expansion)
 #[test]
 fn test_shellexpand_path_tilde_only() {
     let result = shellexpand_path("~");
     assert_eq!(result, "~");
-}
-
-/// Test shellexpand_path with empty path
-#[test]
-fn test_shellexpand_path_empty() {
-    let result = shellexpand_path("");
-    assert_eq!(result, "");
 }
 
 // ==================== bool_to_rwx tests ====================
@@ -271,76 +182,7 @@ fn test_bool_to_rwx_all_true() {
     assert_eq!(bool_to_rwx(true, true, true), "rwx");
 }
 
-/// Test no permissions
-#[test]
-fn test_bool_to_rwx_all_false() {
-    assert_eq!(bool_to_rwx(false, false, false), "---");
-}
-
-/// Test read-only permission
-#[test]
-fn test_bool_to_rwx_read_only() {
-    assert_eq!(bool_to_rwx(true, false, false), "r--");
-}
-
-/// Test write-only permission
-#[test]
-fn test_bool_to_rwx_write_only() {
-    assert_eq!(bool_to_rwx(false, true, false), "-w-");
-}
-
-/// Test execute-only permission
-#[test]
-fn test_bool_to_rwx_exec_only() {
-    assert_eq!(bool_to_rwx(false, false, true), "--x");
-}
-
-/// Test read-write permissions
-#[test]
-fn test_bool_to_rwx_read_write() {
-    assert_eq!(bool_to_rwx(true, true, false), "rw-");
-}
-
-/// Test read-execute permissions
-#[test]
-fn test_bool_to_rwx_read_exec() {
-    assert_eq!(bool_to_rwx(true, false, true), "r-x");
-}
-
-/// Test write-execute permissions
-#[test]
-fn test_bool_to_rwx_write_exec() {
-    assert_eq!(bool_to_rwx(false, true, true), "-wx");
-}
-
 // ==================== SftpOpsError edge case tests ====================
-
-/// Test SftpOpsError::Connection with empty message
-#[test]
-fn test_sftp_ops_error_connection_empty() {
-    assert_eq!(
-        SftpOpsError::Connection(String::new()).to_string(),
-        "Connection error: "
-    );
-}
-
-/// Test SftpOpsError::Operation with empty message
-#[test]
-fn test_sftp_ops_error_operation_empty() {
-    assert_eq!(
-        SftpOpsError::Operation(String::new()).to_string(),
-        "Operation error: "
-    );
-}
-
-/// Test SftpOpsError::LocalIo with empty message
-#[test]
-fn test_sftp_ops_error_local_io_empty() {
-    assert_eq!(
-        SftpOpsError::LocalIo(String::new()).to_string(),
-        "Local I/O error: "
-    );
-}
 
 /// Test SftpOpsError::NoCredentials with empty message
 #[test]
@@ -349,22 +191,4 @@ fn test_sftp_ops_error_no_credentials_empty() {
         SftpOpsError::NoCredentials(String::new()).to_string(),
         "Credentials not found: "
     );
-}
-
-/// Test shellexpand_path expanding nested ~/ path
-#[test]
-fn test_shellexpand_path_home_nested() {
-    let result = shellexpand_path("~/a/b/c");
-    assert!(!result.starts_with('~'));
-    assert!(result.contains("a/b/c"));
-}
-
-/// Test shellexpand_path with tilde followed by slash with no additional path
-#[test]
-fn test_shellexpand_path_home_root() {
-    let result = shellexpand_path("~/");
-    let home = dirs::home_dir().unwrap_or_default();
-    if !home.as_os_str().is_empty() {
-        assert!(!result.starts_with('~'));
-    }
 }

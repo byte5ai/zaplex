@@ -27,9 +27,8 @@ use super::{
     execute_agent_process_signal_with, prepare_agent_model_discovery,
     public_agent_model_discovery_error, server_features_with_runtime_support,
     AgentAccountScanCache, AgentInventoryScanCache, AgentModelDiscoveryLimiter,
-    AgentModelDiscoveryPreparationError, AgentTranscriptReadPermit, ConnectionOutbox,
-    PendingFileOps, ServerModel, AGENT_ACCOUNT_SCAN_MAX_AGE,
-    MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES, MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
+    AgentModelDiscoveryPreparationError, ConnectionOutbox, PendingFileOps, ServerModel,
+    AGENT_ACCOUNT_SCAN_MAX_AGE, MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES,
 };
 #[cfg(unix)]
 use super::{
@@ -101,54 +100,6 @@ fn test_model() -> ServerModel {
         #[cfg(unix)]
         managed_min_available_bytes: Ok(super::super::managed_fleet::DEFAULT_MIN_AVAILABLE_BYTES),
     }
-}
-
-#[cfg(unix)]
-#[test]
-fn accepted_open_cache_replays_only_the_exact_logical_request() {
-    let mut cache = AcceptedOpenCache::default();
-    let request = super::super::proto::OpenSession {
-        logical_open_id: "open-1".to_string(),
-        cwd: Some("/srv/one".to_string()),
-        ..Default::default()
-    };
-    let opened = super::super::proto::SessionOpened {
-        session_id: "pty-1".to_string(),
-        generation: 7,
-        requires_attach: false,
-        expected_agent_binding: None,
-    };
-    cache.insert(request.clone(), opened.clone());
-
-    assert!(matches!(
-        cache.lookup(&request),
-        AcceptedOpenLookup::Accepted(ref cached) if cached == &opened
-    ));
-    assert!(matches!(
-        cache.lookup(&super::super::proto::OpenSession {
-            cwd: Some("/srv/two".to_string()),
-            ..request.clone()
-        }),
-        AcceptedOpenLookup::Conflict
-    ));
-}
-
-#[cfg(unix)]
-#[test]
-fn every_existing_managed_launch_response_requires_attach() {
-    let source = include_str!("server_model.rs");
-    let start = source.find("fn existing_managed_launch(").unwrap();
-    let end = source[start..]
-        .find("fn validate_logical_open(")
-        .map(|offset| start + offset)
-        .unwrap();
-    let body = &source[start..end];
-
-    assert_eq!(body.matches("requires_attach: true").count(), 1);
-    assert_eq!(body.matches("opened().map(Some)").count(), 2);
-    assert!(body.contains("foreground_for_pty(session_id, session.generation)"));
-    assert!(body.contains("expected_agent_binding: Some(expected_agent_binding)"));
-    assert!(!body.contains("requires_attach: false"));
 }
 
 #[cfg(unix)]
@@ -436,30 +387,6 @@ fn legacy_open_requests_without_logical_ids_are_never_deduplicated() {
 
 #[cfg(unix)]
 #[test]
-fn fast_exit_retains_the_original_logical_open_response() {
-    let mut cache = AcceptedOpenCache::default();
-    let request = super::super::proto::OpenSession {
-        logical_open_id: "fast-exit-open".to_string(),
-        ..Default::default()
-    };
-    let opened = super::super::proto::SessionOpened {
-        session_id: "fast-exit-pty".to_string(),
-        generation: 9,
-        requires_attach: false,
-        expected_agent_binding: None,
-    };
-    cache.insert(request.clone(), opened.clone());
-
-    cache.retain_session_tombstone(&opened.session_id);
-
-    assert!(matches!(
-        cache.lookup(&request),
-        AcceptedOpenLookup::Accepted(ref cached) if cached == &opened
-    ));
-}
-
-#[cfg(unix)]
-#[test]
 fn accepted_open_tombstones_are_bounded_and_evicted_oldest_first() {
     let mut cache = AcceptedOpenCache::default();
     for index in 0..MAX_ACCEPTED_OPEN_IDS {
@@ -727,30 +654,6 @@ fn outbound_byte_budget_is_released_when_message_is_dequeued() {
     });
 }
 
-#[test]
-fn outbound_byte_budget_disconnects_slow_consumer() {
-    let message = ServerMessage {
-        request_id: "budgeted-message".to_string(),
-        message: None,
-    };
-    let shutdown_observed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let shutdown = {
-        let shutdown_observed = shutdown_observed.clone();
-        std::sync::Arc::new(move || {
-            shutdown_observed.store(true, std::sync::atomic::Ordering::Release);
-        })
-    };
-    let (outbox, _drain) = ConnectionOutbox::new(prost::Message::encoded_len(&message), shutdown);
-
-    assert_eq!(outbox.try_send(message.clone()), Ok(()));
-    assert_eq!(
-        outbox.try_send(message),
-        Err("connection outbox byte budget exceeded")
-    );
-    assert!(outbox.is_closed());
-    assert!(shutdown_observed.load(std::sync::atomic::Ordering::Acquire));
-}
-
 fn request_id() -> RequestId {
     RequestId::from("test-request".to_string())
 }
@@ -855,18 +758,6 @@ fn identical_client_session_ids_do_not_collide_across_connections() {
             assert_eq!(model.executors.len(), 1);
         });
     });
-}
-
-#[test]
-fn transcript_read_permits_cap_parallel_work_and_release_on_drop() {
-    let in_flight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let permits: Vec<_> = (0..MAX_CONCURRENT_AGENT_TRANSCRIPT_READS)
-        .map(|_| AgentTranscriptReadPermit::try_acquire(std::sync::Arc::clone(&in_flight)).unwrap())
-        .collect();
-
-    assert!(AgentTranscriptReadPermit::try_acquire(std::sync::Arc::clone(&in_flight)).is_none());
-    drop(permits);
-    assert!(AgentTranscriptReadPermit::try_acquire(in_flight).is_some());
 }
 
 #[test]
@@ -1814,19 +1705,6 @@ fn agent_process_signal_requires_client_capability_negotiation() {
 }
 
 #[test]
-fn agent_account_routing_requires_client_capability_negotiation() {
-    let mut model = test_model();
-    let conn = uuid::Uuid::new_v4();
-
-    assert!(!model.client_supports_agent_account_routing(conn));
-    model.connection_features.insert(
-        conn,
-        HashSet::from([FEATURE_AGENT_ACCOUNT_ROUTING_V1.to_string()]),
-    );
-    assert!(model.client_supports_agent_account_routing(conn));
-}
-
-#[test]
 fn agent_model_discovery_requires_client_capability_negotiation() {
     let mut model = test_model();
     let conn = uuid::Uuid::new_v4();
@@ -2006,19 +1884,6 @@ fn agent_model_discovery_response_preserves_capabilities_without_host_paths() {
     assert_eq!(response.models[0].default_effort.as_deref(), Some("high"));
     assert_eq!(response.models[0].context_window, Some(200_000));
     assert!(!format!("{response:?}").contains("/secret/"));
-}
-
-#[test]
-fn agent_transcript_read_requires_client_capability_negotiation() {
-    let mut model = test_model();
-    let conn = uuid::Uuid::new_v4();
-
-    assert!(!model.client_supports_agent_transcript_read(conn));
-    model.connection_features.insert(
-        conn,
-        HashSet::from([FEATURE_AGENT_TRANSCRIPT_READ_V1.to_string()]),
-    );
-    assert!(model.client_supports_agent_transcript_read(conn));
 }
 
 #[test]

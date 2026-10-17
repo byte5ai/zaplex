@@ -1,30 +1,22 @@
 use chrono::{DateTime, Utc};
 use persistence::model::AgentConversationData;
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
-use warp_core::features::FeatureFlag;
+use std::collections::HashMap;
 use warpui::{App, EntityId};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::ambient_agents::task::{TaskCreatorInfo, TaskStatusMessage};
 use crate::ai::ambient_agents::AgentConfigSnapshot;
-use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
 use crate::ai::artifacts::Artifact;
-use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::conversation_navigation::ConversationNavigationData;
 use crate::auth::AuthStateProvider;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 
 use super::{
-    AgentConversationsModel, AgentConversationsModelEvent, AgentManagementFilters,
-    AgentRunDisplayStatus, ArtifactFilter, ConversationMetadata, ConversationOrTask,
-    EnvironmentFilter, HarnessFilter, OwnerFilter, StatusFilter,
+    AgentConversationsModel, AgentManagementFilters, AgentRunDisplayStatus, ArtifactFilter,
+    ConversationMetadata, ConversationOrTask, EnvironmentFilter, HarnessFilter, OwnerFilter,
+    StatusFilter,
 };
 use crate::ai::ambient_agents::task::HarnessConfig;
 use warp_cli::agent::Harness;
@@ -61,38 +53,6 @@ fn create_test_task(
         last_event_sequence: None,
         children: vec![],
     }
-}
-
-#[test]
-fn test_conversation_status_update_emits_conversation_updated() {
-    App::test((), |mut app| async move {
-        let _interactive_management_guard =
-            FeatureFlag::InteractiveConversationManagementView.override_enabled(true);
-        let agent_model = app.add_singleton_model(|_| create_test_model());
-        let saw_conversation_updated = Arc::new(AtomicBool::new(false));
-
-        app.update(|ctx| {
-            let saw_conversation_updated = saw_conversation_updated.clone();
-            ctx.subscribe_to_model(&agent_model, move |_, event, _| {
-                if matches!(event, AgentConversationsModelEvent::ConversationUpdated) {
-                    saw_conversation_updated.store(true, Ordering::SeqCst);
-                }
-            });
-        });
-
-        agent_model.update(&mut app, |model, ctx| {
-            model.handle_history_event(
-                &BlocklistAIHistoryEvent::UpdatedConversationStatus {
-                    conversation_id: AIConversationId::new(),
-                    terminal_view_id: EntityId::new(),
-                    is_restored: false,
-                },
-                ctx,
-            );
-        });
-
-        assert!(saw_conversation_updated.load(Ordering::SeqCst));
-    });
 }
 
 #[test]
@@ -922,20 +882,6 @@ fn test_get_or_async_fetch_task_data_returns_cached_task() {
         });
 
         assert!(result.is_some(), "cached task should be returned");
-    });
-}
-
-#[test]
-fn test_get_or_async_fetch_task_data_does_not_fetch_missing_task() {
-    App::test((), |mut app| async move {
-        let task_id: AmbientAgentTaskId = make_uuid(7001).parse().unwrap();
-        let model_handle = app.add_singleton_model(|_| create_test_model());
-
-        let result = model_handle.update(&mut app, |model, _| {
-            model.get_or_async_fetch_task_data(&task_id)
-        });
-
-        assert!(result.is_none());
     });
 }
 

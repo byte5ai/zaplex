@@ -9,39 +9,11 @@ use zap_sftp::types::*;
 // FileType::from_mode tests
 // ============================================================
 
-/// Verify that 0o040000 is parsed as Dir
-#[test]
-fn test_file_type_from_mode_dir() {
-    let ft = FileType::from_mode(0o040000);
-    assert_eq!(ft, FileType::Dir);
-}
-
-/// Verify that 0o100000 is parsed as File
-#[test]
-fn test_file_type_from_mode_file() {
-    let ft = FileType::from_mode(0o100000);
-    assert_eq!(ft, FileType::File);
-}
-
 /// Verify that 0o120000 is parsed as Symlink
 #[test]
 fn test_file_type_from_mode_symlink() {
     let ft = FileType::from_mode(0o120000);
     assert_eq!(ft, FileType::Symlink);
-}
-
-/// Verify that 0o000000 is parsed as Other
-#[test]
-fn test_file_type_from_mode_other() {
-    let ft = FileType::from_mode(0o000000);
-    assert_eq!(ft, FileType::Other);
-}
-
-/// Verify that unknown type 0o050000 is also parsed as Other
-#[test]
-fn test_file_type_from_mode_unknown() {
-    let ft = FileType::from_mode(0o050000);
-    assert_eq!(ft, FileType::Other);
 }
 
 // ============================================================

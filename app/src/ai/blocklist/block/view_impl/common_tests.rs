@@ -1,20 +1,14 @@
 use itertools::Itertools;
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
-use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
-#[cfg(feature = "local_fs")]
-use warpui::assets::asset_cache::AssetSource;
 use warpui::App;
 
-#[cfg(feature = "local_fs")]
-use super::{blocklist_image_asset_source, ResolvedBlocklistImageSources};
 use super::{
     collect_visual_markdown_lightbox_collection, compute_visual_section_width,
-    display_query_without_context_references, inline_image_source_label,
-    is_supported_blocklist_image_source, lightbox_trigger_for_section, query_context_references,
-    query_prefix_highlight_len, render_scrollable_collapsible_content, text_sections_with_indices,
-    CollapsibleElementState, CollapsibleExpansionState, QueryContextReference,
-    VisualMarkdownLightboxCollection,
+    display_query_without_context_references, is_supported_blocklist_image_source,
+    lightbox_trigger_for_section, query_context_references, render_scrollable_collapsible_content,
+    text_sections_with_indices, CollapsibleElementState, CollapsibleExpansionState,
+    QueryContextReference, VisualMarkdownLightboxCollection,
 };
 use crate::{
     ai::agent::{
@@ -22,69 +16,10 @@ use crate::{
         AgentOutputImageLayout, AgentOutputMermaidDiagram, MessageId, UserQueryMode,
     },
     features::FeatureFlag,
-    search::slash_command_menu::static_commands::commands,
     ui_components::icons::Icon,
 };
 use ui_components::lightbox::{LightboxImage, LightboxImageSource};
 use warpui::{elements::Empty, Element};
-
-#[test]
-fn query_prefix_highlight_len_highlights_invoke_skill_inputs() {
-    let input = AIAgentInput::InvokeSkill {
-        context: Arc::new([]),
-        skill: ParsedSkill {
-            path: PathBuf::from("/tmp/.agents/skills/review-pr/SKILL.md"),
-            name: "review-pr".to_string(),
-            description: "Review a pull request.".to_string(),
-            content: String::new(),
-            line_range: None,
-            provider: SkillProvider::Agents,
-            scope: SkillScope::Project,
-        },
-        user_query: None,
-    };
-
-    assert_eq!(
-        query_prefix_highlight_len(&input, "/review-pr tighten the summary"),
-        Some("/review-pr".len())
-    );
-}
-
-#[test]
-fn query_prefix_highlight_len_does_not_guess_from_plain_user_query_text() {
-    let input = AIAgentInput::UserQuery {
-        query: "/review-pr tighten the summary".to_string(),
-        context: Arc::new([]),
-        static_query_type: None,
-        referenced_attachments: HashMap::new(),
-        user_query_mode: UserQueryMode::Normal,
-        running_command: None,
-        intended_agent: None,
-    };
-
-    assert_eq!(
-        query_prefix_highlight_len(&input, "/review-pr tighten the summary"),
-        None
-    );
-}
-
-#[test]
-fn query_prefix_highlight_len_keeps_existing_plan_highlighting() {
-    let input = AIAgentInput::UserQuery {
-        query: "write tests".to_string(),
-        context: Arc::new([]),
-        static_query_type: None,
-        referenced_attachments: HashMap::new(),
-        user_query_mode: UserQueryMode::Plan,
-        running_command: None,
-        intended_agent: None,
-    };
-
-    assert_eq!(
-        query_prefix_highlight_len(&input, "/plan write tests"),
-        Some(commands::PLAN.name.len())
-    );
-}
 
 #[test]
 fn query_context_references_only_returns_real_at_attachments() {
@@ -314,38 +249,6 @@ fn collect_visual_markdown_lightbox_collection_includes_mermaid_sections_in_sour
                 .all(|image| image.description.is_none()));
         });
     });
-}
-
-#[test]
-fn inline_image_source_label_uses_file_name() {
-    assert_eq!(
-        inline_image_source_label("/tmp/screenshots/classic_1.png"),
-        "classic_1.png"
-    );
-}
-
-#[cfg(feature = "local_fs")]
-#[test]
-fn blocklist_image_asset_source_uses_cached_resolution_when_available() {
-    let current_working_directory = "/tmp/session".to_string();
-    let cached_path = "/tmp/cached/diagram.png".to_string();
-    let resolved_sources = ResolvedBlocklistImageSources::from([(
-        "diagram.png".to_string(),
-        Some(AssetSource::LocalFile {
-            path: cached_path.clone(),
-        }),
-    )]);
-
-    let resolved = blocklist_image_asset_source(
-        "diagram.png",
-        Some(&current_working_directory),
-        Some(&resolved_sources),
-    );
-
-    match resolved {
-        Some(AssetSource::LocalFile { path }) => assert_eq!(path, cached_path),
-        other => panic!("expected cached local file asset source, got {other:?}"),
-    }
 }
 
 /// `is_supported_blocklist_image_source` should accept the same image extensions

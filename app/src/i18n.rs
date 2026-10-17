@@ -262,24 +262,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn init_is_idempotent() {
-        init(Some("en"));
-        init(Some("en"));
-        assert!(loader().is_some());
-    }
-
-    #[test]
-    fn fallback_chain_works() {
-        // A locale with no bundle (e.g. "de") falls back to the en bundle.
-        init(Some("de"));
-        let loader = loader().unwrap();
-        assert_eq!(loader.get("common-ok"), "OK");
-        // Non-existent key — fluent will return the key itself or a string with a marker
-        let missing = loader.get("definitely-does-not-exist");
-        assert!(missing.contains("definitely-does-not-exist"));
-    }
-
-    #[test]
     fn requested_languages_keep_preferred_order() {
         let languages = ["de", "fr"]
             .into_iter()

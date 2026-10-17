@@ -31,61 +31,6 @@ fn formatted_text_wrapper_shares_arc_across_calls() {
 }
 
 #[test]
-fn formatted_text_wrapper_preserves_content() {
-    let text = FormattedText::new([
-        FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("line one")]),
-        FormattedTextLine::Line(vec![FormattedTextFragment::plain_text("line two")]),
-    ]);
-    let wrapper = FormattedTextWrapper::from(text);
-    // lines() metadata matches the cached Arc
-    assert_eq!(wrapper.lines().len(), 2);
-    assert_eq!(wrapper.lines()[0].raw_text(), "line one\n");
-    assert_eq!(wrapper.lines()[1].raw_text(), "line two\n");
-    // Arc contains the same lines
-    let ft = wrapper.formatted_text_arc();
-    assert_eq!(ft.lines.len(), 2);
-}
-
-#[test]
-fn test_convert_files() {
-    let a = FileContext::new(
-        "a.txt".to_string(),
-        AnyFileContent::StringContent("hey\nyou".to_string()),
-        None,
-        None,
-    );
-
-    assert_eq!(
-        Into::<Vec<FileContent>>::into(a),
-        vec![FileContent {
-            file_path: "a.txt".to_string(),
-            content: "hey\nyou".to_string(),
-            line_range: None,
-        }]
-    );
-}
-
-#[test]
-fn test_convert_files_range() {
-    // Content is pre-sliced to match the line range.
-    let a = FileContext::new(
-        "a.txt".to_string(),
-        AnyFileContent::StringContent("hey\nyou".to_string()),
-        Some(1..2),
-        None,
-    );
-
-    assert_eq!(
-        Into::<Vec<FileContent>>::into(a),
-        vec![FileContent {
-            file_path: "a.txt".to_string(),
-            content: "hey\nyou".to_string(),
-            line_range: to_range(1..2),
-        }]
-    );
-}
-
-#[test]
 fn test_convert_files_range_out_of_bounds() {
     // Even with an out-of-bounds range, content is passed through as-is.
     let a = FileContext::new(

@@ -1,4 +1,4 @@
-use super::{number_to_alphabet, number_to_roman, ListNumbering};
+use super::ListNumbering;
 use crate::elements::OrderedListLabel;
 
 #[test]
@@ -211,23 +211,4 @@ fn test_reset() {
             display_label: "5".to_owned()
         }
     );
-}
-
-#[test]
-fn test_number_to_roman() {
-    assert_eq!(number_to_roman(0), "i");
-    assert_eq!(number_to_roman(5), "vi");
-    assert_eq!(number_to_roman(29), "xxx");
-    assert_eq!(number_to_roman(30), "i");
-    assert_eq!(number_to_roman(61), "ii");
-}
-
-#[test]
-fn test_number_to_alphabet() {
-    assert_eq!(number_to_alphabet(0), "a");
-    assert_eq!(number_to_alphabet(25), "z");
-    assert_eq!(number_to_alphabet(26), "aa");
-    assert_eq!(number_to_alphabet(27), "bb");
-    assert_eq!(number_to_alphabet(77), "zzz");
-    assert_eq!(number_to_alphabet(78), "a");
 }

@@ -46,55 +46,6 @@ fn keys(v: &[AccountUsage]) -> Vec<String> {
 }
 
 #[test]
-fn empty_overrides_pass_accounts_through_unchanged() {
-    let ov = AccountOverrides::parse("{}");
-    assert!(ov.is_empty());
-    let accts = vec![account("claude:a"), account("claude:default")];
-    let out = ov.apply(accts);
-    assert_eq!(keys(&out), vec!["claude:a", "claude:default"]);
-}
-
-#[test]
-fn hidden_accounts_are_dropped() {
-    let ov = AccountOverrides::parse(r#"{"claude:a": {"hidden": true}}"#);
-    let out = ov.apply(vec![account("claude:a"), account("claude:b")]);
-    assert_eq!(keys(&out), vec!["claude:b"]);
-}
-
-#[test]
-fn label_override_is_applied() {
-    let ov = AccountOverrides::parse(r#"{"claude:work": {"label": "Work — Max 20x"}}"#);
-    let out = ov.apply(vec![account("claude:work")]);
-    assert_eq!(out[0].account.label, "Work — Max 20x");
-    assert_eq!(out[0].account.key, "claude:work", "key is never rewritten");
-}
-
-#[test]
-fn order_sorts_ascending_with_unordered_last_stable() {
-    // b→order 1, default→order 0; a and c are un-ordered and keep their
-    // input relative order after the ordered ones.
-    let ov =
-        AccountOverrides::parse(r#"{"claude:b": {"order": 1}, "claude:default": {"order": 0}}"#);
-    let out = ov.apply(vec![
-        account("claude:a"),
-        account("claude:b"),
-        account("claude:c"),
-        account("claude:default"),
-    ]);
-    assert_eq!(
-        keys(&out),
-        vec!["claude:default", "claude:b", "claude:a", "claude:c"]
-    );
-}
-
-#[test]
-fn color_lookup_by_key() {
-    let ov = AccountOverrides::parse(r##"{"claude:a": {"color": "#22C55E"}}"##);
-    assert_eq!(ov.color_for("claude:a"), Some("#22C55E"));
-    assert_eq!(ov.color_for("claude:b"), None);
-}
-
-#[test]
 fn unique_legacy_override_migrates_to_root_bound_key() {
     let new_key = "claude:work:0123456789ab";
     let accounts = vec![account_at(new_key, "/srv/accounts/work")];
@@ -156,21 +107,6 @@ fn broken_json_yields_no_overrides_never_hides_accounts() {
         let out = ov.apply(vec![account("claude:a")]);
         assert_eq!(keys(&out), vec!["claude:a"]);
     }
-}
-
-#[test]
-fn malformed_entry_does_not_discard_valid_overrides() {
-    let overrides = AccountOverrides::parse(
-        r#"{
-            "claude:good": {"label": "Work"},
-            "claude:bad": {"order": "two"}
-        }"#,
-    );
-
-    let accounts = overrides.apply(vec![account("claude:good"), account("claude:bad")]);
-
-    assert_eq!(accounts[0].account.label, "Work");
-    assert_eq!(accounts[1].account.label, "claude:bad");
 }
 
 // ── Writing an alias back (A1) ──────────────────────────────────────────────

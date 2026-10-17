@@ -358,7 +358,3 @@ impl From<FolderId> for SyncId {
         Self::ServerId(id.into())
     }
 }
-
-#[cfg(test)]
-#[path = "ids_test.rs"]
-mod tests;

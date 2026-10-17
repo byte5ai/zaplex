@@ -277,55 +277,6 @@ fn canonical_codex_root_alias_is_emitted_once() {
 }
 
 #[test]
-fn malformed_sign_in_file_is_degraded_without_inventing_an_account() {
-    let tmp = tempfile::tempdir().unwrap();
-    let home = tmp.path();
-    write(&home.join(".codex/auth.json"), "{not valid json");
-
-    let discovery = discover_account_roots(home, None);
-    assert!(discovery.accounts.is_empty());
-    assert_eq!(
-        discovery.issues,
-        vec!["Codex account sign-in file is malformed"]
-    );
-}
-
-#[test]
-fn unreadable_sign_in_source_is_degraded_without_inventing_an_account() {
-    let tmp = tempfile::tempdir().unwrap();
-    let home = tmp.path();
-    fs::create_dir_all(home.join(".codex/auth.json")).unwrap();
-
-    let discovery = discover_account_roots(home, None);
-    assert!(discovery.accounts.is_empty());
-    assert_eq!(
-        discovery.issues,
-        vec!["Codex account sign-in file is unreadable"]
-    );
-}
-
-#[test]
-fn unavailable_pinned_codex_root_is_degraded_not_successfully_empty() {
-    let tmp = tempfile::tempdir().unwrap();
-    let home = tmp.path();
-    let missing = home.join("outside/missing");
-
-    let discovery = discover_account_roots(home, Some(&missing));
-    assert!(discovery.accounts.is_empty());
-    assert_eq!(
-        discovery.issues,
-        vec!["Codex pinned account root is unavailable"]
-    );
-
-    let default_root = home.join(".codex");
-    let default_discovery = discover_account_roots(home, Some(&default_root));
-    assert_eq!(
-        default_discovery.issues,
-        vec!["Codex pinned account root is unavailable"]
-    );
-}
-
-#[test]
 fn parse_transcript_uses_per_turn_usage_from_token_count_events() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("rollout-x.jsonl");

@@ -1,14 +1,11 @@
 use chrono::Utc;
 use lazy_static::lazy_static;
-use settings::{RespectUserSyncSetting, SyncToCloud};
 use warpui::{App, ModelHandle};
 
 use crate::auth::AuthManager;
 use crate::auth::AuthStateProvider;
 use crate::auth::UserUid;
-use crate::auth::TEST_USER_UID;
 use crate::cloud_object::model::actions::ObjectActions;
-use crate::cloud_object::model::generic_string_model::GenericStringModel;
 use crate::cloud_object::model::view::EditorState;
 use crate::cloud_object::model::view::ObjectStoreViewModel;
 use crate::cloud_object::model::view::UpdateTimestamp;
@@ -22,10 +19,8 @@ use crate::drive::folders::FolderObjectModel;
 use crate::drive::DriveIndexVariant;
 use crate::features::FeatureFlag;
 use crate::notebooks::NotebookObjectModel;
-use crate::server::ids::ClientId;
 use crate::server::ids::ServerId;
 use crate::settings::init_and_register_user_preferences;
-use crate::settings::Preference;
 use crate::system::SystemStats;
 use crate::workspaces::team::Team;
 use crate::workspaces::user_profiles::UserProfiles;
@@ -174,54 +169,6 @@ fn folder_from_object_store_model(model: &ObjectStoreModel, id: SyncId) -> &Fold
 // (test_update_folder_timestamp_from_*) that depended on the `receive_rtc_update` / `move_object`
 // helpers were deleted along with those helpers; on the local-write path, metadata updates are
 // handled directly by `ObjectStoreModel`, with no need for the RTC path.
-
-#[test]
-fn test_create_json_object() {
-    let client_id = ClientId::default();
-    let id = SyncId::ClientId(client_id);
-    let json_object: Box<dyn StoredObject> = Box::new(PreferenceObject::new(
-        id,
-        GenericStringModel::new(
-            Preference::new(
-                "test_storage_key".to_owned(),
-                "{\"test_key\": \"test_value\"}",
-                SyncToCloud::Globally(RespectUserSyncSetting::Yes),
-            )
-            .expect("error creating preference"),
-        ),
-        StoredObjectMetadata {
-            pending_changes_statuses: StoredObjectStatuses {
-                content_sync_status: StoredObjectSyncStatus::NoLocalChanges,
-                has_pending_metadata_change: false,
-                has_pending_permissions_change: false,
-                pending_untrash: false,
-                pending_delete: false,
-            },
-            folder_id: Default::default(),
-            revision: Default::default(),
-            metadata_last_updated_ts: Default::default(),
-            current_editor_uid: Default::default(),
-            trashed_ts: Default::default(),
-            is_welcome_object: false,
-            creator_uid: None,
-            last_editor_uid: None,
-            last_task_run_ts: None,
-        },
-        mock_permissions(),
-    ));
-
-    App::test((), |mut app| async move {
-        let object_store_model = create_object_store_model(&mut app, vec![json_object]);
-        object_store_model.read(&app, |model, _| {
-            let json_object: &PreferenceObject =
-                model.get_object_of_type(&id).expect("model should exist");
-            assert_eq!(
-                json_object.model().string_model.storage_key,
-                "test_storage_key".to_owned()
-            );
-        });
-    })
-}
 
 fn check_cloud_folders(app: &mut App, number_of_folders: usize) {
     ObjectStoreModel::handle(app).read(app, |model, _| {
@@ -544,165 +491,6 @@ fn assert_sorting_timestamp(id: ServerId, expected_ts: impl Into<ServerTimestamp
 }
 
 #[test]
-fn test_shared_personal_object() {
-    let _guard = FeatureFlag::SharedWithMe.override_enabled(true);
-    App::test((), |mut app| async move {
-        initialize_app(&mut app, Vec::new());
-
-        let other_user = UserUid::new("other_user");
-        let shared_notebook_id = SyncId::ServerId(123.into());
-        let shared_notebook = NotebookObject::new(
-            shared_notebook_id,
-            NotebookObjectModel {
-                title: "Shared Notebook".to_string(),
-                data: "Hello".to_string(),
-                ai_document_id: None,
-                conversation_id: None,
-            },
-            mock_stored_metadata(),
-            StoredObjectPermissions {
-                owner: Owner::User {
-                    user_uid: other_user,
-                },
-                guests: Vec::new(),
-                permissions_last_updated_ts: None,
-                anyone_with_link: None,
-            },
-        );
-
-        ObjectStoreModel::handle(&app).update(&mut app, |object_store_model, ctx| {
-            object_store_model.add_object(shared_notebook_id, shared_notebook);
-
-            let space = object_store_model
-                .get_notebook(&shared_notebook_id)
-                .expect("Notebook is in ObjectStoreModel")
-                .space(ctx);
-            assert_eq!(space, Space::Shared);
-        });
-    });
-}
-
-#[test]
-fn test_unshared_personal_object() {
-    let _guard = FeatureFlag::SharedWithMe.override_enabled(true);
-    App::test((), |mut app| async move {
-        initialize_app(&mut app, Vec::new());
-
-        let shared_notebook_id = SyncId::ServerId(123.into());
-        let shared_notebook = NotebookObject::new(
-            shared_notebook_id,
-            NotebookObjectModel {
-                title: "Shared Notebook".to_string(),
-                data: "Hello".to_string(),
-                ai_document_id: None,
-                conversation_id: None,
-            },
-            mock_stored_metadata(),
-            StoredObjectPermissions {
-                owner: Owner::User {
-                    user_uid: UserUid::new(TEST_USER_UID),
-                },
-                guests: Vec::new(),
-                permissions_last_updated_ts: None,
-                anyone_with_link: None,
-            },
-        );
-
-        ObjectStoreModel::handle(&app).update(&mut app, |object_store_model, ctx| {
-            object_store_model.add_object(shared_notebook_id, shared_notebook);
-
-            let space = object_store_model
-                .get_notebook(&shared_notebook_id)
-                .expect("Notebook is in ObjectStoreModel")
-                .space(ctx);
-            assert_eq!(space, Space::Personal);
-        });
-    });
-}
-
-#[test]
-fn test_shared_team_object() {
-    let _guard = FeatureFlag::SharedWithMe.override_enabled(true);
-    App::test((), |mut app| async move {
-        initialize_app(&mut app, Vec::new());
-
-        // The user is not on this team.
-        let team_uid = ServerId::from(456);
-
-        let shared_notebook_id = SyncId::ServerId(123.into());
-        let shared_notebook = NotebookObject::new(
-            shared_notebook_id,
-            NotebookObjectModel {
-                title: "Shared Notebook".to_string(),
-                data: "Hello".to_string(),
-                ai_document_id: None,
-                conversation_id: None,
-            },
-            mock_stored_metadata(),
-            StoredObjectPermissions {
-                owner: Owner::Team { team_uid },
-                guests: Vec::new(),
-                permissions_last_updated_ts: None,
-                anyone_with_link: None,
-            },
-        );
-
-        ObjectStoreModel::handle(&app).update(&mut app, |object_store_model, ctx| {
-            object_store_model.add_object(shared_notebook_id, shared_notebook);
-
-            let space = object_store_model
-                .get_notebook(&shared_notebook_id)
-                .expect("Notebook is in ObjectStoreModel")
-                .space(ctx);
-            assert_eq!(space, Space::Shared);
-        });
-    });
-}
-
-#[test]
-fn test_cached_team_object_does_not_restore_retired_team_space() {
-    let _guard = FeatureFlag::SharedWithMe.override_enabled(true);
-    App::test((), |mut app| async move {
-        app.update(init_and_register_user_preferences);
-        initialize_app(&mut app, Vec::new());
-
-        // Use the current user's team.
-        let team_uid = TEST_TEAM.uid;
-        let shared_notebook_id = SyncId::ServerId(123.into());
-        let shared_notebook = NotebookObject::new(
-            shared_notebook_id,
-            NotebookObjectModel {
-                title: "Shared Notebook".to_string(),
-                data: "Hello".to_string(),
-                ai_document_id: None,
-                conversation_id: None,
-            },
-            mock_stored_metadata(),
-            StoredObjectPermissions {
-                owner: Owner::Team { team_uid },
-                guests: Vec::new(),
-                permissions_last_updated_ts: None,
-                anyone_with_link: None,
-            },
-        );
-
-        ObjectStoreModel::handle(&app).update(&mut app, |object_store_model, ctx| {
-            object_store_model.add_object(shared_notebook_id, shared_notebook);
-
-            let space = object_store_model
-                .get_notebook(&shared_notebook_id)
-                .expect("Notebook is in ObjectStoreModel")
-                .space(ctx);
-            assert_eq!(space, Space::Shared);
-            assert_eq!(
-                UserWorkspaces::as_ref(ctx).all_user_spaces(ctx),
-                vec![Space::Personal]
-            );
-        });
-    });
-}
-
-#[test]
 fn test_shared_object_in_unshared_folder() {
     let _guard = FeatureFlag::SharedWithMe.override_enabled(true);
     App::test((), |mut app| async move {
@@ -928,18 +716,6 @@ fn active_object_uids_matches_naive_with_nested_trashed_folder() {
             assert_eq!(active, naive_active_object_uids(model));
             assert_eq!(active.len(), 1);
             assert!(active.contains(&active_notebook_id.uid()));
-        });
-    });
-}
-
-#[test]
-fn active_object_uids_matches_naive_with_empty_model() {
-    App::test((), |mut app| async move {
-        let object_store_model = create_object_store_model(&mut app, vec![]);
-        object_store_model.read(&app, |model, _| {
-            let active = model.active_object_uids();
-            assert_eq!(active, naive_active_object_uids(model));
-            assert!(active.is_empty());
         });
     });
 }

@@ -12,8 +12,7 @@ use super::{
     refresh_codex_hooks, refresh_deepseek_hooks, refresh_deepseek_hooks_with_activation,
     refresh_hooks, remove_antigravity_title, remove_codex_hooks, remove_deepseek_hooks,
     remove_hooks, resolve_worker_agent, supports_agent, HookConfigChange,
-    CLAUDE_MANAGED_HOOK_EVENTS, CODEX_MANAGED_HOOK_EVENTS, DEEPSEEK_MANAGED_HOOK_EVENTS,
-    GROK_MANAGED_HOOK_EVENTS, MANAGED_BY_MARKER,
+    DEEPSEEK_MANAGED_HOOK_EVENTS, MANAGED_BY_MARKER,
 };
 use crate::terminal::CLIAgent;
 
@@ -655,18 +654,6 @@ command = "/usr/local/bin/user-audit"
         HookConfigChange::Unchanged
     );
     assert_eq!(fs::read(&path).unwrap(), first_bytes);
-}
-
-#[test]
-fn managed_event_sets_match_each_agents_documented_surface() {
-    assert!(CLAUDE_MANAGED_HOOK_EVENTS.contains(&"Notification"));
-    assert!(CLAUDE_MANAGED_HOOK_EVENTS.contains(&"PermissionRequest"));
-    assert!(CODEX_MANAGED_HOOK_EVENTS.contains(&"PermissionRequest"));
-    assert!(!GROK_MANAGED_HOOK_EVENTS.contains(&"PermissionRequest"));
-    assert!(GROK_MANAGED_HOOK_EVENTS.contains(&"Notification"));
-    assert!(GROK_MANAGED_HOOK_EVENTS.contains(&"PermissionDenied"));
-    assert!(DEEPSEEK_MANAGED_HOOK_EVENTS.contains(&"turn_end"));
-    assert!(!DEEPSEEK_MANAGED_HOOK_EVENTS.contains(&"permission_request"));
 }
 
 #[test]

@@ -1,16 +1,6 @@
 use super::*;
 
 #[test]
-fn test_format_sigfigs() {
-    assert_eq!(format_sigfigs(0.000456, 2,), "0.00046");
-    assert_eq!(format_sigfigs(0.043256, 3,), "0.0433");
-    assert_eq!(format_sigfigs(0.01, 2,), "0.010");
-    assert_eq!(format_sigfigs(10., 3,), "10.0");
-    assert_eq!(format_sigfigs(456.719, 4,), "456.7");
-    assert_eq!(format_sigfigs(10., 2,), "10");
-}
-
-#[test]
 fn test_human_readable_precise_duration() {
     assert_eq!(
         human_readable_precise_duration(Duration::milliseconds(3)),

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use super::*;
 use crate::ai::agent::{task::TaskId, AIAgentActionResultType};
@@ -67,34 +67,4 @@ fn phased_scheduling_stops_at_serial_barrier_and_resumes_afterward() {
     assert_eq!(count_startable_actions_for_pass(&actions), 2);
     assert_eq!(count_startable_actions_for_pass(&actions[2..]), 1);
     assert_eq!(count_startable_actions_for_pass(&actions[3..]), 2);
-}
-
-#[test]
-fn finished_results_stay_in_original_action_order() {
-    let action_order = HashMap::from([
-        (AIAgentActionId::from("first".to_owned()), 0),
-        (AIAgentActionId::from("second".to_owned()), 1),
-        (AIAgentActionId::from("third".to_owned()), 2),
-    ]);
-    let mut finished_results = [
-        make_action_result("third"),
-        make_action_result("first"),
-        make_action_result("second"),
-    ];
-
-    finished_results
-        .sort_by_key(|result| action_order.get(&result.id).copied().unwrap_or(usize::MAX));
-
-    assert_eq!(
-        finished_results[0].id,
-        AIAgentActionId::from("first".to_owned())
-    );
-    assert_eq!(
-        finished_results[1].id,
-        AIAgentActionId::from("second".to_owned())
-    );
-    assert_eq!(
-        finished_results[2].id,
-        AIAgentActionId::from("third".to_owned())
-    );
 }

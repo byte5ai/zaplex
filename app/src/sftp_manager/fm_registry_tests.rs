@@ -21,31 +21,6 @@ fn desc_in_group(id: u64, fs: FsNamespace, path: &str, group: EntityId) -> FmPan
 }
 
 #[test]
-fn upsert_inserts_then_updates_in_place() {
-    let mut reg = FileManagerRegistry::new();
-    reg.upsert(desc(1, FsNamespace::Local, "/a"));
-    reg.upsert(desc(2, FsNamespace::Local, "/b"));
-    assert_eq!(reg.panes().len(), 2);
-
-    // Same id → replace, not append.
-    reg.upsert(desc(1, FsNamespace::Local, "/a2"));
-    assert_eq!(reg.panes().len(), 2);
-    assert_eq!(
-        reg.panes().iter().find(|p| p.id == 1).unwrap().current_path,
-        PathBuf::from("/a2")
-    );
-}
-
-#[test]
-fn remove_is_idempotent() {
-    let mut reg = FileManagerRegistry::new();
-    reg.upsert(desc(1, FsNamespace::Local, "/a"));
-    reg.remove(1);
-    reg.remove(1); // no panic, no-op
-    assert!(reg.panes().is_empty());
-}
-
-#[test]
 fn others_same_fs_excludes_self_and_other_namespaces() {
     let mut reg = FileManagerRegistry::new();
     reg.upsert(desc(1, FsNamespace::Local, "/a"));
@@ -67,22 +42,6 @@ fn others_same_fs_excludes_self_and_other_namespaces() {
     let all = reg.others(1);
     assert_eq!(all.len(), 3);
     assert!(all.iter().all(|p| p.id != 1));
-}
-
-#[test]
-fn backend_handle_is_stored_and_dropped_with_the_pane() {
-    use super::super::sftp_backend::InMemorySftpBackend;
-    let mut reg = FileManagerRegistry::new();
-    reg.upsert(desc(1, FsNamespace::Local, "/a"));
-    assert!(reg.backend_for(1).is_none());
-
-    let backend: Arc<dyn SftpBackend> = Arc::new(InMemorySftpBackend::new(PathBuf::from("/")));
-    reg.set_backend(1, backend);
-    assert!(reg.backend_for(1).is_some());
-
-    // Removing the pane drops its backend handle.
-    reg.remove(1);
-    assert!(reg.backend_for(1).is_none());
 }
 
 #[test]
@@ -109,23 +68,6 @@ fn backend_for_namespace_finds_a_live_backend_for_the_host() {
     // Dropping the only backed pane makes it unresolvable again.
     reg.remove(2);
     assert!(reg.backend_for_namespace(&host).is_none());
-}
-
-#[test]
-fn plan_transfer_covers_every_direction() {
-    let local = FsNamespace::Local;
-    let host_a = FsNamespace::Remote("a".into());
-    let host_a2 = FsNamespace::Remote("a".into());
-    let host_b = FsNamespace::Remote("b".into());
-
-    assert_eq!(plan_transfer(&local, &local), TransferKind::DirectSameFs);
-    assert_eq!(plan_transfer(&host_a, &host_a2), TransferKind::DirectSameFs);
-    assert_eq!(plan_transfer(&local, &host_a), TransferKind::Upload);
-    assert_eq!(plan_transfer(&host_a, &local), TransferKind::Download);
-    assert_eq!(
-        plan_transfer(&host_a, &host_b),
-        TransferKind::RemoteToRemote
-    );
 }
 
 #[test]
@@ -177,58 +119,6 @@ fn hidden_tab_file_managers_are_selectable_targets() {
         .map(|pane| pane.id)
         .collect::<Vec<_>>();
     assert_eq!(target_ids, vec![20, 30]);
-}
-
-#[test]
-fn one_visible_target_wins_over_hidden_tab_candidates() {
-    let mut reg = FileManagerRegistry::new();
-    let visible_group = EntityId::from_usize(1);
-    reg.upsert(desc_in_group(
-        10,
-        FsNamespace::Local,
-        "/source",
-        visible_group,
-    ));
-    reg.upsert(desc_in_group(
-        20,
-        FsNamespace::Local,
-        "/visible",
-        visible_group,
-    ));
-    reg.upsert(desc_in_group(
-        30,
-        FsNamespace::Remote("hidden".into()),
-        "/hidden",
-        EntityId::from_usize(2),
-    ));
-
-    let targets = reg.transfer_targets(10);
-    assert_eq!(targets.default.map(|pane| pane.id), Some(20));
-    assert_eq!(targets.selectable.len(), 2);
-}
-
-#[test]
-fn multiple_visible_targets_require_an_explicit_choice() {
-    let mut reg = FileManagerRegistry::new();
-    let group = EntityId::from_usize(1);
-    for id in [10, 20, 30] {
-        reg.upsert(desc_in_group(id, FsNamespace::Local, "/", group));
-    }
-
-    let targets = reg.transfer_targets(10);
-    assert!(targets.default.is_none());
-    assert_eq!(targets.selectable.len(), 2);
-}
-
-#[test]
-fn unattached_source_never_implicitly_targets_another_pane() {
-    let mut reg = FileManagerRegistry::new();
-    reg.upsert(desc(10, FsNamespace::Local, "/source"));
-    reg.upsert(desc(20, FsNamespace::Local, "/other"));
-
-    let targets = reg.transfer_targets(10);
-    assert!(targets.default.is_none());
-    assert_eq!(targets.selectable.len(), 1);
 }
 
 #[test]

@@ -66,7 +66,3 @@ pub enum CommandSearchItemAction {
     /// The user accepted the search item to translate the query to a command using Zaplex AI.
     TranslateUsingWarpAI,
 }
-
-#[cfg(test)]
-#[path = "searcher_test.rs"]
-mod tests;

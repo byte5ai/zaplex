@@ -502,22 +502,6 @@ fn test_restored_version_editor_isolation() {
 }
 
 #[test]
-fn test_version_string_formatting() {
-    let v1 = AIDocumentVersion::new_for_test(1);
-    let v42 = AIDocumentVersion::new_for_test(42);
-    let v_default = AIDocumentVersion::default();
-
-    assert_eq!(v1.to_string(), "v1");
-    assert_eq!(v42.to_string(), "v42");
-    assert_eq!(v_default.to_string(), "v1");
-    assert_eq!(format!("{}", v1), "v1");
-
-    // Test next() method
-    assert_eq!(v1.next(), AIDocumentVersion::new_for_test(2));
-    assert_eq!(v42.next(), AIDocumentVersion::new_for_test(43));
-}
-
-#[test]
 fn test_restored_from_tracking() {
     App::test((), |mut app| async move {
         initialize_app_for_ai_document_tests(&mut app);

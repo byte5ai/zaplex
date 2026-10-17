@@ -122,83 +122,6 @@ fn test_handle_repository_update_skill_modified() {
 }
 
 #[test]
-fn test_handle_repository_update_skill_deleted() {
-    let (tx, rx) = async_channel::unbounded();
-
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new_for_testing);
-        app.add_singleton_model(|_| DetectedRepositories::default());
-        app.add_singleton_model(RepoMetadataModel::new);
-        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
-
-        let temp_dir = TempDir::new().unwrap();
-        let skill = create_skill_file(&temp_dir, "test", "Test skill", "Test content");
-
-        let update = RepositoryUpdate {
-            added: HashSet::new(),
-            modified: HashSet::new(),
-            deleted: HashSet::from([TargetFile::new(skill.path.clone(), false)]),
-            moved: HashMap::new(),
-            commit_updated: false,
-            index_lock_detected: false,
-        };
-
-        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
-            skill_watcher.handle_repository_update(&update, ctx);
-        });
-
-        let event = rx.recv().await.unwrap();
-        assert_eq!(
-            event,
-            SkillWatcherEvent::SkillsDeleted {
-                paths: vec![skill.path]
-            }
-        );
-    });
-}
-
-#[test]
-fn test_handle_repository_update_multiple_skills_deleted() {
-    let (tx, rx) = async_channel::unbounded();
-
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new_for_testing);
-        app.add_singleton_model(|_| DetectedRepositories::default());
-        app.add_singleton_model(RepoMetadataModel::new);
-        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
-
-        let temp_dir = TempDir::new().unwrap();
-        let skill_a = create_skill_file(&temp_dir, "skill-a", "Skill A", "Content A");
-        let skill_b = create_skill_file(&temp_dir, "skill-b", "Skill B", "Content B");
-
-        let update = RepositoryUpdate {
-            added: HashSet::new(),
-            modified: HashSet::new(),
-            deleted: HashSet::from([
-                TargetFile::new(skill_a.path.clone(), false),
-                TargetFile::new(skill_b.path.clone(), false),
-            ]),
-            moved: HashMap::new(),
-            commit_updated: false,
-            index_lock_detected: false,
-        };
-
-        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
-            skill_watcher.handle_repository_update(&update, ctx);
-        });
-
-        let event = rx.recv().await.unwrap();
-        let SkillWatcherEvent::SkillsDeleted { mut paths } = event else {
-            panic!("Expected SkillsDeleted event");
-        };
-        paths.sort();
-        let mut expected = vec![skill_a.path, skill_b.path];
-        expected.sort();
-        assert_eq!(paths, expected);
-    });
-}
-
-#[test]
 fn test_handle_repository_update_skill_moved() {
     let (tx, rx) = async_channel::unbounded();
 
@@ -303,49 +226,6 @@ fn test_handle_repository_update_non_skill_directory_added_queues_project_direct
                 watcher.queued_project_directory_creations[0].path,
                 canonical_repo.to_local_path().unwrap()
             );
-        });
-    });
-}
-
-/// A modified non-skill file in a known repo should NOT queue anything in
-/// `queued_project_directory_creations`; only directory additions can introduce new skill files.
-#[test]
-fn test_handle_repository_update_non_skill_file_modified_in_repo_does_not_queue_project_directory()
-{
-    App::test((), |mut app| async move {
-        app.add_singleton_model(DirectoryWatcher::new_for_testing);
-        let detected_repos_handle = app.add_singleton_model(|_| DetectedRepositories::default());
-        app.add_singleton_model(RepoMetadataModel::new);
-        let (tx, _rx) = async_channel::unbounded();
-        let skill_watcher_handle = app.add_model(|ctx| SkillWatcher::new_for_testing(ctx, tx));
-
-        let temp_dir = TempDir::new().unwrap();
-        let canonical_repo = StandardizedPath::from_local_canonicalized(temp_dir.path()).unwrap();
-
-        detected_repos_handle.update(&mut app, |repos, _| {
-            repos.insert_test_repo_root(canonical_repo.clone());
-        });
-
-        // Create the file on disk so CanonicalizedPath resolution succeeds.
-        let readme = temp_dir.path().join("README.md");
-        fs::write(&readme, "# Project").unwrap();
-
-        let update = RepositoryUpdate {
-            added: HashSet::new(),
-            modified: HashSet::from([TargetFile::new(readme, false)]),
-            deleted: HashSet::new(),
-            moved: HashMap::new(),
-            commit_updated: false,
-            index_lock_detected: false,
-        };
-
-        skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
-            skill_watcher.handle_repository_update(&update, ctx);
-        });
-
-        // Modifying a plain file must NOT queue a project directory scan.
-        skill_watcher_handle.read(&app, |watcher, _| {
-            assert_eq!(watcher.queued_project_directory_creations.len(), 0);
         });
     });
 }

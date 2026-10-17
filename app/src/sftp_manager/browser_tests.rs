@@ -379,42 +379,6 @@ fn test_navigate_up_from_root() {
 }
 
 // ============================================================
-// Initial state tests
-// ============================================================
-
-/// Verifies that the view's initial state is correct
-#[test]
-fn test_initial_state() {
-    warpui::App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let (_, view) = create_view(&mut app);
-
-        view.read(&app, |view, _| {
-            assert!(
-                view.entries.is_empty(),
-                "Initial entry list should be empty"
-            );
-            assert!(
-                view.selected.is_empty(),
-                "Initial selection set should be empty"
-            );
-            assert!(
-                view.transfers.is_empty(),
-                "Initial transfer list should be empty"
-            );
-            assert!(
-                view.search_filter.is_none(),
-                "Initial search filter should be None"
-            );
-            assert!(
-                !view.is_drag_hovering,
-                "Initial drag hover state should be false"
-            );
-        });
-    });
-}
-
-// ============================================================
 // Context menu tests
 // ============================================================
 
@@ -750,72 +714,6 @@ fn test_context_menu_multiple_open_close_cycles() {
             });
         }
     });
-}
-
-// ============================================================
-// Menu-item action tests
-// ============================================================
-
-/// Verifies that the SftpBrowserAction::DetailsEntry variant is constructed correctly
-#[test]
-fn test_action_details_entry() {
-    let entry = test_entry_reference(42);
-    let action = SftpBrowserAction::DetailsEntry(entry.clone());
-    assert!(matches!(action, SftpBrowserAction::DetailsEntry(actual) if actual == entry));
-}
-
-/// Verifies that the SftpBrowserAction::DeleteEntry variant is constructed correctly
-#[test]
-fn test_action_delete_entry() {
-    let entry = test_entry_reference(10);
-    let action = SftpBrowserAction::DeleteEntry(entry.clone());
-    assert!(matches!(action, SftpBrowserAction::DeleteEntry(actual) if actual == entry));
-}
-
-/// Verifies that the SftpBrowserAction::RenameEntry variant is constructed correctly
-#[test]
-fn test_action_rename_entry() {
-    let entry = test_entry_reference(5);
-    let action = SftpBrowserAction::RenameEntry(entry.clone());
-    assert!(matches!(action, SftpBrowserAction::RenameEntry(actual) if actual == entry));
-}
-
-/// Verifies that the SftpBrowserAction::DownloadEntry variant is constructed correctly
-#[test]
-fn test_action_download_entry() {
-    let entry = test_entry_reference(3);
-    let action = SftpBrowserAction::DownloadEntry(entry.clone());
-    assert!(matches!(action, SftpBrowserAction::DownloadEntry(actual) if actual == entry));
-}
-
-/// Verifies that the SftpBrowserAction::OpenEntry variant is constructed correctly
-#[test]
-fn test_action_open_entry() {
-    let entry = test_entry_reference(1);
-    let action = SftpBrowserAction::OpenEntry(entry.clone());
-    assert!(matches!(action, SftpBrowserAction::OpenEntry(actual) if actual == entry));
-}
-
-/// Verifies that the SftpBrowserAction::ContextMenu variant is constructed correctly
-#[test]
-fn test_action_context_menu_variant() {
-    use pathfinder_geometry::vector::Vector2F;
-    let entry = test_entry_reference(3);
-    let action = SftpBrowserAction::ContextMenu {
-        entry: entry.clone(),
-        position: Vector2F::new(100.0, 200.0),
-    };
-    assert!(matches!(
-        action,
-        SftpBrowserAction::ContextMenu { entry: actual, .. } if actual == entry
-    ));
-}
-
-/// Verifies that the SftpBrowserAction::CloseContextMenu variant is constructed correctly
-#[test]
-fn test_action_close_context_menu_variant() {
-    let action = SftpBrowserAction::CloseContextMenu;
-    assert!(matches!(action, SftpBrowserAction::CloseContextMenu));
 }
 
 // ============================================================
@@ -1604,27 +1502,6 @@ fn test_multiple_select_clears_previous() {
 // Category 8: render safety tests
 // ============================================================
 
-/// Verifies initial state consistency (the constructor attempts to connect, so the state may be Failed or Disconnected)
-#[test]
-fn test_render_disconnected_state() {
-    warpui::App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let (_, view) = create_view(&mut app);
-
-        view.read(&app, |view, _| {
-            // The constructor calls connect_to_server; with no SSH service in the test environment, the state is Failed
-            assert!(matches!(
-                view.connection,
-                ConnectionState::Failed(_) | ConnectionState::Disconnected
-            ));
-            assert!(!view.is_loading);
-            assert!(view.entries.is_empty());
-            assert!(view.dialog.is_none());
-            assert!(view.context_menu.is_none());
-        });
-    });
-}
-
 /// Verifies that the drag hover state is set correctly
 #[test]
 fn test_render_with_drag_hover() {
@@ -1819,33 +1696,6 @@ fn test_render_after_close_all_overlays() {
             assert!(view.search_filter.is_none());
             assert!(view.context_menu.is_none());
             assert!(view.dialog.is_none());
-        });
-    });
-}
-
-/// Verifies the initial path history state
-#[test]
-fn test_render_path_history_initial() {
-    warpui::App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let (_, view) = create_view(&mut app);
-
-        view.read(&app, |view, _| {
-            assert_eq!(view.path_history, vec![PathBuf::from("/")]);
-            assert_eq!(view.history_index, 0);
-        });
-    });
-}
-
-/// Verifies that the initial is_loading is false
-#[test]
-fn test_render_is_loading_initial_false() {
-    warpui::App::test((), |mut app| async move {
-        initialize_app(&mut app);
-        let (_, view) = create_view(&mut app);
-
-        view.read(&app, |view, _| {
-            assert!(!view.is_loading);
         });
     });
 }

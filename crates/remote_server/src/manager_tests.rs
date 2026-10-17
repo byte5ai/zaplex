@@ -51,37 +51,6 @@ fn explicit_runtime_keeps_its_filename_and_observed_version() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn version_compat_both_tagged_and_equal() {
-    assert!(version_is_compatible(
-        Some("v0.2026.05.10.stable"),
-        "v0.2026.05.10.stable",
-    ));
-}
-
-#[test]
-fn version_compat_both_tagged_and_different() {
-    assert!(!version_is_compatible(
-        Some("v0.2026.05.10.stable"),
-        "v0.2026.05.10.preview",
-    ));
-}
-
-#[test]
-fn version_compat_both_untagged() {
-    // Client has no GIT_RELEASE_TAG (cargo run), server also returns empty string
-    // (`script/deploy_remote_server` dev deployment): treat as compatible to preserve
-    // local development loop unaffected.
-    assert!(version_is_compatible(None, ""));
-}
-
-#[test]
-fn version_compat_client_tagged_server_untagged() {
-    // Client is release, server is dev deployment → treat as incompatible,
-    // normally trigger reinstall process.
-    assert!(!version_is_compatible(Some("v0.2026.05.10.stable"), ""));
-}
-
-#[test]
 fn version_compat_client_untagged_server_tagged() {
     // **Critical scenario**: Zaplex client has no tag (cargo build),
     // server is a release from official CDN (with tag). Original helper

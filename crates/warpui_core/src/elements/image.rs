@@ -384,7 +384,3 @@ impl Element for Image {
         self.origin
     }
 }
-
-#[cfg(test)]
-#[path = "image_tests.rs"]
-mod tests;

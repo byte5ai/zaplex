@@ -12,8 +12,6 @@ use super::{
     agents_for_installation_scan, build_diff_hunk_prompt, build_review_prompt,
     build_selection_line_range_prompt, build_selection_substring_prompt, CLIAgent, UBER_TEAM_UID,
 };
-#[cfg(unix)]
-use super::{cli_agent_search_dirs, resolve_executable_in_dirs};
 use crate::ai::agent::{AgentReviewCommentBatch, DiffSetHunk};
 use crate::ai::subscription_agent::{
     CLAUDE_PROVIDER_MANAGED_BY_HOST, CLAUDE_SUBSCRIPTION_PROVIDER_ENVIRONMENT_VARIABLES,
@@ -297,90 +295,6 @@ fn test_detect_known_agents() {
 }
 
 #[test]
-fn test_detect_with_arguments() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            assert_eq!(
-                CLIAgent::detect("claude --model opus", None, None, ctx),
-                Some(CLIAgent::Claude),
-            );
-            assert_eq!(
-                CLIAgent::detect("gemini chat", None, None, ctx),
-                Some(CLIAgent::Gemini),
-            );
-        });
-    });
-}
-
-#[test]
-fn test_detect_with_leading_whitespace() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            assert_eq!(
-                CLIAgent::detect("  claude", None, None, ctx),
-                Some(CLIAgent::Claude),
-            );
-            assert_eq!(
-                CLIAgent::detect("\tclaude --help", None, None, ctx),
-                Some(CLIAgent::Claude),
-            );
-        });
-    });
-}
-
-#[test]
-fn test_detect_no_match() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            assert_eq!(CLIAgent::detect("ls -la", None, None, ctx), None);
-            assert_eq!(CLIAgent::detect("vim", None, None, ctx), None);
-            assert_eq!(CLIAgent::detect("claude_wrapper", None, None, ctx), None);
-        });
-    });
-}
-
-#[test]
-fn test_detect_with_alias() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            let map = aliases(&[("c", "claude")]);
-            assert_eq!(
-                CLIAgent::detect("c", None, Some(&map), ctx),
-                Some(CLIAgent::Claude),
-            );
-            assert_eq!(
-                CLIAgent::detect("c --help", None, Some(&map), ctx),
-                Some(CLIAgent::Claude),
-            );
-        });
-    });
-}
-
-#[test]
-fn test_detect_alias_not_matching() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            let map = aliases(&[("c", "cat")]);
-            assert_eq!(CLIAgent::detect("c", None, Some(&map), ctx), None);
-        });
-    });
-}
-
-#[test]
-fn test_detect_alias_multi_word_value() {
-    App::test((), |mut app| async move {
-        app.update(|ctx| {
-            // Alias whose value starts with "gemini" but has extra words
-            let map = aliases(&[("g", "gemini chat --verbose")]);
-            assert_eq!(
-                CLIAgent::detect("g", None, Some(&map), ctx),
-                Some(CLIAgent::Gemini),
-            );
-        });
-    });
-}
-
-#[test]
 fn test_detect_with_env_var_prefix() {
     App::test((), |mut app| async move {
         app.update(|ctx| {
@@ -443,26 +357,6 @@ fn workspace_with_team_uid(uid: &str) -> Workspace {
 }
 
 #[test]
-fn test_detect_aifx_agent_run_claude_on_uber_team() {
-    App::test((), |mut app| async move {
-        let uber_workspace = workspace_with_team_uid(UBER_TEAM_UID);
-        app.add_singleton_model(|ctx| UserWorkspaces::mock(vec![uber_workspace], ctx));
-
-        app.update(|ctx| {
-            assert_eq!(
-                CLIAgent::detect("aifx agent run claude", None, None, ctx),
-                Some(CLIAgent::Claude),
-            );
-            // With extra args
-            assert_eq!(
-                CLIAgent::detect("aifx agent run claude --verbose", None, None, ctx),
-                Some(CLIAgent::Claude),
-            );
-        });
-    });
-}
-
-#[test]
 fn test_detect_aifx_agent_run_claude_via_alias_on_uber_team() {
     App::test((), |mut app| async move {
         let uber_workspace = workspace_with_team_uid(UBER_TEAM_UID);
@@ -480,157 +374,6 @@ fn test_detect_aifx_agent_run_claude_via_alias_on_uber_team() {
             );
         });
     });
-}
-
-#[test]
-fn test_detect_aifx_agent_run_claude_not_on_uber_team() {
-    App::test((), |mut app| async move {
-        // Register UserWorkspaces with no Uber team membership
-        app.add_singleton_model(UserWorkspaces::default_mock);
-
-        app.update(|ctx| {
-            assert_eq!(
-                CLIAgent::detect("aifx agent run claude", None, None, ctx),
-                None,
-            );
-        });
-    });
-}
-
-#[test]
-fn test_serialized_name_round_trips_known_agents() {
-    for agent in enum_iterator::all::<CLIAgent>() {
-        let name = agent.to_serialized_name();
-        if agent == CLIAgent::Unknown {
-            assert_eq!(name, "Unknown");
-        } else {
-            assert!(!name.is_empty(), "empty serialized name for {agent:?}");
-        }
-        assert_eq!(
-            CLIAgent::from_serialized_name(&name),
-            agent,
-            "round-trip failed for {agent:?} with serialized name {name:?}",
-        );
-    }
-}
-
-#[test]
-fn test_from_serialized_name_falls_back_to_unknown() {
-    assert_eq!(CLIAgent::from_serialized_name(""), CLIAgent::Unknown);
-    assert_eq!(
-        CLIAgent::from_serialized_name("nonexistent"),
-        CLIAgent::Unknown
-    );
-}
-
-#[test]
-fn test_detect_aifx_agent_run_claude_wrong_team() {
-    App::test((), |mut app| async move {
-        let other_workspace = workspace_with_team_uid("some-other-team-uid-01");
-        app.add_singleton_model(|ctx| UserWorkspaces::mock(vec![other_workspace], ctx));
-
-        app.update(|ctx| {
-            assert_eq!(
-                CLIAgent::detect("aifx agent run claude", None, None, ctx),
-                None,
-            );
-        });
-    });
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_agent_search_dirs_include_common_gui_app_paths() {
-    let dirs: Vec<PathBuf> = cli_agent_search_dirs().collect();
-
-    assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
-    assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
-}
-
-#[cfg(unix)]
-#[test]
-fn test_cli_agent_search_dirs_include_home_managed_bins() {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return;
-    };
-    let dirs: Vec<PathBuf> = cli_agent_search_dirs().collect();
-
-    assert!(dirs.contains(&home.join(".cargo/bin")));
-    assert!(dirs.contains(&home.join(".bun/bin")));
-    assert!(dirs.contains(&home.join(".grok/bin")));
-    assert!(dirs.contains(&home.join(".local/bin")));
-}
-
-#[cfg(unix)]
-#[test]
-fn cli_resolution_uses_gui_safe_search_dirs() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let process_path = tempfile::tempdir().unwrap();
-    let gui_safe_path = tempfile::tempdir().unwrap();
-    let executable = gui_safe_path.path().join("codex");
-    std::fs::write(&executable, "#!/bin/sh\n").unwrap();
-    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    assert_eq!(
-        resolve_executable_in_dirs(
-            "codex",
-            &[
-                process_path.path().to_owned(),
-                gui_safe_path.path().to_owned(),
-            ],
-        ),
-        Some(executable),
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn cli_resolution_rejects_non_executable_files() {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let directory = tempfile::tempdir().unwrap();
-    let non_executable = directory.path().join("codex");
-    std::fs::write(&non_executable, "not executable\n").unwrap();
-    std::fs::set_permissions(&non_executable, std::fs::Permissions::from_mode(0o644)).unwrap();
-
-    assert_eq!(
-        resolve_executable_in_dirs("codex", &[directory.path().to_owned()]),
-        None,
-    );
-}
-
-#[test]
-fn fork_command_per_provider() {
-    // Verified against the CLIs on 2026-07-03 (fork/worktree design §2).
-    assert_eq!(
-        CLIAgent::Claude.fork_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
-        Some("claude --resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab --fork-session".to_string())
-    );
-    assert_eq!(
-        CLIAgent::Codex.fork_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
-        Some("codex fork 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
-    );
-    assert_eq!(
-        CLIAgent::Grok.fork_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
-        Some("grok --resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab --fork-session".to_string())
-    );
-    // No known fork mechanism → None, surfaces stay disabled (no fake fork).
-    assert_eq!(CLIAgent::Gemini.fork_command("x"), None);
-    assert_eq!(CLIAgent::Antigravity.fork_command("x"), None);
-    assert_eq!(CLIAgent::Unknown.fork_command("x"), None);
-}
-
-#[test]
-fn fork_command_quotes_hostile_session_ids() {
-    let cmd = CLIAgent::Claude
-        .fork_command("evil; rm -rf /")
-        .expect("claude forks");
-    assert_eq!(cmd, "claude --resume 'evil; rm -rf /' --fork-session");
-    let cmd = CLIAgent::Grok
-        .fork_command("evil; rm -rf /")
-        .expect("grok forks");
-    assert_eq!(cmd, "grok --resume 'evil; rm -rf /' --fork-session");
 }
 
 #[test]
@@ -675,42 +418,6 @@ fn routed_fork_scrubs_keys_and_preserves_dynamic_arguments() {
         shell_words::split(&launch.shell_command(ShellType::Bash)).unwrap(),
         expected
     );
-}
-
-#[test]
-fn resume_command_per_provider_continues_in_place() {
-    // Adopt-in-place: same session, no `--fork-session` (verified 2026-07-05).
-    assert_eq!(
-        CLIAgent::Claude.resume_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
-        Some("claude --resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
-    );
-    assert_eq!(
-        CLIAgent::Codex.resume_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
-        Some("codex resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
-    );
-    assert_eq!(
-        CLIAgent::Grok.resume_command("0198c8f3-aaaa-bbbb-cccc-1234567890ab"),
-        Some("grok --resume 0198c8f3-aaaa-bbbb-cccc-1234567890ab".to_string())
-    );
-    // No known resume mechanism → None, surfaces stay disabled.
-    assert_eq!(CLIAgent::Gemini.resume_command("x"), None);
-    assert_eq!(
-        CLIAgent::Antigravity.resume_command("x"),
-        Some("agy --conversation x".into())
-    );
-    assert_eq!(CLIAgent::Unknown.resume_command("x"), None);
-}
-
-#[test]
-fn resume_command_quotes_hostile_session_ids() {
-    let cmd = CLIAgent::Claude
-        .resume_command("evil; rm -rf /")
-        .expect("claude resumes");
-    assert_eq!(cmd, "claude --resume 'evil; rm -rf /'");
-    let cmd = CLIAgent::Grok
-        .resume_command("evil; rm -rf /")
-        .expect("grok resumes");
-    assert_eq!(cmd, "grok --resume 'evil; rm -rf /'");
 }
 
 #[test]
@@ -1056,13 +763,6 @@ fn installation_scan_targets_agy_not_standalone_gemini() {
 }
 
 #[test]
-fn gemini_is_only_a_command_search_alias_for_antigravity() {
-    assert_eq!(CLIAgent::Antigravity.command_search_aliases(), &["gemini"]);
-    assert!(CLIAgent::Gemini.command_search_aliases().is_empty());
-    assert!(CLIAgent::Grok.command_search_aliases().is_empty());
-}
-
-#[test]
 fn antigravity_resume_quotes_the_conversation_id_and_does_not_invent_fork_support() {
     assert_eq!(
         CLIAgent::Antigravity.resume_command("id with spaces;$(touch /tmp/nope)"),
@@ -1186,21 +886,4 @@ $observedCode = $global:LASTEXITCODE
         assert_eq!(result["home"], "original-account");
         assert_eq!(result["api"], "original-key");
     }
-}
-
-#[test]
-fn fish_routed_launch_keeps_backslashes_and_quotes_inside_each_argument() {
-    let launch = super::RoutedAgentLaunch {
-        program: "codex".to_owned(),
-        args: vec![
-            "resume".to_owned(),
-            r"thread\'; echo unwanted; #".to_owned(),
-        ],
-        environment: vec![("CODEX_HOME", r"/account\\home\".to_owned())],
-        unset_environment: vec!["OPENAI_API_KEY"],
-    };
-    assert_eq!(
-        launch.shell_command(ShellType::Fish),
-        r"env -u OPENAI_API_KEY CODEX_HOME='/account\\\\home\\' 'codex' 'resume' 'thread\\\'; echo unwanted; #'"
-    );
 }

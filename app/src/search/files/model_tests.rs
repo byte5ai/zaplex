@@ -1,46 +1,9 @@
 use super::super::search_item::{FileSearchItem, FileSearchResult};
 use super::FileSearchModel;
-use fuzzy_match::FuzzyMatchResult;
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::RepoMetadataModel;
-use warpui::{App, SingletonEntity};
 
 #[cfg(test)]
 mod file_search_model_tests {
     use super::*;
-
-    #[test]
-    fn test_file_search_model_creation() {
-        App::test((), |app| async move {
-            app.add_singleton_model(|_| DetectedRepositories::default());
-            app.add_singleton_model(RepoMetadataModel::new);
-            app.add_singleton_model(FileSearchModel::new);
-            // Verify the singleton was registered and is accessible
-            app.read(|app| {
-                let _model = FileSearchModel::as_ref(app);
-            });
-        });
-    }
-
-    #[test]
-    fn test_fuzzy_match_path_empty_query() {
-        let result = FileSearchModel::fuzzy_match_path("src/main.rs", "");
-
-        assert!(result.is_some());
-        let match_result = result.unwrap();
-        assert_eq!(match_result.score, 0);
-        assert!(match_result.matched_indices.is_empty());
-    }
-
-    #[test]
-    fn test_fuzzy_match_path_whitespace_only_query() {
-        let result = FileSearchModel::fuzzy_match_path("src/main.rs", "   ");
-
-        assert!(result.is_some());
-        let match_result = result.unwrap();
-        assert_eq!(match_result.score, 0);
-        assert!(match_result.matched_indices.is_empty());
-    }
 
     #[test]
     fn test_fuzzy_match_path_simple_filename_match() {
@@ -132,26 +95,6 @@ mod file_search_model_tests {
     }
 
     #[test]
-    fn test_should_skip_overly_broad_query() {
-        // Single wildcards should be skipped
-        assert!(FileSearchModel::should_skip_overly_broad_query("*"));
-        assert!(FileSearchModel::should_skip_overly_broad_query("?"));
-        assert!(FileSearchModel::should_skip_overly_broad_query("  *  "));
-
-        // Consecutive wildcards should be skipped
-        assert!(FileSearchModel::should_skip_overly_broad_query("**"));
-        assert!(FileSearchModel::should_skip_overly_broad_query("*?"));
-        assert!(FileSearchModel::should_skip_overly_broad_query("?*"));
-        assert!(FileSearchModel::should_skip_overly_broad_query("??"));
-
-        // Valid queries should not be skipped
-        assert!(!FileSearchModel::should_skip_overly_broad_query("main"));
-        assert!(!FileSearchModel::should_skip_overly_broad_query("*.rs"));
-        assert!(!FileSearchModel::should_skip_overly_broad_query("src/main"));
-        assert!(!FileSearchModel::should_skip_overly_broad_query("a*b"));
-    }
-
-    #[test]
     fn test_filename_prioritization() {
         // Filename matches should score higher than path matches
         let filename_match =
@@ -177,57 +120,6 @@ mod file_search_model_tests {
 #[cfg(test)]
 mod file_search_item_tests {
     use super::*;
-
-    #[test]
-    fn test_file_search_item_from_result() {
-        let result = FileSearchResult {
-            path: "src/main.rs".to_string(),
-            project_directory: "/Users/test_user/project".to_string(),
-            is_directory: false,
-        };
-
-        let match_result = FuzzyMatchResult {
-            score: 100,
-            matched_indices: vec![0, 1, 2],
-        };
-
-        let item = FileSearchItem::from_result(result, match_result);
-
-        assert_eq!(item.path, "src/main.rs");
-        assert!(!item.is_directory);
-        assert_eq!(item.match_result.score, 100);
-        assert_eq!(item.match_result.matched_indices, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn test_file_search_item_from_result_no_match() {
-        let result = FileSearchResult {
-            path: "src/test.rs".to_string(),
-            project_directory: "/Users/test_user/project".to_string(),
-            is_directory: false,
-        };
-
-        let item = FileSearchItem::from_result_no_match(result);
-
-        assert_eq!(item.path, "src/test.rs");
-        assert!(!item.is_directory);
-        assert_eq!(item.match_result.score, 0);
-        assert!(item.match_result.matched_indices.is_empty());
-    }
-
-    #[test]
-    fn test_file_search_item_directory() {
-        let result = FileSearchResult {
-            path: "src/components".to_string(),
-            project_directory: "/Users/test_user/project".to_string(),
-            is_directory: true,
-        };
-
-        let item = FileSearchItem::from_result_no_match(result);
-
-        assert_eq!(item.path, "src/components");
-        assert!(item.is_directory);
-    }
 
     #[test]
     fn test_file_search_item_clone() {

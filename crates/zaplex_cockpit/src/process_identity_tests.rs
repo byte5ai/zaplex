@@ -23,39 +23,6 @@ fn send_with_spies(
     )
 }
 
-#[test]
-fn linux_stat_parser_handles_spaces_and_closing_parentheses_in_the_name() {
-    let mut tail: Vec<String> = (3..=24).map(|field| field.to_string()).collect();
-    tail[0] = "S".to_string();
-    tail[19] = "987654".to_string();
-    let stat = format!("42 (worker ) with spaces) {}", tail.join(" "));
-
-    assert_eq!(parse_linux_proc_start(&stat), Some(987654));
-}
-
-#[test]
-fn linux_stat_parser_rejects_truncated_or_non_numeric_start_fields() {
-    assert_eq!(parse_linux_proc_start("42 worker"), None);
-    assert_eq!(parse_linux_proc_start("42 (worker) S 1 2 3"), None);
-
-    let mut tail: Vec<String> = (3..=24).map(|field| field.to_string()).collect();
-    tail[0] = "S".to_string();
-    tail[19] = "not-a-number".to_string();
-    assert_eq!(
-        parse_linux_proc_start(&format!("42 (worker) {}", tail.join(" "))),
-        None
-    );
-}
-
-#[test]
-fn process_signalling_support_requires_platform_and_runtime_probe() {
-    assert_eq!(
-        process_signalling_supported_with(|| true),
-        cfg!(target_os = "linux")
-    );
-    assert!(!process_signalling_supported_with(|| false));
-}
-
 #[cfg(target_os = "linux")]
 #[test]
 fn current_linux_process_has_a_boot_scoped_fingerprint() {

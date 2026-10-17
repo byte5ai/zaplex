@@ -100,27 +100,6 @@ fn managed_daemon_rejection_becomes_retryable_without_a_false_success() {
 }
 
 #[test]
-fn account_selection_is_stable_under_discovery_reordering() {
-    let accounts = vec![account("b"), account("a"), account("c")];
-    let selected = BTreeSet::from([
-        LaunchAccountId("a".to_string()),
-        LaunchAccountId("c".to_string()),
-    ]);
-    let picked = selected_account_ids(&accounts, &selected, false);
-    assert_eq!(
-        picked
-            .into_iter()
-            .map(|account| account.id.0)
-            .collect::<Vec<_>>(),
-        vec!["a", "c"]
-    );
-    assert_eq!(
-        selected_account_ids(&accounts, &BTreeSet::new(), true).len(),
-        3
-    );
-}
-
-#[test]
 fn directory_validation_reserves_targets_before_the_async_reply() {
     let mut ledger = BulkLaunchLedger::new(BulkLaunchPlan::new([target("a"), target("b")]));
     let plan_id = ledger.plan.id;

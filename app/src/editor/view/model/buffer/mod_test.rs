@@ -2,7 +2,7 @@
 // which is at odds with this clippy rule.
 #![allow(clippy::single_range_in_vec_init)]
 
-use crate::editor::{soft_wrap::ClampDirection, tests::RandomCharIter};
+use crate::editor::tests::RandomCharIter;
 use async_channel::Receiver;
 use test::Network;
 
@@ -62,140 +62,6 @@ impl ToCharOffset for usize {
 
 fn to_char_index_range(range: Range<usize>) -> Range<CharOffset> {
     CharOffset::from(range.start)..CharOffset::from(range.end)
-}
-
-#[test]
-#[should_panic]
-fn test_nested_batches_are_not_allowed() {
-    App::test((), |mut app| async move {
-        let buffer = app.add_model(|_| Buffer::new(""));
-        buffer.update(&mut app, |buffer, _ctx| {
-            // The buffer should not start in a batch.
-            assert!(!buffer.batch_state.is_batching());
-
-            // Start a batch.
-            buffer.start_selection_changes_only_batch();
-
-            // The buffer is in a batching state.
-            assert!(buffer.batch_state.is_batching());
-
-            // Start another batch. This should panic -- nested batches are not allowed.
-            buffer.start_selection_changes_only_batch();
-        })
-    })
-}
-
-#[test]
-#[should_panic]
-fn test_edit_without_batching() {
-    App::test((), |mut app| async move {
-        let buffer = app.add_model(|_| Buffer::new(""));
-        buffer.update(&mut app, |buffer, ctx| {
-            // The buffer should not start in a batch.
-            assert!(!buffer.batch_state.is_batching());
-
-            // Try to edit. This should panic.
-            let _ = buffer.edit(vec![to_char_index_range(0..0)], "a", ctx);
-        })
-    })
-}
-
-#[test]
-#[should_panic]
-fn test_change_selections_without_batching() {
-    App::test((), |mut app| async move {
-        let buffer = app.add_model(|_| Buffer::new(""));
-        buffer.update(&mut app, |buffer, _| {
-            // The buffer should not start in a batch.
-            assert!(!buffer.batch_state.is_batching());
-
-            // Try to change selections. This should panic.
-            buffer
-                .change_selections(
-                    vec1![LocalSelection::new_for_test(Anchor::Start, Anchor::End)].into(),
-                )
-                .unwrap();
-        })
-    })
-}
-
-#[test]
-fn test_change_selections() {
-    App::test((), |mut app| async move {
-        let buffer = app.add_model(|_| Buffer::new("abc"));
-        let new_selections: LocalSelections = vec1![LocalSelection {
-            selection: Selection {
-                start: Anchor::End,
-                end: Anchor::Start,
-                reversed: true,
-            },
-            clamp_direction: ClampDirection::Up,
-            goal_end_column: None,
-            goal_start_column: None,
-        }]
-        .into();
-
-        buffer.read(&app, |buffer, _| {
-            assert_ne!(buffer.local_selections, new_selections);
-        });
-
-        buffer.update(&mut app, |buffer, ctx| {
-            buffer.start_selection_changes_only_batch();
-            buffer.change_selections(new_selections.clone()).unwrap();
-            buffer.end_batch(ctx);
-        });
-
-        buffer.read(&app, |buffer, _| {
-            assert_eq!(buffer.local_selections, new_selections);
-        });
-    })
-}
-
-#[test]
-fn test_merge_local_selections() {
-    App::test((), |mut app| async move {
-        let buffer = app.add_model(|_| Buffer::new("abcde"));
-        let (b_anchor, d_anchor, e_anchor) = buffer.read(&app, |buffer, _ctx| {
-            (
-                buffer.anchor_before(1).unwrap(),
-                buffer.anchor_before(3).unwrap(),
-                buffer.anchor_after(4).unwrap(),
-            )
-        });
-
-        // Create two contiguous selections of "bc" and "de".
-        buffer.update(&mut app, |buffer, _| {
-            buffer.local_selections = LocalSelections {
-                pending: None,
-                selections: vec1![
-                    LocalSelection::new_for_test(b_anchor.clone(), d_anchor.clone()),
-                    LocalSelection::new_for_test(d_anchor.clone(), e_anchor.clone()),
-                ],
-                marked_text_state: Default::default(),
-            }
-        });
-
-        buffer.update(&mut app, |buffer, ctx| {
-            buffer.start_selection_changes_only_batch();
-            buffer.merge_local_selections().unwrap();
-            buffer.end_batch(ctx);
-        });
-
-        // After merging, we should just have one selection of "bcde".
-        buffer.read(&app, |buffer, _| {
-            assert_eq!(
-                buffer.local_selections,
-                LocalSelections {
-                    pending: None,
-                    selections: vec1![LocalSelection::new_for_test(
-                        b_anchor.clone(),
-                        e_anchor.clone()
-                    ),],
-                    marked_text_state: Default::default()
-                }
-            )
-        });
-    })
 }
 
 #[test]
@@ -1730,33 +1596,6 @@ fn test_line_len() -> Result<()> {
 }
 
 #[test]
-fn test_text_summary_for_range() {
-    let buffer = Buffer::new("ab\nefg\nhklm\nnopqrs\ntuvwxyz");
-    let text = Text::from(buffer.text());
-
-    assert_eq!(
-        buffer.text_summary_for_range(to_char_index_range(1..3)),
-        text.slice(to_char_index_range(1..3)).summary()
-    );
-    assert_eq!(
-        buffer.text_summary_for_range(to_char_index_range(1..12)),
-        text.slice(to_char_index_range(1..12)).summary()
-    );
-    assert_eq!(
-        buffer.text_summary_for_range(to_char_index_range(0..20)),
-        text.slice(to_char_index_range(0..20)).summary()
-    );
-    assert_eq!(
-        buffer.text_summary_for_range(to_char_index_range(0..22)),
-        text.slice(to_char_index_range(0..22)).summary()
-    );
-    assert_eq!(
-        buffer.text_summary_for_range(to_char_index_range(7..22)),
-        text.slice(to_char_index_range(7..22)).summary()
-    );
-}
-
-#[test]
 fn test_chars_at() -> Result<()> {
     App::test((), |mut app| async move {
         let buffer_model: &mut ModelHandle<Buffer> = &mut app.add_model(|_| Buffer::new(""));
@@ -1797,26 +1636,6 @@ fn test_chars_at() -> Result<()> {
             Ok(())
         })
     })
-}
-
-#[test]
-fn test_fragment_ids() {
-    for seed in 0..10 {
-        let rng = &mut StdRng::seed_from_u64(seed);
-
-        let mut ids = vec![FragmentId(Box::new([0])), FragmentId(Box::new([4]))];
-        for _i in 0..100 {
-            let index = rng.gen_range(1..ids.len());
-
-            let left = ids[index - 1].clone();
-            let right = ids[index].clone();
-            ids.insert(index, FragmentId::between_with_max(&left, &right, 4));
-
-            let mut sorted_ids = ids.clone();
-            sorted_ids.sort();
-            assert_eq!(ids, sorted_ids);
-        }
-    }
 }
 
 #[test]

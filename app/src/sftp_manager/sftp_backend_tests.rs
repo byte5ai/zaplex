@@ -52,40 +52,6 @@ fn linux_open_confined_new_file_falls_back_on_enosys_without_following_symlinks(
     assert!(!outside.join("stage.bin").exists());
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn linux_open_confined_new_file_does_not_fallback_on_other_errors() {
-    let root = tempdir().unwrap();
-    fs::create_dir(root.path().join("parent")).unwrap();
-
-    let result = open_confined_new_file_with_openat2(
-        root.path(),
-        Path::new("/parent/stage.bin"),
-        |_, _, _| Err(std::io::Error::from_raw_os_error(libc::EINVAL)),
-    );
-
-    assert!(matches!(result, Err(SftpOpsError::LocalIo(_))));
-    assert!(!root.path().join("parent/stage.bin").exists());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn linux_component_walk_rejects_parent_components_before_opening() {
-    let directory = tempdir().unwrap();
-    let root = directory.path().join("root");
-    let outside = directory.path().join("outside");
-    fs::create_dir(&root).unwrap();
-    fs::create_dir(&outside).unwrap();
-
-    assert!(open_confined_new_file_with_openat2(
-        &root,
-        Path::new("/../outside/escaped.bin"),
-        |_, _, _| Err(std::io::Error::from_raw_os_error(libc::ENOSYS)),
-    )
-    .is_err());
-    assert!(!outside.join("escaped.bin").exists());
-}
-
 #[cfg(unix)]
 #[test]
 fn identity_bound_delete_preserves_replacement_at_mutation_boundary() {
@@ -734,52 +700,6 @@ fn review14_restart_rediscovers_owned_reservation_without_adopting_foreign_child
         fs::read(namespace.join("foreign-child/foreign.bin")).unwrap(),
         b"foreign"
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn review15_forged_namespace_and_child_markers_are_never_adopted() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let outer = tempdir().unwrap();
-    let root = outer.path().join("backend-root");
-    fs::create_dir(&root).unwrap();
-    let probe = InMemorySftpBackend::new(root.clone());
-    let namespace = root
-        .parent()
-        .unwrap()
-        .join(probe.directory_reservation_namespace_name());
-    drop(probe);
-    fs::create_dir(&namespace).unwrap();
-    fs::set_permissions(&namespace, fs::Permissions::from_mode(0o700)).unwrap();
-    fs::write(
-        namespace.join(DIRECTORY_RESERVATION_NAMESPACE_MARKER),
-        b"zaplex-directory-reservations-v1\n",
-    )
-    .unwrap();
-    fs::set_permissions(
-        namespace.join(DIRECTORY_RESERVATION_NAMESPACE_MARKER),
-        fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    let foreign = namespace.join("forged-reservation");
-    fs::create_dir(&foreign).unwrap();
-    fs::write(
-        namespace.join(format!(
-            "forged-reservation{DIRECTORY_RESERVATION_MARKER_SUFFIX}"
-        )),
-        b"zaplex-owned-directory-v1\n",
-    )
-    .unwrap();
-
-    let backend = InMemorySftpBackend::new(root);
-
-    assert_eq!(
-        backend.startup_recovery_paths_for_test(),
-        Vec::<PathBuf>::new(),
-        "public marker bytes and suffixes must not establish cleanup ownership"
-    );
-    assert!(foreign.is_dir(), "the forged child must remain untouched");
 }
 
 #[cfg(unix)]

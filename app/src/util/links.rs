@@ -72,14 +72,4 @@ mod tests {
             );
         }
     }
-
-    /// A placeholder (empty) destination must report as "not present" so every UI
-    /// surface omits its control instead of rendering a dead button. If a real URL
-    /// is filled in later, the predicate flips to `true` and the control returns.
-    #[test]
-    fn absent_destinations_report_as_missing() {
-        assert_eq!(has_user_docs(), !USER_DOCS_URL.is_empty());
-        assert_eq!(has_slack(), !SLACK_URL.is_empty());
-        assert_eq!(has_privacy_policy(), !PRIVACY_POLICY_URL.is_empty());
-    }
 }

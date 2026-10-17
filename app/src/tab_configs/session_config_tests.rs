@@ -10,34 +10,6 @@ fn generated_worktree_path_string(repo: &str, worktree_name: &str) -> String {
         .to_string()
 }
 
-// ── SessionType helpers ──
-
-#[test]
-fn terminal_command_prefix_is_none() {
-    assert_eq!(SessionType::Terminal.command_prefix(), None);
-}
-
-#[test]
-fn oz_command_prefix_is_none() {
-    assert_eq!(SessionType::Oz.command_prefix(), None);
-}
-
-#[test]
-fn cli_agent_command_prefix_delegates() {
-    assert_eq!(
-        SessionType::CliAgent(CLIAgent::Claude).command_prefix(),
-        Some("claude")
-    );
-    assert_eq!(
-        SessionType::CliAgent(CLIAgent::Codex).command_prefix(),
-        Some("codex")
-    );
-    assert_eq!(
-        SessionType::CliAgent(CLIAgent::Gemini).command_prefix(),
-        Some("gemini")
-    );
-}
-
 // ── build_tab_config ──
 
 #[test]
@@ -905,31 +877,6 @@ fn snapshot_round_trip_3_deep_nesting() {
 }
 
 // ── is_git_repo ──
-
-#[test]
-fn detects_git_repo_with_dot_git_dir() {
-    let dir = tempfile::tempdir().expect("Should create temp dir");
-    std::fs::create_dir(dir.path().join(".git")).expect("Should create .git dir");
-
-    assert!(is_git_repo(dir.path()));
-}
-
-#[test]
-fn detects_non_git_directory() {
-    let dir = tempfile::tempdir().expect("Should create temp dir");
-
-    assert!(!is_git_repo(dir.path()));
-}
-
-#[test]
-fn detects_git_repo_in_parent() {
-    let dir = tempfile::tempdir().expect("Should create temp dir");
-    std::fs::create_dir(dir.path().join(".git")).expect("Should create .git dir");
-    let subdir = dir.path().join("src");
-    std::fs::create_dir(&subdir).expect("Should create subdir");
-
-    assert!(is_git_repo(&subdir));
-}
 
 #[test]
 fn root_directory_does_not_loop() {

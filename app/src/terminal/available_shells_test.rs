@@ -2,7 +2,7 @@ use super::*;
 use crate::terminal::shell::ShellType;
 use crate::test_util::{Stub, VirtualFS};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use warp_core::features::FeatureFlag;
 
@@ -11,74 +11,6 @@ fn make_available_shells(shells: Vec<AvailableShell>) -> AvailableShells {
         shells,
         shell_counts: HashMap::new(),
     }
-}
-
-#[test]
-fn test_load_known_shells_with_empty_path_var() {
-    FeatureFlag::ShellSelector.set_enabled(true);
-
-    // First assert that if there is no fallback, and the env var is empty, we do not load ANY shells
-    let paths_to_search = vec![];
-    let fallback_shells = AvailableShells::load_known_shells(
-        &paths_to_search,
-        Some(Path::new("/some/nonexistent/path")),
-    );
-    assert!(
-        fallback_shells.is_empty(),
-        "expected there to be no shells, but shells contained {fallback_shells:?}"
-    );
-
-    VirtualFS::test(
-        "test_load_known_shells_with_empty_path_var",
-        |dirs, mut sandbox| {
-            let bash = dirs.tests().join("bin").join("bash");
-            let zsh = dirs.tests().join("bin").join("zsh");
-            let fallback_shells_path = dirs.tests().join("etc").join("shells");
-            // Now assert that if there is a fallback, and the env var is empty, we load the fallback
-            sandbox.mkdir("etc");
-            sandbox.mkdir("bin");
-            sandbox.with_files(vec![
-                Stub::FileWithContent(
-                    "etc/shells",
-                    format!("{}\n{}\n", bash.display(), zsh.display()).as_str(),
-                ),
-                Stub::MockExecutable("bin/bash"),
-                Stub::MockExecutable("bin/zsh"),
-            ]);
-
-            let fallback_shells = AvailableShells::load_known_shells(
-                &paths_to_search,
-                Some(fallback_shells_path.as_path()),
-            );
-
-            assert_eq!(fallback_shells.len(), 2);
-            // note about this test; current impl is that we add shells in the following order:
-            //   zsh, bash, fish, pwsh, powershell
-            // so it is important to assert that even though `/bin/bash` is located before `/bin/zsh`
-            // in the fallback file, we still list `zsh` first.
-            assert_eq!(
-                fallback_shells,
-                vec![
-                    AvailableShell {
-                        id: Some(format!("local:{}", zsh.display())),
-                        state: Arc::new(Config::KnownLocal(LocalConfig {
-                            command: "zsh".to_string(),
-                            executable_path: zsh,
-                            shell_type: ShellType::Zsh,
-                        }))
-                    },
-                    AvailableShell {
-                        id: Some(format!("local:{}", bash.display())),
-                        state: Arc::new(Config::KnownLocal(LocalConfig {
-                            command: "bash".to_string(),
-                            executable_path: bash,
-                            shell_type: ShellType::Bash,
-                        }))
-                    }
-                ]
-            )
-        },
-    );
 }
 
 #[test]

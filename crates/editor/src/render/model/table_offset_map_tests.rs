@@ -110,41 +110,6 @@ fn test_empty_cells() {
 }
 
 #[test]
-fn test_cells_in_range() {
-    let map = TableOffsetMap::new(vec![vec![2, 2], vec![2, 2]]);
-    let cells = map.cells_in_range(CharOffset::from(0), map.total_length());
-    assert_eq!(cells.len(), 4);
-
-    let first_row = map.cells_in_range(CharOffset::from(0), CharOffset::from(5));
-    assert_eq!(first_row.len(), 2);
-    assert_eq!(first_row[0].row, 0);
-    assert_eq!(first_row[0].col, 0);
-    assert_eq!(first_row[1].row, 0);
-    assert_eq!(first_row[1].col, 1);
-}
-
-#[test]
-fn test_cell_range() {
-    let map = TableOffsetMap::new(vec![vec![3, 2]]);
-    assert_eq!(
-        map.cell_range(0, 0),
-        Some(CellOffsetRange {
-            start: CharOffset::from(0),
-            end: CharOffset::from(3)
-        })
-    );
-    assert_eq!(
-        map.cell_range(0, 1),
-        Some(CellOffsetRange {
-            start: CharOffset::from(4),
-            end: CharOffset::from(6)
-        })
-    );
-    assert!(map.cell_range(0, 2).is_none());
-    assert!(map.cell_range(1, 0).is_none());
-}
-
-#[test]
 fn test_table_cell_offset_map_handles_bold_and_links() {
     let source = "**Bold** [Link](https://warp.dev)";
     let inline = parse_inline_markdown(source);

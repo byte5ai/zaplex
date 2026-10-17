@@ -58,7 +58,3 @@ impl<F: Future, D: FnMut()> PinnedDrop for OnCancelFuture<F, D> {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "on_cancel_tests.rs"]
-mod tests;

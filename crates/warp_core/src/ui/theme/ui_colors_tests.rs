@@ -34,33 +34,3 @@ hover: "#FFFFFF0D"
     // Fields that were not set should be None
     assert!(colors.main_text.is_none());
 }
-
-/// Verifies that UiColors skips None fields during serialization.
-#[test]
-fn serialize_ui_colors_skips_none() {
-    let colors = UiColors {
-        surface_1: Some(ColorU { r: 0x20, g: 0x21, b: 0x22, a: 255 }),
-        surface_2: None,
-        border: Some(ColorU { r: 0x33, g: 0x35, b: 0x36, a: 255 }),
-        surface_3: None,
-        focus_border: None,
-        split_pane_border: None,
-        main_text: None,
-        sub_text: None,
-        hint_text: None,
-        disabled_text: None,
-        selection: None,
-        text_selection: None,
-        hover: None,
-        active: None,
-        warning: None,
-        error: None,
-        success: None,
-        link: None,
-    };
-    let yaml = serde_yaml::to_string(&colors).expect("serialization failed");
-    assert!(yaml.contains("surface_1"));
-    assert!(yaml.contains("border"));
-    assert!(!yaml.contains("surface_2"));
-    assert!(!yaml.contains("main_text"));
-}

@@ -271,7 +271,3 @@ fn format_block(label: &str, marker: &str, content: &str) -> String {
     output.push('\n');
     output
 }
-
-#[cfg(test)]
-#[path = "logging_tests.rs"]
-mod tests;

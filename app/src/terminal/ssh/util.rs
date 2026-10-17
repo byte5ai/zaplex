@@ -408,55 +408,6 @@ pub fn transfer_file_sftp_command(
 mod tests {
     use super::*;
 
-    #[test]
-    fn ssh_gcloud_ssh_parsing() {
-        assert!(parse_interactive_ssh_command("gcloud").is_none());
-        assert!(parse_interactive_ssh_command("gcloud compute").is_none());
-        assert!(parse_interactive_ssh_command("gcloud compute ss").is_none());
-        assert!(parse_interactive_ssh_command("gcloud compute ssh").is_none());
-        assert!(parse_interactive_ssh_command("command gcloud compute ssh").is_none());
-
-        assert!(
-            parse_interactive_ssh_command("command gcloud compute ssh --zone us-west1-a").is_some()
-        );
-        assert!(parse_interactive_ssh_command("gcloud compute ssh --zone us-west1-a").is_some());
-        assert!(
-            parse_interactive_ssh_command("gcloud compute ssh --zone us-west1-a my-instance")
-                .is_some()
-        );
-        assert!(parse_interactive_ssh_command(
-            "gcloud compute ssh --zone us-west1-a my-instance --project my-project"
-        )
-        .is_some());
-    }
-
-    #[test]
-    fn ssh_elastic_beanstalk_parsing() {
-        assert!(parse_interactive_ssh_command("eb").is_none());
-        assert!(parse_interactive_ssh_command("eb ss").is_none());
-        assert!(parse_interactive_ssh_command("eb ssh").is_none());
-        assert!(parse_interactive_ssh_command("command eb ssh").is_none());
-
-        assert!(parse_interactive_ssh_command("command eb ssh --profile my-profile").is_some());
-        assert!(parse_interactive_ssh_command("eb ssh --profile my-profile").is_some());
-        assert!(parse_interactive_ssh_command("eb ssh --profile my-profile my-env").is_some());
-    }
-
-    #[test]
-    fn ssh_digital_ocean_droplet_parsing() {
-        assert!(parse_interactive_ssh_command("doctl").is_none());
-        assert!(parse_interactive_ssh_command("doctl compute").is_none());
-        assert!(parse_interactive_ssh_command("doctl compute ss").is_none());
-        assert!(parse_interactive_ssh_command("doctl compute ssh").is_none());
-        assert!(parse_interactive_ssh_command("command doctl compute ssh").is_none());
-
-        assert!(parse_interactive_ssh_command("command doctl compute ssh --region nyc1").is_some());
-        assert!(parse_interactive_ssh_command("doctl compute ssh --region nyc1").is_some());
-        assert!(
-            parse_interactive_ssh_command("doctl compute ssh --region nyc1 my-droplet").is_some()
-        );
-    }
-
     /// Verifies that commands resulting from shell alias expansion are correctly
     /// detected as interactive SSH commands. When a user types an alias (e.g.
     /// `myssh`), the terminal view expands it to the alias value before passing

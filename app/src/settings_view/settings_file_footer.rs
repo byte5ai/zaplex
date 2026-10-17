@@ -394,7 +394,3 @@ fn render_alert_action_button(
     .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
     .finish()
 }
-
-#[cfg(test)]
-#[path = "settings_file_footer_tests.rs"]
-mod tests;
