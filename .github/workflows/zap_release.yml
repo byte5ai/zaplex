@@ -420,7 +420,7 @@ jobs:
       - signing_preflight
       - build_remote_server
     # Native arm64 build on the self-hosted macrunner (fresh macOS VM per job, Xcode 27). Full cargo build + bundle +
-    # create-dmg with no sccache is still time-consuming; keep a generous timeout to be safe.
+    # DMG creation with no sccache is still time-consuming; keep a generous timeout to be safe.
     timeout-minutes: 360
     strategy:
       fail-fast: true
@@ -467,8 +467,19 @@ jobs:
       - name: Install cargo-bundle
         run: script/install_cargo_bundle
 
-      - name: Install create-dmg
-        run: brew install create-dmg
+      - name: Install dmgbuild
+        # Hash-pinned; writes the installer window layout without Finder automation.
+        run: |
+          python=python3
+          if ! "$python" -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+            brew install python@3.12
+            python="$(brew --prefix python@3.12)/bin/python3.12"
+          fi
+          "$python" -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/python" -m pip install --only-binary=:all: --require-hashes \
+            -r script/macos/dmgbuild-requirements.txt
+          echo "$RUNNER_TEMP/dmgbuild/bin" >> "$GITHUB_PATH"
+        shell: bash
 
       # Build the published macOS daemon archive before the app so its digest can be
       # embedded in the signed client. The archive intentionally contains only the

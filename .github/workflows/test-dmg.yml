@@ -325,8 +325,19 @@ jobs:
           cp resources/bundled/remote-server/* "$APP_PATH/Contents/Resources/bundled/remote-server/"
         shell: bash
 
-      - name: Install create-dmg
-        run: brew install create-dmg
+      - name: Install dmgbuild
+        # Hash-pinned; writes the installer window layout without Finder automation.
+        run: |
+          python=python3
+          if ! "$python" -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+            brew install python@3.12
+            python="$(brew --prefix python@3.12)/bin/python3.12"
+          fi
+          "$python" -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/python" -m pip install --only-binary=:all: --require-hashes \
+            -r script/macos/dmgbuild-requirements.txt
+          echo "$RUNNER_TEMP/dmgbuild/bin" >> "$GITHUB_PATH"
+        shell: bash
 
       - name: Sign and notarize prepared aarch64 bundle
         id: bundle_app

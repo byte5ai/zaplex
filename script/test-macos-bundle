@@ -76,8 +76,11 @@ elif name == "openssl":
         print("fixture-only-password")
     else:
         sys.exit("Unexpected openssl invocation")
-elif name == "create-dmg":
-    Path(args[-2]).write_bytes(b"mock disk image")
+elif name == "dmgbuild":
+    app = next(a.split("=", 1)[1] for a in args if a.startswith("app="))
+    if not Path(app).is_dir():
+        sys.exit("dmgbuild got a missing app bundle: " + app)
+    Path(args[-1]).write_bytes(b"mock disk image")
 elif name == "sed":
     # The bundle script uses BSD sed's in-place argument form on macOS.
     if sys.platform != "darwin" and args[:2] == ["-i", ""]:
@@ -102,7 +105,7 @@ class MacOSBundleModesTest(unittest.TestCase):
         self.outputs.touch()
         for name in (
             "rustc", "rustup", "cargo", "install_name_tool", "plutil",
-            "security", "codesign", "hdiutil", "create-dmg", "xcrun", "sed", "openssl",
+            "security", "codesign", "hdiutil", "dmgbuild", "xcrun", "sed", "openssl",
         ):
             self.write_mock(self.commands / name)
         for name in (
@@ -246,7 +249,7 @@ prepare_distribution_signing_keychain
         self.assertIn("cargo", commands)
         self.assertIn("prepare_bundled_resources", commands)
         self.assertNotIn("codesign", commands)
-        self.assertNotIn("create-dmg", commands)
+        self.assertNotIn("dmgbuild", commands)
 
     def test_package_uses_complete_app_without_any_preparation(self):
         self.env["MOCK_FORBID_PREPARATION"] = "1"
@@ -267,7 +270,7 @@ prepare_distribution_signing_keychain
                 self.assertEqual(os.readlink(framework / "Example"), "Versions/Current/Example")
         commands = self.command_names()
         self.assertIn("codesign", commands)
-        self.assertIn("create-dmg", commands)
+        self.assertIn("dmgbuild", commands)
         self.assertNotIn("cargo", commands)
         self.assertNotIn("prepare_bundled_resources", commands)
 
@@ -289,7 +292,7 @@ prepare_distribution_signing_keychain
         commands = self.command_names()
         self.assertNotIn("cargo", commands)
         self.assertNotIn("codesign", commands)
-        self.assertNotIn("create-dmg", commands)
+        self.assertNotIn("dmgbuild", commands)
 
     def test_package_rejects_missing_or_incomplete_app(self):
         args = ("--channel", "oss", "--arch", "aarch64", "--package-only")
@@ -300,7 +303,7 @@ prepare_distribution_signing_keychain
         commands = self.command_names()
         self.assertNotIn("cargo", commands)
         self.assertNotIn("codesign", commands)
-        self.assertNotIn("create-dmg", commands)
+        self.assertNotIn("dmgbuild", commands)
 
 
 if __name__ == "__main__":
