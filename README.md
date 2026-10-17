@@ -106,6 +106,7 @@ Once published, download Zaplex 1.2.0 from
 in GitHub Actions, signed with Developer ID, notarized by Apple, and shipped
 together with its matching Linux host daemon. Nothing needs to be installed
 manually on a remote host.
+The app requires macOS 12 (Monterey) or later on Apple Silicon.
 
 Installation and recovery steps are in the
 [Zaplex user guide](docs/release/1.0-user-guide.md).
