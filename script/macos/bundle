@@ -148,10 +148,17 @@ prepare_distribution_signing_inputs() {
     printf '%s' "$MACOS_NOTARY_KEY_P8_BASE64" | /usr/bin/base64 -D > "$NOTARY_KEY_PATH"
   )
 
+  # OpenSSL 3 needs -legacy to read the RC2/3DES-protected .p12; macOS's own
+  # LibreSSL (the only openssl on the self-hosted macrunner VMs) reads it
+  # natively and rejects the flag.
+  PKCS12_LEGACY_ARGS=(-legacy)
+  if openssl version | grep -q LibreSSL; then
+    PKCS12_LEGACY_ARGS=()
+  fi
   CERTIFICATE_SUBJECT="$(
     openssl pkcs12 \
       -in "$CODESIGN_CERT_PATH" \
-      -legacy \
+      "${PKCS12_LEGACY_ARGS[@]}" \
       -clcerts \
       -nokeys \
       -passin env:MACOS_CERTIFICATE_PASSWORD 2>/dev/null \
@@ -163,7 +170,7 @@ prepare_distribution_signing_inputs() {
   fi
   openssl pkcs12 \
     -in "$CODESIGN_CERT_PATH" \
-    -legacy \
+    "${PKCS12_LEGACY_ARGS[@]}" \
     -nocerts \
     -nodes \
     -passin env:MACOS_CERTIFICATE_PASSWORD 2>/dev/null \
