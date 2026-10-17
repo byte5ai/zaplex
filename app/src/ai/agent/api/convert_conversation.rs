@@ -19,10 +19,10 @@ use crate::ai::agent::{
     FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch, GrepResult,
     ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
     PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult, ReadFilesResult,
-    ReadMCPResourceResult, ReadShellCommandOutputResult, RequestCommandOutputResult,
-    RequestFileEditsResult, ServerOutputId, Shared, ShellCommandCompletedTrigger,
-    ShellCommandError, SuggestNewConversationResult, SuggestPromptResult,
-    TransferShellCommandControlToUserResult, UpdatedFileContext,
+    ReadMCPResourceResult, ReadShellCommandOutputResult, RenderableAIError,
+    RequestCommandOutputResult, RequestFileEditsResult, ServerOutputId, Shared,
+    ShellCommandCompletedTrigger, ShellCommandError, SuggestNewConversationResult,
+    SuggestPromptResult, TransferShellCommandControlToUserResult, UpdatedFileContext,
     WriteToLongRunningShellCommandResult,
 };
 use crate::ai::block_context::BlockContext;
@@ -34,6 +34,7 @@ use crate::terminal::model::terminal_model::BlockIndex;
 use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult, ReadSkillResult};
 use ai::skills::ParsedSkill;
 use chrono::{DateTime, Local, TimeZone};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use warp_core::command::ExitCode;
@@ -203,17 +204,64 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
     result.into()
 }
 
+/// How a turn ended that no server recorded. The subscription-agent response adapter
+/// persists it as the turn's last [`api::message::ServerEvent`]; restoring keeps a failed
+/// turn failed, and the event's timestamp marks when the turn ended.
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "turn_outcome", rename_all = "snake_case")]
+pub(crate) enum TurnOutcome {
+    Completed,
+    Failed { error_message: String },
+}
+
+impl TurnOutcome {
+    pub(crate) fn server_event(&self) -> api::message::ServerEvent {
+        api::message::ServerEvent {
+            payload: serde_json::to_string(self).expect("turn outcome serializes to JSON"),
+        }
+    }
+
+    fn from_message(message: &api::Message) -> Option<Self> {
+        let Some(api::message::Message::ServerEvent(event)) = &message.message else {
+            return None;
+        };
+        serde_json::from_str(&event.payload).ok()
+    }
+
+    fn error_message(self) -> Option<String> {
+        match self {
+            TurnOutcome::Completed => None,
+            TurnOutcome::Failed { error_message } => Some(error_message),
+        }
+    }
+}
+
+/// Whether the latest turn recorded in `task` failed, read without restoring its exchanges.
+pub(crate) fn last_turn_failed(task: &api::Task) -> bool {
+    let Some(last_request_id) = task.messages.last().map(|message| &message.request_id) else {
+        return false;
+    };
+    task.messages
+        .iter()
+        .rev()
+        .take_while(|message| message.request_id == *last_request_id)
+        .filter_map(TurnOutcome::from_message)
+        .any(|outcome| outcome.error_message().is_some())
+}
+
 /// Trait for converting task messages into AIAgentExchange objects
 /// for display in the UI as restored AI blocks.
 pub trait ConvertToExchanges {
-    fn into_exchanges(self) -> Vec<AIAgentExchange>;
+    /// `fallback_start_time` starts exchanges whose messages carry no time at all, i.e.
+    /// conversations persisted before their messages were timestamped.
+    fn into_exchanges(self, fallback_start_time: DateTime<Local>) -> Vec<AIAgentExchange>;
 }
 
 impl ConvertToExchanges for &api::Task {
     /// Converts a list of tasks into AIAgentExchange objects.
     ///
     /// Note: for now, we only restore messages from the root task (task with no parent).
-    fn into_exchanges(self) -> Vec<AIAgentExchange> {
+    fn into_exchanges(self, fallback_start_time: DateTime<Local>) -> Vec<AIAgentExchange> {
         let mut exchanges = Vec::new();
         let mut todo_lists: Vec<AIAgentTodoList> = Vec::new();
 
@@ -274,6 +322,7 @@ impl ConvertToExchanges for &api::Task {
                     &current_message_ids,
                     &message_map,
                     current_request_id.as_deref(),
+                    fallback_start_time,
                 ) {
                     exchanges.push(exchange);
                 }
@@ -456,6 +505,7 @@ impl ConvertToExchanges for &api::Task {
                 &current_message_ids,
                 &message_map,
                 current_request_id.as_deref(),
+                fallback_start_time,
             ) {
                 exchanges.push(exchange);
             }
@@ -1354,6 +1404,7 @@ fn create_exchange_from_messages(
     message_ids: &HashSet<String>,
     message_map: &HashMap<&str, &api::Message>,
     server_output_id: Option<&str>,
+    fallback_start_time: DateTime<Local>,
 ) -> Option<AIAgentExchange> {
     // Allow exchanges with only outputs (e.g., when returning from a subtask).
     if inputs.is_empty() && outputs.is_empty() {
@@ -1372,17 +1423,20 @@ fn create_exchange_from_messages(
                 _ => None,
             })
         })
-        // Fall back to any timestamp from the messages in this exchange
+        // Fall back to the earliest timestamp of the messages in this exchange
         .or_else(|| {
-            message_ids.iter().find_map(|message_id| {
-                message_map.get(message_id.as_str()).and_then(|message| {
-                    message.timestamp.as_ref().map(|timestamp| {
-                        proto_timestamp_to_local_datetime(timestamp.seconds, timestamp.nanos)
+            message_ids
+                .iter()
+                .filter_map(|message_id| {
+                    message_map.get(message_id.as_str()).and_then(|message| {
+                        message.timestamp.as_ref().map(|timestamp| {
+                            proto_timestamp_to_local_datetime(timestamp.seconds, timestamp.nanos)
+                        })
                     })
                 })
-            })
+                .min()
         })
-        .unwrap_or_default();
+        .unwrap_or(fallback_start_time);
 
     // Get the exchange's finish time from the last message timestamp in this exchange.
     let finish_time = message_ids
@@ -1444,8 +1498,25 @@ fn create_exchange_from_messages(
         .map(|input| matches!(input, AIAgentInput::ActionResult { .. }))
         .unwrap_or(false);
 
+    let turn_error = message_ids
+        .iter()
+        .filter_map(|message_id| message_map.get(message_id.as_str()).copied())
+        .filter_map(TurnOutcome::from_message)
+        .find_map(TurnOutcome::error_message);
+
     // Create exchange with finished status
-    let output_status = if outputs.is_empty() && !last_input_is_action_result {
+    let output_status = if let Some(error_message) = turn_error {
+        AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Error {
+                output: (!outputs.is_empty()).then(|| Shared::new(ai_output)),
+                error: RenderableAIError::Other {
+                    error_message,
+                    will_attempt_resume: false,
+                    waiting_for_network: false,
+                },
+            },
+        }
+    } else if outputs.is_empty() && !last_input_is_action_result {
         AIAgentOutputStatus::Finished {
             finished_output: FinishedAIAgentOutput::Cancelled {
                 output: None,

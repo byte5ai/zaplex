@@ -47,9 +47,9 @@ pub use claude_registry_lifecycle::{
 pub use conductor::{
     fleet_conductor_session_count, fleet_session_count, group_project_sessions,
     host_conductor_session_count, host_ident, host_key, host_key_is_local, host_session_count,
-    model_effort_label, next_waiting, session_attr_line, session_attrs, session_glyph,
-    session_identity_key, session_identity_key_with_account_id, session_key, split_host_key,
-    state_word, waiting_sessions, ConductorSession, SessionAttrs, WaitingTarget, GLYPH_IDLE,
+    model_effort_label, next_waiting, session_attrs, session_glyph, session_identity_key,
+    session_identity_key_with_account_id, session_key, split_host_key, state_word,
+    waiting_sessions, ConductorSession, SessionAttrs, StateWord, WaitingTarget, GLYPH_IDLE,
     GLYPH_WAITING, GLYPH_WORKING,
 };
 pub use favorites::{Favorite, FavoriteKind, Favorites};
@@ -60,8 +60,9 @@ pub use fleet::{
     ProjectNode, RegisteredHost, RemoteHost, SeenTurns, SessionVerdict,
 };
 pub use format::{
-    binding_window, context_fill, context_window, format_cost, format_relative, format_reset,
-    format_tokens, heat_fill, heat_pct_label_with_provenance, model_family, HeatLevel,
+    binding_window, context_fill, context_window, cost_figure, format_tokens, heat_fill,
+    heat_pct_label_with_provenance, model_family, relative_age, reset_countdown, CostFigure,
+    HeatLevel, RelativeAge, ResetCountdown,
 };
 pub use guardrails::{
     failed_toast, guardrail_target, kill_confirm_message, no_remote_connection_toast,
@@ -107,6 +108,7 @@ pub struct TranscriptScanCache {
     task_states: transcript::TaskStateCache,
     codex_rollouts: codex_sessions::RolloutCache,
     claude_usage: claude::ClaudeUsageCache,
+    codex_usage: codex::CodexUsageCache,
 }
 
 /// How far back dormant-session discovery looks.
@@ -255,12 +257,11 @@ fn build_snapshot_with_claude_discovery(
             idle,
         ));
     }
-    let default_codex_home = home.join(".codex");
-    let pinned_codex_home = (codex_home != default_codex_home.as_path()).then_some(codex_home);
-    let codex_discovery = codex::discover_account_roots(home, pinned_codex_home);
+    let codex_discovery = discover_codex_accounts(home, codex_home);
     degraded.extend(codex_discovery.issues);
     for account in codex_discovery.accounts {
-        let (entries, usage_io_error) = codex::usage_for_account(&account, since);
+        let (entries, usage_io_error) =
+            codex::usage_for_account_with_cache(&account, since, &mut transcript_cache.codex_usage);
         let b5h = if budget_5h > 0 {
             budget_5h
         } else {
@@ -307,6 +308,84 @@ fn build_snapshot_with_claude_discovery(
         accounts,
         generated_at: now,
         health,
+    }
+}
+
+/// Codex account discovery shared by both snapshot builders, so a non-default
+/// `codex_home` is pinned identically in each.
+fn discover_codex_accounts(home: &Path, codex_home: &Path) -> codex::AccountDiscovery {
+    let default_codex_home = home.join(".codex");
+    let pinned_codex_home = (codex_home != default_codex_home.as_path()).then_some(codex_home);
+    codex::discover_account_roots(home, pinned_codex_home)
+}
+
+/// The accounts on this machine and the sessions running in them right now.
+pub struct LiveSessionScan {
+    /// Every account [`build_snapshot_with_cache`] discovers, in its order.
+    pub accounts: Vec<Account>,
+    /// The running sessions of those accounts, stamped with their account.
+    pub sessions: Vec<SessionSnapshot>,
+}
+
+/// Account discovery plus the running sessions of every account, without
+/// usage aggregation or the dormant-history walk. Its cost follows the number
+/// of running agents, not the size of the transcript history, so a remote
+/// daemon can answer its session inventory from it while a full
+/// [`build_snapshot_with_cache`] is still running. Discovery is the same as
+/// the full snapshot's, so both name the same accounts.
+pub fn scan_live_sessions_with_cache(
+    home: &Path,
+    codex_home: &Path,
+    claude_config_dir_env: Option<&str>,
+    now: DateTime<Utc>,
+    transcript_cache: &mut TranscriptScanCache,
+) -> LiveSessionScan {
+    scan_live_sessions_with_claude_discovery(
+        home,
+        codex_home,
+        claude_config_dir_env,
+        now,
+        transcript_cache,
+        claude::discover_accounts_with_health,
+    )
+}
+
+/// [`scan_live_sessions_with_cache`] with Claude account discovery injected,
+/// so tests do not depend on the processes running on the host.
+fn scan_live_sessions_with_claude_discovery(
+    home: &Path,
+    codex_home: &Path,
+    claude_config_dir_env: Option<&str>,
+    now: DateTime<Utc>,
+    transcript_cache: &mut TranscriptScanCache,
+    discover_claude_accounts: impl FnOnce(&Path, Option<&str>) -> claude::AccountDiscovery,
+) -> LiveSessionScan {
+    let claude_discovery = discover_claude_accounts(home, claude_config_dir_env);
+    let codex_discovery = discover_codex_accounts(home, codex_home);
+    let mut sessions = Vec::new();
+    for account in &claude_discovery.accounts {
+        for mut session in
+            live_claude_sessions_with_cache(&account.config_dir, now, transcript_cache)
+        {
+            account.stamp(&mut session);
+            sessions.push(session);
+        }
+    }
+    for account in &codex_discovery.accounts {
+        for mut session in
+            live_codex_sessions_with_cache(&account.config_dir, now, transcript_cache)
+        {
+            account.stamp(&mut session);
+            sessions.push(session);
+        }
+    }
+    LiveSessionScan {
+        accounts: claude_discovery
+            .accounts
+            .into_iter()
+            .chain(codex_discovery.accounts)
+            .collect(),
+        sessions,
     }
 }
 

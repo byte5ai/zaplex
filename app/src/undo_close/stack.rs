@@ -6,7 +6,9 @@ use warpui::{
 
 use crate::{
     ai::blocklist::BlocklistAIHistoryModel,
+    app_state::release_daemon_pty_claims_for_terminal_views,
     pane_group::{PaneGroup, PaneId},
+    remote_server::manager::RemoteServerManager,
     send_telemetry_from_app_ctx,
     server::telemetry::{TelemetryEvent, UndoCloseItemType},
     tab::TabData,
@@ -72,6 +74,18 @@ impl ClosedItem {
 
         match self {
             ClosedItem::Window(data) => {
+                // A closed window's views are out of reach, so its panes cannot
+                // be cleaned up like a discarded tab's below. Drop the daemon
+                // connections they still hold instead of leaking them.
+                for connection_session_id in
+                    release_daemon_pty_claims_for_terminal_views(|terminal_view_id| {
+                        data.contains_view(terminal_view_id)
+                    })
+                {
+                    RemoteServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                        manager.deregister_session(connection_session_id, false, ctx);
+                    });
+                }
                 let ClosedWindowData { window_id, .. } = *data;
                 if let Some(workspace) = window_workspace(window_id, ctx) {
                     workspace.update(ctx, |workspace, ctx| {

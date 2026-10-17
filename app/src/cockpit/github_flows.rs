@@ -1124,6 +1124,7 @@ pub async fn run_structured_analysis(
             display_name: account.label.clone(),
             provider_account_id: account.provider_account_id.clone(),
             config_dir: account.config_dir.clone(),
+            config_dir_pin: account.config_dir.clone(),
         },
         executable,
         version: String::new(),

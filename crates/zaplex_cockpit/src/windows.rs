@@ -35,7 +35,7 @@ fn floor_to_hour(ts: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 /// A rolling activity block: a start (first activity floored to the hour) and its totals.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Block {
     start: DateTime<Utc>,
     totals: WindowTotals,
@@ -79,7 +79,9 @@ fn current_window(
     pricing: &PricingTable,
 ) -> (WindowTotals, Option<DateTime<Utc>>) {
     match rolling_blocks(entries, window, pricing).last() {
-        Some(b) if now >= b.start && now < b.start + window => (b.totals, Some(b.start + window)),
+        Some(b) if now >= b.start && now < b.start + window => {
+            (b.totals.clone(), Some(b.start + window))
+        }
         _ => (WindowTotals::default(), None),
     }
 }

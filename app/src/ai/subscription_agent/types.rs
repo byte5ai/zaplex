@@ -81,6 +81,11 @@ pub(crate) struct AccountIdentity {
     #[serde(default)]
     pub(crate) provider_account_id: Option<String>,
     pub(crate) config_dir: Option<PathBuf>,
+    /// Config root exported to the CLI process, `None` for the provider's default
+    /// login (the cockpit's `Account::config_dir_pin`). Only launches use it;
+    /// `config_dir` stays the account's route identity.
+    #[serde(default)]
+    pub(crate) config_dir_pin: Option<PathBuf>,
 }
 
 impl AccountIdentity {

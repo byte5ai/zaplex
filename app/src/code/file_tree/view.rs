@@ -2708,7 +2708,12 @@ impl FileTreeView {
         stack.finish()
     }
 
-    fn render_error_state(&self, text: String, app: &AppContext) -> Box<dyn Element> {
+    fn render_error_state(
+        &self,
+        title: String,
+        text: String,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
 
@@ -2732,7 +2737,7 @@ impl FileTreeView {
             )
             .with_child(
                 Text::new(
-                    crate::t!("project-explorer-unavailable-title"),
+                    title,
                     appearance.ui_font_family(),
                     appearance.ui_font_subheading(),
                 )
@@ -2930,6 +2935,7 @@ impl View for FileTreeView {
     #[cfg(not(feature = "local_fs"))]
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         self.render_error_state(
+            crate::t!("project-explorer-unavailable-title"),
             crate::t!("project-explorer-unavailable-remote-description"),
             app,
         )
@@ -2939,6 +2945,7 @@ impl View for FileTreeView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         if matches!(self.enablement, CodingPanelEnablementState::Disabled) {
             return self.render_error_state(
+                crate::t!("project-explorer-unavailable-title"),
                 crate::t!("project-explorer-unavailable-disabled-description"),
                 app,
             );
@@ -2953,6 +2960,7 @@ impl View for FileTreeView {
         ) {
             return if self.loading_deadline_passed() {
                 self.render_error_state(
+                    crate::t!("project-explorer-unavailable-title"),
                     crate::t!("project-explorer-unavailable-remote-description"),
                     app,
                 )
@@ -2973,6 +2981,7 @@ impl View for FileTreeView {
                     self.render_loading_state(app)
                 } else {
                     self.render_error_state(
+                        crate::t!("project-explorer-unavailable-title"),
                         crate::t!("project-explorer-unavailable-remote-description"),
                         app,
                     )
@@ -2984,13 +2993,18 @@ impl View for FileTreeView {
                 CodingPanelEnablementState::UnsupportedSession
             ) {
                 return self.render_error_state(
+                    crate::t!("project-explorer-unavailable-title"),
                     crate::t!("project-explorer-unavailable-wsl-description"),
                     app,
                 );
             }
 
             return if self.loading_deadline_passed() {
-                self.render_error_state(crate::t!("project-explorer-empty-description"), app)
+                self.render_error_state(
+                    crate::t!("project-explorer-empty-title"),
+                    crate::t!("project-explorer-empty-description"),
+                    app,
+                )
             } else {
                 self.render_loading_state(app)
             };

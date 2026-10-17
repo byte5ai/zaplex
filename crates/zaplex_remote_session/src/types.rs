@@ -170,6 +170,12 @@ pub const FEATURE_SESSION_TAKEOVER_V1: &str = "session-takeover-v1";
 /// ignore `SessionInfo.live` from daemons that do not advertise this.
 pub const FEATURE_SESSION_LIVE_METADATA_V1: &str = "session-live-metadata-v1";
 
+/// Capability: `SessionInfo.retention` reports since when a session has had no
+/// client and when the detached-session GC ends it, counted from that detach,
+/// or why it is kept. Clients ignore the field from daemons that do not
+/// advertise this; older daemons count their limit from the last attach.
+pub const FEATURE_SESSION_DETACH_RETENTION_V1: &str = "session-detach-retention-v1";
+
 /// `SessionNotice.kind` pushed to a connection whose session attachment was
 /// taken over by a newer, generation-checked attach.
 pub const SESSION_NOTICE_ATTACH_TAKEN_OVER: &str = "attach-taken-over";
@@ -251,6 +257,7 @@ pub fn supported_features() -> Vec<String> {
         features.push(FEATURE_AGENT_PTY_BINDING_V2.to_string());
         features.push(FEATURE_MULTIPLEXER_INVENTORY_V1.to_string());
         features.push(FEATURE_SESSION_TAKEOVER_V1.to_string());
+        features.push(FEATURE_SESSION_DETACH_RETENTION_V1.to_string());
     }
     #[cfg(target_os = "linux")]
     {
@@ -294,6 +301,7 @@ pub fn supported_client_features() -> Vec<String> {
         FEATURE_MANAGED_OPEN_ATTACH_V1.to_string(),
         FEATURE_SESSION_TAKEOVER_V1.to_string(),
         FEATURE_SESSION_LIVE_METADATA_V1.to_string(),
+        FEATURE_SESSION_DETACH_RETENTION_V1.to_string(),
     ]
 }
 

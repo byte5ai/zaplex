@@ -70,8 +70,14 @@ The previous static illustrations are superseded, not alternative approved layou
    a fixed metadata line below it: the foreground command (program name only, never arguments;
    omitted next to an agent identity and at an idle prompt) and the time of its last attach (“last
    opened …”). Live facts come only from daemons advertising `session-live-metadata-v1` (Linux);
-   older daemons fall back to the directory the session was opened in. Detached-since and
-   expiry belong in the same line once #508 and #510 provide them. Sessions open here come first,
+   older daemons fall back to the directory the session was opened in. Daemons advertising
+   `session-detach-retention-v1` add since when the session has had no client and when it ends,
+   24 h counted from that detach (“detached for 2 hours · ends in 22 hours”). A detached session
+   whose foreground runs a coding agent (Claude Code, Codex), or whose foreground cannot be read,
+   is never ended automatically and says so (“kept while the agent runs”) (#508). Older daemons
+   report no detach time; their rows add the end their attach-based 24 h limit implies (“ends in
+   21 hours unless attached”). Every listed session not open here, except managed ones, carries an
+   “End session” action that kills it after a confirmation naming a running agent (#510). Sessions open here come first,
    ordered by title; the others follow by most recent attach, and keyboard navigation uses the same
    order. Without any pane or daemon identity the row reads `Host · Terminal` like a pane without a
    known directory; the session id appears only in the tooltip, never in the visible title (#509).

@@ -1220,6 +1220,12 @@ impl PaneGroup {
     ) {
         if self.pane_contents.contains_key(&pane_id) {
             match event {
+                PaneViewEvent::PaneDragStarted => {
+                    // Capture the focus when the drag starts, not on the first drag-over event:
+                    // a drag can end without one, and a value left by an earlier drag that ended
+                    // elsewhere (e.g. on the tab bar) must not be reused.
+                    self.drag_start_focus = Some(self.focused_pane_id(ctx));
+                }
                 PaneViewEvent::MovePaneWithinPaneGroup {
                     target_id,
                     direction,

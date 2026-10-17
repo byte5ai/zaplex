@@ -312,6 +312,8 @@ ai-footer-subscription-choose-account = Choose account
 ai-footer-subscription-choose-model = Choose model
 ai-footer-subscription-switch-location = Switch to { $host } · Directory { $directory }
 ai-footer-subscription-local-machine = Local machine
+ai-footer-subscription-default-account = Default subscription
+ai-footer-subscription-remote-default-account = Remote default subscription
 ai-footer-subscription-choose-directory = Choose directory…
 ai-footer-subscription-enter-remote-directory = Enter an absolute remote directory or .…
 ai-footer-subscription-use-directory = Use directory { $directory }
@@ -334,6 +336,7 @@ ai-footer-subscription-status-running-tool = Running { $tool }
 ai-footer-subscription-detail-running-tool = The selected agent is running { $tool }.
 ai-footer-subscription-status-waiting-for-approval = Waiting for approval
 ai-footer-subscription-detail-waiting-for-approval = Review the requested action before the agent can continue.
+ai-footer-subscription-approval-required = Approval required for { $kind }: { $description }
 ai-footer-subscription-status-turn-complete = Turn complete
 ai-footer-subscription-detail-turn-complete = Continue the recorded session or start over.
 ai-footer-subscription-status-session-ended = Session ended
@@ -341,6 +344,7 @@ ai-footer-subscription-detail-session-ended = This session cannot accept more pr
 ai-footer-subscription-identity-id = ID { $id }
 ai-footer-subscription-identity-named-id = { $name } · ID { $id }
 ai-footer-subscription-model-resolved = resolved { $model }
+ai-footer-subscription-session-target = { $agent } · { $account } · { $host } · { $directory } · { $model }
 ai-footer-subscription-field-agent = Agent
 ai-footer-subscription-field-account = Account
 ai-footer-subscription-field-host = Host
@@ -2682,6 +2686,29 @@ ai-context-blocks-days-ago = { $count ->
         [one] 1 day ago
        *[other] { $count } days ago
     }
+time-format-just-now = just now
+time-format-just-now-sentence-case = Just now
+time-format-minutes-ago = { $count } min ago
+time-format-hours-ago = { $count ->
+        [one] 1 hour ago
+       *[other] { $count } hours ago
+    }
+time-format-days-ago = { $count ->
+        [one] 1 day ago
+       *[other] { $count } days ago
+    }
+time-format-weeks-ago = { $count ->
+        [one] 1 week ago
+       *[other] { $count } weeks ago
+    }
+time-format-months-ago = { $count ->
+        [one] 1 month ago
+       *[other] { $count } months ago
+    }
+time-format-years-ago = { $count ->
+        [one] 1 year ago
+       *[other] { $count } years ago
+    }
 ai-context-blocks-no-output = No output
 ai-context-blocks-accessibility-label = Block: { $command }
 
@@ -2801,14 +2828,13 @@ workspace-conversation-list-past = PAST
 workspace-conversation-list-view-all = View all
 workspace-conversation-list-show-less = Show less
 workspace-conversation-list-empty-title = No conversations yet
-workspace-conversation-list-empty-description = Your active and past conversations with local and ambient agents will appear here.
+workspace-conversation-list-empty-description = Your active and past agent conversations will appear here.
 workspace-conversation-list-new-conversation = New conversation
 conversation-untitled = Untitled conversation
 conversation-deleted = Deleted conversation
 workspace-conversation-list-no-matching = No matching conversations
 workspace-conversation-list-delete = Delete
 workspace-conversation-list-delete-in-progress-error = Conversations cannot be deleted while in progress.
-workspace-conversation-list-delete-ambient-tooltip = Ambient agent conversations cannot be deleted
 workspace-conversation-list-fork-new-pane = Fork in new pane
 workspace-conversation-list-fork-new-tab = Fork in new tab
 workspace-conversation-list-fallback-title = Conversation
@@ -2822,6 +2848,7 @@ command-palette-conversations-a11y-fork = Press enter to fork the current conver
 command-palette-conversations-a11y-new = Press enter to create a new conversation.
 workspace-left-panel-project-explorer = Project explorer
 project-explorer-empty-description = No project found in this session. Open a session in a project directory to browse its files.
+project-explorer-empty-title = No project found
 project-explorer-unavailable-title = Project explorer unavailable
 project-explorer-unavailable-disabled-description = The Project Explorer requires access to your local workspace. Open a new session or navigate to an active session to view.
 project-explorer-unavailable-remote-description = The Project Explorer requires access to your local workspace, which isn’t supported in remote sessions.
@@ -2886,6 +2913,24 @@ cockpit-card-reset-both = 5h ↻ { $reset5h } · wk ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
 cockpit-header-cost-summary = today { $today } · { $week } wk
 cockpit-header-today-total = All accounts · today { $today }
+# List-price cost estimates. Fluent does not localize decimal separators, so the
+# whole dollars and the cents are placed separately.
+cockpit-cost-estimate = ~${ $whole }.{ $cents }
+cockpit-cost-unpriced = unpriced
+cockpit-cost-partly-unpriced = partly unpriced
+cockpit-cost-unpriced-models = No list price: { $models }
+cockpit-cost-source = Costs: estimate from API list prices as of { $date }
+cockpit-fleet-cost-summary = today { $today } · 5h { $block } · wk { $week }
+cockpit-fleet-accounts = { $count ->
+    [one] { $count } account
+   *[other] { $count } accounts
+}
+cockpit-fleet-working = ▶ { $count } working
+cockpit-fleet-waiting = ✋ { $count } { $count ->
+    [one] waiting on you
+   *[other] waiting on you
+}
+cockpit-fleet-more-sessions = … { $count } more
 # Review cluster. "reviewed" is deliberately not "approved": the mark is a
 # private note to yourself — it tells the agent nothing and approves nothing.
 cockpit-session-review = Review
@@ -2987,6 +3032,11 @@ workspace-left-panel-ssh-manager-delete-credential-unavailable = unavailable cre
 workspace-left-panel-ssh-manager-delete-cannot-undo = This action cannot be undone.
 workspace-left-panel-ssh-manager-menu-new-folder = New folder
 workspace-left-panel-ssh-manager-menu-new-server = New SSH server
+workspace-left-panel-ssh-manager-default-folder-name = New folder
+workspace-left-panel-ssh-manager-default-server-name = New server
+workspace-left-panel-ssh-manager-clone-name-suffix = (copy)
+workspace-left-panel-ssh-manager-note-imported-from = Imported from
+workspace-left-panel-ssh-manager-note-discovered-via-tailscale = Discovered via Tailscale
 workspace-left-panel-ssh-manager-menu-edit = Edit
 workspace-left-panel-ssh-manager-menu-connect = Connect
 workspace-left-panel-ssh-manager-menu-sessions = Zaplex sessions
@@ -3003,6 +3053,7 @@ workspace-left-panel-ssh-manager-zaplex-sessions = Zaplex sessions
 workspace-left-panel-ssh-manager-sessions-loading = Loading sessions…
 workspace-left-panel-ssh-manager-sessions-empty = No Zaplex sessions
 workspace-left-panel-ssh-manager-sessions-not-persistent = Set "Session persistence" to Persistent to use this
+workspace-left-panel-ssh-manager-sessions-unix-only = Daemon sessions are only supported on Unix hosts.
 workspace-left-panel-ssh-manager-sessions-needs-key = Zaplex sessions need key-based authentication
 workspace-left-panel-ssh-manager-session-id = Session ID: { $id }
 workspace-left-panel-ssh-manager-session-open-here = Open in this window
@@ -3021,8 +3072,52 @@ workspace-left-panel-ssh-manager-session-last-opened-days = { $count ->
         [one] last opened 1 day ago
        *[other] last opened { $count } days ago
     }
+workspace-left-panel-ssh-manager-session-detached-metadata = { $detached } · { $retention }
+workspace-left-panel-ssh-manager-session-detached-now = just detached
+workspace-left-panel-ssh-manager-session-detached-minutes = { $count ->
+        [one] detached for 1 minute
+       *[other] detached for { $count } minutes
+    }
+workspace-left-panel-ssh-manager-session-detached-hours = { $count ->
+        [one] detached for 1 hour
+       *[other] detached for { $count } hours
+    }
+workspace-left-panel-ssh-manager-session-detached-days = { $count ->
+        [one] detached for 1 day
+       *[other] detached for { $count } days
+    }
+workspace-left-panel-ssh-manager-session-expires-soon = ends shortly
+workspace-left-panel-ssh-manager-session-expires-minutes = { $count ->
+        [one] ends in 1 minute
+       *[other] ends in { $count } minutes
+    }
+workspace-left-panel-ssh-manager-session-expires-hours = { $count ->
+        [one] ends in 1 hour
+       *[other] ends in { $count } hours
+    }
+workspace-left-panel-ssh-manager-session-kept = kept
+workspace-left-panel-ssh-manager-session-kept-agent = kept while the agent runs
+workspace-left-panel-ssh-manager-session-kept-unknown = kept, program unknown
+workspace-left-panel-ssh-manager-session-legacy-metadata = { $opened } · { $expires }
+workspace-left-panel-ssh-manager-session-legacy-expires-soon = ends shortly unless attached
+workspace-left-panel-ssh-manager-session-legacy-expires-minutes = { $count ->
+        [one] ends in 1 minute unless attached
+       *[other] ends in { $count } minutes unless attached
+    }
+workspace-left-panel-ssh-manager-session-legacy-expires-hours = { $count ->
+        [one] ends in 1 hour unless attached
+       *[other] ends in { $count } hours unless attached
+    }
+workspace-left-panel-ssh-manager-session-end = End session
+workspace-left-panel-ssh-manager-session-end-title = End session “{ $name }”?
+workspace-left-panel-ssh-manager-session-end-summary = This ends the session's shell and every program running in it on { $host }. Its output is lost.
+workspace-left-panel-ssh-manager-session-end-agent = An agent is running in it and ends too.
+workspace-left-panel-ssh-manager-session-end-confirm = End
+workspace-left-panel-ssh-manager-session-end-changed = This session has changed or no longer exists. Refresh sessions.
+workspace-left-panel-ssh-manager-session-end-failed = Could not end this session: { $detail }
 workspace-left-panel-ssh-manager-session-host-missing = This host no longer exists in Connections
 workspace-left-panel-ssh-manager-session-open-error = Could not open this session: { $detail }
+workspace-left-panel-ssh-manager-session-stale = This session has changed or no longer exists. Reloading the session list.
 workspace-left-panel-ssh-manager-sessions-refreshing = Refreshing sessions…
 workspace-left-panel-ssh-manager-sessions-timeout = The session list could not be loaded within { $seconds } seconds. Refresh sessions to try again.
 workspace-left-panel-ssh-manager-sessions-needs-install = Connect to the host first to set up the Zaplex session service. Then refresh sessions.
@@ -3114,6 +3209,7 @@ theme-editor-error-image = Could not create a theme from the image: { $error }
 theme-editor-error-local-files = Theme import requires local file access.
 theme-editor-error-export-write = Could not write the exported theme: { $error }
 workspace-left-panel-ssh-manager-multiplexer-metadata = { $kind } · { $windows } windows · { $clients } clients
+workspace-left-panel-ssh-manager-multiplexer-kind-unknown = unknown
 workspace-left-panel-ssh-manager-multiplexer-scan-error = Multiplexer discovery failed: { $detail }
 workspace-left-panel-ssh-manager-multiplexer-invalid = This multiplexer session has no supported type.
 workspace-left-panel-ssh-manager-multiplexer-host-missing = The saved host no longer exists.
@@ -3160,6 +3256,11 @@ workspace-left-panel-ssh-manager-candidates-refresh = Refresh from ~/.ssh/config
 workspace-left-panel-ssh-manager-add-heading = Add a host
 workspace-left-panel-ssh-manager-add-blank = Create a blank server
 workspace-left-panel-ssh-manager-discover-tailscale = Discover Tailscale hosts
+workspace-left-panel-ssh-manager-tailscale-start-failed = Could not start Tailscale discovery: { $error }
+workspace-left-panel-ssh-manager-tailscale-timed-out = Tailscale discovery timed out.
+workspace-left-panel-ssh-manager-tailscale-read-failed = Could not read Tailscale status: { $error }
+workspace-left-panel-ssh-manager-tailscale-unavailable = Tailscale not found or not running (`tailscale status` failed).
+workspace-left-panel-ssh-manager-tailscale-import-failed = Tailscale import worker failed: { $error }
 workspace-left-panel-ssh-manager-add-cancel = Cancel
 terminal-su-root-password-confirm = Auto-fill Root Password
 terminal-su-root-password-confirm-subtitle = Click to confirm and inject the saved Root password
@@ -3326,7 +3427,7 @@ global-search-title = Global search
 global-search-description = Search in files across your current directories.
 global-search-unavailable-title = Global search unavailable
 global-search-unavailable-description = Global search requires access to your local workspace. Open a new session or navigate to an active session to view.
-global-search-remote-description = Global search requires access to your local workspace, which isn't supported in remote sessions
+global-search-remote-description = Global search requires access to your local workspace, which isn't supported in remote sessions.
 global-search-unsupported-session-description = Global search doesn't currently work in Git Bash or WSL.
 global-search-failed = Global search failed.
 
@@ -4037,6 +4138,7 @@ cockpit-host-no-local-agents = No local AI sessions
 cockpit-host-inventory-pending = Loading AI sessions…
 cockpit-host-inventory-unsupported = Update the host service to list AI sessions
 cockpit-host-inventory-unavailable = AI sessions are temporarily unavailable
+cockpit-host-inventory-timed-out = The host takes too long to list AI sessions
 cockpit-host-removed = removed from Connections
 cockpit-host-unverified = Connections registry unavailable
 cockpit-conductor-rest-show-both = { $running } running · { $idle } idle — show
@@ -4117,6 +4219,9 @@ cockpit-table-filter-all = All
 cockpit-table-filter-waiting = Waiting
 cockpit-table-filter-active = Active
 cockpit-table-filter-idle = Idle
+cockpit-table-state-waiting = waiting
+cockpit-table-state-working = working
+cockpit-table-state-idle = idle
 cockpit-account-gone = This account is no longer discoverable — signed out, or its config directory is gone.
 cockpit-menu-adopt = Open session
 cockpit-menu-fork = Fork
@@ -4189,6 +4294,13 @@ sftp-file-manager-title = File manager
 cockpit-table-search-placeholder = Filter sessions…
 cockpit-meter-5h = 5h
 cockpit-meter-week = wk
+cockpit-duration-minutes = { $minutes }m
+cockpit-duration-hours = { $hours }h
+cockpit-duration-days = { $days }d
+cockpit-duration-hours-minutes = { $hours }h{ $minutes }m
+cockpit-duration-days-hours = { $days }d{ $hours }h
+cockpit-age-now = now
+cockpit-reset-resetting = resetting
 fm-col-name = Name
 fm-col-size = Size
 fm-col-modified = Modified
@@ -4452,6 +4564,7 @@ workspace-split-target-changed = The split was not opened because its pane moved
 workspace-split-host-already-connecting = { $host } is already connecting. Open the split again once it is connected.
 workspace-split-agent-single-launch = A split holds exactly one agent. Choose a single account.
 workspace-launch-more-hosts = More hosts
+workspace-launch-host-not-found = Couldn't find host '{ $host }' to launch { $agent } on.
 workspace-remote-agent-route-validation-unavailable = The daemon cannot validate this agent-to-PTY route.
 workspace-remote-daemon-connection-unavailable = The daemon connection is unavailable; refresh Agent Sessions.
 workspace-remote-pty-agent-changed = This PTY's foreground agent changed. Refresh Agent Sessions before attaching again.
@@ -4530,6 +4643,15 @@ workspace-remote-routed-split-target-changed = The remote account or managed ses
 # Persistence initialization must succeed before the workspace can open.
 persistence-startup-error-title = Zaplex could not open its saved data
 persistence-startup-error-detail = Startup was stopped to prevent working without saving. Your existing database and migration files have been kept. Close any other Zaplex instance, resolve the error below, then restart Zaplex.
+
+    { $error }
+persistence-startup-error-migration-locked = Another Zaplex instance is opening the same saved data, so this start was stopped. Wait until the other instance has finished starting, or quit it, then start Zaplex again.
+
+    { $error }
+persistence-startup-error-legacy-database-locked = Zaplex could not take over the data of an earlier version from { $path } because another app is still using it, for example an earlier version of Zap or Zaplex. Quit that app, then start Zaplex again; the transfer then continues automatically. The file and your current data are unchanged.
+
+    { $error }
+persistence-startup-error-legacy-database-copy-failed = Zaplex could not take over the data of an earlier version from { $path }. The file and your current data are unchanged. Resolve the error below, for example by freeing disk space or allowing access to the folder, then start Zaplex again. If the file is damaged, move it to another folder: Zaplex then starts without this data and leaves the file untouched.
 
     { $error }
 persistence-startup-error-close = Close Zaplex

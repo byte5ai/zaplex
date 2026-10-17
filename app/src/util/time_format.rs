@@ -76,44 +76,33 @@ pub fn human_readable_approx_duration(duration: Duration, sentence_case: bool) -
     let ms = duration.num_milliseconds() as f64;
     let years = ms / YEAR_TO_MS;
     if years >= 1. {
-        return truncated_quantity_with_unit(years, "year");
+        return crate::t!("time-format-years-ago", count = (years as i64));
     }
     let months = ms / MONTH_TO_MS;
     if months >= 1. {
-        return truncated_quantity_with_unit(months, "month");
+        return crate::t!("time-format-months-ago", count = (months as i64));
     }
     let weeks = ms / WEEK_TO_MS;
     if weeks >= 1. {
-        return truncated_quantity_with_unit(weeks, "week");
+        return crate::t!("time-format-weeks-ago", count = (weeks as i64));
     }
     let days = ms / DAY_TO_MS;
     if days >= 1. {
-        return truncated_quantity_with_unit(days, "day");
+        return crate::t!("time-format-days-ago", count = (days as i64));
     }
     let hours = ms / HOUR_TO_MS;
     if hours >= 1. {
-        return truncated_quantity_with_unit(hours, "hour");
+        return crate::t!("time-format-hours-ago", count = (hours as i64));
     }
     // Minutes and seconds are both abbreviated, so skip pluralization.
     let minutes = ms / MIN_TO_MS;
     if minutes >= 1. {
-        return format!("{} min ago", minutes as i32);
+        return crate::t!("time-format-minutes-ago", count = (minutes as i64));
     }
     if sentence_case {
-        "Just now".to_owned()
+        crate::t!("time-format-just-now-sentence-case")
     } else {
-        "just now".to_owned()
-    }
-}
-
-/// Provided a value and a unit, this will format the quantity as an integer number with the
-/// unit pluralized if the value is not 1.
-fn truncated_quantity_with_unit(num: f64, unit: &str) -> String {
-    let truncated_int = num as i32;
-    if truncated_int == 1 {
-        format!("{truncated_int} {unit} ago")
-    } else {
-        format!("{truncated_int} {unit}s ago")
+        crate::t!("time-format-just-now")
     }
 }
 

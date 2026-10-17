@@ -1271,6 +1271,19 @@ async fn remote_refresh_publishes_a_healthy_host_while_another_rpc_hangs() {
     servers[1].abort();
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn inventory_past_its_deadline_is_timed_out_not_temporarily_unavailable() {
+    assert_eq!(
+        failed_inventory_status(&ClientError::Timeout(REMOTE_REFRESH_TIMEOUT)),
+        AgentInventoryStatus::TimedOut
+    );
+    assert_eq!(
+        failed_inventory_status(&ClientError::Disconnected),
+        AgentInventoryStatus::Unavailable
+    );
+}
+
 #[test]
 fn local_scan_failure_cannot_become_an_authoritative_empty_inventory() {
     let remote = connected_root("remote", "host-a", None);

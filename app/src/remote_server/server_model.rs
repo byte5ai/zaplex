@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 use warp_core::channel::ChannelState;
 use warp_core::SessionId;
 #[cfg(unix)]
@@ -33,6 +34,8 @@ use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::FileId;
 
+#[cfg(unix)]
+use super::managed_fleet::{detached_retention, DetachedRetention, ForegroundAgent, KeepReason};
 use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
     write_file_response, Abort, AgentModelCapability, AgentModelDiscoveryResponse,
@@ -52,12 +55,21 @@ use super::proto::{
     AttachSession, BindAgentPty, CloseSession, DetachSession, ManagedLaunch,
     ManagedSessionExitInfo, ManagedSessionInfo, ManagedSessionLifecycleAction,
     ManagedSessionLifecycleRequest, MemoryMeasurement, MemoryMeasurementStatus, OpenSession,
-    ResizeSession, SessionAttached, SessionExited, SessionInfo, SessionInput, SessionList,
-    SessionNotice, SessionOpened, SessionOutput, SessionSize, SetBootstrapPreamble, UnbindAgentPty,
+    ResizeSession, SessionAttached, SessionExited, SessionInfo, SessionInput, SessionKeepReason,
+    SessionList, SessionNotice, SessionOpened, SessionOutput, SessionRetention, SessionSize,
+    SetBootstrapPreamble, UnbindAgentPty,
 };
+#[cfg(target_os = "linux")]
+use super::session_live::{read_session_live_state, RealPtyProcfs};
+#[cfg(unix)]
+use chrono::{DateTime, SecondsFormat};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
+use zaplex_cockpit::{
+    GuardrailSignal, ProcessSignalError, Provider, SessionSnapshot, TranscriptScanCache,
+};
+
+use super::agent_account::{AccountInventoryScan, LiveAgentScan};
 #[cfg(unix)]
 use zaplex_remote_session::agent_binding::{
     AgentIdentity, AgentPtyBindings, BindingError, BindingRequest,
@@ -100,14 +112,16 @@ pub const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10 
 /// consumer is disconnected before its outbox can grow beyond this budget.
 pub(super) const CONNECTION_OUTBOX_BUDGET_BYTES: usize = 8 * 1024 * 1024;
 
-/// Reap a session that has had no attached connection for this long. Detached
-/// sessions otherwise live indefinitely so a client can reconnect (laptop
-/// closed, etc.); this bounds memory against truly abandoned ones (Stage 4).
+/// Reap a session that has had no attached connection for this long, counted
+/// from its detach. Detached sessions otherwise live indefinitely so a client
+/// can reconnect (laptop closed, etc.); this bounds memory against truly
+/// abandoned ones (Stage 4). Exemptions: `managed_fleet::detached_retention`.
 #[cfg(unix)]
 const MAX_DETACHED_SESSION_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// Soft cap on total output-ring bytes across all of this host's sessions. When
-/// exceeded, the oldest *detached* sessions are reaped until back under it
-/// (live, attached sessions are never reaped).
+/// exceeded, the longest-detached sessions the retention policy lets expire are
+/// reaped until back under it (attached sessions and those kept by policy, such
+/// as a running agent, are never reaped, even if the cap stays exceeded).
 #[cfg(unix)]
 const HOST_RING_CAP_BYTES: usize = 256 * 1024 * 1024;
 /// How often the detached-session GC sweep runs.
@@ -1161,31 +1175,44 @@ impl FileChunkIoState {
     }
 }
 
+/// A completed account and history scan is served this long before a request
+/// starts a background refresh. Shorter than the client's 45 s reconcile
+/// interval, so every reconcile sees data at most one cycle old.
+const AGENT_ACCOUNT_SCAN_MAX_AGE: Duration = Duration::from_secs(30);
+/// How long a session inventory waits for this daemon's first account scan
+/// before answering with running sessions only. Keeps the reply well inside
+/// the 10 s deadline clients apply to it.
+const AGENT_ACCOUNT_SCAN_FIRST_WAIT: Duration = Duration::from_secs(2);
+/// Inventory scans at least this slow are logged with their measured duration.
+const SLOW_AGENT_SCAN: Duration = Duration::from_secs(2);
+
 struct CachedAgentInventoryScan {
     completed_at: Instant,
-    scan: super::agent_account::AccountInventoryScan,
+    scan: LiveAgentScan,
 }
 
+/// Live half of the agent inventory: account discovery plus running sessions.
+/// It never reads usage or dormant history, so it stays fast however large
+/// the transcript history grows.
 #[derive(Default)]
 struct AgentInventoryScanCache {
-    transcripts: zaplex_cockpit::TranscriptScanCache,
+    transcripts: TranscriptScanCache,
     latest: Option<CachedAgentInventoryScan>,
 }
 
 impl AgentInventoryScanCache {
-    fn scan(&mut self, requested_at: Instant) -> super::agent_account::AccountInventoryScan {
-        self.scan_with(requested_at, |transcripts| {
-            super::agent_account::scan_agent_accounts_with_cache(transcripts)
-        })
+    fn scan(&mut self, requested_at: Instant) -> LiveAgentScan {
+        self.scan_with(
+            requested_at,
+            super::agent_account::scan_live_agents_with_cache,
+        )
     }
 
     fn scan_with(
         &mut self,
         requested_at: Instant,
-        scanner: impl FnOnce(
-            &mut zaplex_cockpit::TranscriptScanCache,
-        ) -> super::agent_account::AccountInventoryScan,
-    ) -> super::agent_account::AccountInventoryScan {
+        scanner: impl FnOnce(&mut TranscriptScanCache) -> LiveAgentScan,
+    ) -> LiveAgentScan {
         if let Some(cached) = self
             .latest
             .as_ref()
@@ -1194,12 +1221,147 @@ impl AgentInventoryScanCache {
             return cached.scan.clone();
         }
 
+        let started = Instant::now();
         let scan = scanner(&mut self.transcripts);
+        let elapsed = started.elapsed();
+        if elapsed >= SLOW_AGENT_SCAN {
+            log::warn!("Daemon: live agent session scan took {elapsed:?}");
+        }
         self.latest = Some(CachedAgentInventoryScan {
             completed_at: Instant::now(),
             scan: scan.clone(),
         });
         scan
+    }
+}
+
+fn scan_live_agents(
+    cache: &Mutex<AgentInventoryScanCache>,
+    requested_at: Instant,
+) -> LiveAgentScan {
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| {
+            log::warn!("Daemon: agent inventory cache mutex was poisoned; recovering its state");
+            poisoned.into_inner()
+        })
+        .scan(requested_at)
+}
+
+struct CachedAgentAccountScan {
+    completed_at: Instant,
+    scan: AccountInventoryScan,
+}
+
+#[derive(Default)]
+struct AgentAccountScanState {
+    latest: Option<CachedAgentAccountScan>,
+    refreshing: bool,
+}
+
+/// Account and dormant-history half of the agent inventory. It aggregates
+/// usage over the whole transcript window and can take longer than a client
+/// deadline on a host with a large history. At most one scan runs at a time;
+/// its result serves every later request, including one whose own deadline
+/// ran out while it was scanning. Answering a request only takes the state
+/// lock, never the lock the scan holds.
+#[derive(Default)]
+struct AgentAccountScanCache {
+    state: Mutex<AgentAccountScanState>,
+    completed: Condvar,
+    transcripts: Mutex<TranscriptScanCache>,
+}
+
+impl AgentAccountScanCache {
+    fn lock_state(&self) -> MutexGuard<'_, AgentAccountScanState> {
+        self.state.lock().unwrap_or_else(|poisoned| {
+            log::warn!("Daemon: agent account scan state mutex was poisoned; recovering its state");
+            poisoned.into_inner()
+        })
+    }
+
+    /// Reserves the single refresh slot when no scan is running and the latest
+    /// completed scan is missing or older than [`AGENT_ACCOUNT_SCAN_MAX_AGE`].
+    fn claim_refresh(&self, now: Instant) -> bool {
+        let mut state = self.lock_state();
+        let current = state.latest.as_ref().is_some_and(|latest| {
+            now.saturating_duration_since(latest.completed_at) < AGENT_ACCOUNT_SCAN_MAX_AGE
+        });
+        if state.refreshing || current {
+            return false;
+        }
+        state.refreshing = true;
+        true
+    }
+
+    /// Runs a refresh reserved by [`Self::claim_refresh`], publishes its result
+    /// and wakes every request waiting for it.
+    fn refresh_with(
+        &self,
+        scanner: impl FnOnce(&mut TranscriptScanCache) -> AccountInventoryScan,
+    ) -> AccountInventoryScan {
+        let release = AgentAccountRefreshRelease(self);
+        let started = Instant::now();
+        let scan = scanner(&mut self.transcripts.lock().unwrap_or_else(|poisoned| {
+            log::warn!("Daemon: agent account scan cache mutex was poisoned; recovering its state");
+            poisoned.into_inner()
+        }));
+        let elapsed = started.elapsed();
+        if elapsed >= SLOW_AGENT_SCAN {
+            log::warn!(
+                "Daemon: agent account and history scan took {elapsed:?}; session inventories \
+                 meanwhile answer from the live scan"
+            );
+        }
+        self.lock_state().latest = Some(CachedAgentAccountScan {
+            completed_at: Instant::now(),
+            scan: scan.clone(),
+        });
+        drop(release);
+        scan
+    }
+
+    /// The latest completed scan, however old. Waits at most `wait` while the
+    /// first scan of this daemon is still running.
+    fn latest(&self, wait: Duration) -> Option<AccountInventoryScan> {
+        let (state, _) = self
+            .completed
+            .wait_timeout_while(self.lock_state(), wait, |state| {
+                state.latest.is_none() && state.refreshing
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        state.latest.as_ref().map(|latest| latest.scan.clone())
+    }
+
+    /// The latest completed scan, however old. Without one, waits for the
+    /// running scan, or scans on this thread when none is running.
+    fn latest_or_refresh_with(
+        &self,
+        scanner: impl FnOnce(&mut TranscriptScanCache) -> AccountInventoryScan,
+    ) -> AccountInventoryScan {
+        let mut state = self
+            .completed
+            .wait_while(self.lock_state(), |state| {
+                state.latest.is_none() && state.refreshing
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(latest) = state.latest.as_ref() {
+            return latest.scan.clone();
+        }
+        state.refreshing = true;
+        drop(state);
+        self.refresh_with(scanner)
+    }
+}
+
+/// Frees the refresh slot even when the scanner panics, so one failed scan
+/// cannot block every later refresh and every waiting request.
+struct AgentAccountRefreshRelease<'a>(&'a AgentAccountScanCache);
+
+impl Drop for AgentAccountRefreshRelease<'_> {
+    fn drop(&mut self) {
+        self.0.lock_state().refreshing = false;
+        self.0.completed.notify_all();
     }
 }
 
@@ -1583,11 +1745,14 @@ pub struct ServerModel {
     /// safe file-manager transfer protocol.
     #[cfg(unix)]
     safe_files: SafeFileWorker,
-    /// Single-flight inventory cache shared by all agent-inventory requests.
-    /// The mutex and every filesystem operation guarded by it run only on the
-    /// blocking pool. Requests that overlap reuse the scan that completed
-    /// after they were submitted instead of repeating the same walk.
+    /// Live-session inventory cache shared by every request that needs the
+    /// running agents. The mutex and every filesystem operation guarded by it
+    /// run only on the blocking pool. Requests that overlap reuse the scan that
+    /// completed after they were submitted instead of repeating the same walk.
     agent_inventory_scan_cache: Arc<Mutex<AgentInventoryScanCache>>,
+    /// Account capacity and dormant history. Scanned in the background with
+    /// its own locks, so a slow history never delays the live inventory.
+    agent_account_scan_cache: Arc<AgentAccountScanCache>,
     /// Opaque account ids from the latest daemon-local inventory mapped to
     /// provider config roots that never cross the wire.
     agent_account_routes: super::agent_account::AccountRouteCache,
@@ -1654,6 +1819,7 @@ impl ServerModel {
             #[cfg(unix)]
             safe_files: SafeFileWorker::new(),
             agent_inventory_scan_cache: Arc::new(Mutex::new(AgentInventoryScanCache::default())),
+            agent_account_scan_cache: Arc::new(AgentAccountScanCache::default()),
             agent_account_routes: Default::default(),
             #[cfg(test)]
             fresh_agent_account_routes_for_test: None,
@@ -1990,6 +2156,16 @@ impl ServerModel {
         for request_id in self.accepted_opens.remove_connection(conn_id) {
             if let Some(handle) = self.in_progress.remove(&request_id) {
                 handle.abort();
+            }
+        }
+        // Its sessions keep running detached; their age limit starts now.
+        #[cfg(unix)]
+        {
+            let now_ms = now_epoch_millis();
+            for session in self.sessions.values_mut() {
+                if session.attached == conn_id {
+                    session.detached_since_ms.get_or_insert(now_ms);
+                }
             }
         }
         self.executors
@@ -2993,14 +3169,8 @@ impl ServerModel {
             request_id.clone(),
             conn_id,
             move || {
-                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
-                    log::warn!(
-                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                    );
-                    poisoned.into_inner()
-                });
-                let current_sessions = collect_agent_sessions(&mut cache, requested_at);
-                drop(cache);
+                let current_sessions =
+                    collect_agent_sessions(scan_live_agents(&inventory_cache, requested_at));
                 execute_agent_process_signal_with(
                     req,
                     &current_sessions,
@@ -4129,16 +4299,26 @@ struct CollectedAgentSessions {
 }
 
 fn collect_agent_sessions_for_peer(
-    inventory_cache: &mut AgentInventoryScanCache,
-    requested_at: Instant,
+    scan: LiveAgentScan,
+    dormant: Vec<SessionSnapshot>,
     supports_account_routing: bool,
 ) -> CollectedAgentSessions {
     let now = chrono::Utc::now();
-    // Build account inventory and session inventory in one discovery pass. This
-    // keeps CLAUDE_CONFIG_DIR/CODEX_HOME and process-discovered plexed roots
+    // Running sessions and routes come from one discovery pass. This keeps
+    // CLAUDE_CONFIG_DIR/CODEX_HOME and process-discovered plexed roots
     // identical to the opaque route cache that assigns account ids.
-    let scan = inventory_cache.scan(requested_at);
     let mut snapshots = scan.sessions;
+    // Dormant rows may come from an older account scan; a session that runs
+    // again since then is reported once, as running.
+    let running: HashSet<(Provider, String)> = snapshots
+        .iter()
+        .map(|session| (session.provider, session.session_id.clone()))
+        .collect();
+    snapshots.extend(
+        dormant
+            .into_iter()
+            .filter(|session| !running.contains(&(session.provider, session.session_id.clone()))),
+    );
     if let Some(home) = dirs::home_dir() {
         snapshots.extend(zaplex_cockpit::antigravity_idle_sessions(
             &home,
@@ -4185,11 +4365,26 @@ fn collect_agent_sessions_for_peer(
     }
 }
 
-fn collect_agent_sessions(
-    inventory_cache: &mut AgentInventoryScanCache,
+fn collect_agent_sessions(scan: LiveAgentScan) -> Vec<super::proto::AgentSessionInfo> {
+    collect_agent_sessions_for_peer(scan, Vec::new(), false).sessions
+}
+
+/// One `ListAgentSessions` reply: running sessions from a live scan plus the
+/// dormant rows of the latest completed account scan. Only the first account
+/// scan of this daemon is waited for, and at most `first_wait`.
+fn agent_session_inventory(
+    inventory_cache: &Mutex<AgentInventoryScanCache>,
+    account_scan_cache: &AgentAccountScanCache,
     requested_at: Instant,
-) -> Vec<super::proto::AgentSessionInfo> {
-    collect_agent_sessions_for_peer(inventory_cache, requested_at, false).sessions
+    first_wait: Duration,
+    supports_account_routing: bool,
+) -> CollectedAgentSessions {
+    let live = scan_live_agents(inventory_cache, requested_at);
+    let dormant = account_scan_cache
+        .latest(first_wait)
+        .map(|scan| scan.dormant_sessions)
+        .unwrap_or_default();
+    collect_agent_sessions_for_peer(live, dormant, supports_account_routing)
 }
 
 const AGENT_MODEL_DISCOVERY_SCHEMA_VERSION: u32 = 1;
@@ -4363,6 +4558,7 @@ async fn discover_agent_models_on_daemon(
             provider_account_id: resolved.provider_account_id,
             // Set even for the provider's default account so the child cannot
             // inherit an unrelated daemon-level config-root override.
+            config_dir_pin: Some(config_dir.clone()),
             config_dir: Some(config_dir),
         },
         executable,
@@ -4420,9 +4616,32 @@ fn public_agent_model_discovery_error(provider: &str, error: &anyhow::Error) -> 
 /// Daemon-side agent-session inventory handler (Agent-Cockpit). Cross-platform:
 /// filesystem/transcript discovery, no PTY ownership required.
 impl ServerModel {
+    /// Starts one background account and history scan when the latest
+    /// completed one is missing or stale and none is running. Its result
+    /// serves every later request, whether or not the request that started
+    /// it is still waiting.
+    fn refresh_agent_accounts_in_background(&self, now: Instant, ctx: &mut ModelContext<Self>) {
+        if !self.agent_account_scan_cache.claim_refresh(now) {
+            return;
+        }
+        let cache = Arc::clone(&self.agent_account_scan_cache);
+        ctx.background_executor()
+            .spawn(async move {
+                let refresh = tokio::task::spawn_blocking(move || {
+                    cache.refresh_with(super::agent_account::scan_agent_accounts_with_cache);
+                });
+                if let Err(error) = refresh.await {
+                    log::error!("Daemon: background agent account scan failed: {error}");
+                }
+            })
+            .detach();
+    }
+
     /// Reports this host's secret-free AI-account inventory and refreshes the
     /// daemon-local opaque-id route cache. Discovery runs off the model thread;
-    /// no provider config path is included in the response.
+    /// no provider config path is included in the response. The latest
+    /// completed account scan answers at once; only a daemon that has not
+    /// completed one yet makes the request wait for it.
     fn handle_list_agent_accounts(
         &mut self,
         request_id: &RequestId,
@@ -4436,21 +4655,14 @@ impl ServerModel {
             }));
         }
         let request_id_for_response = request_id.clone();
-        let inventory_cache = Arc::clone(&self.agent_inventory_scan_cache);
-        let requested_at = Instant::now();
+        let account_scan_cache = Arc::clone(&self.agent_account_scan_cache);
+        self.refresh_agent_accounts_in_background(Instant::now(), ctx);
         let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
             conn_id,
             move || {
-                inventory_cache
-                    .lock()
-                    .unwrap_or_else(|poisoned| {
-                        log::warn!(
-                            "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                        );
-                        poisoned.into_inner()
-                    })
-                    .scan(requested_at)
+                account_scan_cache
+                    .latest_or_refresh_with(super::agent_account::scan_agent_accounts_with_cache)
             },
             move |me, scan, _ctx| {
                 me.agent_account_routes.replace(scan.routes);
@@ -4609,9 +4821,14 @@ impl ServerModel {
     /// registry read. Running it inline on the model thread
     /// would stall PTY/session servicing (`SessionInput`/`SessionOutput`/attach)
     /// for the duration of every cockpit inventory poll. The blocking helper
-    /// runs the complete scan, including the cache lock, on Tokio's blocking
-    /// pool and invokes `on_resolve` back on the model thread. Overlapping
-    /// requests reuse the scan that completed after they were submitted.
+    /// runs the scan, including the cache lock, on Tokio's blocking pool and
+    /// invokes `on_resolve` back on the model thread. Overlapping requests
+    /// reuse the scan that completed after they were submitted.
+    ///
+    /// Only the running sessions are scanned per request. Dormant history
+    /// comes from the latest background account scan, which on a host with a
+    /// large transcript history can take longer than the client deadline;
+    /// the reply never waits for it beyond [`AGENT_ACCOUNT_SCAN_FIRST_WAIT`].
     fn handle_list_agent_sessions(
         &mut self,
         request_id: &RequestId,
@@ -4622,18 +4839,20 @@ impl ServerModel {
         let conn_id_for_response = conn_id;
         let supports_account_routing = self.client_supports_agent_account_routing(conn_id);
         let inventory_cache = Arc::clone(&self.agent_inventory_scan_cache);
+        let account_scan_cache = Arc::clone(&self.agent_account_scan_cache);
         let requested_at = Instant::now();
+        self.refresh_agent_accounts_in_background(requested_at, ctx);
         let handle = self.spawn_blocking_request_handler(
             request_id.clone(),
             conn_id,
             move || {
-                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
-                    log::warn!(
-                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                    );
-                    poisoned.into_inner()
-                });
-                collect_agent_sessions_for_peer(&mut cache, requested_at, supports_account_routing)
+                agent_session_inventory(
+                    &inventory_cache,
+                    &account_scan_cache,
+                    requested_at,
+                    AGENT_ACCOUNT_SCAN_FIRST_WAIT,
+                    supports_account_routing,
+                )
             },
             move |me, collected, _ctx| {
                 let CollectedAgentSessions {
@@ -5038,6 +5257,90 @@ fn managed_lifecycle_response(
             .unwrap_or_default(),
         diagnostic_code: diagnostic_code.into(),
     }
+}
+
+/// Whether no registered connection receives the session's output.
+#[cfg(unix)]
+fn session_is_detached(
+    session: &super::session_host::Session,
+    connection_senders: &HashMap<ConnectionId, ConnectionOutbox>,
+) -> bool {
+    session.attached == uuid::Uuid::nil() || !connection_senders.contains_key(&session.attached)
+}
+
+/// The session's standing under the detached-session policy. A detached
+/// session without a recorded detach time counts as attached; callers record
+/// one first ([`ServerModel::stamp_unrecorded_detachments`]).
+#[cfg(unix)]
+fn session_retention(
+    session: &super::session_host::Session,
+    connection_senders: &HashMap<ConnectionId, ConnectionOutbox>,
+    max_detached_age_ms: u64,
+    foreground_agent: impl FnOnce() -> ForegroundAgent,
+) -> DetachedRetention {
+    let detached_since_ms = session_is_detached(session, connection_senders)
+        .then_some(session.detached_since_ms)
+        .flatten();
+    detached_retention(
+        session.managed.as_ref(),
+        detached_since_ms,
+        max_detached_age_ms,
+        foreground_agent,
+    )
+}
+
+/// Whether a coding agent holds the session's terminal foreground. Only Linux
+/// daemons can read it from `/proc`; elsewhere it stays unknown, which keeps
+/// detached sessions from being ended automatically.
+#[cfg(unix)]
+fn session_foreground_agent(shell_pid: u32) -> ForegroundAgent {
+    #[cfg(target_os = "linux")]
+    {
+        read_session_live_state(&RealPtyProcfs, shell_pid).foreground_agent
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = shell_pid;
+        ForegroundAgent::Unknown
+    }
+}
+
+#[cfg(unix)]
+fn session_retention_to_proto(retention: DetachedRetention) -> SessionRetention {
+    match retention {
+        DetachedRetention::Attached => SessionRetention::default(),
+        DetachedRetention::Kept {
+            detached_since_epoch_millis,
+            reason,
+        } => SessionRetention {
+            detached_since_epoch_millis,
+            expires_at_epoch_millis: 0,
+            keep_reason: match reason {
+                KeepReason::Managed => SessionKeepReason::Managed,
+                KeepReason::AgentRunning => SessionKeepReason::AgentRunning,
+                KeepReason::ForegroundUnknown => SessionKeepReason::ForegroundUnknown,
+            }
+            .into(),
+        },
+        DetachedRetention::Expires {
+            detached_since_epoch_millis,
+            expires_at_epoch_millis,
+        } => SessionRetention {
+            detached_since_epoch_millis,
+            expires_at_epoch_millis,
+            keep_reason: SessionKeepReason::Unspecified.into(),
+        },
+    }
+}
+
+/// UTC RFC 3339 form of a Unix epoch millis timestamp, for logs.
+#[cfg(unix)]
+fn format_epoch_millis(epoch_millis: u64) -> String {
+    i64::try_from(epoch_millis)
+        .ok()
+        .and_then(DateTime::from_timestamp_millis)
+        .map(|time| time.to_rfc3339_opts(SecondsFormat::Secs, true))
+        .unwrap_or_else(|| format!("{epoch_millis} epoch ms"))
 }
 
 #[cfg(unix)]
@@ -5461,15 +5764,9 @@ impl ServerModel {
             request_id.clone(),
             conn_id,
             move || {
-                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
-                    log::warn!(
-                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                    );
-                    poisoned.into_inner()
-                });
                 let collected = collect_agent_sessions_for_peer(
-                    &mut cache,
-                    requested_at,
+                    scan_live_agents(&inventory_cache, requested_at),
+                    Vec::new(),
                     supports_account_routing,
                 );
                 (collected.live_agents, collected.account_routes)
@@ -6183,6 +6480,7 @@ impl ServerModel {
                 cwd,
                 shell: shell.clone(),
                 last_attached_ms: now_epoch_millis(),
+                detached_since_ms: None,
                 preamble: super::session_host::BootstrapPreamble::new(
                     super::session_host::BOOTSTRAP_PREAMBLE_CAP_BYTES,
                 ),
@@ -6514,15 +6812,9 @@ impl ServerModel {
             request_id.clone(),
             conn_id,
             move || {
-                let mut cache = inventory_cache.lock().unwrap_or_else(|poisoned| {
-                    log::warn!(
-                        "Daemon: agent inventory cache mutex was poisoned; recovering its state"
-                    );
-                    poisoned.into_inner()
-                });
                 let collected = collect_agent_sessions_for_peer(
-                    &mut cache,
-                    requested_at,
+                    scan_live_agents(&inventory_cache, requested_at),
+                    Vec::new(),
                     supports_account_routing,
                 );
                 (collected.live_agents, collected.account_routes)
@@ -6718,6 +7010,7 @@ impl ServerModel {
         // Route live output to the reconnected connection from now on.
         session.attached = conn_id;
         session.last_attached_ms = now_epoch_millis();
+        session.detached_since_ms = None;
         let agent_binding = if client_supports_agent_pty_binding {
             self.agent_pty_bindings
                 .foreground_for_pty(&msg.session_id, generation)
@@ -6800,6 +7093,7 @@ impl ServerModel {
             // (which would silently cut off the new tab's live output).
             if session.attached == conn_id {
                 session.attached = uuid::Uuid::nil();
+                session.detached_since_ms = Some(now_epoch_millis());
                 log::info!(
                     "Daemon: detached session {} (still running)",
                     msg.session_id
@@ -6824,7 +7118,9 @@ impl ServerModel {
         conn_id: ConnectionId,
         ctx: &mut ModelContext<Self>,
     ) -> HandlerOutcome {
-        self.prune_recent_managed_exits(now_epoch_millis());
+        let now_ms = now_epoch_millis();
+        self.prune_recent_managed_exits(now_ms);
+        self.stamp_unrecorded_detachments(now_ms);
         let recent_managed_exits: Vec<_> = self
             .recent_managed_exits
             .iter()
@@ -6860,13 +7156,20 @@ impl ServerModel {
                     (None, Some(project)) => project,
                     (None, None) => String::new(),
                 };
+                // One reading, so a row never names an agent next to an expiry.
                 #[cfg(target_os = "linux")]
-                let live = Some(super::session_live::read_session_live_metadata(
-                    &super::session_live::RealPtyProcfs,
-                    session.child.id(),
-                ));
+                let (live, foreground_agent) = {
+                    let state = read_session_live_state(&RealPtyProcfs, session.child.id());
+                    (Some(state.metadata), state.foreground_agent)
+                };
                 #[cfg(not(target_os = "linux"))]
-                let live = None;
+                let (live, foreground_agent) = (None, ForegroundAgent::Unknown);
+                let retention = session_retention(
+                    session,
+                    &self.connection_senders,
+                    MAX_DETACHED_SESSION_AGE.as_millis() as u64,
+                    || foreground_agent,
+                );
                 (
                     SessionInfo {
                         session_id: id.clone(),
@@ -6884,6 +7187,7 @@ impl ServerModel {
                             .map(|managed| managed_session_info(managed, session.generation)),
                         process_memory: None,
                         live,
+                        retention: Some(session_retention_to_proto(retention)),
                     },
                     session
                         .managed
@@ -6965,81 +7269,91 @@ impl ServerModel {
         HandlerOutcome::Async(Some(handle))
     }
 
-    /// Memory governor (Stage 4): reaps detached sessions that are either idle
-    /// past `max_detached_age_ms`, or — if total ring bytes exceed
-    /// `host_ring_cap_bytes` — the oldest detached ones until back under the cap.
-    /// Never touches a session with a live attached connection. Returns the
-    /// number reaped. Wall-clock is passed in (`now_ms`) so it is unit-testable.
+    /// Memory governor (Stage 4): ends detached sessions whose age limit,
+    /// counted from their detach, has passed, and — if total ring bytes exceed
+    /// `host_ring_cap_bytes` — the longest-detached ones until back under the
+    /// cap. Whether a session may be ended at all is decided only by
+    /// [`detached_retention`]: never one with a live attached connection, a
+    /// managed one, or one whose foreground runs or might run a coding agent.
+    /// Returns the number reaped. Wall-clock (`now_ms`) and the foreground
+    /// reading by shell pid (`foreground_agent`) are passed in so it is
+    /// unit-testable.
     fn gc_sessions(
         &mut self,
         now_ms: u64,
         max_detached_age_ms: u64,
         host_ring_cap_bytes: usize,
+        foreground_agent: impl Fn(u32) -> ForegroundAgent,
     ) -> usize {
-        let mut reaped = 0;
-
-        // Phase 1: detached and idle longer than the max age.
-        let aged: Vec<String> = {
+        self.stamp_unrecorded_detachments(now_ms);
+        let retentions: Vec<(String, DetachedRetention)> = {
             let senders = &self.connection_senders;
             self.sessions
                 .iter()
-                .filter(|(_, s)| {
-                    let detached =
-                        s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached);
-                    super::managed_fleet::eligible_for_detached_age_gc(
-                        s.managed.as_ref(),
-                        detached,
-                        now_ms,
-                        s.last_attached_ms,
-                        max_detached_age_ms,
-                    )
+                .map(|(id, session)| {
+                    let retention =
+                        session_retention(session, senders, max_detached_age_ms, || {
+                            foreground_agent(session.child.id())
+                        });
+                    (id.clone(), retention)
                 })
-                .map(|(id, _)| id.clone())
                 .collect()
         };
-        for id in aged {
-            if let Some(mut session) = self.sessions.remove(&id) {
-                self.accepted_opens.retain_session_tombstone(&id);
-                self.agent_pty_bindings.remove_pty(&id, session.generation);
-                let _ = session.child.kill();
-                let _ = session.child.wait();
-                reaped += 1;
+        let mut reaped = 0;
+
+        // Phase 1: detached for longer than the age limit.
+        for (id, retention) in &retentions {
+            match *retention {
+                DetachedRetention::Expires {
+                    detached_since_epoch_millis,
+                    expires_at_epoch_millis,
+                } if expires_at_epoch_millis <= now_ms => {
+                    if self
+                        .reap_detached_session(id, detached_since_epoch_millis, now_ms, "age limit")
+                        .is_some()
+                    {
+                        reaped += 1;
+                    }
+                }
+                DetachedRetention::Expires { .. }
+                | DetachedRetention::Kept { .. }
+                | DetachedRetention::Attached => {}
             }
         }
 
-        // Phase 2: enforce the host-wide ring-bytes cap by reaping oldest
-        // detached sessions until back under it.
+        // Phase 2: enforce the host-wide ring-bytes cap by ending the
+        // longest-detached sessions the policy lets expire.
         let total: usize = self.sessions.values().map(|s| s.ring.len()).sum();
         if total > host_ring_cap_bytes {
             let mut over = total - host_ring_cap_bytes;
-            let mut candidates: Vec<(u64, String)> = {
-                let senders = &self.connection_senders;
-                self.sessions
-                    .iter()
-                    .filter(|(_, s)| {
-                        let detached =
-                            s.attached == uuid::Uuid::nil() || !senders.contains_key(&s.attached);
-                        super::managed_fleet::eligible_for_ring_pressure_gc(
-                            s.managed.as_ref(),
-                            detached,
-                        )
-                    })
-                    .map(|(id, s)| (s.last_attached_ms, id.clone()))
-                    .collect()
-            };
-            candidates.sort_by_key(|(age, _)| *age); // oldest (smallest ms) first
-            for (_, id) in candidates {
+            let mut candidates: Vec<(u64, &String)> = retentions
+                .iter()
+                .filter_map(|(id, retention)| match *retention {
+                    DetachedRetention::Expires {
+                        detached_since_epoch_millis,
+                        ..
+                    } => Some((detached_since_epoch_millis, id)),
+                    DetachedRetention::Kept { .. } | DetachedRetention::Attached => None,
+                })
+                .collect();
+            candidates.sort(); // earliest detach first
+            for (detached_since_ms, id) in candidates {
                 if over == 0 {
                     break;
                 }
-                if let Some(mut session) = self.sessions.remove(&id) {
-                    self.accepted_opens.retain_session_tombstone(&id);
-                    self.agent_pty_bindings.remove_pty(&id, session.generation);
-                    over = over.saturating_sub(session.ring.len());
-                    let _ = session.child.kill();
-                    let _ = session.child.wait();
+                if let Some(ring_bytes) =
+                    self.reap_detached_session(id, detached_since_ms, now_ms, "host ring cap")
+                {
+                    over = over.saturating_sub(ring_bytes);
                     reaped += 1;
                 }
+            }
+            if over > 0 {
+                log::warn!(
+                    "Daemon GC: output rings stay {over} bytes over the host cap; the remaining \
+                     sessions are attached or kept by policy (agent running, foreground unknown, \
+                     or managed)"
+                );
             }
         }
 
@@ -7047,6 +7361,43 @@ impl ServerModel {
             log::info!("Daemon GC: reaped {reaped} detached session(s)");
         }
         reaped
+    }
+
+    /// Records `now_ms` as the detach time of every detached session without
+    /// one (an open that completed after its connection was gone), so its age
+    /// limit counts from the first time the daemon sees it without a client.
+    fn stamp_unrecorded_detachments(&mut self, now_ms: u64) {
+        let senders = &self.connection_senders;
+        for session in self.sessions.values_mut() {
+            if session_is_detached(session, senders) {
+                session.detached_since_ms.get_or_insert(now_ms);
+            }
+        }
+    }
+
+    /// Ends one detached session for the GC and logs it with its detach time
+    /// and `reason`. Returns the ring bytes it held, or `None` if it no longer
+    /// exists.
+    fn reap_detached_session(
+        &mut self,
+        id: &str,
+        detached_since_ms: u64,
+        now_ms: u64,
+        reason: &str,
+    ) -> Option<usize> {
+        let mut session = self.sessions.remove(id)?;
+        self.accepted_opens.retain_session_tombstone(id);
+        self.agent_pty_bindings.remove_pty(id, session.generation);
+        let ring_bytes = session.ring.len();
+        log::info!(
+            "Daemon GC: ending session {id} ({reason}); detached since {} ({} min ago), \
+             {ring_bytes} ring bytes",
+            format_epoch_millis(detached_since_ms),
+            now_ms.saturating_sub(detached_since_ms) / 60_000,
+        );
+        let _ = session.child.kill();
+        let _ = session.child.wait();
+        Some(ring_bytes)
     }
 
     /// Arm the shutdown grace timer if the daemon is now fully idle: no
@@ -7085,6 +7436,7 @@ impl ServerModel {
                                 now,
                                 MAX_DETACHED_SESSION_AGE.as_millis() as u64,
                                 HOST_RING_CAP_BYTES,
+                                session_foreground_agent,
                             );
                             // GC may have reaped the last session. If no proxies
                             // are connected either, the daemon is now fully idle —

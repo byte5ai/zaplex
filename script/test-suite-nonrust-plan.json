@@ -3,7 +3,7 @@
   "scope": "Linux build-free PR test suites plus measurement-adapter regressions; policy guards separate; each suite once per acceptance revision",
   "inventory_source_hashes": {
     ".github/actions/static-pr-checks/action.yml": "429e0d823f85756e20349c434f5de0d28591550d2f6ac95291557039d155578a",
-    ".github/workflows/pr-check.yml": "818d38e01642b3f3251689bed05302d7236e69b1c013cc08ed9d3a8439b0d0d8"
+    ".github/workflows/pr-check.yml": "823f22f8e39436c2fdd4cd4ce662f4ff27499f44ef70557905dc032a019219df"
   },
   "required_tools": [
     "bash",

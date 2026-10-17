@@ -15,7 +15,7 @@ use crate::proto::{
     AgentProcessSignalRequest, AgentProcessSignalResponse, AgentProcessSignalStatus,
     AgentPtyBindingResponse, AgentSessionIdentity, AgentSessionList, AgentTranscriptResponse,
     AttachSession, Authenticate, BindAgentPty, BufferEdit, ClientMessage, CloseBuffer,
-    CreateDirectory, CreateDirectoryResponse, DeleteFile, DetachSession,
+    CloseSession, CreateDirectory, CreateDirectoryResponse, DeleteFile, DetachSession,
     DiscoverAgentModelsRequest, ErrorCode, HostExec, HostExecResult, Initialize,
     InitializeResponse, ListAgentAccounts, ListAgentSessions, ListDirectory, ListDirectoryResponse,
     ListMultiplexerSessions, ListSessions, LoadRepoMetadataDirectoryResponse, ManagedLaunch,
@@ -1344,6 +1344,21 @@ impl RemoteServerClient {
         };
         self.outbound_tx.try_send(msg).map_err(|e| {
             log::error!("Failed to enqueue session detach: {e}");
+            ClientError::Disconnected
+        })
+    }
+
+    /// Ends a session for good: the daemon kills its shell and everything
+    /// running in it (notification). Managed sessions refuse it.
+    pub fn send_close_session(&self, session_id: String) -> Result<(), ClientError> {
+        let msg = ClientMessage {
+            request_id: String::new(),
+            message: Some(client_message::Message::CloseSession(CloseSession {
+                session_id,
+            })),
+        };
+        self.outbound_tx.try_send(msg).map_err(|e| {
+            log::error!("Failed to enqueue session close: {e}");
             ClientError::Disconnected
         })
     }

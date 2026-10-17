@@ -688,9 +688,9 @@ fn account_document(
             "unknown".to_string()
         },
         usage: usage_available.then(|| UsageDocument {
-            block_5h: window_document(usage.block5h),
-            today: window_document(usage.today),
-            week: window_document(usage.week),
+            block_5h: window_document(&usage.block5h),
+            today: window_document(&usage.today),
+            week: window_document(&usage.week),
             reset_5h: usage.reset5h,
             reset_week: usage.reset_week,
             heat_5h: usage.heat,
@@ -959,7 +959,10 @@ fn host_state(
         (HostAvailability::Available, AgentInventoryStatus::Pending) => "loading",
         (HostAvailability::Available, AgentInventoryStatus::Ready) => "connected",
         (HostAvailability::Available, AgentInventoryStatus::Unsupported) => "unsupported",
-        (HostAvailability::Available, AgentInventoryStatus::Unavailable) => "unavailable",
+        (
+            HostAvailability::Available,
+            AgentInventoryStatus::Unavailable | AgentInventoryStatus::TimedOut,
+        ) => "unavailable",
     }
 }
 
@@ -1027,7 +1030,7 @@ fn session_document(
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn window_document(window: WindowTotals) -> UsageWindowDocument {
+fn window_document(window: &WindowTotals) -> UsageWindowDocument {
     UsageWindowDocument {
         input_tokens: window.input,
         output_tokens: window.output,

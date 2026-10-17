@@ -1,233 +1,137 @@
-use crate::terminal::color::List;
-use crate::terminal::event::UserBlockCompleted;
-use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::block::{BlockSize, SerializedBlock};
-use crate::terminal::shell::ShellType;
-use crate::terminal::BlockPadding;
-use crate::theme::WarpTheme;
+use warpui::App;
 
 use super::*;
 
-impl PtyController {
-    /// Flushes PTY writes by sending a "dummy" test write, and blocking until the test write is
-    /// handled.
-    ///
-    /// When the "dummy write" is handled, an event is emitted through a channel. This method
-    /// blocks on receiving this event through the channel. Since async writes are handled in order
-    /// that they are queued, this ensures all queued writes have been handled/"flushed".
-    fn flush_pty_writes(&mut self) {
-        let (tx, rx) = futures::channel::oneshot::channel();
-        let _ = self.queue_async_write(AsyncPtyWrite {
-            bytes: vec![],
-            delay: None,
-            on_write_fn: Some(Box::new(move || {
-                let _ = tx.send(());
-            })),
-        });
-        let _ = warpui::r#async::block_on(rx);
-    }
+const GENERATOR: &str = "warp_run_generator_command 1700000000000001 'compgen -c'";
+
+/// A PtyController whose line editor is active, as after a shell prompt.
+fn controller_at_prompt(
+    app: &mut App,
+) -> (
+    ModelHandle<PtyController<Sender<Message>>>,
+    Receiver<Message>,
+    Arc<FairMutex<TerminalModel>>,
+) {
+    let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
+    let sessions = app.add_model(|_| Sessions::new_for_test());
+    let (_model_events_tx, model_events_rx) = async_channel::unbounded();
+    let model_events =
+        app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
+    let line_editor_status =
+        app.add_model(|ctx| LineEditorStatus::new(model_events.clone(), sessions.clone(), ctx));
+    let (_executor_command_tx, executor_command_rx) = async_channel::unbounded();
+    let (event_loop_tx, event_loop_rx) = async_channel::unbounded();
+    let controller_model = terminal_model.clone();
+    let controller = app.add_model(|ctx| {
+        PtyController::new(
+            event_loop_tx,
+            model_events,
+            line_editor_status.clone(),
+            sessions,
+            executor_command_rx,
+            controller_model,
+            ctx,
+        )
+    });
+    line_editor_status.update(app, |line_editor_status, ctx| {
+        line_editor_status.mark_active_for_test(ctx);
+    });
+    (controller, event_loop_rx, terminal_model)
 }
 
-fn terminal_model(background_executor: Arc<Background>) -> Arc<FairMutex<TerminalModel>> {
-    Arc::new(FairMutex::new(TerminalModel::new_for_test(
-        // This BlockSize contains arbitrary values.
-        BlockSize {
-            block_padding: BlockPadding {
-                padding_top: 0.5,
-                command_padding_top: 0.5,
-                middle: 0.5,
-                bottom: 0.5,
-            },
-            size: SizeInfo::new_for_test_with_width_and_height(7., 10.5),
-            max_block_scroll_limit: 1000,
-            prompt_height: 1.,
-        },
-        List::from(&WarpTheme::default().into()),
-        ChannelEventListener::new_for_test(),
-        background_executor,
-        false,
-        None,
-        false,
-        None,
-    )))
+fn queue_generator(
+    controller: &ModelHandle<PtyController<Sender<Message>>>,
+    cancel_tx: Sender<InBandCommandCancelledEvent>,
+    app: &mut App,
+) {
+    controller.update(app, |controller, ctx| {
+        controller.queue_in_band_command(
+            GENERATOR,
+            ShellType::Bash,
+            "1700000000000001".to_owned(),
+            cancel_tx,
+            ctx,
+        );
+    });
 }
 
-fn assert_input_matches(message: &Message, expected_bytes: Vec<u8>) {
-    assert!(matches!(message, Message::Input(bytes) if bytes.to_vec() == expected_bytes));
-}
-
-/// Returns a vector containing the bytes we expect to be written to the PTY to execute the given
-/// `command` in the given `Shell`.
-fn expected_command_bytes(command: &str, shell: &Shell) -> Vec<u8> {
-    let mut bytes = shell.shell_type().kill_buffer_bytes().to_vec();
-    bytes.extend(command.as_bytes().to_vec());
-    bytes.extend(shell.shell_type().execute_command_bytes());
-    bytes
-}
-
-#[test]
-fn test_pty_controller_writes_user_command() {
-    let (event_loop_tx, event_loop_rx) = mio_extras::channel::channel();
-    let background_executor = Arc::new(Background::default());
-    let mut controller = PtyController::new(
-        event_loop_tx,
-        background_executor.clone(),
-        terminal_model(background_executor),
-    );
-
-    let shell = Shell::new(ShellType::Zsh, None, None, Default::default(), None);
-    assert!(controller.write_user_command("echo foo", &shell).is_ok());
-    controller.flush_pty_writes();
-
-    let message = event_loop_rx
-        .try_recv()
-        .expect("PtyController should have sent write.");
-    assert!(
-        matches!(message, Message::Input(bytes) if bytes.to_vec() == expected_command_bytes("echo foo", &shell))
-    );
-}
-
-#[test]
-fn test_pty_controller_writes_in_band_command() {
-    let (event_loop_tx, event_loop_rx) = mio_extras::channel::channel();
-    let background_executor = Arc::new(Background::default());
-    let mut controller = PtyController::new(
-        event_loop_tx,
-        background_executor.clone(),
-        terminal_model(background_executor),
-    );
-
-    let shell = Shell::new(ShellType::Zsh, None, None, Default::default(), None);
-    assert!(controller.write_in_band_command("echo foo", &shell).is_ok());
-    controller.flush_pty_writes();
-
-    let message = event_loop_rx
-        .try_recv()
-        .expect("PtyController should have sent write.");
-    assert_input_matches(&message, expected_command_bytes("echo foo", &shell));
-}
-
-#[test]
-fn test_pty_controller_updates_block_list_when_writing_in_band_command() {
-    let (event_loop_tx, _) = mio_extras::channel::channel();
-    let background_executor = Arc::new(Background::default());
-    let terminal_model = terminal_model(background_executor.clone());
-    let mut controller =
-        PtyController::new(event_loop_tx, background_executor, terminal_model.clone());
-
-    let shell = Shell::new(ShellType::Zsh, None, None, Default::default(), None);
-    assert!(controller.write_in_band_command("echo foo", &shell).is_ok());
-    controller.flush_pty_writes();
-
-    assert!(terminal_model
-        .lock()
+fn is_in_band_block_marked(terminal_model: &Arc<FairMutex<TerminalModel>>) -> bool {
+    let terminal_model = terminal_model.lock();
+    terminal_model
         .block_list()
-        .is_writing_or_executing_in_band_command());
+        .is_writing_or_executing_in_band_command()
+        || terminal_model
+            .block_list()
+            .active_block()
+            .is_in_band_command_block()
 }
 
+/// #530: a replayed prompt makes the line editor look active while the daemon
+/// event loop still rejects input. The generator must wait in the queue
+/// without marking a block, and run once the remote phase is `Ready`.
 #[test]
-fn test_pty_controller_writes_input_buffer_sequence_after_block_completed() {
-    let (event_loop_tx, event_loop_rx) = mio_extras::channel::channel();
-    let background_executor = Arc::new(Background::default());
+fn in_band_command_stays_queued_until_remote_input_is_ready() {
+    App::test((), |mut app| async move {
+        let (controller, event_loop_rx, terminal_model) = controller_at_prompt(&mut app);
+        let (cancel_tx, _cancel_rx) = async_channel::unbounded();
+        controller.update(&mut app, |controller, ctx| {
+            controller.set_remote_input_phase(RemoteInputPhase::Transport, ctx);
+        });
+        queue_generator(&controller, cancel_tx, &mut app);
 
-    let mut controller = PtyController::new(
-        event_loop_tx,
-        background_executor.clone(),
-        terminal_model(background_executor),
-    );
-    controller.set_state_after_block_completed(
-        &BlockType::User(UserBlockCompleted {
-            serialized_block: SerializedBlock::new_for_test("echo foo".as_bytes().to_vec(), vec![])
-                .into(),
-            command: "echo foo".to_owned(),
-            output_truncated: "".to_owned(),
-            started_at: None,
-            num_output_lines: 0,
-            num_output_lines_truncated: 0,
-            shell_type: None,
-        }),
-        true,
-    );
-    controller.flush_pty_writes();
+        for phase in [
+            RemoteInputPhase::Transport,
+            RemoteInputPhase::Attach,
+            RemoteInputPhase::Replay,
+        ] {
+            controller.update(&mut app, |controller, ctx| {
+                controller.set_remote_input_phase(phase, ctx);
+            });
+            assert!(
+                event_loop_rx.try_recv().is_err(),
+                "nothing may be written in the {phase:?} phase"
+            );
+            assert!(
+                !is_in_band_block_marked(&terminal_model),
+                "no block may be marked in-band in the {phase:?} phase"
+            );
+        }
 
-    let message = event_loop_rx
-        .try_recv()
-        .expect("PtyController should have sent write.");
-    assert_input_matches(&message, vec![escape_sequences::C0::ESC, b'i']);
+        controller.update(&mut app, |controller, ctx| {
+            controller.set_remote_input_phase(RemoteInputPhase::Ready, ctx);
+        });
+        let Ok(Message::InBandCommand(command)) = event_loop_rx.try_recv() else {
+            panic!("the held generator must be written as an in-band command once input is ready");
+        };
+        assert!(
+            String::from_utf8_lossy(&command.bytes).contains(GENERATOR),
+            "the written bytes run the held generator"
+        );
+        assert!(
+            event_loop_rx.try_recv().is_err(),
+            "it is written exactly once"
+        );
+        assert!(
+            !is_in_band_block_marked(&terminal_model),
+            "the event loop, not the controller, marks the block on delivery"
+        );
+    });
 }
 
+/// A PTY without a remote input phase keeps writing generators right away and
+/// marks their block before the bytes leave the controller.
 #[test]
-fn test_pty_controller_writes_in_band_command_after_input_buffer_sequence() {
-    let (event_loop_tx, event_loop_rx) = mio_extras::channel::channel();
-    let background_executor = Arc::new(Background::default());
-    let mut controller = PtyController::new(
-        event_loop_tx,
-        background_executor.clone(),
-        terminal_model(background_executor),
-    );
+fn in_band_command_without_remote_phase_is_written_and_marked_immediately() {
+    App::test((), |mut app| async move {
+        let (controller, event_loop_rx, terminal_model) = controller_at_prompt(&mut app);
+        let (cancel_tx, _cancel_rx) = async_channel::unbounded();
 
-    let shell = Shell::new(ShellType::Zsh, None, None, Default::default(), None);
-    controller.set_state_after_block_completed(
-        &BlockType::User(UserBlockCompleted {
-            serialized_block: SerializedBlock::new_for_test("echo foo".as_bytes().to_vec(), vec![])
-                .into(),
-            command: "echo foo".to_owned(),
-            output_truncated: "".to_owned(),
-            started_at: None,
-            num_output_lines: 0,
-            num_output_lines_truncated: 0,
-            shell_type: None,
-        }),
-        true,
-    );
-    assert!(controller.write_in_band_command("echo foo", &shell).is_ok());
-    controller.flush_pty_writes();
+        queue_generator(&controller, cancel_tx, &mut app);
 
-    let mut messages = vec![];
-    while let Ok(message) = event_loop_rx.try_recv() {
-        messages.push(message);
-    }
-    assert_eq!(messages.len(), 2);
-    assert_input_matches(&messages[0], vec![escape_sequences::C0::ESC, b'i']);
-
-    assert_input_matches(&messages[1], expected_command_bytes("echo foo", &shell));
-}
-
-#[test]
-fn test_pty_controller_cancels_async_writes_upon_user_command() {
-    let (event_loop_tx, event_loop_rx) = mio_extras::channel::channel();
-    let background_executor = Arc::new(Background::default());
-    let mut controller = PtyController::new(
-        event_loop_tx,
-        background_executor.clone(),
-        terminal_model(background_executor),
-    );
-
-    controller.set_state_after_block_completed(
-        &BlockType::User(UserBlockCompleted {
-            serialized_block: SerializedBlock::new_for_test("echo foo".as_bytes().to_vec(), vec![])
-                .into(),
-            command: "echo foo".to_owned(),
-            output_truncated: "".to_owned(),
-            started_at: None,
-            num_output_lines: 0,
-            num_output_lines_truncated: 0,
-            shell_type: None,
-        }),
-        true,
-    );
-    let shell = Shell::new(ShellType::Zsh, None, None, Default::default(), None);
-    // Writing this command should cancel writing the input buffer escape sequence, which is
-    // written after a 50ms delay. Since only ~25 ms has passed the write should not have
-    // occurred yet.
-    assert!(controller.write_user_command("echo foo", &shell).is_ok());
-    controller.flush_pty_writes();
-
-    let mut messages = vec![];
-    while let Ok(message) = event_loop_rx.try_recv() {
-        messages.push(message);
-    }
-    assert_eq!(messages.len(), 1);
-
-    assert_input_matches(&messages[0], expected_command_bytes("echo foo", &shell));
+        let Ok(Message::Input(bytes)) = event_loop_rx.try_recv() else {
+            panic!("a PTY that accepts every write receives the generator as plain input");
+        };
+        assert!(String::from_utf8_lossy(&bytes).contains(GENERATOR));
+        assert!(is_in_band_block_marked(&terminal_model));
+    });
 }

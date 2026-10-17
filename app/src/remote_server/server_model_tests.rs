@@ -7,6 +7,7 @@ use std::sync::{
     mpsc, Arc, Mutex,
 };
 
+use super::super::agent_account::{AccountInventoryScan, LiveAgentScan};
 use super::super::proto::{
     client_message, list_directory_response, read_file_chunk_response, resolve_path_response,
     server_message, write_file_chunk_response, Abort, AgentProcessSignal,
@@ -22,12 +23,13 @@ use super::super::server_buffer_tracker::ServerBufferTracker;
 #[cfg(feature = "local_fs")]
 use super::collect_directory_entries;
 use super::{
-    agent_model_discovery_response, execute_agent_process_signal_with,
-    prepare_agent_model_discovery, public_agent_model_discovery_error,
-    server_features_with_runtime_support, AgentInventoryScanCache, AgentModelDiscoveryLimiter,
+    agent_model_discovery_response, agent_session_inventory, collect_agent_sessions_for_peer,
+    execute_agent_process_signal_with, prepare_agent_model_discovery,
+    public_agent_model_discovery_error, server_features_with_runtime_support,
+    AgentAccountScanCache, AgentInventoryScanCache, AgentModelDiscoveryLimiter,
     AgentModelDiscoveryPreparationError, AgentTranscriptReadPermit, ConnectionOutbox,
-    PendingFileOps, ServerModel, MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES,
-    MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
+    PendingFileOps, ServerModel, AGENT_ACCOUNT_SCAN_MAX_AGE,
+    MAX_CONCURRENT_AGENT_MODEL_DISCOVERIES, MAX_CONCURRENT_AGENT_TRANSCRIPT_READS,
 };
 #[cfg(unix)]
 use super::{
@@ -40,7 +42,9 @@ use super::{
     FileChunkIoBackend, FileChunkIoState, StdFileChunkIoBackend, MAX_CONCURRENT_FILE_CHUNK_IO,
     MAX_FILE_CHUNK_BYTES, MAX_PENDING_FILE_CHUNK_IO,
 };
-use zaplex_cockpit::{GuardrailSignal, ProcessSignalError};
+use zaplex_cockpit::{
+    GuardrailSignal, ProcessSignalError, Provider, SessionSnapshot, SessionState,
+};
 #[cfg(unix)]
 use zaplex_remote_session::types::FEATURE_MULTIPLEXER_INVENTORY_V1;
 use zaplex_remote_session::types::{
@@ -82,6 +86,7 @@ fn test_model() -> ServerModel {
         agent_inventory_scan_cache: std::sync::Arc::new(std::sync::Mutex::new(
             super::AgentInventoryScanCache::default(),
         )),
+        agent_account_scan_cache: std::sync::Arc::new(AgentAccountScanCache::default()),
         agent_account_routes: Default::default(),
         fresh_agent_account_routes_for_test: None,
         #[cfg(unix)]
@@ -869,22 +874,245 @@ fn overlapping_inventory_requests_reuse_the_completed_scan() {
     let mut cache = AgentInventoryScanCache::default();
     let requested_at = std::time::Instant::now();
     let mut scan_count = 0;
-    let make_scan = || super::super::agent_account::AccountInventoryScan {
-        inventory: super::super::proto::AgentAccountInventory::default(),
-        routes: HashMap::new(),
-        sessions: Vec::new(),
-    };
 
     cache.scan_with(requested_at, |_| {
         scan_count += 1;
-        make_scan()
+        live_scan(&[])
     });
     cache.scan_with(requested_at, |_| {
         scan_count += 1;
-        make_scan()
+        live_scan(&[])
     });
 
     assert_eq!(scan_count, 1);
+}
+
+fn agent_snapshot(session_id: &str, state: SessionState) -> SessionSnapshot {
+    SessionSnapshot {
+        session_id: session_id.to_string(),
+        cwd: "/work/project".to_string(),
+        name: String::new(),
+        state,
+        provider: Provider::Codex,
+        model: String::new(),
+        effort: None,
+        ctx_tokens: 0,
+        project_root: "/work/project".to_string(),
+        repo_root: "/work/project".to_string(),
+        project_name: "project".to_string(),
+        branch: None,
+        worktree: None,
+        config_dir: None,
+        account_email: None,
+        account_id: None,
+        process_fingerprint: None,
+        pty_session_id: None,
+        pty_session_generation: None,
+        pty_foreground: false,
+        task_state: None,
+        last_activity: chrono::Utc::now(),
+        pid: 0,
+        awaiting_input: false,
+        turn_id: None,
+        attention: None,
+    }
+}
+
+fn live_scan(running: &[&str]) -> LiveAgentScan {
+    LiveAgentScan {
+        routes: HashMap::new(),
+        sessions: running
+            .iter()
+            .map(|session_id| agent_snapshot(session_id, SessionState::Active))
+            .collect(),
+    }
+}
+
+fn account_scan(dormant: &[&str]) -> AccountInventoryScan {
+    AccountInventoryScan {
+        inventory: super::super::proto::AgentAccountInventory::default(),
+        routes: HashMap::new(),
+        dormant_sessions: dormant
+            .iter()
+            .map(|session_id| agent_snapshot(session_id, SessionState::Idle))
+            .collect(),
+    }
+}
+
+/// Starts an account scan at `now` that holds its scan lock until released,
+/// like a scan over a transcript history larger than any client deadline.
+fn start_blocked_account_scan(
+    cache: &std::sync::Arc<AgentAccountScanCache>,
+    now: std::time::Instant,
+) -> (
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<AccountInventoryScan>,
+) {
+    assert!(cache.claim_refresh(now));
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let cache = std::sync::Arc::clone(cache);
+    let scanning = std::thread::spawn(move || {
+        cache.refresh_with(|_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            account_scan(&["dormant-after-release"])
+        })
+    });
+    started_rx.recv().unwrap();
+    (release_tx, scanning)
+}
+
+/// Answers one session inventory on its own thread, so a reply that waits
+/// for the account scan fails the test instead of hanging it.
+fn session_inventory_within(
+    inventory_cache: &std::sync::Arc<std::sync::Mutex<AgentInventoryScanCache>>,
+    account_scan_cache: &std::sync::Arc<AgentAccountScanCache>,
+    requested_at: std::time::Instant,
+    deadline: std::time::Duration,
+) -> Option<Vec<AgentSessionInfo>> {
+    let (answered_tx, answered_rx) = std::sync::mpsc::channel();
+    let inventory_cache = std::sync::Arc::clone(inventory_cache);
+    let account_scan_cache = std::sync::Arc::clone(account_scan_cache);
+    std::thread::spawn(move || {
+        let collected = agent_session_inventory(
+            &inventory_cache,
+            &account_scan_cache,
+            requested_at,
+            std::time::Duration::from_millis(20),
+            false,
+        );
+        let _ = answered_tx.send(collected.sessions);
+    });
+    answered_rx.recv_timeout(deadline).ok()
+}
+
+#[test]
+fn slow_account_scan_blocks_neither_session_inventory_nor_account_listing() {
+    let inventory_cache =
+        std::sync::Arc::new(std::sync::Mutex::new(AgentInventoryScanCache::default()));
+    let account_scan_cache = std::sync::Arc::new(AgentAccountScanCache::default());
+    let requested_at = std::time::Instant::now();
+    // The live scan of these requests, already taken: a reply must not need more.
+    inventory_cache
+        .lock()
+        .unwrap()
+        .scan_with(requested_at, |_| live_scan(&["running"]));
+    let deadline = std::time::Duration::from_secs(1);
+
+    // The daemon's first account scan is still running: running sessions answer.
+    let (release, scanning) = start_blocked_account_scan(&account_scan_cache, requested_at);
+    let sessions = session_inventory_within(
+        &inventory_cache,
+        &account_scan_cache,
+        requested_at,
+        deadline,
+    )
+    .expect("the session inventory must answer while the first account scan runs");
+    assert!(sessions
+        .iter()
+        .any(|session| session.session_id == "running" && session.state == "active"));
+    release.send(()).unwrap();
+    scanning.join().unwrap();
+
+    // A stale result starts the next refresh, which then holds its scan lock.
+    let stale = std::time::Instant::now() + AGENT_ACCOUNT_SCAN_MAX_AGE;
+    let (release, scanning) = start_blocked_account_scan(&account_scan_cache, stale);
+    let (listed_tx, listed_rx) = std::sync::mpsc::channel();
+    let listing_cache = std::sync::Arc::clone(&account_scan_cache);
+    std::thread::spawn(move || {
+        let _ = listed_tx.send(listing_cache.latest_or_refresh_with(|_| {
+            panic!("a completed account scan must answer the listing")
+        }));
+    });
+    let listed = listed_rx
+        .recv_timeout(deadline)
+        .expect("account listing must not wait for the running scan");
+    assert_eq!(
+        listed.dormant_sessions[0].session_id,
+        "dormant-after-release"
+    );
+    let sessions = session_inventory_within(
+        &inventory_cache,
+        &account_scan_cache,
+        requested_at,
+        deadline,
+    )
+    .expect("session inventory must not wait for the running scan");
+    assert!(sessions
+        .iter()
+        .any(|session| session.session_id == "running"));
+    assert!(sessions
+        .iter()
+        .any(|session| session.session_id == "dormant-after-release" && session.state == "idle"));
+
+    release.send(()).unwrap();
+    scanning.join().unwrap();
+}
+
+#[test]
+fn timed_out_scan_result_is_reused_by_next_cycle() {
+    let cache = AgentAccountScanCache::default();
+    let mut scans = 0;
+    // A cycle's request started this scan and stopped waiting before it ended.
+    assert!(cache.claim_refresh(std::time::Instant::now()));
+    cache.refresh_with(|_| {
+        scans += 1;
+        account_scan(&["dormant"])
+    });
+
+    // The next cycle arrives after the scan completed and uses it.
+    let next_cycle = std::time::Instant::now();
+    assert!(
+        !cache.claim_refresh(next_cycle),
+        "a completed scan must not be restarted by the next cycle"
+    );
+    let reused = cache.latest_or_refresh_with(|_| {
+        scans += 1;
+        account_scan(&["rescanned"])
+    });
+
+    assert_eq!(scans, 1);
+    assert_eq!(reused.dormant_sessions[0].session_id, "dormant");
+}
+
+#[test]
+fn dormant_history_does_not_repeat_a_running_session() {
+    let collected = collect_agent_sessions_for_peer(
+        live_scan(&["resumed"]),
+        vec![
+            agent_snapshot("resumed", SessionState::Idle),
+            agent_snapshot("dormant", SessionState::Idle),
+        ],
+        false,
+    );
+
+    let resumed: Vec<&AgentSessionInfo> = collected
+        .sessions
+        .iter()
+        .filter(|session| session.session_id == "resumed")
+        .collect();
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].state, "active");
+    assert!(collected
+        .sessions
+        .iter()
+        .any(|session| session.session_id == "dormant" && session.state == "idle"));
+}
+
+#[test]
+fn failed_account_scan_releases_the_refresh_slot() {
+    let cache = AgentAccountScanCache::default();
+    assert!(cache.claim_refresh(std::time::Instant::now()));
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cache.refresh_with(|_| panic!("account scan failed"));
+    }));
+    assert!(failed.is_err());
+
+    // The slot is free again: later requests neither wait forever nor stop refreshing.
+    assert!(cache.claim_refresh(std::time::Instant::now()));
+    let recovered = cache.refresh_with(|_| account_scan(&["recovered"]));
+    assert_eq!(recovered.dormant_sessions[0].session_id, "recovered");
 }
 
 #[test]
@@ -1745,6 +1973,7 @@ fn agent_model_discovery_response_preserves_capabilities_without_host_paths() {
                 display_name: "Remote account".to_string(),
                 provider_account_id: Some("provider-account-42".to_string()),
                 config_dir: Some("/secret/daemon/account".into()),
+                config_dir_pin: Some("/secret/daemon/account".into()),
             },
             executable: "/secret/bin/claude".into(),
             version: "2.1.220".to_string(),
@@ -3131,14 +3360,18 @@ fn create_directory_creates_nested_directories() {
 
 #[cfg(unix)]
 mod daemon_session {
-    use super::super::{normalize_pty_dimensions, LogicalOpenReservation, HOST_RING_CAP_BYTES};
+    use super::super::{
+        normalize_pty_dimensions, LogicalOpenReservation, HOST_RING_CAP_BYTES,
+        MAX_DETACHED_SESSION_AGE,
+    };
     use super::{bind_status, binding_identity, test_model};
+    use crate::remote_server::managed_fleet::ForegroundAgent;
     use crate::remote_server::proto::{
         client_message, server_message, Abort, AttachSession, BindAgentPty, ClientMessage,
         CloseSession, DetachSession, ListSessions, ManagedLaunch, ManagedSessionLifecycleAction,
         ManagedSessionLifecycleRequest, ManagedSessionLifecycleStatus, OpenSession,
-        ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionList,
-        SessionOpened, SessionSize,
+        ReadAgentTranscript, ResizeSession, ServerMessage, SessionInput, SessionKeepReason,
+        SessionList, SessionOpened, SessionSize,
     };
     use crate::remote_server::protocol::RequestId;
     use futures::future::Either;
@@ -5418,7 +5651,10 @@ mod daemon_session {
 
             model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
             model.update(&mut app, |m, _ctx| {
-                assert_eq!(m.gc_sessions(u64::MAX, 1, 0), 0);
+                assert_eq!(
+                    m.gc_sessions(u64::MAX, 1, 0, |_| ForegroundAgent::NotRunning),
+                    0
+                );
                 assert!(m.sessions.contains_key(&opened.session_id));
             });
 
@@ -5997,13 +6233,15 @@ mod daemon_session {
             // grace guard keeps the daemon up).
             model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
             model.update(&mut app, |m, _ctx| {
-                m.sessions.get_mut(&id1).unwrap().last_attached_ms = 0;
-                m.sessions.get_mut(&id2).unwrap().last_attached_ms = 1_000_000_000_000;
+                m.sessions.get_mut(&id1).unwrap().detached_since_ms = Some(0);
+                m.sessions.get_mut(&id2).unwrap().detached_since_ms = Some(1_000_000_000_000);
             });
 
             // Age GC (60s max, unlimited cap): reap ancient id1, keep recent id2.
             let reaped = model.update(&mut app, |m, _ctx| {
-                m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX)
+                m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX, |_| {
+                    ForegroundAgent::NotRunning
+                })
             });
             assert_eq!(reaped, 1, "ancient detached session reaped");
             model.update(&mut app, |m, _ctx| {
@@ -6019,7 +6257,9 @@ mod daemon_session {
             let mut reaped2 = 0;
             for _ in 0..50 {
                 reaped2 = model.update(&mut app, |m, _ctx| {
-                    m.gc_sessions(1_000_000_000_000, u64::MAX, 0)
+                    m.gc_sessions(1_000_000_000_000, u64::MAX, 0, |_| {
+                        ForegroundAgent::NotRunning
+                    })
                 });
                 if reaped2 == 1 {
                     break;
@@ -6120,13 +6360,15 @@ mod daemon_session {
                 );
                 // Age the session so the next GC sweep reaps it.
                 for s in m.sessions.values_mut() {
-                    s.last_attached_ms = 0;
+                    s.detached_since_ms = Some(0);
                 }
             });
 
             // GC reaps the now-ancient last session, then re-evaluates idleness.
             model.update(&mut app, |m, ctx| {
-                let reaped = m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX);
+                let reaped = m.gc_sessions(1_000_000_000_000, 60_000, usize::MAX, |_| {
+                    ForegroundAgent::NotRunning
+                });
                 assert_eq!(reaped, 1, "the last detached session is reaped");
                 m.maybe_arm_grace_when_idle(ctx);
             });
@@ -6137,6 +6379,221 @@ mod daemon_session {
                     m.grace_timer_cancel.is_some(),
                     "GC emptied the daemon with no connections — grace timer must be armed"
                 );
+            });
+        });
+    }
+
+    /// #508: the age limit counts from the detach, never from the last attach.
+    /// A session attached for 48 h whose connection then drops (laptop lid
+    /// closed) still lives the full limit before the GC ends it.
+    #[test]
+    fn long_attached_session_survives_disconnect_for_full_grace_period() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in(&path), ctx)
+            });
+            let id = recv_session_opened(&conn_rx).await.expect("session opened");
+            let max_age_ms = MAX_DETACHED_SESSION_AGE.as_millis() as u64;
+
+            let detached_at = model.update(&mut app, |m, ctx| {
+                let session = m.sessions.get_mut(&id).unwrap();
+                session.last_attached_ms = session.last_attached_ms.saturating_sub(2 * max_age_ms);
+                m.deregister_connection(conn_id, ctx);
+                m.sessions[&id]
+                    .detached_since_ms
+                    .expect("a dropped connection records the detach time")
+            });
+
+            let reaped = model.update(&mut app, |m, _ctx| {
+                m.gc_sessions(detached_at + max_age_ms - 1, max_age_ms, usize::MAX, |_| {
+                    ForegroundAgent::NotRunning
+                })
+            });
+            assert_eq!(reaped, 0, "48 h of attachment must not shorten the limit");
+            let reaped = model.update(&mut app, |m, _ctx| {
+                m.gc_sessions(detached_at + max_age_ms, max_age_ms, usize::MAX, |_| {
+                    ForegroundAgent::NotRunning
+                })
+            });
+            assert_eq!(reaped, 1, "the full limit after the drop ends the session");
+            model.update(&mut app, |m, _ctx| assert!(!m.sessions.contains_key(&id)));
+        });
+    }
+
+    /// #508: ring-cap pressure ends the longest-detached session first, not
+    /// the one whose last attach is oldest.
+    #[test]
+    fn ring_cap_eviction_orders_by_detach_time() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "ring-early"), ctx)
+            });
+            let early_id = recv_session_opened(&conn_rx)
+                .await
+                .expect("early session opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "ring-late"), ctx)
+            });
+            let late_id = recv_session_opened(&conn_rx)
+                .await
+                .expect("late session opened");
+            model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
+
+            // One model update, so no shell output can grow a ring in between.
+            let reaped = model.update(&mut app, |m, _ctx| {
+                let early = m.sessions.get_mut(&early_id).unwrap();
+                early.last_attached_ms = 2_000;
+                early.detached_since_ms = Some(3_000);
+                early.ring.append(b"detached first, attached last");
+                let late = m.sessions.get_mut(&late_id).unwrap();
+                late.last_attached_ms = 1_000;
+                late.detached_since_ms = Some(4_000);
+                late.ring.append(b"attached first, detached last");
+                let total: usize = m.sessions.values().map(|s| s.ring.len()).sum();
+                m.gc_sessions(5_000, u64::MAX, total - 1, |_| ForegroundAgent::NotRunning)
+            });
+            assert_eq!(reaped, 1, "one byte over the cap ends exactly one session");
+            model.update(&mut app, |m, _ctx| {
+                assert!(
+                    !m.sessions.contains_key(&early_id),
+                    "the earliest detach goes first"
+                );
+                assert!(m.sessions.contains_key(&late_id));
+            });
+        });
+    }
+
+    /// Product decision for #508: a detached session whose foreground runs a
+    /// coding agent is ended neither by the age limit nor by ring-cap
+    /// pressure, even if the cap then stays exceeded.
+    #[test]
+    fn running_agent_session_is_never_reaped() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (conn_tx, conn_rx) = async_channel::unbounded::<ServerMessage>();
+            let conn_id = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(conn_id, conn_tx, ctx)
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "agent"), ctx)
+            });
+            let agent_id = recv_session_opened(&conn_rx)
+                .await
+                .expect("agent session opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(conn_id, open_in_with_logical_id(&path, "shell"), ctx)
+            });
+            let shell_id = recv_session_opened(&conn_rx)
+                .await
+                .expect("shell session opened");
+            model.update(&mut app, |m, ctx| m.deregister_connection(conn_id, ctx));
+
+            let (reaped, survivors) = model.update(&mut app, |m, _ctx| {
+                for session in m.sessions.values_mut() {
+                    session.detached_since_ms = Some(0);
+                    session.ring.append(b"output");
+                }
+                let agent_pid = m.sessions[&agent_id].child.id();
+                let reaped = m.gc_sessions(1_000_000_000_000, 60_000, 0, |pid| {
+                    if pid == agent_pid {
+                        ForegroundAgent::Running
+                    } else {
+                        ForegroundAgent::NotRunning
+                    }
+                });
+                (reaped, m.sessions.keys().cloned().collect::<Vec<_>>())
+            });
+            assert_eq!(reaped, 1, "only the plain shell past its limit is reaped");
+            assert_eq!(survivors, vec![agent_id.clone()]);
+            assert!(!survivors.contains(&shell_id));
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(uuid::Uuid::new_v4(), close_msg(&agent_id), ctx)
+            });
+        });
+    }
+
+    /// #508: the inventory reports since when a session has had no client and
+    /// when the GC ends it, counted from that detach; an attached session
+    /// reports neither.
+    #[test]
+    fn list_sessions_reports_detach_time_and_expiry() {
+        App::test((), |mut app| async move {
+            let model = app.add_singleton_model(|_ctx| test_model());
+            let (dropped_tx, dropped_rx) = async_channel::unbounded::<ServerMessage>();
+            let dropped = uuid::Uuid::new_v4();
+            let (lister_tx, lister_rx) = async_channel::unbounded::<ServerMessage>();
+            let lister = uuid::Uuid::new_v4();
+            model.update(&mut app, |m, ctx| {
+                m.register_connection(dropped, dropped_tx, ctx);
+                m.register_connection(lister, lister_tx, ctx);
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().to_string_lossy().to_string();
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(dropped, open_in_with_logical_id(&path, "dropped"), ctx)
+            });
+            let detached_id = recv_session_opened(&dropped_rx)
+                .await
+                .expect("detached session opened");
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(lister, open_in_with_logical_id(&path, "attached"), ctx)
+            });
+            let attached_id = recv_session_opened(&lister_rx)
+                .await
+                .expect("attached session opened");
+
+            let detached_at = model.update(&mut app, |m, ctx| {
+                m.deregister_connection(dropped, ctx);
+                m.handle_message(lister, list_msg(), ctx);
+                m.sessions[&detached_id].detached_since_ms.unwrap()
+            });
+            let list = recv_session_list(&lister_rx).await.expect("SessionList");
+            let retention = |id: &str| {
+                list.sessions
+                    .iter()
+                    .find(|session| session.session_id == id)
+                    .and_then(|session| session.retention.clone())
+                    .expect("retention reported")
+            };
+
+            let detached = retention(&detached_id);
+            assert_eq!(detached.detached_since_epoch_millis, detached_at);
+            // A plain shell expires a full limit after the drop. Between two
+            // bootstrap commands its foreground may be unreadable, which keeps
+            // it instead; it never expires by attach time.
+            let max_age_ms = MAX_DETACHED_SESSION_AGE.as_millis() as u64;
+            assert!(
+                detached.expires_at_epoch_millis == detached_at + max_age_ms
+                    || detached.keep_reason == SessionKeepReason::ForegroundUnknown as i32,
+                "{detached:?}"
+            );
+            let attached = retention(&attached_id);
+            assert_eq!(attached.detached_since_epoch_millis, 0);
+            assert_eq!(attached.expires_at_epoch_millis, 0);
+
+            model.update(&mut app, |m, ctx| {
+                m.handle_message(lister, close_msg(&detached_id), ctx);
+                m.handle_message(lister, close_msg(&attached_id), ctx);
             });
         });
     }

@@ -4,6 +4,26 @@ This document records key changes: the Zap/Warp release history inherited before
 
 ## [1.2.0] — 2026-10-06
 
+- Remote-Sessions (#508, #510): Getrennte Sessions laufen 24 Stunden ab der Trennung statt ab dem letzten Öffnen ab; Sessions, in denen Claude Code oder Codex läuft, beendet der Daemon nie automatisch. Die Sessionliste zeigt „getrennt seit …“ und das Ablaufdatum, Sessions älterer Daemons lassen sich dort gezielt beenden, und verwaiste Sockets abgestürzter Daemons werden aufgeräumt. Wiederhergestellte Tabs scheitern nach einem App-Update nicht mehr an der Attach-Frist, während das neue Remote-Binary installiert wird.
+
+- Cockpit (#507): Remote-Hosts mit großer Transkripthistorie zeigen ihre laufenden KI-Sessions wieder sofort; die Inventur wartet nicht mehr auf den vollständigen Historienscan, und überschreitet ein Host die Frist, sagt das Cockpit das klar statt „vorübergehend nicht verfügbar“.
+
+- Cockpit-Kosten (#515): Aktuelle Claude- und Codex-Modelle werden mit belegten Listenpreisen (Stand 16.10.2026) geschätzt. Ein Modell ohne Preis macht die Summe nicht mehr unbrauchbar: Beträge erscheinen im deutschen Format („~4,20 $“) mit dem Hinweis „teilweise ohne Preis“ und den betroffenen Modellen im Tooltip.
+
+- Texte (#516): Cockpit, Konto-Panes und Verbindungen zeigen Zeiten, Statuswörter, Standardnamen und Meldungen auf Deutsch („2 h 13 min“, „jetzt“, „Neuer Server“); Projektbrowser und Globale Suche heißen überall gleich.
+
+- In-App-Agent (#511, #514): Das Claude-Standardkonto startet ohne `CLAUDE_CONFIG_DIR` und meldet auf macOS nicht mehr „Not logged in“, obwohl Cockpit und Terminal angemeldet sind. Nach einem Neustart zeigt die Liste der Agenten-Unterhaltungen den echten letzten Zeitpunkt statt „56 years ago“ und markiert fehlgeschlagene Läufe als Fehler; relative Zeiten und Agenten-Texte sind übersetzt, Hinweise auf Hintergrundagenten entfernt.
+
+- Session-Übernahme (#497, #499, #519): Öffnet sich eine Remote-Session, die bereits in einem anderen Tab läuft, bleibt keine tote Pane zurück; die doppelte Verbindung wird getrennt und der vorhandene Tab fokussiert. Erneutes Öffnen einer gerade geschlossenen Session stellt ihren Tab auch fensterübergreifend wieder her, liegt sie in einem geschlossenen Fenster, wird dessen Verbindung getrennt und die Session normal übernommen; nach Ablauf der Rückgängig-Frist werden die Verbindungen geschlossener Tabs und Fenster freigegeben. Ein Klick auf eine veraltete Sessionzeile zeigt einen Hinweis und lädt die Liste neu.
+
+- Daemon-Panes (#486, #513, #530): Der Projekt-Explorer zeigt in Daemon-Sessions den Baum auf dem Zielhost statt nach 12 Sekunden „nicht verfügbar“; der Zustand „kein Projekt“ hat einen eigenen Titel. Ein gleichnamiges lokales Git-Repo erscheint nicht mehr in Prompt, Git-Status und Code-Review einer Remote-Session. Interne Generator-Befehle werden erst geschrieben, wenn die Remote-Sitzung Eingaben annimmt, sodass nach einem Reconnect keine versteckten Generator-Blöcke oder hängenden Vervollständigungen zurückbleiben.
+
+- Panes (#496, #500): „Split links“ und „Split oben“ führen wie rechts/unten über das gemeinsame Startmenü; nach dem Ziehen einer Pane ist die gezogene Pane auch dann fokussiert, wenn der Drag ohne Zwischenziel endet.
+
+- Start (#498): Ein liegengebliebener Migrationsmarker ohne alte Datenbank blockiert den Start nicht mehr; ist die Datenbank einer früheren Version kurz gesperrt, versucht Zaplex die Übernahme bis zu 10 Sekunden erneut, und der Startfehler-Dialog nennt Ursache, betroffene Datei und Ausweg.
+
+- CI (#472): Der Coverage-Lauf misst im selben Build auch die Abdeckung ohne die Kandidaten für die Testsuite-Kürzung; veraltete Testfilter und die zeitabhängige Prozesszuordnung im Cockpit-Test sind korrigiert.
+
 - Ein Tab lässt sich mit der Maus aus der Tab-Leiste oder dem vertikalen Tab-Panel als Pane in den sichtbaren Tab ziehen: Über dem Inhalt markiert eine Fläche die Hälfte des Panes, an der er eingefügt wird; Loslassen übernimmt alle seine Panes samt Anordnung, ohne Verbindung, PTY oder Agent neu zu starten. Tabs werden dafür beim Loslassen statt beim Drücken aktiviert, damit der sichtbare Tab beim Ziehen eines anderen Tabs stehen bleibt. Das eingefügte Layout teilt sich die markierte Hälfte des Ziel-Panes, Nachbar-Panes behalten ihre Größe. Editor-Panes werden nur in Tabs ohne Editor eingefügt, und Child-Agent-Zuordnungen wandern mit.
 
 - Tabs und Panes haben ein gemeinsames Startmenü: „+“ und alle vier Split-Richtungen zeigen Terminal, „Neuer Agent…“, die Favoriten und neu „Weitere Hosts“ mit allen übrigen registrierten Hosts. Aus einem Split heraus startet jeder Eintrag im neuen Pane, auch der Agent; Konto, Startabsicht und Prompt hängen an genau diesem Pane. Tab-spezifische Einträge (Tab-Konfigurationen, Docker-Sandbox, Worktree-Konfiguration, geschlossene Session) bleiben im „+“-Menü.

@@ -19,6 +19,7 @@ fn target(agent: SubscriptionAgent) -> SubscriptionTarget {
                 display_name: "developer@example.com".to_string(),
                 provider_account_id: None,
                 config_dir: Some("/accounts/with space".into()),
+                config_dir_pin: Some("/accounts/with space".into()),
             },
             executable: match agent {
                 SubscriptionAgent::ClaudeCode => "/usr/bin/claude".into(),

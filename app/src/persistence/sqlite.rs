@@ -9,7 +9,6 @@ use std::ptr;
 use std::str::FromStr;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Mutex, Once, OnceLock};
-#[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
 use std::{
     collections::{HashMap, VecDeque},
@@ -57,7 +56,7 @@ use super::model::{
 use super::schema;
 use super::{
     BlockCompleted, FinishedCommandMetadata, ModelEvent, PersistedData, StartedCommandMetadata,
-    WriterHandles,
+    StartupBlocker, WriterHandles,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -131,7 +130,7 @@ use crate::{
     cloud_object::{StoredObjectPermissions, StoredObjectStatuses, StoredObjectSyncStatus},
     workflows::WorkflowObjectModel,
 };
-use crate::{report_error, report_if_error, safe_info, send_telemetry_from_app_ctx};
+use crate::{report_error, report_if_error, safe_info, safe_warn, send_telemetry_from_app_ctx};
 
 diesel::define_sql_function! {
     fn json_extract(target: diesel::sql_types::Text, path: diesel::sql_types::Text) -> diesel::sql_types::Text;
@@ -151,6 +150,15 @@ const ZAP_APP_GROUP_SQLITE_MIGRATION_PENDING_MARKER: &str =
 const LEGACY_STATE_SQLITE_MIGRATION_MARKER: &str = ".legacy-state-sqlite-migrated";
 const LEGACY_STATE_SQLITE_MIGRATION_PENDING_MARKER: &str = ".legacy-state-sqlite-migration-pending";
 const SQLITE_BACKUP_BUSY_TIMEOUT_MS: i32 = 1_000;
+/// How long a database snapshot keeps retrying while another connection holds a lock.
+const SQLITE_SNAPSHOT_LOCK_RETRY_WINDOW: Duration = Duration::from_secs(10);
+/// Pause between snapshot attempts, on top of each attempt's busy timeout.
+const SQLITE_SNAPSHOT_LOCK_RETRY_DELAY: Duration = Duration::from_millis(250);
+/// How long a start waits for another start that holds the migration lock. It must exceed the
+/// snapshot lock retry window plus the copy itself, so that a concurrent start waits instead of
+/// aborting while the first one retries.
+#[cfg(not(target_family = "wasm"))]
+const SQLITE_MIGRATION_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(target_os = "macos")]
 const ZAPLEX_APP_GROUP_ID: &str = "2BBY89MBSN.dev.warp";
 
@@ -468,7 +476,7 @@ pub(super) fn init_db() -> Result<SqliteConnection> {
 
 #[cfg(not(target_family = "wasm"))]
 fn lock_sqlite_migration(target_db: &Path) -> Result<fs::File> {
-    lock_sqlite_migration_with_timeout(target_db, Duration::from_secs(3))
+    lock_sqlite_migration_with_timeout(target_db, SQLITE_MIGRATION_LOCK_TIMEOUT)
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -491,6 +499,9 @@ fn lock_sqlite_migration_with_timeout(target_db: &Path, timeout: Duration) -> Re
             Err(fs::TryLockError::WouldBlock) if started.elapsed() < timeout => {
                 let remaining = timeout.saturating_sub(started.elapsed());
                 thread::sleep(Duration::from_millis(25).min(remaining));
+            }
+            Err(error @ fs::TryLockError::WouldBlock) => {
+                return Err(error).context(StartupBlocker::MigrationLocked);
             }
             Err(error) => {
                 return Err(error).context(
@@ -516,7 +527,12 @@ fn migrate_legacy_state_sqlite_if_needed(source_db: &Path, target_db: &Path) -> 
     let pending = migration_path_exists(&pending_marker)?;
     match std::fs::metadata(source_db) {
         Ok(_) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound && !pending => return Ok(false),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if pending {
+                abandon_sqlite_migration_without_source(&pending_marker, source_db)?;
+            }
+            return Ok(false);
+        }
         Err(err) => {
             return Err(err).with_context(|| {
                 format!(
@@ -576,8 +592,12 @@ fn migrate_zap_app_group_sqlite_if_needed(target_db: &Path, legacy_dir: &Path) -
     let pending = migration_path_exists(&pending_marker)?;
     match std::fs::metadata(&legacy_db) {
         Ok(_) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound && !pending => {
-            write_complete_migration_marker(&complete_marker)?;
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if pending {
+                abandon_sqlite_migration_without_source(&pending_marker, &legacy_db)?;
+            } else {
+                write_complete_migration_marker(&complete_marker)?;
+            }
             return Ok(());
         }
         Err(err) => {
@@ -655,13 +675,28 @@ fn latest_sqlite_modified_time(db: &Path) -> Result<std::time::SystemTime> {
 }
 
 fn snapshot_sqlite_database(source_db: &Path, target_db: &Path) -> Result<()> {
-    snapshot_sqlite_database_with_page_limit(source_db, target_db, -1)
+    snapshot_sqlite_database_with_page_limit(
+        source_db,
+        target_db,
+        -1,
+        SQLITE_SNAPSHOT_LOCK_RETRY_WINDOW,
+    )
+    .map_err(|err| {
+        if err.downcast_ref::<StartupBlocker>().is_some() {
+            err
+        } else {
+            err.context(StartupBlocker::LegacyDatabaseCopyFailed(
+                source_db.to_owned(),
+            ))
+        }
+    })
 }
 
 fn snapshot_sqlite_database_with_page_limit(
     source_db: &Path,
     target_db: &Path,
     page_limit: i32,
+    lock_retry_window: Duration,
 ) -> Result<()> {
     let source =
         RawSqliteConnection::open(source_db, sqlite3::SQLITE_OPEN_READONLY).with_context(|| {
@@ -696,27 +731,47 @@ fn snapshot_sqlite_database_with_page_limit(
             )
         })?;
 
-    let mut backup = RawSqliteBackup::new(&target, &source)?;
-    let step_status = backup.step(page_limit);
-    // `sqlite3_backup_finish` may return SQLITE_OK after a BUSY/LOCKED/incomplete step. Success
-    // therefore requires both a completed step and a successful finish.
-    let finish_status = backup.finish();
+    let started = Instant::now();
+    let (step_status, finish_status) = loop {
+        let mut backup = RawSqliteBackup::new(&target, &source)?;
+        let step_status = backup.step(page_limit);
+        // `sqlite3_backup_finish` may return SQLITE_OK after a BUSY/LOCKED/incomplete step. Success
+        // therefore requires both a completed step and a successful finish.
+        let finish_status = backup.finish();
+        let elapsed = started.elapsed();
+        if !is_sqlite_lock_conflict(step_status) || elapsed >= lock_retry_window {
+            break (step_status, finish_status);
+        }
+        // Another connection held a lock beyond the busy timeout. Finishing rolled the target back,
+        // and the retry needs a fresh backup: a backup handle treats extended BUSY codes as fatal.
+        log::info!("SQLite snapshot is blocked by a lock (status {step_status}); retrying");
+        thread::sleep(
+            SQLITE_SNAPSHOT_LOCK_RETRY_DELAY.min(lock_retry_window.saturating_sub(elapsed)),
+        );
+    };
     if step_status != sqlite3::SQLITE_DONE || finish_status != sqlite3::SQLITE_OK {
         let error_status = if finish_status != sqlite3::SQLITE_OK {
             finish_status
         } else {
             step_status
         };
-        return Err(target.error(error_status)).with_context(|| {
-            format!(
-                "SQLite backup from `{}` to `{}` did not complete (step status {step_status}, finish status {finish_status})",
-                source_db.display(),
-                target_db.display()
-            )
-        });
+        let error = target.error(error_status).context(format!(
+            "SQLite backup from `{}` to `{}` did not complete (step status {step_status}, finish status {finish_status})",
+            source_db.display(),
+            target_db.display()
+        ));
+        if is_sqlite_lock_conflict(error_status) {
+            return Err(error.context(StartupBlocker::LegacyDatabaseLocked(source_db.to_owned())));
+        }
+        return Err(error);
     }
 
     Ok(())
+}
+
+/// Whether `status` reports a lock held by another connection, which a later attempt can overcome.
+fn is_sqlite_lock_conflict(status: i32) -> bool {
+    matches!(status & 0xff, sqlite3::SQLITE_BUSY | sqlite3::SQLITE_LOCKED)
 }
 
 struct RawSqliteConnection {
@@ -739,8 +794,8 @@ impl RawSqliteConnection {
             return Err(connection.error(status));
         }
 
-        // SAFETY: `handle` is a valid open SQLite connection. The timeout bounds lock waits; the
-        // backup itself is deliberately attempted only once rather than retried indefinitely.
+        // SAFETY: `handle` is a valid open SQLite connection. The timeout bounds each lock wait; a
+        // snapshot retries a locked backup only within its bounded lock retry window.
         let status = unsafe {
             sqlite3::sqlite3_busy_timeout(connection.handle, SQLITE_BACKUP_BUSY_TIMEOUT_MS)
         };
@@ -882,6 +937,21 @@ fn write_and_sync_file(path: &Path, contents: &[u8]) -> Result<()> {
             path.display()
         )
     })
+}
+
+/// Abandons an interrupted migration whose source database no longer exists.
+///
+/// Without its source the migration can never complete, so keeping the pending marker would fail
+/// every start. The target keeps the state the interrupted attempt left behind (SQLite rolls back a
+/// partial copy) and stays in use. No completion marker is written because the migration did not
+/// complete. Removing the pending marker means a reappearing source is handled by the regular rules
+/// for an existing target instead of being forced over data saved after this start.
+fn abandon_sqlite_migration_without_source(pending_marker: &Path, source_db: &Path) -> Result<()> {
+    safe_warn!(
+        safe: ("Abandoning an interrupted SQLite migration because its source database no longer exists"),
+        full: ("Abandoning an interrupted SQLite migration because its source database `{}` no longer exists", source_db.display())
+    );
+    remove_pending_migration_marker(pending_marker)
 }
 
 fn remove_pending_migration_marker(marker: &Path) -> Result<()> {

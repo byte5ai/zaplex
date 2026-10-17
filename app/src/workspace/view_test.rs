@@ -3916,6 +3916,68 @@ fn every_split_direction_opens_the_launch_menu_without_adding_a_pane() {
                 });
             });
         }
+
+        // A pane's own split actions (as dispatched by its context menu) take the same route,
+        // and the local choice inserts the new pane on the captured side.
+        for (action, direction, axis, source_index) in [
+            (
+                TerminalAction::SplitLeft(None),
+                Direction::Left,
+                pane_group::SplitDirection::Horizontal,
+                1,
+            ),
+            (
+                TerminalAction::SplitUp(None),
+                Direction::Up,
+                pane_group::SplitDirection::Vertical,
+                1,
+            ),
+            (
+                TerminalAction::SplitRight(None),
+                Direction::Right,
+                pane_group::SplitDirection::Horizontal,
+                0,
+            ),
+            (
+                TerminalAction::SplitDown(None),
+                Direction::Down,
+                pane_group::SplitDirection::Vertical,
+                0,
+            ),
+        ] {
+            let (pane_group, source, source_view) = workspace.update(&mut app, |workspace, ctx| {
+                workspace.add_terminal_tab(false, ctx);
+                let pane_group = workspace.active_tab_pane_group().clone();
+                let source = pane_group.as_ref(ctx).focused_pane_id(ctx);
+                let source_view = pane_group
+                    .as_ref(ctx)
+                    .terminal_view_from_pane_id(source, ctx)
+                    .expect("a new tab starts with a terminal pane");
+                (pane_group, source, source_view)
+            });
+
+            source_view.update(&mut app, |view, ctx| view.handle_action(&action, ctx));
+            workspace.read(&app, |workspace, ctx| {
+                let pending = workspace
+                    .pending_split_launch
+                    .as_ref()
+                    .expect("the split waits for a launch-menu choice");
+                assert_eq!(pending.target.pane_id(), source);
+                assert_eq!(pending.target.direction(), direction);
+                assert_eq!(pane_group.as_ref(ctx).visible_pane_ids(), vec![source]);
+            });
+
+            // Choosing the local terminal entry inserts the pane on the captured side.
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.handle_action(&WorkspaceAction::SplitLaunchLocal, ctx);
+            });
+            pane_group.read(&app, |group, _| {
+                let panes = group.visible_pane_ids();
+                assert_eq!(panes.len(), 2);
+                assert_eq!(panes[source_index], source);
+                assert_eq!(group.num_splits_at_root(axis), 2);
+            });
+        }
     });
 }
 
@@ -3971,6 +4033,67 @@ fn dragging_a_tab_onto_a_pane_joins_its_panes_as_a_split() {
         workspace.read(&app, |workspace, _| {
             assert_eq!(workspace.tabs.len(), 1);
             assert_eq!(workspace.active_tab_pane_group().id(), target_group_id);
+        });
+    });
+}
+
+#[test]
+fn ending_a_pane_drag_focuses_the_dragged_pane_unless_focus_moved_during_the_drag() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let (pane_group, window_id) = workspace.read(&app, |workspace, _| {
+            (
+                workspace.active_tab_pane_group().clone(),
+                workspace.window_id,
+            )
+        });
+        let (first, dragged, third) = pane_group.update(&mut app, |group, ctx| {
+            let first = group.focused_pane_id(ctx);
+            let dragged: PaneId = group.add_terminal_pane(Direction::Right, None, ctx).into();
+            let third: PaneId = group.add_terminal_pane(Direction::Right, None, ctx).into();
+            (first, dragged, third)
+        });
+        let header = app
+            .views_of_type::<pane_group::PaneView<TerminalView>>(window_id)
+            .into_iter()
+            .flatten()
+            .find(|view| view.read(&app, |view, _| view.pane_id()) == dragged)
+            .map(|view| view.read(&app, |view, _| view.header().clone()))
+            .expect("the dragged pane has a pane view");
+        let start_drag = |app: &mut App| {
+            header.update(app, |header, ctx| {
+                header.handle_action(&pane_group::PaneHeaderAction::PaneHeaderDragStarted, ctx)
+            })
+        };
+        let drop_on_pane_group = |app: &mut App| {
+            header.update(app, |header, ctx| {
+                header.handle_action(
+                    &pane_group::PaneHeaderAction::PaneHeaderDropped {
+                        origin: ActionOrigin::Pane,
+                        drop_location: pane_group::PaneDragDropLocation::PaneGroup(dragged),
+                    },
+                    ctx,
+                )
+            })
+        };
+
+        // A drag that ends before any drag-over event (a quick flick, or a drop in the
+        // middle of a pane) still focuses the dragged pane.
+        pane_group.update(&mut app, |group, ctx| group.focus_pane_by_id(first, ctx));
+        start_drag(&mut app);
+        drop_on_pane_group(&mut app);
+        pane_group.read(&app, |group, ctx| {
+            assert_eq!(group.focused_pane_id(ctx), dragged);
+        });
+
+        // A focus change while dragging is kept when the drag ends.
+        pane_group.update(&mut app, |group, ctx| group.focus_pane_by_id(first, ctx));
+        start_drag(&mut app);
+        pane_group.update(&mut app, |group, ctx| group.focus_pane_by_id(third, ctx));
+        drop_on_pane_group(&mut app);
+        pane_group.read(&app, |group, ctx| {
+            assert_eq!(group.focused_pane_id(ctx), third);
         });
     });
 }
@@ -5558,22 +5681,22 @@ fn daemon_identity_indexing_requests_the_coalesced_app_state_save_last() {
         .map(|offset| start + offset)
         .unwrap();
     let body = &source[start..end];
-    let claim = body.find("claim_daemon_pty(").unwrap();
+    let claim = body.find("if !self.settle_opened_daemon_claim(").unwrap();
     let identity = body.find("set_terminal_remote_identity(").unwrap();
     let save = body
         .rfind("ctx.dispatch_global_action(\"workspace:save_app\", ());")
         .unwrap();
-    let collision_cleanup = &body[claim..identity];
+    let collision_cleanup = &body[body.find("fn settle_opened_daemon_claim(").unwrap()..];
 
     assert!(claim < identity);
     assert!(save > identity);
+    assert!(body[claim..identity].contains("return;"));
     assert!(body.contains("daemon_connection_pane_for_terminal_view("));
     assert!(collision_cleanup.contains("retire_competing_daemon_surface("));
     assert!(collision_cleanup.contains("if !existing.shares_connection_with(&owner)"));
     assert!(collision_cleanup.contains("deregister_session(connection_session_id, false, ctx)"));
     assert!(collision_cleanup.contains("focus_daemon_claim_owner(&existing, ctx)"));
     assert!(collision_cleanup.contains("owns_same_terminal_surface(&owner)"));
-    assert!(collision_cleanup.contains("return;"));
 }
 
 #[test]
@@ -6189,7 +6312,10 @@ fn reopening_a_pty_owned_by_an_undo_closed_tab_restores_that_tab() {
                 "a tab inside its Undo Close grace period still owns the PTY"
             );
 
-            assert!(workspace.focus_existing_adopted_daemon_session(&binding, None, ctx));
+            assert_eq!(
+                workspace.focus_existing_adopted_daemon_session(&binding, None, ctx),
+                Some(true)
+            );
 
             assert_eq!(workspace.tabs.len(), tab_count);
             assert!(!UndoCloseStack::as_ref(ctx).is_pane_group_tab_in_stack(closed_group.id()));
@@ -6216,14 +6342,16 @@ fn sidebar_open_retires_a_pty_owner_no_tab_can_show() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let workspace = mock_workspace(&mut app);
+        let deregistered = record_deregistered_sessions(&mut app);
         let conn = warp_core::SessionId::from(907u64);
         let adopt_conn = warp_core::SessionId::from(908u64);
         let route = hidden_owner_test_route();
         let binding = daemon_adoption_key("daemon-orphaned-owner", &route, "pty-orphaned", 11);
         let (orphaned_group, owner) = workspace.update(&mut app, |workspace, ctx| {
             let (group, owner) = add_claimed_daemon_tab(workspace, conn, &binding, ctx);
-            assert!(
+            assert_eq!(
                 workspace.focus_existing_adopted_daemon_session(&binding, None, ctx),
+                Some(true),
                 "an owner shown by a tab is focused, never retired"
             );
             assert_eq!(
@@ -6252,7 +6380,10 @@ fn sidebar_open_retires_a_pty_owner_no_tab_can_show() {
                 "the orphaned surface is alive, so its claim still looks live"
             );
 
-            assert!(!workspace.focus_existing_adopted_daemon_session(&binding, None, ctx));
+            assert_eq!(
+                workspace.focus_existing_adopted_daemon_session(&binding, None, ctx),
+                None
+            );
 
             assert!(crate::app_state::daemon_pty_claim(&binding, ctx).is_none());
             let reservation = DaemonPtyClaimOwner {
@@ -6265,8 +6396,39 @@ fn sidebar_open_retires_a_pty_owner_no_tab_can_show() {
                 DaemonPtyClaimOutcome::Claimed
             ));
         });
+
+        // A surface that no longer exists at all, like a tab of a window closed
+        // into Undo Close, leaves a claim that only looks free. Its connection
+        // is dropped before the PTY is taken over.
+        let stale_conn = warp_core::SessionId::from(915u64);
+        let stale_binding = daemon_adoption_key("daemon-orphaned-owner", &route, "pty-stale", 16);
+        let stale_group = workspace.update(&mut app, |workspace, ctx| {
+            let (group, _) = add_claimed_daemon_tab(workspace, stale_conn, &stale_binding, ctx);
+            let index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == group.id())
+                .unwrap();
+            workspace.remove_tab(index, false, false, ctx);
+            group.downgrade()
+        });
+        app.update(|_| ());
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(stale_group.upgrade(ctx).is_none());
+            assert!(crate::app_state::daemon_pty_claim(&stale_binding, ctx).is_none());
+            assert!(crate::app_state::stale_daemon_pty_claim(&stale_binding, ctx).is_some());
+
+            assert_eq!(
+                workspace.focus_existing_adopted_daemon_session(&stale_binding, None, ctx),
+                None
+            );
+
+            assert!(crate::app_state::stale_daemon_pty_claim(&stale_binding, ctx).is_none());
+        });
+        assert_eq!(*deregistered.lock().unwrap(), vec![conn, stale_conn]);
         crate::app_state::release_daemon_pty_claim_for_connection(conn);
         crate::app_state::release_daemon_pty_claim_for_connection(adopt_conn);
+        crate::app_state::release_daemon_pty_claim_for_connection(stale_conn);
     });
 }
 
@@ -6321,6 +6483,187 @@ fn retry_claim_takes_over_only_from_an_unreachable_owner() {
         drop(orphaned_group);
         crate::app_state::release_daemon_pty_claim_for_connection(conn);
         crate::app_state::release_daemon_pty_claim_for_connection(retry_conn);
+    });
+}
+
+/// Records every daemon connection the remote-server manager deregisters.
+#[cfg(unix)]
+fn record_deregistered_sessions(app: &mut App) -> Arc<std::sync::Mutex<Vec<SessionId>>> {
+    let deregistered = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = deregistered.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_model(&RemoteServerManager::handle(ctx), move |_, event, _| {
+            if let crate::remote_server::manager::RemoteServerManagerEvent::SessionDeregistered {
+                session_id,
+            } = event
+            {
+                observed.lock().unwrap().push(*session_id);
+            }
+        });
+    });
+    deregistered
+}
+
+/// The event loop fails a surface that lost the PTY claim before its deferred
+/// `SessionOpened` reaches the workspace. That open must still discard the
+/// surface, drop its connection and focus the PTY's owner.
+#[cfg(unix)]
+#[test]
+fn deferred_open_of_a_failed_surface_yields_to_the_pty_owner() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let deregistered = record_deregistered_sessions(&mut app);
+        let conn = warp_core::SessionId::from(911u64);
+        let losing_conn = warp_core::SessionId::from(912u64);
+        let route = hidden_owner_test_route();
+        let binding = daemon_adoption_key("daemon-open-conflict", &route, "pty-conflict", 13);
+        workspace.update(&mut app, |workspace, ctx| {
+            let (owner_group, owner) = add_claimed_daemon_tab(workspace, conn, &binding, ctx);
+            let (losing_group, losing_pane, losing_view) =
+                add_adopted_daemon_tab(workspace, losing_conn, ctx);
+            workspace
+                .daemon_session_hosts
+                .insert(losing_conn, "conflict.example.test".to_string());
+            // What `finish_failed_startup` leaves once the event loop saw the conflict.
+            losing_view.update(ctx, |view, ctx| {
+                view.set_remote_input_phase(
+                    crate::terminal::view::RemoteInputPhase::Failed,
+                    Some(losing_conn),
+                    ctx,
+                );
+            });
+            workspace.activate_tab(0, ctx);
+            let tab_count = workspace.tabs.len();
+
+            assert!(!workspace.settle_opened_daemon_claim(
+                losing_conn,
+                &losing_group,
+                losing_pane,
+                &losing_view,
+                &binding,
+                ctx,
+            ));
+
+            assert_eq!(workspace.tabs.len(), tab_count - 1);
+            assert!(!workspace
+                .tabs
+                .iter()
+                .any(|tab| tab.pane_group.id() == losing_group.id()));
+            assert_eq!(workspace.active_tab_pane_group().id(), owner_group.id());
+            assert!(!workspace.daemon_session_hosts.contains_key(&losing_conn));
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .and_then(|claim| claim.terminal_view_id),
+                owner.terminal_view_id
+            );
+        });
+        assert_eq!(*deregistered.lock().unwrap(), vec![losing_conn]);
+        crate::app_state::release_daemon_pty_claim_for_connection(conn);
+        crate::app_state::release_daemon_pty_claim_for_connection(losing_conn);
+    });
+}
+
+/// Reopening a PTY from one window whose owning tab was closed in another
+/// window restores that tab where it was closed and focuses it there.
+#[cfg(unix)]
+#[test]
+fn reclick_after_tab_close_across_windows_restores_the_tab_in_its_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let clicking = mock_workspace(&mut app);
+        let closing = mock_workspace(&mut app);
+        let conn = warp_core::SessionId::from(913u64);
+        let route = hidden_owner_test_route();
+        let binding = daemon_adoption_key("daemon-cross-window", &route, "pty-cross-window", 14);
+        let (closed_group, owner, closing_tab_count) =
+            closing.update(&mut app, |workspace, ctx| {
+                let (group, owner) = add_claimed_daemon_tab(workspace, conn, &binding, ctx);
+                let tab_count = workspace.tabs.len();
+                let index = workspace
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.pane_group.id() == group.id())
+                    .unwrap();
+                workspace.remove_tab(index, true, true, ctx);
+                (group, owner, tab_count)
+            });
+        let clicking_tab_count = clicking.read(&app, |workspace, _| workspace.tabs.len());
+
+        clicking.update(&mut app, |workspace, ctx| {
+            assert_eq!(
+                workspace.focus_existing_adopted_daemon_session(&binding, None, ctx),
+                Some(true)
+            );
+            assert_eq!(workspace.tabs.len(), clicking_tab_count);
+            assert!(!UndoCloseStack::as_ref(ctx).is_pane_group_tab_in_stack(closed_group.id()));
+            assert_eq!(
+                crate::app_state::daemon_pty_claim(&binding, ctx)
+                    .and_then(|claim| claim.terminal_view_id),
+                owner.terminal_view_id
+            );
+        });
+        closing.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.tabs.len(), closing_tab_count);
+            assert_eq!(workspace.active_tab_pane_group().id(), closed_group.id());
+            let pane = closed_group
+                .as_ref(ctx)
+                .daemon_connection_pane(conn, ctx)
+                .expect("the reopened tab shows the live connection again");
+            assert_eq!(closed_group.as_ref(ctx).focused_pane_id(ctx), pane);
+        });
+        crate::app_state::release_daemon_pty_claim_for_connection(conn);
+    });
+}
+
+/// Undo Close keeps an adopted tab's PTY claim and connection only while the
+/// tab can be reopened. Discarding it, as its grace period expiry does, drops
+/// the connection and lets the PTY be opened again.
+#[cfg(unix)]
+#[test]
+fn discarding_an_undo_closed_tab_releases_its_daemon_claim() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let deregistered = record_deregistered_sessions(&mut app);
+        let conn = warp_core::SessionId::from(914u64);
+        let route = hidden_owner_test_route();
+        let binding = daemon_adoption_key("daemon-undo-expiry", &route, "pty-expiry", 15);
+        // Kept alive by the test, so only an explicit release can drop the claim.
+        let closed_group = workspace.update(&mut app, |workspace, ctx| {
+            let (group, _) = add_claimed_daemon_tab(workspace, conn, &binding, ctx);
+            let index = workspace
+                .tabs
+                .iter()
+                .position(|tab| tab.pane_group.id() == group.id())
+                .unwrap();
+            workspace.remove_tab(index, true, true, ctx);
+            assert!(
+                crate::app_state::daemon_pty_claim(&binding, ctx).is_some(),
+                "a tab inside its Undo Close grace period still owns the PTY"
+            );
+            group
+        });
+        assert!(deregistered.lock().unwrap().is_empty());
+
+        app.update(|ctx| {
+            UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
+                stack.discard_pane_group_parent(closed_group.id(), ctx);
+            });
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(!UndoCloseStack::as_ref(ctx).is_pane_group_tab_in_stack(closed_group.id()));
+            assert!(crate::app_state::daemon_pty_claim(&binding, ctx).is_none());
+            assert_eq!(
+                workspace.focus_existing_adopted_daemon_session(&binding, None, ctx),
+                None,
+                "with the claim released, a click opens the PTY again"
+            );
+        });
+        assert_eq!(*deregistered.lock().unwrap(), vec![conn]);
+        drop(closed_group);
+        crate::app_state::release_daemon_pty_claim_for_connection(conn);
     });
 }
 

@@ -169,6 +169,12 @@ where
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
                 Message::Input(input) => state.write_list.push_back(input),
+                // A local PTY never rejects input: mark the block and write.
+                Message::InBandCommand(command) => {
+                    let input = command.bytes.clone();
+                    command.delivered();
+                    state.write_list.push_back(input);
+                }
                 Message::Shutdown => {
                     return ChannelResult::TerminateLoop {
                         child_exited: false,

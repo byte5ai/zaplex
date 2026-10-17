@@ -253,6 +253,47 @@ pub(crate) fn daemon_pty_claim(
         .cloned()
 }
 
+/// The owner of `identity` whose terminal surface no longer exists, e.g. one
+/// held by a window closed into Undo Close. Live lookups treat its claim as
+/// free, yet its connection can still be attached to the PTY.
+pub(crate) fn stale_daemon_pty_claim(
+    identity: &DaemonPtyIdentity,
+    app: &AppContext,
+) -> Option<DaemonPtyClaimOwner> {
+    DAEMON_PTY_CLAIMS
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .owners
+        .get(identity)
+        .filter(|owner| {
+            owner
+                .terminal_view
+                .as_ref()
+                .is_some_and(|terminal_view| terminal_view.upgrade(app).is_none())
+        })
+        .cloned()
+}
+
+/// Releases every claim whose terminal surface `is_released` selects and
+/// returns the connections those claims belonged to.
+pub(crate) fn release_daemon_pty_claims_for_terminal_views(
+    is_released: impl Fn(EntityId) -> bool,
+) -> Vec<SessionId> {
+    let mut connections = Vec::new();
+    DAEMON_PTY_CLAIMS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .owners
+        .retain(|_, owner| {
+            let released = owner.terminal_view_id.is_some_and(&is_released);
+            if released {
+                connections.push(owner.connection_session_id);
+            }
+            !released
+        });
+    connections
+}
+
 pub(crate) fn release_daemon_pty_claim_reservation(
     identity: &DaemonPtyIdentity,
     connection_session_id: SessionId,

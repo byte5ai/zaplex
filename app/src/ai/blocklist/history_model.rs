@@ -85,6 +85,9 @@ pub struct AIConversationMetadata {
 
     /// Local marker for conversations owned by an ambient agent run.
     pub ambient_agent_task_id: Option<AmbientAgentTaskId>,
+
+    /// Whether the latest turn failed; the only status known without loading the conversation.
+    pub last_turn_failed: bool,
 }
 
 impl From<&AIConversation> for AIConversationMetadata {
@@ -108,6 +111,7 @@ impl From<&AIConversation> for AIConversationMetadata {
             is_restorable_locally: true,
             artifacts: conversation.artifacts().to_vec(),
             ambient_agent_task_id: conversation.task_id(),
+            last_turn_failed: matches!(conversation.status(), ConversationStatus::Error),
         }
     }
 }
@@ -1872,8 +1876,12 @@ impl BlocklistAIHistoryModel {
         tasks: Vec<warp_multi_agent_api::Task>,
         conversation_data: AgentConversationData,
     ) -> anyhow::Result<AIConversation> {
-        let mut conversation =
-            AIConversation::new_restored(conversation_id, tasks, Some(conversation_data))?;
+        let mut conversation = AIConversation::new_restored(
+            conversation_id,
+            tasks,
+            Some(conversation_data),
+            Local::now(),
+        )?;
 
         // Assign fresh exchange IDs so persisted blocks do not collide.
         conversation.reassign_exchange_ids();

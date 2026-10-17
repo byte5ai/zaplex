@@ -74,6 +74,10 @@ pub const ROW_V_PADDING: f32 = 3.0;
 /// Horizontal padding of a one-line interactive row.
 pub const ROW_H_PADDING: f32 = 6.0;
 
+/// Width of a usage meter's window label (`5 h`, `Woche`), shared by the sidebar
+/// and the pane so every meter's track starts at the same edge (mockup: 38 px).
+pub const METER_LABEL_WIDTH: f32 = 38.0;
+
 /// Wraps one already-assembled row LINE as an interactive row surface: row
 /// padding, control radius, and — when `hovered` — the shared `fg_overlay_1`
 /// hover fill. The ONE hover grammar for host and session rows; pass

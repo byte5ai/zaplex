@@ -75,6 +75,47 @@ pub fn initialize(ctx: &mut AppContext) -> Result<(Option<PersistedData>, Option
     }
 }
 
+/// A persistence startup failure that the startup error dialog explains with its cause and way
+/// out. It is attached as context to the SQLite initialization error.
+#[derive(Debug, thiserror::Error)]
+pub enum StartupBlocker {
+    /// Another Zaplex start held the SQLite migration lock for the whole startup wait.
+    #[error("Failed to lock SQLite migrations; another application may be starting")]
+    MigrationLocked,
+    /// Another connection kept a lock for the whole retry window while the database of an earlier
+    /// version was being copied.
+    #[error("SQLite database `{}` of an earlier version stayed locked", .0.display())]
+    LegacyDatabaseLocked(PathBuf),
+    /// The database of an earlier version could not be copied for a reason other than a lock.
+    #[error("SQLite database `{}` of an earlier version could not be copied", .0.display())]
+    LegacyDatabaseCopyFailed(PathBuf),
+}
+
+/// Returns the localized explanation of a failed persistence startup: its cause and way out,
+/// followed by the technical error.
+pub fn startup_error_detail(error: &anyhow::Error) -> String {
+    let error_text = format!("{error:#}");
+    match error.downcast_ref::<StartupBlocker>() {
+        Some(StartupBlocker::MigrationLocked) => {
+            crate::t!(
+                "persistence-startup-error-migration-locked",
+                error = error_text
+            )
+        }
+        Some(StartupBlocker::LegacyDatabaseLocked(path)) => crate::t!(
+            "persistence-startup-error-legacy-database-locked",
+            path = path.display().to_string(),
+            error = error_text
+        ),
+        Some(StartupBlocker::LegacyDatabaseCopyFailed(path)) => crate::t!(
+            "persistence-startup-error-legacy-database-copy-failed",
+            path = path.display().to_string(),
+            error = error_text
+        ),
+        None => crate::t!("persistence-startup-error-detail", error = error_text),
+    }
+}
+
 /// Prewarm SQLite connection + run migrations in background thread. Should be called before
 /// `app_builder.run` so SQLite initialization can run concurrently with winit/wgpu initialization,
 /// saving ~70–90ms on cold startup. Multiple calls are idempotent. Omitting falls back to sync path.

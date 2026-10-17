@@ -6,6 +6,7 @@ use super::{
 use crate::ai::artifacts::Artifact;
 use crate::persistence::model::AgentConversationData;
 use crate::persistence::ModelEvent;
+use chrono::Local;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
@@ -21,6 +22,7 @@ fn restored_conversation(conversation_data: Option<AgentConversationData>) -> AI
             server_data: String::new(),
         }],
         conversation_data,
+        Local::now(),
     )
     .unwrap()
 }
@@ -83,6 +85,7 @@ fn restored_conversation_with_queries(queries: &[&str]) -> AIConversation {
             server_data: String::new(),
         }],
         None,
+        Local::now(),
     )
     .unwrap()
 }

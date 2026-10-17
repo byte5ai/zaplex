@@ -365,6 +365,8 @@ jobs:
           claude_discovery_scrubs_all_provider_environment_variables
           remote_launch_quotes_working_directory_environment_and_model
           selected_subscription_accounts_scrub_provider_auth_environment
+          legacy_conversation_without_message_timestamp_uses_row_timestamp
+          unloaded_conversation_keeps_its_failed_last_turn
         shell: bash
 
       - name: cargo test (retired BYOP persistence compatibility)
@@ -389,6 +391,7 @@ jobs:
             remote_server::headless_connect::tests \
             remote_server::session_live::tests \
             terminal::daemon_tty::event_loop::tests \
+            terminal::writeable_pty::pty_controller::tests \
             provisional_daemon_adoption_cleanup_covers_connection_and_tab
           cargo test --locked -p remote_server --lib client::tests
           cargo test --locked -p zap_sftp --lib session::tests
@@ -432,8 +435,6 @@ jobs:
       - name: cargo test (app dependency + UI smoke gates)
         run: >
           cargo test --locked -p warp --lib -- --nocapture
-          maps_credentials_not_loaded_to_user_message
-          newer_profile_refresh_rejects_late_success_or_error_from_older_refresh
           test_import_from_file
           file_manager_start_path_uses_session_cwd
           file_manager_start_path_falls_back_when_no_cwd
@@ -538,15 +539,14 @@ jobs:
           inventory_rows_resolve_the_exact_daemon_pty_claim_identity
           detached_session_row_uses_daemon_live_cwd_and_foreground_command
           old_daemon_without_live_metadata_falls_back_honestly
+          detached_session_row_reports_detach_time_and_expiry
+          older_daemon_row_names_its_attach_based_end
           normalized_agent_titles_are_preserved_with_known_cwd_in_the_tooltip
           stale_daemon_adoption_cannot_resolve_a_different_inventory_row
           test_non_legacy_remote_session_lists_directory_entries_with_remote_server_enabled
           test_legacy_ssh_fallback_lists_directory_entries_without_remote_host_id
           test_session_context_lists_directory_entries_remotely
           connections_registry_drives_favorite_launch_menu
-          split_picker_marks_only_the_current_host_and_preserves_routes
-          split_picker_uses_the_visible_file_manager_host_instead_of_the_covered_terminal
-          split_picker_distinguishes_unreadable_registry_from_empty_registry
           function_bar_tracks_subtree_focus_when_the_remembered_pane_does_not_change
           disabled_function_click_cannot_execute_after_mouse_down_focuses_the_pane
           host_lookup_failure_distinguishes_registry_errors_from_removed_hosts

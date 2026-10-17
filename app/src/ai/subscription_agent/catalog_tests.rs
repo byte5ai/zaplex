@@ -16,6 +16,7 @@ fn installation(version: &str) -> InstallationIdentity {
             display_name: "developer@example.com".to_string(),
             provider_account_id: None,
             config_dir: Some(PathBuf::from("/accounts/claude-1")),
+            config_dir_pin: None,
         },
         executable: PathBuf::from("/usr/bin/claude"),
         version: version.to_string(),

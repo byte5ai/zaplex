@@ -331,6 +331,8 @@ use chrono::{DateTime, Local, NaiveDateTime};
 use command_corrections::rules::{Rule, RuleId as CommandCorrectionsRuleId};
 use command_corrections::{correct_command, Command, Correction, HistoryItem, SessionMetadata};
 use enclose::enclose;
+#[cfg(feature = "local_fs")]
+use futures::future::{ready, Either};
 use instant::Instant;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -4240,8 +4242,12 @@ impl TerminalView {
                 // `RemoteServerManager` is a singleton, so every `TerminalView` receives every event.
                 // Filter for session-scoped events that are specifically tracked by this view.
                 // Host-scoped variants return `None` and pass through unfiltered.
+                // `NavigatedToDirectory` carries the id the navigation was sent with (a
+                // daemon-hosted shell's connection session); its arm matches it exactly.
                 if let Some(sid) = event.session_id() {
-                    if !me.sessions.as_ref(ctx).tracks_session(sid) {
+                    if !matches!(event, RemoteServerManagerEvent::NavigatedToDirectory { .. })
+                        && !me.sessions.as_ref(ctx).tracks_session(sid)
+                    {
                         return;
                     }
                 }
@@ -4454,10 +4460,14 @@ impl TerminalView {
                         ..
                     } => {
                         // Check if this navigation belongs to our active session
-                        // using exact session_id match (no CWD heuristics).
-                        let is_relevant = me
-                            .active_block_session_id()
-                            .is_some_and(|sid| sid == *nav_session_id);
+                        // using exact session_id match (no CWD heuristics). The
+                        // workspace navigates under the active session's
+                        // remote-server id, which is the connection session for a
+                        // daemon-hosted shell.
+                        let is_relevant = me.active_block_session_id().is_some_and(|sid| {
+                            me.sessions.as_ref(ctx).remote_server_session_id(sid)
+                                == *nav_session_id
+                        });
                         if is_relevant {
                             ctx.emit(Event::Pane(PaneEvent::RemoteRepoNavigated {
                                 host_id: host_id.clone(),
@@ -11155,16 +11165,30 @@ impl TerminalView {
                                 let directory_for_detection =
                                     native_directory.as_deref().unwrap_or(active_directory);
 
-                                let fut = DetectedRepositories::handle(ctx).update(
-                                    ctx,
-                                    |updater, ctx| {
-                                        updater.detect_possible_git_repo(
-                                            directory_for_detection,
-                                            RepoDetectionSource::TerminalNavigation,
-                                            ctx,
-                                        )
-                                    },
-                                );
+                                // A remote shell (SSH or daemon-hosted) reports a path on
+                                // its own host: a repository at that path on this machine
+                                // is not its repository.
+                                let is_remote_session = block_metadata_received_event
+                                    .block_metadata
+                                    .session_id()
+                                    .and_then(|session_id| {
+                                        self.sessions.as_ref(ctx).get(session_id)
+                                    })
+                                    .is_some_and(|session| !session.is_local());
+                                let fut = if is_remote_session {
+                                    Either::Right(ready(None))
+                                } else {
+                                    Either::Left(DetectedRepositories::handle(ctx).update(
+                                        ctx,
+                                        |updater, ctx| {
+                                            updater.detect_possible_git_repo(
+                                                directory_for_detection,
+                                                RepoDetectionSource::TerminalNavigation,
+                                                ctx,
+                                            )
+                                        },
+                                    ))
+                                };
 
                                 ctx.spawn(fut, move |me, repo_path_opt, ctx| {
                                     let old_repo_path = me.current_repo_path.clone();

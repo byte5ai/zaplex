@@ -4,18 +4,11 @@
 //! material. Session snapshots may carry the task titles that an external agent
 //! deliberately emitted through its structured task/plan tool.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-
-/// A JSON-safe sentinel for an aggregated window containing unpriced usage.
-/// It stays negative under ordinary fleet sums; real token costs cannot be
-/// negative, and [`crate::format::format_cost`] renders every negative value as
-/// `unpriced`. The explicit [`WindowTotals::has_unpriced_usage`] flag remains
-/// the semantic source of truth.
-pub(crate) const UNPRICED_COST_USD: f64 = -1.0e300;
 
 /// The LLM CLI providers the cockpit understands.
 ///
@@ -110,7 +103,7 @@ pub struct UsageEntry {
 }
 
 /// Aggregated token + cost totals over a time window.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct WindowTotals {
     pub input: u64,
     pub output: u64,
@@ -124,12 +117,16 @@ pub struct WindowTotals {
     pub work: u64,
     /// All billable tokens: `work + cache_read`.
     pub total: u64,
-    /// `true` if at least one turn's model had no static price. In that case
-    /// `cost_usd` is a JSON-safe negative sentinel, which
-    /// [`crate::format::format_cost`] renders as `unpriced` instead of
-    /// pretending the unknown spend is `$0.00`.
+    /// `true` if at least one turn's model had no static price. `cost_usd` then
+    /// covers only the priced turns, and [`crate::format::cost_figure`] says so
+    /// instead of pretending the unknown spend is `$0.00` or part of the sum.
     #[serde(default)]
     pub has_unpriced_usage: bool,
+    /// The models whose turns had no static price, i.e. whose spend is missing
+    /// from `cost_usd`.
+    #[serde(default)]
+    pub unpriced_models: BTreeSet<String>,
+    /// Estimated cost of the priced turns at bundled list prices.
     pub cost_usd: f64,
     /// Number of assistant messages/turns counted.
     pub messages: u64,
@@ -150,12 +147,15 @@ impl WindowTotals {
         let total = work.saturating_add(e.cache_read);
         self.work = self.work.saturating_add(work);
         self.total = self.total.saturating_add(total);
-        match pricing.cost_for(&e.model, e.input, e.output, e.cache_create, e.cache_read) {
-            Some(cost) if !self.has_unpriced_usage => self.cost_usd += cost,
-            Some(_) => {}
-            None => {
-                self.has_unpriced_usage = true;
-                self.cost_usd = UNPRICED_COST_USD;
+        // A turn that billed no tokens costs nothing at any rate, so it is
+        // neither part of the estimate nor a gap in it.
+        if total > 0 {
+            match pricing.cost_for(&e.model, e.input, e.output, e.cache_create, e.cache_read) {
+                Some(cost) => self.cost_usd += cost,
+                None => {
+                    self.has_unpriced_usage = true;
+                    self.unpriced_models.insert(e.model.clone());
+                }
             }
         }
         self.messages = self.messages.saturating_add(1);

@@ -84,6 +84,25 @@ cockpit-card-reset-both = 5h ↻ { $reset5h } · Wo ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
 cockpit-header-cost-summary = heute { $today } · { $week } Wo
 cockpit-header-today-total = Alle Konten · heute { $today }
+# List-price cost estimates. Fluent does not localize decimal separators, so the
+# whole dollars and the cents are placed separately; the no-break space keeps
+# amount and currency on one line.
+cockpit-cost-estimate = ~{ $whole },{ $cents }{"\u00A0"}$
+cockpit-cost-unpriced = ohne Preis
+cockpit-cost-partly-unpriced = teilweise ohne Preis
+cockpit-cost-unpriced-models = Ohne Listenpreis: { $models }
+cockpit-cost-source = Kosten: Schätzung nach API-Listenpreisen, Stand { $date }
+cockpit-fleet-cost-summary = heute { $today } · 5{"\u00A0"}h { $block } · Woche { $week }
+cockpit-fleet-accounts = { $count ->
+    [one] { $count } Konto
+   *[other] { $count } Konten
+}
+cockpit-fleet-working = ▶ { $count } aktiv
+cockpit-fleet-waiting = ✋ { $count } { $count ->
+    [one] wartet auf Dich
+   *[other] warten auf Dich
+}
+cockpit-fleet-more-sessions = … { $count } weitere
 # Review-Cluster. „geprüft" ist bewusst kein „freigegeben": die Markierung ist
 # eine private Notiz an dich selbst — sie sagt dem Agenten nichts und gibt nichts frei.
 cockpit-session-review = Ansehen
@@ -112,6 +131,7 @@ cockpit-host-no-local-agents = Keine lokalen KI-Sessions
 cockpit-host-inventory-pending = KI-Sessions werden geladen…
 cockpit-host-inventory-unsupported = Host-Dienst aktualisieren, um KI-Sessions anzuzeigen
 cockpit-host-inventory-unavailable = KI-Sessions sind vorübergehend nicht verfügbar
+cockpit-host-inventory-timed-out = Der Host braucht zu lange, um KI-Sessions aufzulisten
 cockpit-host-removed = aus Verbindungen entfernt
 cockpit-host-unverified = Verbindungsregister nicht verfügbar
 cockpit-conductor-rest-show-both = { $running } laufend · { $idle } ruhend — zeigen
@@ -182,6 +202,11 @@ workspace-favorite-manage-host-error = Die Host-Einstellungen konnten nicht geö
 workspace-left-panel-ssh-manager-tree-empty = Noch keine SSH-Server. Nutze den Ordner-Button für einen Ordner, + für einen Server.
 workspace-left-panel-ssh-manager-add-blank = Leeren Server anlegen
 workspace-left-panel-ssh-manager-discover-tailscale = Tailscale-Hosts entdecken
+workspace-left-panel-ssh-manager-tailscale-start-failed = Tailscale-Suche konnte nicht gestartet werden: { $error }
+workspace-left-panel-ssh-manager-tailscale-timed-out = Die Tailscale-Suche hat zu lange gedauert.
+workspace-left-panel-ssh-manager-tailscale-read-failed = Tailscale-Status konnte nicht gelesen werden: { $error }
+workspace-left-panel-ssh-manager-tailscale-unavailable = Tailscale wurde nicht gefunden oder läuft nicht (`tailscale status` ist fehlgeschlagen).
+workspace-left-panel-ssh-manager-tailscale-import-failed = Tailscale-Hosts konnten nicht übernommen werden: { $error }
 
 # ── Allgemein (überall sichtbare Buttons/Labels) ─────────────────────────────
 common-ok = OK
@@ -605,7 +630,7 @@ workspace-left-panel-agent-conversations = Agent-Unterhaltungen
 workspace-left-panel-close-panel = Panel schließen
 workspace-left-panel-back-to-connections = Zurück zu Verbindungen
 workspace-left-panel-global-search = Globale Suche
-workspace-left-panel-project-explorer = Projekt-Explorer
+workspace-left-panel-project-explorer = Projektbrowser
 workspace-left-panel-server-file-browser = Server-Dateien
 workspace-left-panel-skill-manager = Skill-Manager
 workspace-left-panel-ssh-manager = Verbindungen
@@ -666,6 +691,11 @@ workspace-left-panel-ssh-manager-menu-delete = Löschen
 workspace-left-panel-ssh-manager-menu-edit = Bearbeiten
 workspace-left-panel-ssh-manager-menu-new-folder = Neuer Ordner
 workspace-left-panel-ssh-manager-menu-new-server = Neuer SSH-Server
+workspace-left-panel-ssh-manager-default-folder-name = Neuer Ordner
+workspace-left-panel-ssh-manager-default-server-name = Neuer Server
+workspace-left-panel-ssh-manager-clone-name-suffix = (Kopie)
+workspace-left-panel-ssh-manager-note-imported-from = Importiert aus
+workspace-left-panel-ssh-manager-note-discovered-via-tailscale = Über Tailscale gefunden
 workspace-left-panel-ssh-manager-menu-rename = Umbenennen
 workspace-left-panel-ssh-manager-menu-sessions = Zaplex-Sessions
 workspace-left-panel-ssh-manager-menu-refresh-sessions = Zaplex-Sessions aktualisieren
@@ -728,6 +758,7 @@ workspace-left-panel-ssh-manager-sessions-empty = Keine Zaplex-Sessions
 workspace-left-panel-ssh-manager-sessions-loading = Lade Sessions…
 workspace-left-panel-ssh-manager-sessions-needs-key = Zaplex-Sessions benötigen schlüsselbasierte Authentifizierung
 workspace-left-panel-ssh-manager-sessions-not-persistent = „Session-Persistenz“ auf „Dauerhaft“ setzen, um dies zu nutzen
+workspace-left-panel-ssh-manager-sessions-unix-only = Daemon-Sessions gibt es nur auf Unix-Hosts.
 workspace-left-panel-ssh-manager-session-id = Session-ID: { $id }
 workspace-left-panel-ssh-manager-session-open-here = In diesem Fenster offen
 workspace-left-panel-ssh-manager-session-show-tab = Tab anzeigen
@@ -745,8 +776,52 @@ workspace-left-panel-ssh-manager-session-last-opened-days = { $count ->
         [one] zuletzt geöffnet vor 1 Tag
        *[other] zuletzt geöffnet vor { $count } Tagen
     }
+workspace-left-panel-ssh-manager-session-detached-metadata = { $detached } · { $retention }
+workspace-left-panel-ssh-manager-session-detached-now = gerade getrennt
+workspace-left-panel-ssh-manager-session-detached-minutes = { $count ->
+        [one] getrennt seit 1 Minute
+       *[other] getrennt seit { $count } Minuten
+    }
+workspace-left-panel-ssh-manager-session-detached-hours = { $count ->
+        [one] getrennt seit 1 Stunde
+       *[other] getrennt seit { $count } Stunden
+    }
+workspace-left-panel-ssh-manager-session-detached-days = { $count ->
+        [one] getrennt seit 1 Tag
+       *[other] getrennt seit { $count } Tagen
+    }
+workspace-left-panel-ssh-manager-session-expires-soon = läuft in Kürze ab
+workspace-left-panel-ssh-manager-session-expires-minutes = { $count ->
+        [one] läuft in 1 Minute ab
+       *[other] läuft in { $count } Minuten ab
+    }
+workspace-left-panel-ssh-manager-session-expires-hours = { $count ->
+        [one] läuft in 1 Stunde ab
+       *[other] läuft in { $count } Stunden ab
+    }
+workspace-left-panel-ssh-manager-session-kept = bleibt erhalten
+workspace-left-panel-ssh-manager-session-kept-agent = bleibt erhalten, solange der Agent läuft
+workspace-left-panel-ssh-manager-session-kept-unknown = bleibt erhalten, Programm unbekannt
+workspace-left-panel-ssh-manager-session-legacy-metadata = { $opened } · { $expires }
+workspace-left-panel-ssh-manager-session-legacy-expires-soon = läuft ohne Verbindung in Kürze ab
+workspace-left-panel-ssh-manager-session-legacy-expires-minutes = { $count ->
+        [one] läuft ohne Verbindung in 1 Minute ab
+       *[other] läuft ohne Verbindung in { $count } Minuten ab
+    }
+workspace-left-panel-ssh-manager-session-legacy-expires-hours = { $count ->
+        [one] läuft ohne Verbindung in 1 Stunde ab
+       *[other] läuft ohne Verbindung in { $count } Stunden ab
+    }
+workspace-left-panel-ssh-manager-session-end = Session beenden
+workspace-left-panel-ssh-manager-session-end-title = Session „{ $name }“ beenden?
+workspace-left-panel-ssh-manager-session-end-summary = Auf { $host } werden die Shell dieser Session und alle darin laufenden Programme beendet. Ihre Ausgabe geht verloren.
+workspace-left-panel-ssh-manager-session-end-agent = Darin läuft gerade ein Agent; er wird ebenfalls beendet.
+workspace-left-panel-ssh-manager-session-end-confirm = Beenden
+workspace-left-panel-ssh-manager-session-end-changed = Diese Session hat sich inzwischen geändert oder existiert nicht mehr. Aktualisiere die Sessions.
+workspace-left-panel-ssh-manager-session-end-failed = Diese Session konnte nicht beendet werden: { $detail }
 workspace-left-panel-ssh-manager-session-host-missing = Dieser Host existiert nicht mehr unter Verbindungen
 workspace-left-panel-ssh-manager-session-open-error = Diese Session konnte nicht geöffnet werden: { $detail }
+workspace-left-panel-ssh-manager-session-stale = Diese Session hat sich geändert oder existiert nicht mehr. Die Sessionliste wird neu geladen.
 workspace-left-panel-ssh-manager-sessions-refreshing = Sessions werden aktualisiert…
 workspace-left-panel-ssh-manager-sessions-timeout = Die Sessionliste konnte innerhalb von { $seconds } Sekunden nicht geladen werden. Aktualisiere die Sessions, um es erneut zu versuchen.
 workspace-left-panel-ssh-manager-sessions-needs-install = Verbinde zuerst den Host, um den Zaplex-Sitzungsdienst einzurichten. Aktualisiere danach die Sessions.
@@ -838,6 +913,7 @@ theme-editor-error-image = Aus dem Bild konnte kein Theme erstellt werden: { $er
 theme-editor-error-local-files = Für den Theme-Import ist lokaler Dateizugriff erforderlich.
 theme-editor-error-export-write = Das exportierte Theme konnte nicht geschrieben werden: { $error }
 workspace-left-panel-ssh-manager-multiplexer-metadata = { $kind } · { $windows } Fenster · { $clients } Clients
+workspace-left-panel-ssh-manager-multiplexer-kind-unknown = unbekannt
 workspace-left-panel-ssh-manager-multiplexer-scan-error = Multiplexer-Erkennung fehlgeschlagen: { $detail }
 workspace-left-panel-ssh-manager-multiplexer-invalid = Diese Multiplexer-Session hat keinen unterstützten Typ.
 workspace-left-panel-ssh-manager-multiplexer-host-missing = Der gespeicherte Host ist nicht mehr vorhanden.
@@ -865,7 +941,10 @@ cockpit-table-col-last = Zuletzt
 cockpit-table-filter-all = Alle
 cockpit-table-filter-waiting = Wartet
 cockpit-table-filter-active = Aktiv
-cockpit-table-filter-idle = Idle
+cockpit-table-filter-idle = Ruht
+cockpit-table-state-waiting = Wartet
+cockpit-table-state-working = Aktiv
+cockpit-table-state-idle = Ruht
 cockpit-account-gone = Dieses Konto ist nicht mehr auffindbar — abgemeldet, oder sein Konfig-Verzeichnis fehlt.
 cockpit-menu-adopt = Session öffnen
 cockpit-menu-fork = Fork
@@ -941,8 +1020,15 @@ sftp-context-menu-rename = Umbenennen
 sftp-context-menu-delete = Löschen
 sftp-context-menu-details = Details
 cockpit-table-search-placeholder = Sessions filtern…
-cockpit-meter-5h = 5h
-cockpit-meter-week = Wo
+cockpit-meter-5h = 5{"\u00A0"}h
+cockpit-meter-week = Woche
+cockpit-duration-minutes = { $minutes }{"\u00A0"}min
+cockpit-duration-hours = { $hours }{"\u00A0"}h
+cockpit-duration-days = { $days }{"\u00A0"}d
+cockpit-duration-hours-minutes = { $hours }{"\u00A0"}h { $minutes }{"\u00A0"}min
+cockpit-duration-days-hours = { $days }{"\u00A0"}d { $hours }{"\u00A0"}h
+cockpit-age-now = jetzt
+cockpit-reset-resetting = wird zurückgesetzt
 fm-col-name = Name
 fm-col-size = Größe
 fm-col-modified = Geändert
@@ -1297,6 +1383,8 @@ ai-footer-subscription-choose-account = Konto auswählen
 ai-footer-subscription-choose-model = Modell auswählen
 ai-footer-subscription-switch-location = Zu { $host } wechseln · Verzeichnis { $directory }
 ai-footer-subscription-local-machine = Lokaler Rechner
+ai-footer-subscription-default-account = Standard-Abo
+ai-footer-subscription-remote-default-account = Standard-Abo des Remote-Hosts
 ai-footer-subscription-choose-directory = Verzeichnis auswählen…
 ai-footer-subscription-enter-remote-directory = Absolutes Remote-Verzeichnis oder . eingeben…
 ai-footer-subscription-use-directory = Verzeichnis { $directory } verwenden
@@ -1319,6 +1407,7 @@ ai-footer-subscription-status-running-tool = { $tool } wird ausgeführt
 ai-footer-subscription-detail-running-tool = Der ausgewählte Agent führt { $tool } aus.
 ai-footer-subscription-status-waiting-for-approval = Wartet auf Genehmigung
 ai-footer-subscription-detail-waiting-for-approval = Prüfe die angeforderte Aktion, bevor der Agent fortfahren kann.
+ai-footer-subscription-approval-required = Genehmigung erforderlich für { $kind }: { $description }
 ai-footer-subscription-status-turn-complete = Antwort abgeschlossen
 ai-footer-subscription-detail-turn-complete = Setze die aufgezeichnete Sitzung fort oder starte neu.
 ai-footer-subscription-status-session-ended = Sitzung beendet
@@ -1326,6 +1415,7 @@ ai-footer-subscription-detail-session-ended = Diese Sitzung kann keine weiteren 
 ai-footer-subscription-identity-id = ID { $id }
 ai-footer-subscription-identity-named-id = { $name } · ID { $id }
 ai-footer-subscription-model-resolved = aufgelöst { $model }
+ai-footer-subscription-session-target = { $agent } · { $account } · { $host } · { $directory } · { $model }
 ai-footer-subscription-field-agent = Agent
 ai-footer-subscription-field-account = Konto
 ai-footer-subscription-field-host = Host
@@ -2090,7 +2180,7 @@ settings-code-show-diff-stats = Diff-Statistik auf der Code-Review-Schaltfläche
 settings-code-show-diff-stats-desc = Auf der Code-Review-Schaltfläche die Anzahl hinzugefügter und entfernter Zeilen anzeigen.
 settings-code-project-explorer = Projektbrowser
 settings-code-project-explorer-desc = Fügt dem linken Werkzeugbereich einen Projektbrowser beziehungsweise Dateibaum im IDE-Stil hinzu.
-settings-code-global-search = Globale Dateisuche
+settings-code-global-search = Globale Suche
 settings-code-global-search-desc = Fügt dem linken Werkzeugbereich eine globale Dateisuche hinzu.
 
 # ── Einstellungen: Ausführungsprofile ────────────────────────────────────────
@@ -3125,6 +3215,29 @@ ai-context-blocks-days-ago = { $count ->
         [one] Vor 1 Tag
        *[other] Vor { $count } Tagen
     }
+time-format-just-now = gerade eben
+time-format-just-now-sentence-case = Gerade eben
+time-format-minutes-ago = vor { $count } Min.
+time-format-hours-ago = { $count ->
+        [one] vor 1 Stunde
+       *[other] vor { $count } Stunden
+    }
+time-format-days-ago = { $count ->
+        [one] vor 1 Tag
+       *[other] vor { $count } Tagen
+    }
+time-format-weeks-ago = { $count ->
+        [one] vor 1 Woche
+       *[other] vor { $count } Wochen
+    }
+time-format-months-ago = { $count ->
+        [one] vor 1 Monat
+       *[other] vor { $count } Monaten
+    }
+time-format-years-ago = { $count ->
+        [one] vor 1 Jahr
+       *[other] vor { $count } Jahren
+    }
 ai-context-blocks-no-output = Keine Ausgabe
 ai-context-blocks-accessibility-label = Block: { $command }
 
@@ -3239,14 +3352,13 @@ workspace-conversation-list-past = VERGANGEN
 workspace-conversation-list-view-all = Alle anzeigen
 workspace-conversation-list-show-less = Weniger anzeigen
 workspace-conversation-list-empty-title = Noch keine Unterhaltungen
-workspace-conversation-list-empty-description = Deine aktiven und vergangenen Unterhaltungen mit lokalen und Hintergrundagenten erscheinen hier.
+workspace-conversation-list-empty-description = Deine aktiven und vergangenen Agenten-Unterhaltungen erscheinen hier.
 workspace-conversation-list-new-conversation = Neue Unterhaltung
 conversation-untitled = Unbenannte Unterhaltung
 conversation-deleted = Gelöschte Unterhaltung
 workspace-conversation-list-no-matching = Keine passenden Unterhaltungen
 workspace-conversation-list-delete = Löschen
 workspace-conversation-list-delete-in-progress-error = Laufende Unterhaltungen können nicht gelöscht werden.
-workspace-conversation-list-delete-ambient-tooltip = Unterhaltungen mit Hintergrundagenten können nicht gelöscht werden
 workspace-conversation-list-fork-new-pane = In neues Pane forken
 workspace-conversation-list-fork-new-tab = In neuen Tab forken
 workspace-conversation-list-fallback-title = Unterhaltung
@@ -3259,6 +3371,7 @@ command-palette-conversations-a11y-navigate = Eingabetaste drücken, um zur Unte
 command-palette-conversations-a11y-fork = Eingabetaste drücken, um die aktuelle Unterhaltung in eine neue Unterhaltung zu forken.
 command-palette-conversations-a11y-new = Eingabetaste drücken, um eine neue Unterhaltung zu erstellen.
 project-explorer-empty-description = In dieser Session wurde kein Projekt gefunden. Öffne eine Session in einem Projektverzeichnis, um dessen Dateien zu durchsuchen.
+project-explorer-empty-title = Kein Projekt gefunden
 project-explorer-unavailable-title = Projektbrowser nicht verfügbar
 project-explorer-unavailable-disabled-description = Der Projektbrowser benötigt Zugriff auf deinen lokalen Arbeitsbereich. Öffne eine neue oder wechsle zu einer aktiven Session.
 project-explorer-unavailable-remote-description = Der Projektbrowser benötigt Zugriff auf deinen lokalen Arbeitsbereich, der in Remote-Sessions nicht unterstützt wird.
@@ -3391,7 +3504,7 @@ global-search-title = Globale Suche
 global-search-description = Dateien in deinen aktuellen Verzeichnissen durchsuchen.
 global-search-unavailable-title = Globale Suche nicht verfügbar
 global-search-unavailable-description = Die globale Suche benötigt Zugriff auf deinen lokalen Arbeitsbereich. Öffne eine neue oder wechsle zu einer aktiven Session.
-global-search-remote-description = Die globale Suche benötigt Zugriff auf deinen lokalen Arbeitsbereich, der in Remote-Sessions nicht unterstützt wird
+global-search-remote-description = Die globale Suche benötigt Zugriff auf deinen lokalen Arbeitsbereich, der in Remote-Sessions nicht unterstützt wird.
 global-search-unsupported-session-description = Die globale Suche funktioniert derzeit nicht in Git Bash oder WSL.
 global-search-failed = Globale Suche fehlgeschlagen.
 
@@ -3690,7 +3803,7 @@ onboarding-customize-vertical = Vertikal
 onboarding-customize-horizontal = Horizontal
 onboarding-customize-conversation-history = Unterhaltungsverlauf
 onboarding-customize-file-explorer = Dateibrowser
-onboarding-customize-global-file-search = Globale Dateisuche
+onboarding-customize-global-file-search = Globale Suche
 onboarding-customize-warp-drive = Zaplex Drive
 onboarding-customize-tools-panel = Werkzeugbereich
 onboarding-customize-code-review = Code-Review
@@ -4107,6 +4220,7 @@ workspace-split-target-changed = Der Split wurde nicht geöffnet, weil sich sein
 workspace-split-host-already-connecting = { $host } wird bereits verbunden. Öffne den Split erneut, sobald die Verbindung steht.
 workspace-split-agent-single-launch = Ein Split nimmt genau einen Agenten auf. Wähle ein einzelnes Konto.
 workspace-launch-more-hosts = Weitere Hosts
+workspace-launch-host-not-found = { $agent } konnte nicht gestartet werden: Host „{ $host }“ nicht gefunden.
 workspace-remote-agent-route-validation-unavailable = Der Daemon kann diese Agent-zu-PTY-Route nicht validieren.
 workspace-remote-daemon-connection-unavailable = Die Daemon-Verbindung ist nicht verfügbar; aktualisiere die Agent-Sessions.
 workspace-remote-pty-agent-changed = Der Vordergrund-Agent dieses PTYs hat sich geändert. Aktualisiere die Agent-Sessions, bevor du es erneut anhängst.
@@ -4185,6 +4299,15 @@ workspace-remote-routed-split-target-changed = Die Remote-Konto- oder verwaltete
 # Persistence initialization must succeed before the workspace can open.
 persistence-startup-error-title = Zaplex konnte die gespeicherten Daten nicht öffnen
 persistence-startup-error-detail = Der Start wurde abgebrochen, damit keine Arbeit ohne Speicherung verloren geht. Die vorhandene Datenbank und Migrationsdateien bleiben erhalten. Schließe gegebenenfalls eine andere Zaplex-Instanz, behebe den folgenden Fehler und starte Zaplex erneut.
+
+    { $error }
+persistence-startup-error-migration-locked = Eine andere Zaplex-Instanz öffnet gerade dieselben gespeicherten Daten, daher wurde dieser Start abgebrochen. Warte, bis die andere Instanz fertig gestartet ist, oder beende sie, und starte Zaplex dann erneut.
+
+    { $error }
+persistence-startup-error-legacy-database-locked = Zaplex konnte die Daten einer früheren Version aus { $path } nicht übernehmen, weil eine andere App sie noch verwendet, zum Beispiel eine frühere Version von Zap oder Zaplex. Beende diese App und starte Zaplex erneut; die Übernahme wird dann automatisch fortgesetzt. Die Datei und deine aktuellen Daten bleiben unverändert.
+
+    { $error }
+persistence-startup-error-legacy-database-copy-failed = Zaplex konnte die Daten einer früheren Version aus { $path } nicht übernehmen. Die Datei und deine aktuellen Daten bleiben unverändert. Behebe den folgenden Fehler, zum Beispiel indem du Speicherplatz freigibst oder den Zugriff auf den Ordner erlaubst, und starte Zaplex erneut. Ist die Datei beschädigt, verschiebe sie in einen anderen Ordner: Zaplex startet dann ohne diese Daten und lässt die Datei unangetastet.
 
     { $error }
 persistence-startup-error-close = Zaplex schließen
