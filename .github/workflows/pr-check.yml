@@ -184,6 +184,10 @@ jobs:
         run: cargo check --locked --bin zaplex
         shell: bash
 
+      - name: Native window mouse routing regressions
+        run: cargo test --locked -p warpui --lib platform::mac::window::tests:: -- --nocapture
+        shell: bash
+
       - name: Native subscription Agent layout evidence
         env:
           WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: "1"
