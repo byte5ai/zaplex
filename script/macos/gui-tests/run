@@ -1,0 +1,48 @@
+#!/bin/bash
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")" && pwd)
+art=${1:?Usage: run ARTIFACT_DIRECTORY}
+mkdir -p "$art"
+art=$(cd "$art" && pwd)
+work=$(mktemp -d)
+cp -R "$root/project.yml" "$root/ZaplexUITests" "$work/"
+
+macrunner-gui-check --prepare --screenshot "$art/desktop.png"
+cat /Users/Shared/macrunner-image.txt > "$art/runner-image.txt"
+xcodebuild -version > "$art/xcode.txt"
+sw_vers > "$art/macos.txt"
+
+xcodegen generate --spec "$work/project.yml"
+xcodebuild build-for-testing -project "$work/ZaplexGUI.xcodeproj" -scheme ZaplexGUI \
+  -destination 'platform=macOS' -derivedDataPath "$work/build" \
+  > "$art/build-tests.log" 2>&1
+
+shopt -s nullglob
+bundles=("$work"/build/Build/Products/*.xctestrun)
+[[ ${#bundles[@]} -eq 1 ]] || { echo "Expected exactly one xctestrun file" >&2; exit 1; }
+
+set +e
+macrunner-gui-run --timeout 360 --artifacts "$art/gui" -- \
+  xcodebuild test-without-building -xctestrun "${bundles[0]}" \
+  -destination 'platform=macOS' -parallel-testing-enabled NO \
+  -resultBundlePath "$art/tests.xcresult" > "$art/tests.log" 2>&1
+result=$?
+set -e
+
+if [[ -d "$art/tests.xcresult" ]]; then
+  xcrun xcresulttool export attachments --path "$art/tests.xcresult" --output-path "$art/attachments"
+  xcrun xcresulttool get test-results summary --path "$art/tests.xcresult" > "$art/summary.json"
+  # A green xcodebuild with no matching tests must never pass the gate.
+  /usr/bin/python3 - "$art/summary.json" <<'PY'
+import json, sys
+summary = json.load(open(sys.argv[1]))
+if not (summary.get('passedTests') == 4 and summary.get('failedTests') == 0
+        and summary.get('skippedTests') == 0):
+    raise SystemExit('All four GUI tests must execute and pass; see summary.json')
+PY
+else
+  echo "No XCTest result bundle was produced" >&2
+  exit 1
+fi
+exit "$result"

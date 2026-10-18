@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+
+dmg=${1:?Usage: install-dmg DMG ARTIFACT_DIRECTORY}
+art=${2:?Usage: install-dmg DMG ARTIFACT_DIRECTORY}
+[[ ! -e /Applications/Zaplex.app ]] || { echo "Zaplex already installed: expected fresh VM" >&2; exit 1; }
+mkdir -p "$art"
+mount=$(mktemp -d)
+trap 'hdiutil detach "$mount" >/dev/null 2>&1 || true' EXIT
+hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$dmg" > "$art/mount.log"
+[[ -d "$mount/Zaplex.app" ]] || { echo "Zaplex.app missing from DMG" >&2; exit 1; }
+ditto "$mount/Zaplex.app" /Applications/Zaplex.app
+codesign --verify --deep --strict /Applications/Zaplex.app > "$art/signature.log" 2>&1
+shasum -a 256 "$dmg" > "$art/dmg.sha256"
+plutil -convert json -o "$art/app-info.json" /Applications/Zaplex.app/Contents/Info.plist

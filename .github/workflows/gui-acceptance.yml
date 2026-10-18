@@ -1,0 +1,78 @@
+name: macOS GUI acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release to test (no app build)
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: DMG artifact from the calling workflow
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  gui:
+    name: Installed DMG user flows
+    # ci-lint: allow-CI006  Manual/batch only; ephemeral VM without signing secrets
+    runs-on: macrunner
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify GUI prerequisites
+        run: macrunner-gui-check --prepare
+
+      - name: Download existing release and verify asset digest
+        if: github.event_name == 'workflow_dispatch' && inputs.artifact_name == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          script/validate-release-tag "$RELEASE_TAG"
+          mkdir -p "$RUNNER_TEMP/dmg" "$RUNNER_TEMP/gui-evidence"
+          gh api "repos/byte5ai/zaplex/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/gui-evidence/release.json"
+          digest=$(jq -er '.assets[] | select(.name == "Zaplex-arm64.dmg") | .digest' "$RUNNER_TEMP/gui-evidence/release.json")
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          asset_id=$(jq -er '.assets[] | select(.name == "Zaplex-arm64.dmg") | .id' "$RUNNER_TEMP/gui-evidence/release.json")
+          gh api "repos/byte5ai/zaplex/releases/assets/$asset_id" -H 'Accept: application/octet-stream' > "$RUNNER_TEMP/dmg/Zaplex-arm64.dmg"
+          printf '%s  %s\n' "${digest#sha256:}" "$RUNNER_TEMP/dmg/Zaplex-arm64.dmg" | shasum -a 256 -c -
+
+      - name: Fetch DMG from this batch
+        if: inputs.artifact_name != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ runner.temp }}/dmg
+
+      - name: Install unchanged app from DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=("$RUNNER_TEMP"/dmg/*.dmg)
+          [[ ${#dmgs[@]} -eq 1 ]]
+          bash script/macos/gui-tests/install-dmg "${dmgs[0]}" "$RUNNER_TEMP/gui-evidence"
+          git rev-parse HEAD > "$RUNNER_TEMP/gui-evidence/test-source-sha.txt"
+
+      - name: Exercise user flows in the installed app
+        run: bash script/macos/gui-tests/run "$RUNNER_TEMP/gui-evidence"
+
+      - name: Preserve evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-gui-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gui-evidence/
+          if-no-files-found: error
+          retention-days: 14

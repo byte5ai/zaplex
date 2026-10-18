@@ -1,0 +1,23 @@
+name: ZaplexGUI
+options:
+  bundleIdPrefix: dev.zaplex.tests
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    GENERATE_INFOPLIST_FILE: YES
+targets:
+  ZaplexUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [ZaplexUITests]
+schemes:
+  ZaplexGUI:
+    build:
+      targets:
+        ZaplexUITests: [test]
+    test:
+      targets: [ZaplexUITests]
