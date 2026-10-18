@@ -286,6 +286,13 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  gui_acceptance:
+    name: Verify installed DMG user flows
+    needs: build_dmg
+    uses: ./.github/workflows/gui-acceptance.yml
+    with:
+      artifact_name: zap-test-dmg-aarch64
+
   build_dmg:
     name: Sign and package Test DMG (macOS Apple Silicon)
     # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
