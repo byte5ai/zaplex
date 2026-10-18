@@ -22,9 +22,10 @@ NSWindowStyleMask warpWindowMask = NSWindowStyleMaskClosable | NSWindowStyleMask
 // The default macOS titlebar height (in points).
 static const CGFloat DEFAULT_TITLEBAR_HEIGHT = 28.0;
 
-BOOL warp_should_dispatch_native_window_chrome_event(BOOL mouseDownStartedInNativeChrome,
-                                                     BOOL nativeChromeDispatchIsSupported) {
-    return mouseDownStartedInNativeChrome && nativeChromeDispatchIsSupported;
+BOOL warp_should_dispatch_native_window_chrome_event(BOOL mouseDownOnWindowButton,
+                                                     BOOL mouseDownOnResizeEdge,
+                                                     BOOL nativeResizeDispatchIsSupported) {
+    return mouseDownOnWindowButton || (mouseDownOnResizeEdge && nativeResizeDispatchIsSupported);
 }
 
 // A back-to-front ordered array of windows, identified by their `windowNumber`
@@ -409,7 +410,7 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
 
     for (NSUInteger i = 0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
         NSButton *button = [self standardWindowButton:buttons[i]];
-        if (button && !button.hidden) {
+        if (button && !button.isHiddenOrHasHiddenAncestor) {
             NSPoint point = [button convertPoint:event.locationInWindow fromView:nil];
             if (NSPointInRect(point, button.bounds)) {
                 return button;
@@ -434,12 +435,17 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     switch (event.type) {
         case NSEventTypeLeftMouseDown: {
             NSButton *windowButton = [self standardWindowButtonAtEvent:event];
-            if (windowButton) {
-                _leftMouseDownStartedInNativeWindowChrome = NO;
-                [windowButton mouseDown:event];
-                break;
+            BOOL nativeResizeDispatchIsSupported = NO;
+            if (@available(macOS 27, *)) {
+                nativeResizeDispatchIsSupported = YES;
             }
-            _leftMouseDownStartedInNativeWindowChrome = [self eventIsOverResizeEdge:event];
+            // AppKit must receive the entire button gesture, including mouse-down, so it
+            // can establish its tracking target. Calling the button directly bypasses that
+            // setup and routing mouse-up to the content view prevents the click from completing.
+            _leftMouseDownStartedInNativeWindowChrome =
+                warp_should_dispatch_native_window_chrome_event(
+                    windowButton != nil, !windowButton && [self eventIsOverResizeEdge:event],
+                    nativeResizeDispatchIsSupported);
             [super sendEvent:event];
             break;
         }
@@ -452,26 +458,17 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         // This breaks drag-and-drop for panes and tabs (see CLD-2581), so we work around it with
         // custom dispatching.
         case NSEventTypeLeftMouseUp: {
-            BOOL nativeChromeDispatchIsSupported = NO;
-            if (@available(macOS 27, *)) {
-                nativeChromeDispatchIsSupported = YES;
-            }
-            if (warp_should_dispatch_native_window_chrome_event(
-                    _leftMouseDownStartedInNativeWindowChrome, nativeChromeDispatchIsSupported)) {
+            BOOL nativeChromeGesture = _leftMouseDownStartedInNativeWindowChrome;
+            _leftMouseDownStartedInNativeWindowChrome = NO;
+            if (nativeChromeGesture) {
                 [super sendEvent:event];
             } else {
                 [self.contentView mouseUp:event];
             }
-            _leftMouseDownStartedInNativeWindowChrome = NO;
             break;
         }
         case NSEventTypeLeftMouseDragged: {
-            BOOL nativeChromeDispatchIsSupported = NO;
-            if (@available(macOS 27, *)) {
-                nativeChromeDispatchIsSupported = YES;
-            }
-            if (warp_should_dispatch_native_window_chrome_event(
-                    _leftMouseDownStartedInNativeWindowChrome, nativeChromeDispatchIsSupported)) {
+            if (_leftMouseDownStartedInNativeWindowChrome) {
                 [super sendEvent:event];
             } else {
                 [self.contentView mouseDragged:event];

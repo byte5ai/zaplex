@@ -477,8 +477,9 @@ extern "C" {
     fn set_titlebar_height(window: id, height: f64);
     #[cfg(test)]
     fn warp_should_dispatch_native_window_chrome_event(
-        mouse_down_started_in_native_chrome: BOOL,
-        native_chrome_dispatch_is_supported: BOOL,
+        mouse_down_on_window_button: BOOL,
+        mouse_down_on_resize_edge: BOOL,
+        native_resize_dispatch_is_supported: BOOL,
     ) -> BOOL;
 }
 

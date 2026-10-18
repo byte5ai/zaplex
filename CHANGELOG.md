@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.1] — 2026-10-18
+
+- macOS: Die Ampel-Buttons zum Schließen, Minimieren und für Vollbild erhalten wieder die vollständige native Klickfolge. Tab- und Pane-Dragging sowie die versionsabhängige Behandlung der Fensterränder bleiben erhalten.
+
 ## [1.2.0] — 2026-10-06
 
 - Remote-Sessions (#508, #510): Getrennte Sessions laufen 24 Stunden ab der Trennung statt ab dem letzten Öffnen ab; Sessions, in denen Claude Code oder Codex läuft, beendet der Daemon nie automatisch. Die Sessionliste zeigt „getrennt seit …“ und das Ablaufdatum, Sessions älterer Daemons lassen sich dort gezielt beenden, und verwaiste Sockets abgestürzter Daemons werden aufgeräumt. Wiederhergestellte Tabs scheitern nach einem App-Update nicht mehr an der Attach-Frist, während das neue Remote-Binary installiert wird.
