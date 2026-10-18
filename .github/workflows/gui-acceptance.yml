@@ -7,6 +7,11 @@ on:
         description: Existing release to test (no app build)
         required: true
         type: string
+      suite:
+        description: Full acceptance or terminal-only diagnosis (not full acceptance)
+        type: choice
+        options: [full, terminal]
+        default: full
   workflow_call:
     inputs:
       artifact_name:
@@ -66,7 +71,14 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/gui-evidence/test-source-sha.txt"
 
       - name: Exercise user flows in the installed app
-        run: bash script/macos/gui-tests/run "$RUNNER_TEMP/gui-evidence"
+        env:
+          SUITE: ${{ inputs.artifact_name != '' && 'full' || inputs.suite || 'full' }}
+        run: |
+          echo "GUI suite: $SUITE" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$SUITE" != full ]]; then
+            echo 'Diagnostic subset only — not a full DMG acceptance.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          bash script/macos/gui-tests/run "$RUNNER_TEMP/gui-evidence" "$SUITE"
 
       - name: Preserve evidence even on failure
         if: always()

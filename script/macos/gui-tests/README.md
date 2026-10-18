@@ -24,8 +24,11 @@ Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
 
 - Manuell: `gui-acceptance.yml` mit `release_tag` eines bestehenden Releases.
   Asset-ID und SHA-256 aus der GitHub-API werden vor der Installation geprüft.
+  `suite=terminal` prüft gezielt die drei Terminalfälle ohne den Schließen-Button;
+  dieser Diagnoselauf gilt ausdrücklich nicht als vollständige Abnahme.
 - Im Batch: `test-dmg.yml` ruft den Workflow nach dem Verpacken auf und übergibt
   genau dessen DMG-Artefakt. Fehler lassen den Test-DMG-Workflow scheitern.
+  Im Batch wird immer die vollständige Suite ausgeführt.
 - Die Job-VM benötigt Xcode, xcodegen und die Werkzeuge `macrunner-gui-check` und
   `macrunner-gui-run`. Die GUI-Vorprüfung ist verpflichtend.
 - Jeder Lauf archiviert DMG-Hash, App-Metadaten, Test-Commit, Werkzeugversionen,
@@ -34,6 +37,10 @@ Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
 
 Der erste Pilot nutzt `v1.2.0-rc1`. Die Ampel-Korrektur in 1.2.1 ist dort noch
 nicht enthalten; Testergebnisse beziehen sich auf den dokumentierten DMG-Hash.
+
+Die OCR verwendet Vision-Revision 2 mit CPU-Ausführung. Die Standardrevision
+verlangte im ersten Pilot auf macOS 27 einen in der VM nicht verfügbaren
+Neural-Engine-Backend und scheiterte vor der eigentlichen Textprüfung.
 
 ## Aussagegrenzen
 

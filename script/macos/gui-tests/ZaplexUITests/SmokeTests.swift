@@ -35,6 +35,10 @@ final class SmokeTests: XCTestCase {
     private func screenText() throws -> String {
         let image = try XCTUnwrap(NSBitmapImageRep(data: app.screenshot().pngRepresentation)?.cgImage)
         let request = VNRecognizeTextRequest()
+        // The macOS VM has no Neural Engine. Revision 3 selects ANE-only models
+        // on macOS 27; use the CPU-capable revision for this ASCII output.
+        request.revision = VNRecognizeTextRequestRevision2
+        request.usesCPUOnly = true
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
         try VNImageRequestHandler(cgImage: image).perform([request])
