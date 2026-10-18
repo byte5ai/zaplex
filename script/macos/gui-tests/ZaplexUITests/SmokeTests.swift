@@ -1,5 +1,4 @@
 import AppKit
-import Vision
 import XCTest
 
 // The installed release app is deliberately not a build target of this project.
@@ -33,12 +32,23 @@ final class SmokeTests: XCTestCase {
     }
 
     private func screenText() throws -> String {
-        let image = try XCTUnwrap(NSBitmapImageRep(data: app.screenshot().pngRepresentation)?.cgImage)
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = false
-        try VNImageRequestHandler(cgImage: image).perform([request])
-        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+        // Vision's text models require an unavailable ANE backend in this VM,
+        // even with usesCPUOnly. Tesseract reads the same rendered pixels on CPU.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/tesseract")
+        process.arguments = ["stdin", "stdout", "-l", "eng", "--psm", "11"]
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        input.fileHandleForWriting.write(app.screenshot().pngRepresentation)
+        try input.fileHandleForWriting.close()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0, "OCR failed: \(text)")
+        return text
     }
 
     private func expectOutput(_ suffix: String) throws {
