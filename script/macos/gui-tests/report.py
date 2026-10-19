@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-SUITES = {"full": 14, "terminal": 3, "navigation": 8, "surfaces": 2}
+SUITES = {"full": 15, "terminal": 3, "navigation": 8, "surfaces": 3}
 CASES = {
     "SmokeTests/testTerminalExecutesAndRendersOutput",
     "SmokeTests/testNewWindowRunsItsOwnShell",
@@ -21,6 +21,7 @@ CASES = {
     "NavigationTests/testSettingsReturnToOriginalShell",
     "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell",
     "SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+    "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible",
 }
 
 

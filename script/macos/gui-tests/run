@@ -7,7 +7,7 @@ suite=${2:-full}
 selection=${3:-}
 filters=()
 case "$suite" in
-  full) expected=14 ;;
+  full) expected=15 ;;
   terminal)
     expected=3
     filters=(-only-testing:ZaplexUITests/SmokeTests -skip-testing:ZaplexUITests/SmokeTests/testNativeCloseButtonClosesWindow)
@@ -17,7 +17,7 @@ case "$suite" in
     filters=(-only-testing:ZaplexUITests/NavigationTests)
     ;;
   surfaces)
-    expected=2
+    expected=3
     filters=(-only-testing:ZaplexUITests/SurfaceTests)
     ;;
   *) echo "Unknown suite: $suite" >&2; exit 2 ;;

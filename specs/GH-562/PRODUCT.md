@@ -26,6 +26,9 @@ prüft das installierte DMG. Ein erfolgreicher Code-Review ersetzt keinen Ablauf
 8. Der Dateimanager öffnet im Arbeitsverzeichnis des aktiven Pane, zeigt eine
    dort angelegte Testdatei und die beschrifteten Dateiaktionen. Zurückwechseln
    erhält die Shell. Das Öffnen/Schließen von „Connections“ erhält sie ebenfalls.
+9. Bei höchstens 700 Punkten Fensterbreite bleiben alle acht beschrifteten
+   Dateimanager-Aktionen sichtbar, wie in `docs/ui/README.md` vereinbart.
+   Das Fenster wird dafür tatsächlich durch Ziehen schmaler gemacht.
 
 ## Vollständige Produktabnahme
 

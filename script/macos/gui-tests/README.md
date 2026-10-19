@@ -20,11 +20,12 @@ Zaplex-Einstellungen und keine Anmeldedaten im Testprofil.
 | Einstellungen | Sichtbar geöffnet; nach Escape bleibt die ursprüngliche Shell benutzbar |
 | Dateimanager | Zeigt die Datei im Pane-Arbeitsverzeichnis und Dateiaktionen; Zurückwechseln erhält die Shell |
 | Connections | Öffnet sichtbar; Schließen erhält die ursprüngliche Shell |
+| Schmaler Dateimanager | Bei höchstens 700 Punkten Breite bleiben alle acht Dateiaktionen sichtbar |
 
 Die erwartete Ausgabe steht nie vollständig im eingegebenen Befehl. Tesseract
 liest die gerenderten Pixel; bloßes Echo der Eingabe oder ein interner Modellzustand
 reicht nicht. XCTest-Anhänge enthalten Screenshots und den Accessibility-Baum.
-Alle vierzehn Fälle müssen ausgeführt werden und bestehen; übersprungene Tests,
+Alle fünfzehn Fälle müssen ausgeführt werden und bestehen; übersprungene Tests,
 Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
 
 ## Ausführung
