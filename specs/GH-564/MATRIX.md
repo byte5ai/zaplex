@@ -6,9 +6,12 @@ Diese Matrix ist vor dem **nächsten nativen Lauf** festgelegt. Sie macht die
 bereits früher ausgeführten Funktionstests nicht rückwirkend zu UX-Tests.
 
 Prüfziel und Referenzstand: `6c956383ad560913dc31fa383104dc489104d561`.
-Für diesen Stand liegt am 19.10.2026 kein verfügbares DMG vor. Daher sind alle
-aktuellen Ergebnisse `not-run`. Die getrennte [Altbuild-Auswertung](README.md)
-verwendet v1.2.0-rc1 und kann diese Spalte nicht ersetzen.
+Für die vollständige DMG-/Explorationsabnahme liegt noch kein Ergebnis vor;
+die Fallspalte bleibt dafür `not-run`. Die getrennte
+[Altbuild-Auswertung](README.md) verwendet v1.2.0-rc1.
+Ergänzend dokumentiert die [native Fixture-Auswertung](NATIVE-FIXTURES.md)
+Teilbelege und Fehler auf `1201fc4f3cafcbab7464343cad8b715d8cf3db2e`.
+Weder Altbuild noch Fixtures ersetzen die vollständigen Fallkombinationen.
 
 ## Referenzen und Bewertung
 

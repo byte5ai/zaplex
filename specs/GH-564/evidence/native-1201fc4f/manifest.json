@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "native-integration-fixtures",
+  "source_sha": "1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+  "test_source_sha": "1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+  "reference_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "run_id": "39246675914",
+  "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39246675914",
+  "package_version": "1.2.1",
+  "dmg_sha256": null,
+  "installed_dmg": false,
+  "image_processing": "None; unchanged original PNG bytes. Workspace captures verified against the original evidence.json hashes.",
+  "scope": "Native app render/event assertions; deterministic labelled host/session inventory; real isolated local PTYs and files.",
+  "not_covered": [
+    "live SSH/daemon/provider acceptance",
+    "OS reduced motion",
+    "restart restore",
+    "cross-host transfers",
+    "independent exploratory interaction",
+    "authenticated provider interaction",
+    "German locale",
+    "contrast variant",
+    "installed DMG acceptance"
+  ],
+  "images": [
+    {
+      "file": "native-connections-dark-250.png",
+      "sha256": "c21952dc7f7e38c5fa3bea1934b885b7b76a60579de9c0d242cfcaa40495e2ca",
+      "original_file": "test_native_workspace_connections_evidence/2026-10-19T11-51-41/native-connections-dark-250.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-connections-dark-320.png",
+      "sha256": "94f37d7c10b404f1acebba271cd3a6c55dcb7d88d8d0ab30db101fd910f06974",
+      "original_file": "test_native_workspace_connections_evidence/2026-10-19T11-51-41/native-connections-dark-320.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-connections-dark-480.png",
+      "sha256": "90de495c1c37b5a903c4171a9855305684af1ccea7138738a9acf476c0a60e44",
+      "original_file": "test_native_workspace_connections_evidence/2026-10-19T11-51-41/native-connections-dark-480.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-connections-light-250.png",
+      "sha256": "99012d3235eb23ef769c08aed77bdf7ea7ce56902c861289371969624716ddf5",
+      "original_file": "test_native_workspace_connections_evidence/2026-10-19T11-51-41/native-connections-light-250.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-connections-light-320.png",
+      "sha256": "11a6210847e599a9e6ef738d672f33d144e5e7689c9ad14aab7f38a71f047dce",
+      "original_file": "test_native_workspace_connections_evidence/2026-10-19T11-51-41/native-connections-light-320.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-connections-light-480.png",
+      "sha256": "c27b654ffc00656e2aa5b7bc1839a8e5f59d5cc34320486188489c2d67537625",
+      "original_file": "test_native_workspace_connections_evidence/2026-10-19T11-51-41/native-connections-light-480.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-favorite-flyout.png",
+      "sha256": "657f0820d9fc14d64524ff6a3cb9e6b55d80cb847dbfc67806d90fc0bba2f8bd",
+      "original_file": "test_native_workspace_connections_evidence/2026-10-19T11-51-41/native-favorite-flyout.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        900,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-file-manager-focused-action.png",
+      "sha256": "6a85d375fafd3e90c485855a3d9c074a8da3decff523a4fa907c9d96c88060c4",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T11-51-45/native-file-manager-focused-action.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-file-managers-narrow.png",
+      "sha256": "f70f26590305f24f9cc043792f293fcd8f95b4a77137ae31b274dd40cc1b0631",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T11-51-45/native-file-managers-narrow.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-file-managers-normal.png",
+      "sha256": "ccf310786b2e8b302959971ff55a633051e51ca9ab2a650ed170f32394e67942",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T11-51-45/native-file-managers-normal.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-file-managers-restored-terminals.png",
+      "sha256": "2fef5125531873091990481ed7ae395e148b4e684a35b35aa5ae80c3b683b4d6",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T11-51-45/native-file-managers-restored-terminals.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-panes-after-drag.png",
+      "sha256": "5e84a0d0b22a697de3f0aca6b937b79567062ff5766add619d6b5d479601aa98",
+      "original_file": "test_native_workspace_panes_evidence/2026-10-19T11-51-49/native-panes-after-drag.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-panes-side-by-side.png",
+      "sha256": "4c08526445c677020a52ec2079536767ff1a4662db702583f5b4ca3e9bd5a1fa",
+      "original_file": "test_native_workspace_panes_evidence/2026-10-19T11-51-49/native-panes-side-by-side.png",
+      "artifact_name": "native-workspace-evidence-1201fc4f3cafcbab7464343cad8b715d8cf3db2e",
+      "artifact_id": 12184281917,
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "subscription-agent-narrow-540x670.png",
+      "sha256": "e751048cb7f254e267a42ab006ec798884cc94a1aad8c0b693eed12080394ebc",
+      "original_file": "test_subscription_agent_conversation_layout_evidence/2026-10-19T11-51-29/subscription-agent-narrow-540x670.png",
+      "artifact_name": "subscription-agent-layout-evidence",
+      "artifact_id": 12183867612,
+      "screenshot_pixels": [
+        540,
+        670
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    },
+    {
+      "file": "subscription-agent-normal-1180x640.png",
+      "sha256": "77521110f812bc26fff4c9bfe29fb07b8a14035b542729dbf26662962af4ccea",
+      "original_file": "test_subscription_agent_conversation_layout_evidence/2026-10-19T11-51-29/subscription-agent-normal-1180x640.png",
+      "artifact_name": "subscription-agent-layout-evidence",
+      "artifact_id": 12183867612,
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture; connections explicitly set by fixture",
+      "reduced_motion": null
+    }
+  ]
+}

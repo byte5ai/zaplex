@@ -3,12 +3,15 @@
 Stand: 19.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
 übergreifend [#562](https://github.com/byte5ai/zaplex/issues/562).
 
-**Keine Gesamtfreigabe.** Der aktuelle Quellstand wurde nicht nativ geprüft.
+**Keine Gesamtfreigabe.** Die aktuelle DMG-/Explorationsabnahme fehlt.
+Zusätzlich zu dieser Altbuild-Auswertung liegen jetzt
+[native Integrationstest-Belege für `1201fc4f`](NATIVE-FIXTURES.md) vor:
+15 neue Originalaufnahmen mit zwei visuellen Fehlerbefunden.
 Die vor dem nächsten Lauf festgelegte [Prüfmatrix](MATRIX.md) enthält die
 Sollzustände, Nutzeraufgaben, Varianten, benötigten Nachweise und die konkreten
 Gründe für `not-run`. Freie Exploration wurde nicht durchgeführt.
 
-Diese Session hat vorhandene native Screenshots selbst visuell bewertet und
+Diese Altbuild-Auswertung hat vorhandene native Screenshots visuell bewertet und
 mit den versionierten Sollvorgaben verglichen. Sie hat keine neue native
 App-Interaktion ausgeführt. Die früheren deterministischen Funktionstests sind
 keine explorativen Abläufe und werden hier nicht dazu umdeklariert.
