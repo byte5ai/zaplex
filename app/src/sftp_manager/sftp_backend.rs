@@ -1171,8 +1171,25 @@ fn create_local_directory_with_anchor(
         source,
         reserved_identity: None,
     })?;
+    let mut options = fs::OpenOptions::new();
+    #[cfg(target_os = "linux")]
+    options
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_DIRECTORY);
+    #[cfg(not(target_os = "linux"))]
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY);
+    // Pin the reserved inode until ownership validation completes. Metadata alone
+    // can match a replacement when the filesystem immediately reuses an inode.
+    let reservation = options
+        .open(path)
+        .map_err(|source| DirectoryAnchorCreateError {
+            source,
+            reserved_identity: None,
+        })?;
     let reserved =
-        stable_identity_from_local_metadata(&fs::symlink_metadata(path).map_err(|source| {
+        stable_identity_from_local_metadata(&reservation.metadata().map_err(|source| {
             DirectoryAnchorCreateError {
                 source,
                 reserved_identity: None,
@@ -1182,13 +1199,6 @@ fn create_local_directory_with_anchor(
     if let Some(after_create) = after_create {
         after_create(path);
     }
-    let mut options = fs::OpenOptions::new();
-    #[cfg(target_os = "linux")]
-    options
-        .read(true)
-        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW);
-    #[cfg(not(target_os = "linux"))]
-    options.read(true).custom_flags(libc::O_NOFOLLOW);
     let anchor = options
         .open(path)
         .map_err(|source| DirectoryAnchorCreateError {
@@ -1220,6 +1230,7 @@ fn create_local_directory_with_anchor(
             reserved_identity: Some(reserved),
         });
     }
+    drop(reservation);
     Ok(anchor)
 }
 
