@@ -41,6 +41,11 @@ Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
   Diagnoseläufe auf bekannte Testnamen (`Klasse/testMethode`, kommagetrennt);
   damit können nur fehlgeschlagene Fälle erneut ausgeführt werden. `full`
   lehnt eine solche Einschränkung ab.
+- Fortsetzung am vorhandenen CI-Artefakt: `gui-resume.yml` prüft dessen Herkunft.
+  `only_tests` beschränkt den Lauf auf fehlgeschlagene Fälle; `current_tests=true`
+  verwendet die XCTest-Revision des aktuellen Workflow-Commits. App- und
+  Testrevision werden separat archiviert. Das DMG wird nicht neu gebaut.
+  Ein solcher Teillauf bleibt diagnostisch und erteilt keine vollständige Abnahme.
 - Im Batch: `test-dmg.yml` ruft den Workflow nach dem Verpacken auf und übergibt
   genau dessen DMG-Artefakt. Fehler lassen den Test-DMG-Workflow scheitern.
   Im Batch wird immer die vollständige Suite ausgeführt.
@@ -77,3 +82,15 @@ Ein grüner Teiltest, eine geänderte erwartete Fallzahl oder leere Ergebnisse
 dürfen keine volle lokale Abnahme liefern. Die Swift-Dateien lassen sich vorab
 mit `swiftc -frontend -parse` syntaktisch prüfen; die eigentliche Kompilierung
 und Ausführung finden ausschließlich im macOS-Testjob statt.
+
+## Gezielte Fehlerprüfung nach Lauf 39303447063
+
+Vor dem Wiederholungslauf sind genau drei Fälle ausgewählt: Fenster schließen,
+Split-Abbruch und Split links. Das Schließen muss die Fensterzahl um genau eins
+verringern, auch wenn weitere Fenster wiederhergestellt wurden. Bei den beiden
+Terminalfällen muss jeder Befehl nach genau einem Return die erwartete frische
+Ausgabe liefern und der ursprüngliche nicht exportierte Shellzustand erhalten
+bleiben. Vor Return wird die vollständig angekommene Texteingabe am öffentlichen
+AX-Wert geprüft und ein Screenshot gesichert; der Erfolgsnachweis bleibt OCR der
+Ausgabe. Feste Ablehnungsgründe aus dem App-Log helfen, eine Shell-Startsperre von
+verlorener Eingabe zu unterscheiden. Der alte Lauf belegt diese Ursache noch nicht.

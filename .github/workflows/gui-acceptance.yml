@@ -18,6 +18,16 @@ on:
         type: string
   workflow_call:
     inputs:
+      suite:
+        type: string
+        default: full
+      only_tests:
+        type: string
+        default: ''
+      test_source_sha:
+        description: Explicit separate XCTest revision; empty uses app source
+        type: string
+        default: ''
       artifact_run_id:
         description: Verified earlier Test DMG run; empty uses the current run
         type: string
@@ -45,7 +55,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ inputs.test_source_sha || inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Load current GUI launcher without changing app or XCTest source
@@ -105,15 +115,16 @@ jobs:
           git rev-parse HEAD > "$RUNNER_TEMP/gui-evidence/test-source-sha.txt"
           if [[ -n "$APP_SOURCE_SHA" ]]; then
             [[ "$APP_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-            [[ "$(git rev-parse HEAD)" == "$APP_SOURCE_SHA" ]]
+            [[ "$(git rev-parse HEAD)" == "$TEST_SOURCE_SHA" ]]
             printf '%s\n' "$APP_SOURCE_SHA" > "$RUNNER_TEMP/gui-evidence/app-source-sha.txt"
           fi
         env:
           APP_SOURCE_SHA: ${{ inputs.source_sha }}
+          TEST_SOURCE_SHA: ${{ inputs.test_source_sha || inputs.source_sha }}
 
       - name: Exercise user flows in the installed app
         env:
-          SUITE: ${{ inputs.artifact_name != '' && 'full' || inputs.suite || 'full' }}
+          SUITE: ${{ inputs.suite || 'full' }}
           ONLY_TESTS: ${{ inputs.only_tests }}
         run: |
           echo "Local GUI suite: $SUITE" >> "$GITHUB_STEP_SUMMARY"
@@ -122,6 +133,27 @@ jobs:
             echo 'Diagnostic subset only — not a full DMG acceptance.' >> "$GITHUB_STEP_SUMMARY"
           fi
           bash script/macos/gui-tests/run "$RUNNER_TEMP/gui-evidence" "$SUITE" "$ONLY_TESTS"
+
+      - name: Preserve command rejection reasons
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          import json
+          from pathlib import Path
+          import os
+          import re
+          # Only fixed rejection codes, never full logs or command/profile data.
+          pattern = re.compile(r"Tried to execute command but can_execute_command was false: (NotBootstrapped|HistoryNotAppendable|ExistingActiveCommand)")
+          counts = {}
+          for log in (Path.home() / "Library/Logs").glob("zaplex*.log*"):
+              if log.is_file():
+                  for reason in pattern.findall(log.read_text(errors="replace")):
+                      counts[reason] = counts.get(reason, 0) + 1
+          target = Path(os.environ["RUNNER_TEMP"]) / "gui-evidence/command-rejections.json"
+          target.parent.mkdir(parents=True, exist_ok=True)
+          target.write_text(json.dumps(counts, indent=2) + "\n")
+          PYCODE
 
       - name: Preserve evidence even on failure
         if: always()
