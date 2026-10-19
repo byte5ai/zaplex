@@ -83,6 +83,44 @@ Die erfolgreiche Geometrieprüfung allein erfasst abgeschnittene Texte nicht.
 | Pane-Drag | `native-panes-side-by-side.png` und `native-panes-after-drag.png`: nebeneinander → übereinander; Entwurf bleibt sichtbar, expliziter Tabtitel steht oben. | Native Interaktionsassertions für diese feste lokale Folge; keine vollständige Vier-Richtungen-/Mehrhost-Abnahme. |
 
 Diese Beobachtungen ersetzen keine vollständige `pass`-Zeile der
-[vorab festgelegten Matrix](MATRIX.md). Der aktuelle Batch muss noch den
-Test-DMG-/GUI-Teil abschließen; die unabhängige Exploration benötigt weiterhin
-den bereits erfassten isolierten GUI-Zugang.
+[vorab festgelegten Matrix](MATRIX.md). Die vollständigen Abläufe am neuen
+installierten DMG sind noch nicht durchgeführt; die unabhängige Exploration
+benötigt zusätzlich den bereits erfassten isolierten GUI-Zugang.
+
+## Erneuter Nachweis mit Paketversion 1.2.2
+
+Die nativen Layout-Tests in [Batch 39257382471](https://github.com/byte5ai/zaplex/actions/runs/39257382471)
+sind auf `cadcb19130bbe0630f39bdd61b4e183ff154981a` erfolgreich. Die erneute
+Sichtprüfung bestätigt trotzdem beide oben beschriebenen Fehler:
+
+- **NF01 / #572:** Bei [1180×640](evidence/native-cadcb191/native-file-managers-normal.png)
+  sind `projects` und `acceptance-file.txt` lesbar; bei
+  [760×640](evidence/native-cadcb191/native-file-managers-narrow.png) verschwinden
+  Namen und Name-Spaltenkopf weiterhin vollständig.
+- **NF02 / #153:** Im [540×670-Agentenfenster](evidence/native-cadcb191/subscription-agent-narrow-540x670.png)
+  sind Handlungsanleitung und Shortcut-Zeile weiterhin abgeschnitten.
+
+Die drei erneut visuell geprüften Originalbilder sind mit Quelle, Teststand,
+Artefakt-ID und SHA-256 im [Manifest](evidence/native-cadcb191/manifest.json)
+gesichert. Auch diese Aufnahmen stammen aus nativen Integrationstest-Fixtures;
+sie sind keine Aufnahmen des installierten DMGs und keine freie Exploration.
+
+## Build-Nachweis und verbleibende Grenze
+
+Auf demselben Commit bestehen Linux-/macOS-Compile- und Regressionstests,
+4.386 Pakettests (13 bereits zuvor übersprungen) sowie vier Dokumentationstests
+(vier ignoriert). Der zuvor fehlgeschlagene Verzeichnis-Austauschtest besteht
+nach der Korrektur aus [#575](https://github.com/byte5ai/zaplex/pull/575)
+unverändert. Die isolierte Live-SFTP-Prüfung ist ebenfalls grün; sie ersetzt
+keinen nativen Remote-/Provider-Ablauf. Ihr Namensfilter erfasst sechs der sieben
+ignorierten Backend-Fälle; die verbleibende Auswahl-Lücke ist in
+[#576](https://github.com/byte5ai/zaplex/issues/576) erfasst.
+
+Der anschließende macOS-App-Build verlor am 19.10.2026 um 14:01 UTC die
+Runner-Verbindung. GitHub meldet keinen Compilerfehler oder Exit-Status für den
+Build-Schritt; die Job-Logs sind nicht verfügbar. Der Status des Runners nach
+dem Abbruch war unauffällig, die Ursache ist noch ungeklärt. Der Vorfall ist im
+zuständigen privaten Infrastrukturprojekt erfasst. Der parallele Linux-Daemon-
+Build ist erfolgreich; sein Artefakt `zap-remote-server-linux-x86_64`
+(ID `12192687872`) ist im abgeschlossenen Lauf vorhanden. Ein neues Test-DMG und
+die darauf folgenden GUI-Abläufe sind damit noch nicht nachgewiesen.

@@ -5,8 +5,12 @@ Stand: 19.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
 
 **Keine Gesamtfreigabe.** Die aktuelle DMG-/Explorationsabnahme fehlt.
 Zusätzlich zu dieser Altbuild-Auswertung liegen jetzt
-[native Integrationstest-Belege für `1201fc4f`](NATIVE-FIXTURES.md) vor:
-15 neue Originalaufnahmen mit zwei visuellen Fehlerbefunden.
+[native Integrationstest-Belege](NATIVE-FIXTURES.md) vor:
+15 Originalaufnahmen auf `1201fc4f` sowie drei erneut geprüfte Aufnahmen auf
+`cadcb191` (Paketversion 1.2.2). Beide visuellen Fehler bestehen weiterhin.
+Im [Batch 39257382471](https://github.com/byte5ai/zaplex/actions/runs/39257382471)
+sind alle Code-/Testprüfungen und der Linux-Daemon-Build erfolgreich. Der
+macOS-App-Build verlor die Runner-Verbindung; ein neues DMG entstand nicht.
 Die vor dem nächsten Lauf festgelegte [Prüfmatrix](MATRIX.md) enthält die
 Sollzustände, Nutzeraufgaben, Varianten, benötigten Nachweise und die konkreten
 Gründe für `not-run`. Freie Exploration wurde nicht durchgeführt.
@@ -35,11 +39,13 @@ Die frühere Angabe „512 Punkte“ wird für diese Auswertung durch den
 zeitgleichen AX-Wert **513 Punkte** präzisiert. Das zweite Fenster hinter dem
 schmalen Dateimanager ist ein separates Fenster, kein zweites Pane im selben Tab.
 
-Die API-Prüfung fand kein neueres verfügbares DMG für den gewünschten Stand.
-Der letzte erfolgreiche CI-Batch
+Die ursprüngliche API-Prüfung fand kein neueres verfügbares DMG für den gewünschten Stand.
+Der damals letzte erfolgreiche CI-Batch
 [39017883322](https://github.com/byte5ai/zaplex/actions/runs/39017883322)
 lief auf `7f26510d087e5b6ca6ea4df2f5926ed6d49cd817`, nicht auf dem Prüfziel,
-und übersprang den Test-DMG-Job. Ein Neubau ist nicht gestartet.
+und übersprang den Test-DMG-Job. Der inzwischen gestartete Neubau auf `cadcb191`
+ist im [aktuellen Build-Nachweis](NATIVE-FIXTURES.md#build-nachweis-und-verbleibende-grenze)
+dokumentiert.
 
 ## Gesicherte Belege
 
@@ -145,13 +151,13 @@ wurde live gelesen und ist offen; hier werden weder private Endpunkte noch
 Zugangsdaten veröffentlicht. Saubere, nicht durch Systembanner verdeckte
 Aufnahmebedingungen gehören zu dieser Voraussetzung.
 
-Der nächste konkrete Buildweg ist ein `ci-batch.yml`-Dispatch auf `main` mit
-`artifacts=test-dmg`, normalem Abnahmeprofil und dem dann aktuellen `VERSION`.
-Er baut das DMG einschließlich Linux-Daemon und führt die vollständigen 15 lokalen
-GUI-Fälle aus. Vorherige Laufzeiten: etwa 64 Minuten CI, zusätzlich zuletzt etwa
-32 Minuten Linux-Daemon und 72 Minuten Mac-App plus Verpackung/GUI; grob drei
-Stunden. Nach der geltenden Freigabegrenze für lange/berechnete Builds benötigt
-dieser Lauf eine konkrete Zustimmung; er ist keine Release-Veröffentlichung.
+Der autorisierte Batch auf `cadcb191` mit `artifacts=test-dmg` ist abgeschlossen.
+Sein Linux-Daemon-Artefakt ist vorhanden; App-Verpackung und die 15 lokalen
+GUI-Fälle konnten wegen des Runner-Verbindungsverlusts nicht ausgeführt werden.
+Nach Klärung der Infrastrukturstörung ist die Fortsetzung auf diesem Commit auf
+den fehlgeschlagenen App-Build und seine abhängigen Schritte begrenzt. Die
+erfolgreichen Prüfungen und der Daemon-Build bleiben erhalten. Ein erneuter
+Gesamtlauf oder eine Release-Veröffentlichung wurde nicht gestartet.
 
 Auch ein grüner neuer 15-Fälle-Lauf erledigt diese Matrix nicht. Danach folgen
 die eigentliche native Sichtprüfung, das vollständige Kontrollinventar und

@@ -10,7 +10,9 @@ Für die vollständige DMG-/Explorationsabnahme liegt noch kein Ergebnis vor;
 die Fallspalte bleibt dafür `not-run`. Die getrennte
 [Altbuild-Auswertung](README.md) verwendet v1.2.0-rc1.
 Ergänzend dokumentiert die [native Fixture-Auswertung](NATIVE-FIXTURES.md)
-Teilbelege und Fehler auf `1201fc4f3cafcbab7464343cad8b715d8cf3db2e`.
+Teilbelege und Fehler auf `1201fc4f3cafcbab7464343cad8b715d8cf3db2e`
+sowie die erneute Sichtprüfung der beiden Fehler auf
+`cadcb19130bbe0630f39bdd61b4e183ff154981a` (Paketversion 1.2.2).
 Weder Altbuild noch Fixtures ersetzen die vollständigen Fallkombinationen.
 
 ## Referenzen und Bewertung

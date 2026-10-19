@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "native-integration-fixtures",
+  "source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "test_source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "reference_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "run_id": "39257382471",
+  "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39257382471",
+  "package_version": "1.2.2",
+  "dmg_sha256": null,
+  "installed_dmg": false,
+  "image_processing": "None; unchanged original PNG bytes. Workspace captures verified against the original evidence.json hashes.",
+  "scope": "Native UI fixtures with real isolated local PTYs and files; Agent state set by the test. Recheck of NF01 and NF02 only.",
+  "not_covered": [
+    "live SSH/daemon/provider acceptance",
+    "OS reduced motion",
+    "restart restore",
+    "cross-host transfers",
+    "independent exploratory interaction",
+    "authenticated provider interaction",
+    "German locale",
+    "contrast variant",
+    "installed DMG acceptance"
+  ],
+  "images": [
+    {
+      "file": "native-file-managers-normal.png",
+      "sha256": "7f7e4463a7d55325090c0a8696869aa1287e9b169922d21ef5b95037e56c6e75",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T13-16-13/native-file-managers-normal.png",
+      "artifact_name": "native-workspace-evidence-cadcb19130bbe0630f39bdd61b4e183ff154981a",
+      "artifact_id": 12189496184,
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture",
+      "reduced_motion": null
+    },
+    {
+      "file": "native-file-managers-narrow.png",
+      "sha256": "1c946b3c2fb17be7ef436485b1afeaa9ffdb4444eaf992d2a3a9f46a26cffb8f",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T13-16-13/native-file-managers-narrow.png",
+      "artifact_name": "native-workspace-evidence-cadcb19130bbe0630f39bdd61b4e183ff154981a",
+      "artifact_id": 12189496184,
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture",
+      "reduced_motion": null
+    },
+    {
+      "file": "subscription-agent-narrow-540x670.png",
+      "sha256": "30c7309dea250bafba68ac7d57ee1a374dd4f6db49fc67d18bc99031bf974231",
+      "original_file": "test_subscription_agent_conversation_layout_evidence/2026-10-19T13-15-55/subscription-agent-narrow-540x670.png",
+      "artifact_name": "subscription-agent-layout-evidence",
+      "artifact_id": 12189506200,
+      "screenshot_pixels": [
+        540,
+        670
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "theme_basis": "visible capture",
+      "reduced_motion": null
+    }
+  ]
+}
