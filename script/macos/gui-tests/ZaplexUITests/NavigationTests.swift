@@ -5,6 +5,7 @@ import XCTest
 class GUIFlowTestCase: XCTestCase {
     var app: XCUIApplication!
     var window: XCUIElement { app.windows.firstMatch }
+    private var lastOCR = ""
 
     private struct Word {
         let text: String
@@ -55,6 +56,7 @@ class GUIFlowTestCase: XCTestCase {
         input.fileHandleForWriting.write(screenshot)
         try input.fileHandleForWriting.close()
         let tsv = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        lastOCR = tsv
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0, "Tesseract failed")
         let scaleX = window.frame.width / CGFloat(bitmap.pixelsWide)
@@ -88,7 +90,7 @@ class GUIFlowTestCase: XCTestCase {
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         } while Date() < deadline
-        evidence("missing-visible-content", text: last.map({ $0.text }).joined(separator: " "))
+        evidence("missing-visible-content", text: last.map({ $0.text }).joined(separator: " ") + "\n\n" + lastOCR)
         XCTFail("Expected rendered text: \(phrase)")
         throw NSError(domain: "ZaplexGUI", code: 1, userInfo: [NSLocalizedDescriptionKey: phrase])
     }
@@ -124,7 +126,7 @@ final class NavigationTests: GUIFlowTestCase {
     func testTabsKeepIndependentShells() throws {
         app.typeText("qa_state=741\n")
         try output(state: 741)
-        selectMenu("File", "New Tab")
+        selectMenu("File", "New Terminal Tab")
         try output(state: 963)
         app.typeText("qa_state=852\n")
         selectMenu("Tab", "Switch to Previous Tab")
@@ -135,7 +137,7 @@ final class NavigationTests: GUIFlowTestCase {
 
     func testClosingTabPreservesOriginalShell() throws {
         app.typeText("qa_state=741\n")
-        selectMenu("File", "New Tab")
+        selectMenu("File", "New Terminal Tab")
         try output(state: 963)
         selectMenu("Tab", "Close the Current Tab")
         try output(state: 741)

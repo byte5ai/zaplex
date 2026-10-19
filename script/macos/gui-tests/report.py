@@ -29,6 +29,40 @@ def validate_selection(selection):
     return len(cases) == len(set(cases)) and set(cases) <= CASES
 
 
+def matching_test_cases(tree, expected):
+    """Use Xcode's executed test IDs, not only an aggregate green count."""
+    found = []
+
+    def visit(node):
+        if not isinstance(node, dict):
+            return
+        if node.get("nodeType") == "Test Case":
+            identifier = node.get("nodeIdentifier", "")
+            if identifier.endswith("()"):
+                identifier = identifier[:-2]
+            found.append((identifier, node.get("result")))
+        for child in node.get("children", []):
+            visit(child)
+
+    for node in tree.get("testNodes", []):
+        visit(node)
+    return (bool(expected) and len(found) == len(expected)
+            and {identifier for identifier, _ in found} == set(expected)
+            and all(result == "Passed" for _, result in found))
+
+
+def expected_cases(suite, root):
+    if suite == "full":
+        return CASES
+    if suite == "selected":
+        selection = (root / "selected-cases.txt").read_text().strip()
+        return set(selection.split(",")) if validate_selection(selection) else set()
+    prefix = {"terminal": "SmokeTests/", "navigation": "NavigationTests/",
+              "surfaces": "SurfaceTests/"}.get(suite)
+    return {case for case in CASES if prefix and case.startswith(prefix)
+            and (suite != "terminal" or case != "SmokeTests/testNativeCloseButtonClosesWindow")}
+
+
 def assess(summary, suite, expected, exit_code):
     valid_counts = all(
         type(summary.get(key)) is int and summary[key] >= 0
@@ -42,6 +76,7 @@ def assess(summary, suite, expected, exit_code):
         and summary["passedTests"] == expected
         and summary["failedTests"] == 0
         and summary["skippedTests"] == 0
+        and summary.get("expectedFailures", 0) == 0
     )
     return {
         "schema_version": 1,
@@ -69,14 +104,31 @@ def main():
     except (OSError, ValueError):
         summary = {}
     report = assess(summary, suite, int(expected), int(exit_code))
+    try:
+        required_cases = expected_cases(suite, root)
+        test_tree = json.loads((root / "test-cases.json").read_text())
+        cases_match = (int(expected) == len(required_cases)
+                       and isinstance(test_tree, dict)
+                       and matching_test_cases(test_tree, required_cases))
+    except (OSError, ValueError):
+        cases_match = False
+        required_cases = set()
+    report["required_cases"] = sorted(required_cases)
+    report["executed_cases_match"] = cases_match
     digest_file = root / "dmg.sha256"
-    digest = digest_file.read_text().split()[0] if digest_file.is_file() else ""
+    digest_parts = digest_file.read_text().split() if digest_file.is_file() else []
+    digest = digest_parts[0] if digest_parts else ""
     report["dmg_sha256"] = digest if re.fullmatch(r"[a-f0-9]{64}", digest) else None
     for filename, key in (("test-source-sha.txt", "test_source_sha"),
                           ("app-source-sha.txt", "app_source_sha")):
         path = root / filename
         value = path.read_text().strip() if path.is_file() else None
         report[key] = value if value and re.fullmatch(r"[a-f0-9]{40}", value) else None
+    if report["dmg_sha256"] is None or report["test_source_sha"] is None or not cases_match:
+        report["selected_tests"] = "fail"
+        report["local_gui"] = "fail" if suite == "full" else "not-run"
+        report["product_acceptance"] = "fail"
+        report["error"] = "Missing artifact identity or incomplete/mismatched executed test cases"
     (root / "acceptance.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return 0 if report["selected_tests"] == "pass" else 1
