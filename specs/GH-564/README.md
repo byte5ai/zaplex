@@ -3,14 +3,19 @@
 Stand: 19.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
 übergreifend [#562](https://github.com/byte5ai/zaplex/issues/562).
 
-**Keine Gesamtfreigabe.** Die aktuelle DMG-/Explorationsabnahme fehlt.
+**Keine Gesamtfreigabe.** Das aktuelle DMG ist gebaut und installiert geprüft:
+12 lokale GUI-Tests bestanden, drei fehlgeschlagen. Die vollständige
+DMG-/Explorationsabnahme fehlt; Details im [Fortsetzungsnachweis](NATIVE-FIXTURES.md#gezielte-fortsetzung-und-installiertes-dmg).
 Zusätzlich zu dieser Altbuild-Auswertung liegen jetzt
 [native Integrationstest-Belege](NATIVE-FIXTURES.md) vor:
 15 Originalaufnahmen auf `1201fc4f` sowie drei erneut geprüfte Aufnahmen auf
 `cadcb191` (Paketversion 1.2.2). Beide visuellen Fehler bestehen weiterhin.
 Im [Batch 39257382471](https://github.com/byte5ai/zaplex/actions/runs/39257382471)
 sind alle Code-/Testprüfungen und der Linux-Daemon-Build erfolgreich. Der
-macOS-App-Build verlor die Runner-Verbindung; ein neues DMG entstand nicht.
+macOS-App-Build verlor die Runner-Verbindung. Die gezielte Fortsetzung
+[39295080993](https://github.com/byte5ai/zaplex/actions/runs/39295080993)
+baute danach App und DMG erfolgreich mit vier Cargo-Jobs und übernahm den
+vorhandenen Linux-Daemon. Es wurde kein neuer Gesamtbatch ausgeführt.
 Die vor dem nächsten Lauf festgelegte [Prüfmatrix](MATRIX.md) enthält die
 Sollzustände, Nutzeraufgaben, Varianten, benötigten Nachweise und die konkreten
 Gründe für `not-run`. Freie Exploration wurde nicht durchgeführt.
@@ -144,20 +149,20 @@ das bedeutet nicht, dass die App keine hat. Der bereits bekannte native
 Schließen-Fehler des alten DMG und dessen Korrektur #558 bleiben beim aktuellen
 DMG erneut zu prüfen (bestehender Auftrag #559/#562).
 
-Der aktuelle Gesamtvergleich ist blockiert durch ein fehlendes aktuelles DMG,
-den noch nicht bereitgestellten begrenzten explorativen GUI-Zugriff sowie
+Der aktuelle Gesamtvergleich benötigt den noch nicht bereitgestellten
+begrenzten explorativen GUI-Zugriff sowie
 isolierte Remote-/Provider-Testzugänge. Der bestehende private Infrastrukturauftrag
 wurde live gelesen und ist offen; hier werden weder private Endpunkte noch
 Zugangsdaten veröffentlicht. Saubere, nicht durch Systembanner verdeckte
 Aufnahmebedingungen gehören zu dieser Voraussetzung.
 
-Der autorisierte Batch auf `cadcb191` mit `artifacts=test-dmg` ist abgeschlossen.
-Sein Linux-Daemon-Artefakt ist vorhanden; App-Verpackung und die 15 lokalen
-GUI-Fälle konnten wegen des Runner-Verbindungsverlusts nicht ausgeführt werden.
-Nach Klärung der Infrastrukturstörung ist die Fortsetzung auf diesem Commit auf
-den fehlgeschlagenen App-Build und seine abhängigen Schritte begrenzt. Die
-erfolgreichen Prüfungen und der Daemon-Build bleiben erhalten. Ein erneuter
-Gesamtlauf oder eine Release-Veröffentlichung wurde nicht gestartet.
+Die autorisierte Fortsetzung auf `cadcb191` ist ausgeführt. Das signierte und
+notarisierte DMG enthält den vorhandenen Linux-Daemon; die erfolgreichen
+Codeprüfungen wurden übernommen. Alle 15 lokalen GUI-Fälle wurden in
+[39303447063](https://github.com/byte5ai/zaplex/actions/runs/39303447063)
+ausgeführt, mit 12 bestandenen und drei fehlgeschlagenen Fällen. Die konkreten
+Test-/Eingabebefunde sind in #562 nachzuverfolgen. Kein neuer Gesamtbatch und
+keine Release-Veröffentlichung wurden gestartet.
 
 Auch ein grüner neuer 15-Fälle-Lauf erledigt diese Matrix nicht. Danach folgen
 die eigentliche native Sichtprüfung, das vollständige Kontrollinventar und

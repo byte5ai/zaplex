@@ -64,65 +64,68 @@ Animationen, Drag, Fokusübergänge und Recovery. Keine persönlichen Profile.
 
 ## Fälle
 
-Gründe: **B** = aktuelles DMG fehlt; **G** = begrenzter interaktiver Zugriff auf die
+Gründe: **V** = vollständige Fall-/Variantenkombination noch nicht geprüft; **G** = begrenzter interaktiver Zugriff auf die
 ephemere native GUI noch nicht bereitgestellt; **R** = isolierter Remote-Zugang
 noch nicht nachgewiesen; **P** = autorisierte isolierte Providerprofile fehlen.
-Diese Voraussetzungen sind keine Produktfehler. Alle Fälle benötigen B; die
-explorative Durchführung und interaktive Vollständigkeitsprüfung zusätzlich G.
+Das aktuelle DMG ist vorhanden und installiert geprüft (12 lokale Tests bestanden,
+drei fehlgeschlagen; siehe [Nachweis](NATIVE-FIXTURES.md#gezielte-fortsetzung-und-installiertes-dmg)).
+Diese Teilbelege erfüllen keine gesamte Fall-/Variantenkombination; deshalb V.
+Die explorative Durchführung und interaktive Vollständigkeitsprüfung benötigt G.
+Fehlende Testvoraussetzungen sind keine Produktfehler.
 
 | ID | Sollquelle | Nutzeraufgabe / Zustand | Erwartete Darstellung und Interaktion | Nachweis | Aktueller Status / Grund |
 |---|---|---|---|---|---|
-| V01 | C:C3, A6; U | Ohne eingerichteten Host starten | Arbeitsfläche, vorhandene horizontale Navigation und nächster Schritt erkennbar; keine überdeckten Texte oder dekorativen Farbränder | Gesamtansicht und Navigation | not-run — B, G |
-| V02 | C:A4, A6; U | Alle sichtbaren Icons erkunden | Verständliche lokalisierte Tooltips, stabile Geometrie, klare aktive/inaktive Zustände | Hover-/Fokusfolge pro Icon | not-run — B, G |
-| V03 | U | Per Tastatur navigieren und zurückkehren | Sinnvolle Fokusreihenfolge; sichtbarer Fokus; Escape/Zurück und Rückgabe zum Auslöser | Tastaturablauf | not-run — B, G |
-| C01 | C:C1; U | Leere Verbindungsliste verstehen | Vollständige Anleitung einschließlich Ordner- und Plus-Aktion, auch schmal | Leerzustand DE/EN, 250/320/480 | not-run — B; Altbuild-Befund D01 |
-| C02 | C:C1; U | Ordner und Host anlegen/bearbeiten | Eindeutige Feldnamen, Validierung, Speichern/Abbrechen; keine doppelte Konfiguration | Formular leer/ungültig/gültig | not-run — B, G |
-| C03 | C:C1, A1, A2 | Konfigurierten Host finden/favorisieren | Identität priorisiert; feste Stecker-/Sternslots; Offline-Host bleibt hier sichtbar | Lange Registry-Zeilen, Sternwechsel | not-run — B, G |
-| C04 | C:C1, C4; U | Verbinden, Fehler erkennen, abbrechen | Lade-/Fehlerzustand mit verständlichem nächstem Schritt; kein festhängender Dialog | Echte Verbindung und definierter Fehler | not-run — B, G, R |
-| C05 | C:C4–C7, A5 | Vorhandene Session wiederfinden | Recovery-Hierarchie, aktuelle Identität, Metadaten, Offen-Markierung und Reihenfolge stimmen | Inventar und Klick auf Session | not-run — B, G, R |
-| C06 | C:C6; U | Session beenden / Löschdialog abbrechen | Ziel und laufender Agent verständlich; Abbruch erhält Session; Bestätigung wirkt nur auf das benannte Ziel | Isolierte Session, Dialogfolge | not-run — B, G, R, P |
-| S01 | C:C3, T2 | Zwischen KI-Sessions und KI-Konten wechseln | Getrennte Einträge und Scrollbereiche, volle Sidebarhöhe; lokaler Leerzustand bleibt ehrlich | Beide Ansichten, leer und gefüllt | not-run — B, G, P |
-| S02 | C:T1, T3, T5; B+ | Projekt und Agent finden | B+-Verdichtung für 1/mehrere PTYs und 1/mehrere Agents; keine leeren Ebenen | Alle vier Baumkonstellationen | not-run — B, G, P |
-| S03 | C:T6–T8; B+ | Lange/gleiche Sessiontitel unterscheiden | Einrückung, gekürzter gemeinsamer Präfix, mindestens acht unterscheidende Zeichen, voller Tooltip, Managed-Marke | Lange Geschwistertitel, Fokus, Hover | not-run — B, G, P |
-| S04 | C:T4, S3 | Auf einen Agenten zugreifen | Jeder sichtbare/countbare Ziel-Agent ist erreichbar; Auswahl und kollabierter Vorfahr behalten Akzent | Klick, Kollaps, Inbox/Palette-Abgleich | not-run — B, G, P, R |
-| S05 | C:S1–S3 | Wartenden Agenten erkennen | Nur wartende Agents amber; Zahlen konsistent; Puls 1,6 s, Ring bis etwa 2×; Reduced Motion mit statischem Halo | Video und Zustandsfolge gesehen/ungesehen/blockiert | not-run — B, G, P |
-| A01 | C:I1, I2, P5 | Konto-Details öffnen und erneut wählen | Provider/Konto einmalig; ergänzt/fokussiert Details, übrige Panes bleiben erhalten | Vorher/Nachher und erneuter Klick | not-run — B, G, P |
-| A02 | C:I2, A3 | Verbrauch und Herkunft verstehen | 5 h/Woche untereinander, Reset direkt unter Spur; Schätzlegende und Herkunft; wartende Session dezent markiert | Echte Kontodaten mit isoliertem Profil | not-run — B, G, P |
-| A03 | U; GH-160 | Agent/Konto/Modell auswählen | Ohne CLI, ohne Anmeldung und bei mehreren Konten ehrliche Zustände und gangbarer nächster Schritt | Startkarte leer/geladen/Fehler/Abbruch | not-run — B, G, P |
-| L01 | L1, L2, L5 | Plus und vier Split-Menüs öffnen | Gleiche gemeinsame Einträge/Reihenfolge; Tabzusätze nur bei Plus; Menü vor Screenshot sichtbar | Fünf offene Menüs | not-run — B, G; Altbelege teilweise zu früh |
-| L02 | L2; U | Leere Favoriten verstehen | Vollständige Anleitung zur Favorisierung sichtbar, auch am Fensterrand | DE/EN, normale/schmale Breite | not-run — B; Altbuild-Befund D02 |
-| L03 | L3, L4; C:C2 | Favorit bzw. weiteren Host wählen | Name verbindet einmal; nur Nichtfavoriten im Untermenü; Stern-Änderung konsistent | Registry + Menü + echte Verbindung | not-run — B, G, R |
-| L04 | L4; C:C2 | Separates Favoriten-Flyout bedienen | Ellipse verbindet nicht; seitliches Flyout hält Elternmenü sichtbar; Randplatzierung/Fokus/Zurück stimmen | Maus und Tastatur an beiden Rändern | not-run — B, G, R |
-| L05 | L6; C:P2 | Split per Escape/Außenklick abbrechen | Keine neue Pane/Session; ursprüngliche Shell und Fokus bleiben | Vorher/Nachher mit Shellzustand | not-run — B, G |
-| L06 | L7–L9 | Agent in erfasster Pane starten | Genau eine Session an erfasster Position; Mehrfachkonto und verschwundenes Ziel mit Erklärung, kein falscher Start | Kontowahl, Fokuswechsel, ungültiges Ziel | not-run — B, G, P, R |
-| P01 | C:P2 | Lokal rechts/links/oben/unten teilen | Neue unabhängige Shell in jeder gewünschten Richtung; Quellshell bleibt | Vier Geometrien und unabhängige Ausgabe | not-run — B |
-| P02 | C:P2, P3 | Mehrhost-Panes nebeneinander nutzen | Host/CWD/Startziel pro Pane, kein Routing über zufälligen Fokus | Zwei echte Hosts, asynchroner Start | not-run — B, G, R |
-| P03 | C:P3; N1 | CWD, Fokus und Tabtitel wechseln | Host·Verzeichnis korrekt; expliziter Tabtitel gewinnt, Entfernen stellt Automatik wieder her | Wechsel und kollidierende Namen | not-run — B, G, R |
-| P04 | C:P4, P5 | Pane verschieben/abtrennen | Dieselbe Pane ohne neue PTY; gültige Drop-Zonen; Abbruch erhält Ausgangslayout | Header-Drag in vier Richtungen/Tab | not-run — B, G, R |
-| P05 | J1–J8 | Ganzen Tab als Split einfügen | Ziel bleibt beim Drag sichtbar; Layout/Identitäten bleiben, Quelltab entfällt; Selbst-/ungültiger Drop wirkungslos | Drag/Abbruch, verschachtelte Panes | not-run — B, G, R |
-| P06 | C:P5, R1 | Fenster/Session wiederherstellen | Geometrie, Fokus, Modus, Entwurf und richtige Remote-Identität erhalten; provisorischer Start nicht ins andere Fenster verschiebbar | Neustart/Restore + Drag während Start | not-run — B, G, R |
-| F01 | C:F1, P3 | Dateimanager öffnen/zur Shell zurück | Pane-Kontext und Shellzustand bleiben; F10/Leistenaktion/Pane-X kehren zurück | Drei Rückwege, frischer Shellmarker | not-run — B, G |
-| F02 | C:F2 | Dateiaktionen bei wenig Platz finden | F2–F8/F10 mit kurzer Beschriftung; eine/zwei/vier gleich breite Reihen; keine versteckten Aktionen | Breitenfolge, alle acht Zellen | not-run — B, G |
-| F03 | C:F2, F5 | Fokus zwischen Dateipanes wechseln | Nur kompatible fokussierte Pane aktiviert Aktionen; Cursor und Markierung unterscheidbar | Zwei Panes mit gleichem Dateinamen | not-run — B, G |
-| F04 | C:F4 | In Elternverzeichnis zurückgehen | Verlassener Ordner wird nach Identität ausgewählt und sichtbar gescrollt | Verschachtelte, sortierte Liste | not-run — B, G |
-| F05 | C:F3 | Transferziel bewusst wählen | Dauerhafte Zielzeile; eindeutiger Host/Pfad/Pane; eigener Tab zuerst; Quelle bei F5/F6 erkennbar | Mehrere mögliche Ziele, gleiche Namen | not-run — B, G, R |
-| F06 | C:F3 | Ziel-Pane ändern/schließen | Gewähltes Ziel folgt deren Verzeichnis; nach Schließen/Moduswechsel neue Wahl, nie stiller Ersatz | Ziel ändern, dann Copy/Move | not-run — B, G, R |
-| F07 | C:F5 | Dateien/Ordner markieren | Alle definierten Tastatur-/Mauswege, Identität bei Sortieren/Refresh, sichtbare Zählung; `..` nicht markierbar | Gemischte Auswahl und Liste ändern | not-run — B, G |
-| F08 | C:F1, F5; U | F2 Umbenennen / F3 Ansehen / F4 Bearbeiten | Cursorziel klar, Aktion ausführbar; ungültiger Name/Fehler erklärbar; Rückweg erhält Auswahl | Isolierte Dateien, gültig/ungültig/Abbruch | not-run — B, G |
-| F09 | C:F3, F5; U | F5 Kopieren / F6 Verschieben | Quelle/Ziel klar, Mehrfachauswahl berücksichtigt; Konflikt, Fortschritt, Abbruch und Fehler wieder auflösbar | Echte lokale/Remote-Transfers, Inhaltsvergleich | not-run — B, G, R |
-| F10 | C:F5; U | F7 Ordner / F8 Löschen | Name/Fehler verständlich; Bestätigung zählt Ordner samt Inhalt und Dateien getrennt; Abbruch ohne Verlust | Ausschließlich künstliche Testdaten | not-run — B, G |
-| F11 | C:F1 | Dateimanager bei laufender Shell schließen | CWD-Übernahme oder ehrlicher Hinweis; kein blindes cd bei unklarer Identität, kein Entwurfsverlust | Freier/belegter Prompt, verschachtelte Shell | not-run — B, G, R |
-| R01 | C:R1 | Offline/Reconnect abwarten | Sperre und Ursache sichtbar; gleiche Route/Generation, freigegebene Eingabe erst nach Ready | Echte Trennung, Vorher/Nachher + Video | not-run — B, G, R |
-| R02 | C:R1, R2 | Timeout, Retry, Abbruch, einfacher Terminalmodus | Verständlicher Ausgang; keine lokale Ersatzshell; Corrupt ohne tote Aktionen; einfacher Modus mit dauerhaftem Hinweis | Je echter Zustand und Folgeaktion | not-run — B, G, R |
-| E01 | U | Einstellungen öffnen, ändern, zurück | Als Tab erkennbar; Änderung sichtbar; Zurück zur bestehenden Shell ohne Zustandsverlust | Einstellung vorher/nachher + Shellmarker | not-run — B, G |
-| E02 | U | Settings suchen und Unterseiten bedienen | Suchtreffer/Leerzustand, Toggles, Felder, Dropdowns, Speichern/Abbrechen und Dateizugang verständlich | Inventar unten, jede erreichbare Kontrolle | not-run — B, G |
-| E03 | U | Weitere Sidebar-Werkzeuge nutzen | Tooltip/Bezeichnung, Leer-/Lade-/Fehlerzustand, Auswahl und Rückweg ohne Sackgasse | Inventar unten, echte statt Platzhalterzustände | not-run — B, G, R, P |
-| E04 | U | Native Menüs, Kontextmenüs, Palette, Dialoge erkunden | Sinnvolle Benennung, Shortcuts, Fokus und Abbruch; keine wirkungslosen sichtbaren Aktionen | Kontrollinventar mit Zustandsfolge | not-run — B, G |
-| X01 | U | Einstieg ohne Host frei lösen | Tester findet aus sichtbarer UI selbst Terminal, Host-Anlage und Rückweg; Hindernisse protokolliert | Exploratives Aktionsprotokoll | not-run — B, G |
-| X02 | U | Lokales Projekt mit mehreren Panes bearbeiten | Tester wählt selbst nächste Schritte; Kontext bleibt nachvollziehbar; unerwartete Zustände werden untersucht | Exploratives Aktionsprotokoll | not-run — B, G |
-| X03 | U | Host/Favorit und Agent/Konto finden | Echte Ziele ohne Codewissen finden, starten, wiederfinden und Fehler auflösen | Exploratives Aktionsprotokoll | not-run — B, G, R, P |
-| X04 | U | Dateien mit eindeutigem Ziel bearbeiten | Auswahl, Transfer, Konflikt/Abbruch und Rückkehr aus sichtbarer UI verständlich | Exploratives Aktionsprotokoll | not-run — B, G, R |
-| X05 | U | Einstellung ändern und Fehler beheben | Tester findet Einstellung und Rückweg; korrigiert eine absichtlich ungültige Eingabe | Exploratives Aktionsprotokoll | not-run — B, G |
+| V01 | C:C3, A6; U | Ohne eingerichteten Host starten | Arbeitsfläche, vorhandene horizontale Navigation und nächster Schritt erkennbar; keine überdeckten Texte oder dekorativen Farbränder | Gesamtansicht und Navigation | not-run — V, G |
+| V02 | C:A4, A6; U | Alle sichtbaren Icons erkunden | Verständliche lokalisierte Tooltips, stabile Geometrie, klare aktive/inaktive Zustände | Hover-/Fokusfolge pro Icon | not-run — V, G |
+| V03 | U | Per Tastatur navigieren und zurückkehren | Sinnvolle Fokusreihenfolge; sichtbarer Fokus; Escape/Zurück und Rückgabe zum Auslöser | Tastaturablauf | not-run — V, G |
+| C01 | C:C1; U | Leere Verbindungsliste verstehen | Vollständige Anleitung einschließlich Ordner- und Plus-Aktion, auch schmal | Leerzustand DE/EN, 250/320/480 | not-run — V; Altbuild-Befund D01 |
+| C02 | C:C1; U | Ordner und Host anlegen/bearbeiten | Eindeutige Feldnamen, Validierung, Speichern/Abbrechen; keine doppelte Konfiguration | Formular leer/ungültig/gültig | not-run — V, G |
+| C03 | C:C1, A1, A2 | Konfigurierten Host finden/favorisieren | Identität priorisiert; feste Stecker-/Sternslots; Offline-Host bleibt hier sichtbar | Lange Registry-Zeilen, Sternwechsel | not-run — V, G |
+| C04 | C:C1, C4; U | Verbinden, Fehler erkennen, abbrechen | Lade-/Fehlerzustand mit verständlichem nächstem Schritt; kein festhängender Dialog | Echte Verbindung und definierter Fehler | not-run — V, G, R |
+| C05 | C:C4–C7, A5 | Vorhandene Session wiederfinden | Recovery-Hierarchie, aktuelle Identität, Metadaten, Offen-Markierung und Reihenfolge stimmen | Inventar und Klick auf Session | not-run — V, G, R |
+| C06 | C:C6; U | Session beenden / Löschdialog abbrechen | Ziel und laufender Agent verständlich; Abbruch erhält Session; Bestätigung wirkt nur auf das benannte Ziel | Isolierte Session, Dialogfolge | not-run — V, G, R, P |
+| S01 | C:C3, T2 | Zwischen KI-Sessions und KI-Konten wechseln | Getrennte Einträge und Scrollbereiche, volle Sidebarhöhe; lokaler Leerzustand bleibt ehrlich | Beide Ansichten, leer und gefüllt | not-run — V, G, P |
+| S02 | C:T1, T3, T5; B+ | Projekt und Agent finden | B+-Verdichtung für 1/mehrere PTYs und 1/mehrere Agents; keine leeren Ebenen | Alle vier Baumkonstellationen | not-run — V, G, P |
+| S03 | C:T6–T8; B+ | Lange/gleiche Sessiontitel unterscheiden | Einrückung, gekürzter gemeinsamer Präfix, mindestens acht unterscheidende Zeichen, voller Tooltip, Managed-Marke | Lange Geschwistertitel, Fokus, Hover | not-run — V, G, P |
+| S04 | C:T4, S3 | Auf einen Agenten zugreifen | Jeder sichtbare/countbare Ziel-Agent ist erreichbar; Auswahl und kollabierter Vorfahr behalten Akzent | Klick, Kollaps, Inbox/Palette-Abgleich | not-run — V, G, P, R |
+| S05 | C:S1–S3 | Wartenden Agenten erkennen | Nur wartende Agents amber; Zahlen konsistent; Puls 1,6 s, Ring bis etwa 2×; Reduced Motion mit statischem Halo | Video und Zustandsfolge gesehen/ungesehen/blockiert | not-run — V, G, P |
+| A01 | C:I1, I2, P5 | Konto-Details öffnen und erneut wählen | Provider/Konto einmalig; ergänzt/fokussiert Details, übrige Panes bleiben erhalten | Vorher/Nachher und erneuter Klick | not-run — V, G, P |
+| A02 | C:I2, A3 | Verbrauch und Herkunft verstehen | 5 h/Woche untereinander, Reset direkt unter Spur; Schätzlegende und Herkunft; wartende Session dezent markiert | Echte Kontodaten mit isoliertem Profil | not-run — V, G, P |
+| A03 | U; GH-160 | Agent/Konto/Modell auswählen | Ohne CLI, ohne Anmeldung und bei mehreren Konten ehrliche Zustände und gangbarer nächster Schritt | Startkarte leer/geladen/Fehler/Abbruch | not-run — V, G, P |
+| L01 | L1, L2, L5 | Plus und vier Split-Menüs öffnen | Gleiche gemeinsame Einträge/Reihenfolge; Tabzusätze nur bei Plus; Menü vor Screenshot sichtbar | Fünf offene Menüs | not-run — V, G; Altbelege teilweise zu früh |
+| L02 | L2; U | Leere Favoriten verstehen | Vollständige Anleitung zur Favorisierung sichtbar, auch am Fensterrand | DE/EN, normale/schmale Breite | not-run — V; Altbuild-Befund D02 |
+| L03 | L3, L4; C:C2 | Favorit bzw. weiteren Host wählen | Name verbindet einmal; nur Nichtfavoriten im Untermenü; Stern-Änderung konsistent | Registry + Menü + echte Verbindung | not-run — V, G, R |
+| L04 | L4; C:C2 | Separates Favoriten-Flyout bedienen | Ellipse verbindet nicht; seitliches Flyout hält Elternmenü sichtbar; Randplatzierung/Fokus/Zurück stimmen | Maus und Tastatur an beiden Rändern | not-run — V, G, R |
+| L05 | L6; C:P2 | Split per Escape/Außenklick abbrechen | Keine neue Pane/Session; ursprüngliche Shell und Fokus bleiben | Vorher/Nachher mit Shellzustand | not-run — V, G |
+| L06 | L7–L9 | Agent in erfasster Pane starten | Genau eine Session an erfasster Position; Mehrfachkonto und verschwundenes Ziel mit Erklärung, kein falscher Start | Kontowahl, Fokuswechsel, ungültiges Ziel | not-run — V, G, P, R |
+| P01 | C:P2 | Lokal rechts/links/oben/unten teilen | Neue unabhängige Shell in jeder gewünschten Richtung; Quellshell bleibt | Vier Geometrien und unabhängige Ausgabe | not-run — V |
+| P02 | C:P2, P3 | Mehrhost-Panes nebeneinander nutzen | Host/CWD/Startziel pro Pane, kein Routing über zufälligen Fokus | Zwei echte Hosts, asynchroner Start | not-run — V, G, R |
+| P03 | C:P3; N1 | CWD, Fokus und Tabtitel wechseln | Host·Verzeichnis korrekt; expliziter Tabtitel gewinnt, Entfernen stellt Automatik wieder her | Wechsel und kollidierende Namen | not-run — V, G, R |
+| P04 | C:P4, P5 | Pane verschieben/abtrennen | Dieselbe Pane ohne neue PTY; gültige Drop-Zonen; Abbruch erhält Ausgangslayout | Header-Drag in vier Richtungen/Tab | not-run — V, G, R |
+| P05 | J1–J8 | Ganzen Tab als Split einfügen | Ziel bleibt beim Drag sichtbar; Layout/Identitäten bleiben, Quelltab entfällt; Selbst-/ungültiger Drop wirkungslos | Drag/Abbruch, verschachtelte Panes | not-run — V, G, R |
+| P06 | C:P5, R1 | Fenster/Session wiederherstellen | Geometrie, Fokus, Modus, Entwurf und richtige Remote-Identität erhalten; provisorischer Start nicht ins andere Fenster verschiebbar | Neustart/Restore + Drag während Start | not-run — V, G, R |
+| F01 | C:F1, P3 | Dateimanager öffnen/zur Shell zurück | Pane-Kontext und Shellzustand bleiben; F10/Leistenaktion/Pane-X kehren zurück | Drei Rückwege, frischer Shellmarker | not-run — V, G |
+| F02 | C:F2 | Dateiaktionen bei wenig Platz finden | F2–F8/F10 mit kurzer Beschriftung; eine/zwei/vier gleich breite Reihen; keine versteckten Aktionen | Breitenfolge, alle acht Zellen | not-run — V, G |
+| F03 | C:F2, F5 | Fokus zwischen Dateipanes wechseln | Nur kompatible fokussierte Pane aktiviert Aktionen; Cursor und Markierung unterscheidbar | Zwei Panes mit gleichem Dateinamen | not-run — V, G |
+| F04 | C:F4 | In Elternverzeichnis zurückgehen | Verlassener Ordner wird nach Identität ausgewählt und sichtbar gescrollt | Verschachtelte, sortierte Liste | not-run — V, G |
+| F05 | C:F3 | Transferziel bewusst wählen | Dauerhafte Zielzeile; eindeutiger Host/Pfad/Pane; eigener Tab zuerst; Quelle bei F5/F6 erkennbar | Mehrere mögliche Ziele, gleiche Namen | not-run — V, G, R |
+| F06 | C:F3 | Ziel-Pane ändern/schließen | Gewähltes Ziel folgt deren Verzeichnis; nach Schließen/Moduswechsel neue Wahl, nie stiller Ersatz | Ziel ändern, dann Copy/Move | not-run — V, G, R |
+| F07 | C:F5 | Dateien/Ordner markieren | Alle definierten Tastatur-/Mauswege, Identität bei Sortieren/Refresh, sichtbare Zählung; `..` nicht markierbar | Gemischte Auswahl und Liste ändern | not-run — V, G |
+| F08 | C:F1, F5; U | F2 Umbenennen / F3 Ansehen / F4 Bearbeiten | Cursorziel klar, Aktion ausführbar; ungültiger Name/Fehler erklärbar; Rückweg erhält Auswahl | Isolierte Dateien, gültig/ungültig/Abbruch | not-run — V, G |
+| F09 | C:F3, F5; U | F5 Kopieren / F6 Verschieben | Quelle/Ziel klar, Mehrfachauswahl berücksichtigt; Konflikt, Fortschritt, Abbruch und Fehler wieder auflösbar | Echte lokale/Remote-Transfers, Inhaltsvergleich | not-run — V, G, R |
+| F10 | C:F5; U | F7 Ordner / F8 Löschen | Name/Fehler verständlich; Bestätigung zählt Ordner samt Inhalt und Dateien getrennt; Abbruch ohne Verlust | Ausschließlich künstliche Testdaten | not-run — V, G |
+| F11 | C:F1 | Dateimanager bei laufender Shell schließen | CWD-Übernahme oder ehrlicher Hinweis; kein blindes cd bei unklarer Identität, kein Entwurfsverlust | Freier/belegter Prompt, verschachtelte Shell | not-run — V, G, R |
+| R01 | C:R1 | Offline/Reconnect abwarten | Sperre und Ursache sichtbar; gleiche Route/Generation, freigegebene Eingabe erst nach Ready | Echte Trennung, Vorher/Nachher + Video | not-run — V, G, R |
+| R02 | C:R1, R2 | Timeout, Retry, Abbruch, einfacher Terminalmodus | Verständlicher Ausgang; keine lokale Ersatzshell; Corrupt ohne tote Aktionen; einfacher Modus mit dauerhaftem Hinweis | Je echter Zustand und Folgeaktion | not-run — V, G, R |
+| E01 | U | Einstellungen öffnen, ändern, zurück | Als Tab erkennbar; Änderung sichtbar; Zurück zur bestehenden Shell ohne Zustandsverlust | Einstellung vorher/nachher + Shellmarker | not-run — V, G |
+| E02 | U | Settings suchen und Unterseiten bedienen | Suchtreffer/Leerzustand, Toggles, Felder, Dropdowns, Speichern/Abbrechen und Dateizugang verständlich | Inventar unten, jede erreichbare Kontrolle | not-run — V, G |
+| E03 | U | Weitere Sidebar-Werkzeuge nutzen | Tooltip/Bezeichnung, Leer-/Lade-/Fehlerzustand, Auswahl und Rückweg ohne Sackgasse | Inventar unten, echte statt Platzhalterzustände | not-run — V, G, R, P |
+| E04 | U | Native Menüs, Kontextmenüs, Palette, Dialoge erkunden | Sinnvolle Benennung, Shortcuts, Fokus und Abbruch; keine wirkungslosen sichtbaren Aktionen | Kontrollinventar mit Zustandsfolge | not-run — V, G |
+| X01 | U | Einstieg ohne Host frei lösen | Tester findet aus sichtbarer UI selbst Terminal, Host-Anlage und Rückweg; Hindernisse protokolliert | Exploratives Aktionsprotokoll | not-run — V, G |
+| X02 | U | Lokales Projekt mit mehreren Panes bearbeiten | Tester wählt selbst nächste Schritte; Kontext bleibt nachvollziehbar; unerwartete Zustände werden untersucht | Exploratives Aktionsprotokoll | not-run — V, G |
+| X03 | U | Host/Favorit und Agent/Konto finden | Echte Ziele ohne Codewissen finden, starten, wiederfinden und Fehler auflösen | Exploratives Aktionsprotokoll | not-run — V, G, R, P |
+| X04 | U | Dateien mit eindeutigem Ziel bearbeiten | Auswahl, Transfer, Konflikt/Abbruch und Rückkehr aus sichtbarer UI verständlich | Exploratives Aktionsprotokoll | not-run — V, G, R |
+| X05 | U | Einstellung ändern und Fehler beheben | Tester findet Einstellung und Rückweg; korrigiert eine absichtlich ungültige Eingabe | Exploratives Aktionsprotokoll | not-run — V, G |
 
 ## Kontrollinventar für den nächsten Lauf
 

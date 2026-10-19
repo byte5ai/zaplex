@@ -124,3 +124,42 @@ zuständigen privaten Infrastrukturprojekt erfasst. Der parallele Linux-Daemon-
 Build ist erfolgreich; sein Artefakt `zap-remote-server-linux-x86_64`
 (ID `12192687872`) ist im abgeschlossenen Lauf vorhanden. Ein neues Test-DMG und
 die darauf folgenden GUI-Abläufe sind damit noch nicht nachgewiesen.
+
+## Gezielte Fortsetzung und installiertes DMG
+
+Dieser spätere Nachweis ersetzt die oben dokumentierte Build-Blockade:
+[Run 39295080993](https://github.com/byte5ai/zaplex/actions/runs/39295080993)
+baute die App auf unverändertem `cadcb191` mit `CARGO_BUILD_JOBS=4` erfolgreich
+(37 min 47 s für den Build-/Vorbereitungsschritt). Der frühere erfolgreiche
+Blacksmith-Daemon wurde übernommen und sein SHA-256 geprüft. Signierung,
+Notarisierung und Stapling bestanden; kein neuer Gesamtbatch und kein Release.
+Der Erfolg stützt die Speicherhypothese zum früheren VM-Neustart, beweist sie
+aber nicht. Ein vorheriger Cargo-HTTP/2-Abruffehler wurde im Build-Schritt durch
+HTTP/1.1 vermieden.
+
+Die GUI-Fortsetzung
+[39303447063](https://github.com/byte5ai/zaplex/actions/runs/39303447063)
+installierte das unveränderte DMG 1.2.2 mit SHA-256
+`313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3`.
+App und XCTest stammen von `cadcb191`; ausschließlich der Shell-Starter stammt
+von `9e200e30a39eb11d22020afa599e5838ec724104`, um den nachgewiesenen
+Bash-3.2-Fehler bei leerer Filterliste zu korrigieren. Beide Revisionen stehen
+getrennt in den Artefakten. Zuvor wurde die übersprungene GUI-Abhängigkeit
+korrigiert; App und DMG wurden dafür nicht nochmals gebaut.
+
+**15 Fälle tatsächlich ausgeführt: 12 bestanden, drei fehlgeschlagen, null
+übersprungen.** Die exakte Fallmenge wurde unabhängig mit den 15 erwarteten IDs
+abgeglichen. [result.json](evidence/dmg-cadcb191/result.json) hält Identität,
+Fallresultate, Originalbeleg-Hashes und die Zuordnung der Fehlerbilder fest.
+Rohbelege liegen im GUI-Artefakt `12212937860` (14 Tage Aufbewahrung).
+
+| Fehlgeschlagener Fall | Geprüfter Befund | Aussagegrenze / Folgeauftrag in #562 |
+|---|---|---|
+| `testCancelSplitKeepsOriginalShell` | Scheitert bereits im Setup: [Befehl steht sichtbar im Eingabefeld](evidence/dmg-cadcb191/setup-command-not-executed.png), erwartete Ausgabe fehlt. | Der eigentliche Abbruchablauf wurde nicht erreicht. Bereitschaft des Terminals und Verarbeitung der Return-Eingabe untersuchen. |
+| `testSplitLeft` | [Neues linkes Pane sichtbar](evidence/dmg-cadcb191/left-pane-command-not-executed.png); eingegebener Befehl bleibt ohne erwartete Ausgabe im Eingabefeld. | Kein bloßer OCR-Lesefehler im geprüften Bild. Ursache zwischen Testzeitpunkt und App-Eingabeverarbeitung noch offen; keine bestätigte Split-Geometrie-Regression. |
+| `testNativeCloseButtonClosesWindow` | Accessibility zählt vor dem Klick acht Fenster, danach sieben; das sichtbare Vorderfenster wechselt. | `firstMatch.exists` prüft danach das nächste Fenster. Fehlerhafte Testidentität; der Klick schließt in diesem Lauf ein Fenster. Keine erneute Ampel-Regression daraus ableiten. |
+
+Die drei Fälle bleiben im Lauf fehlgeschlagen. Bestandene Fälle werden nicht
+erneut ausgeführt; es wurde kein weiterer Lauf ohne neue Korrektur gestartet.
+Diese lokale deterministische Suite ersetzt weder die vollständige Varianten-
+matrix noch Remote-/Provider-Abnahme und unabhängige Exploration.
