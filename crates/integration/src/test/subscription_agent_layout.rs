@@ -45,11 +45,14 @@ pub fn test_subscription_agent_conversation_layout_evidence() -> Builder {
     ] {
         builder = builder.with_step(resize_window(width_name, width, height));
         for state in SubscriptionAgentLayoutState::ALL {
-            builder = builder.with_step(assert_layout_state(
-                width_name,
-                state,
-                (state == screenshot_state).then_some(screenshot_name),
-            ));
+            let capture = if width_name == "narrow"
+                && state == SubscriptionAgentLayoutState::RecoverableErrorWithSession
+            {
+                Some("subscription-agent-recoverable-error-540x670.png")
+            } else {
+                (state == screenshot_state).then_some(screenshot_name)
+            };
+            builder = builder.with_step(assert_layout_state(width_name, state, capture));
         }
     }
 
@@ -138,6 +141,13 @@ fn validate_layout_snapshot(
     let footer = required_bounds(width_name, state, "footer", snapshot.footer)?;
     let identity = required_bounds(width_name, state, "identity", snapshot.identity)?;
     let viewport = RectF::new(vec2f(0., 0.), snapshot.window_size);
+
+    if state != SubscriptionAgentLayoutState::Ready && snapshot.start_hint.is_some() {
+        return Err(format!(
+            "{width_name}/{}: new-conversation guidance contradicts the current lifecycle",
+            state.name()
+        ));
+    }
 
     for (name, bounds) in [
         ("input", input),

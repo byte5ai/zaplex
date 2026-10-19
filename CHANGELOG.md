@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.4] — 2026-10-20
+
+- Agent-Ansicht: Der Einstiegshinweis erscheint nur im startbereiten Zustand; laufende, beendete und fehlgeschlagene Sessions behalten Platz für ihre tatsächlichen Aktionen (#153).
+
 ## [1.2.3] — 2026-10-20
 
 - Schmale Ansichten: Dateinamen bleiben vor optionalen Metadaten sichtbar; Connections-, Favoriten- und Agent-Hinweise umbrechen statt abgeschnitten zu werden (#565, #566, #572, #153).

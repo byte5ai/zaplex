@@ -52,21 +52,29 @@ jobs:
             *) exit 1 ;;
           esac
           cargo test --locked -p integration --test integration -- --list > "$RUNNER_TEMP/native-layout-tests.txt"
+          failed=0
           for test_name in "${tests[@]}"; do
             grep -Fx "ui_tests::$test_name: test" "$RUNNER_TEMP/native-layout-tests.txt"
-            cargo test --locked -p integration --test integration "ui_tests::$test_name" -- --exact --nocapture
+            if ! cargo test --locked -p integration --test integration "ui_tests::$test_name" -- --exact --nocapture; then
+              failed=1
+              continue
+            fi
             case "$test_name" in
               test_subscription_agent_*)
-                captures=(subscription-agent-normal-1180x640 subscription-agent-narrow-540x670) ;;
+                captures=(subscription-agent-normal-1180x640 subscription-agent-narrow-540x670 subscription-agent-recoverable-error-540x670) ;;
               test_native_workspace_empty_states*)
                 captures=(native-empty-connections-dark-250 native-empty-connections-dark-320 native-empty-connections-dark-480 native-empty-connections-light-250 native-empty-connections-light-320 native-empty-connections-light-480 native-empty-favorites-dark native-empty-favorites-light) ;;
               test_native_workspace_file_managers*)
                 captures=(native-file-managers-normal native-file-managers-narrow native-file-managers-normal-light native-file-managers-narrow-light native-file-manager-full-name native-file-manager-focused-action native-file-managers-restored-terminals) ;;
             esac
             for capture in "${captures[@]}"; do
-              find "$ZAPLEX_INTEGRATION_TEST_ARTIFACTS_DIR/$test_name" -type f -name "$capture.png" -size +0c -print -quit | grep -q .
+              if ! find "$ZAPLEX_INTEGRATION_TEST_ARTIFACTS_DIR/$test_name" -type f -name "$capture.png" -size +0c -print -quit | grep -q .; then
+                echo "::error::Missing capture: $test_name/$capture.png"
+                failed=1
+              fi
             done
           done
+          exit "$failed"
       - name: Upload native layout evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
