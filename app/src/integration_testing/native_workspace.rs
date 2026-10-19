@@ -2,6 +2,7 @@
 //! they do not claim live SSH, daemon, or provider acceptance.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use pathfinder_geometry::{rect::RectF, vector::vec2f};
 use warpui::{
@@ -98,6 +99,87 @@ pub fn seed_connections() -> TestStep {
             data.insert(HOST_IDS, ids);
         },
     )
+}
+
+pub fn empty_connections(panel_width: f32) -> TestStep {
+    TestStep::new("Show the empty Connections instruction at minimum sidebar width")
+        .with_action(move |app, window_id, _| {
+            let workspace = workspace_view(app, window_id);
+            app.dispatch_typed_action(
+                window_id,
+                &[workspace.id()],
+                &WorkspaceAction::OpenSshManager,
+            );
+            app.update(|ctx| {
+                let handle = ResizableData::as_ref(ctx)
+                    .get_handle(window_id, ModalType::LeftPanelWidth)
+                    .expect("panel sizing handle");
+                handle
+                    .lock()
+                    .expect("panel sizing lock")
+                    .set_size(panel_width);
+                workspace.update(ctx, |_, ctx| ctx.notify());
+            });
+        })
+        .add_named_assertion(
+            "The complete empty-state instruction fits inside Connections",
+            |app, window_id| {
+                let Some(panel) = bounds(app, window_id, "ssh_manager_panel_root") else {
+                    return AssertionOutcome::failure("Connections panel not painted".into());
+                };
+                let Some(last_char) = bounds(app, window_id, "connections-empty-last-char") else {
+                    return AssertionOutcome::failure("Empty instruction end not painted".into());
+                };
+                if !contains(panel, last_char) {
+                    return AssertionOutcome::failure(format!(
+                        "Instruction clips: {last_char:?}, panel={panel:?}"
+                    ));
+                }
+                AssertionOutcome::Success
+            },
+        )
+}
+
+pub fn empty_favorites() -> TestStep {
+    TestStep::new("Show the empty Favorites instruction in the actual launch menu")
+        .with_action(|app, window_id, _| {
+            let workspace = workspace_view(app, window_id);
+            app.dispatch_typed_action(
+                window_id,
+                &[workspace.id()],
+                &WorkspaceAction::OpenNewSessionMenu {
+                    position: vec2f(30., 80.),
+                },
+            );
+        })
+        .add_named_assertion(
+            "The empty hint has room for multiple readable lines",
+            |app, window_id| {
+                let Some(hint) = bounds(app, window_id, &crate::t!("workspace-favorites-empty"))
+                else {
+                    return AssertionOutcome::failure("Empty favorites hint not painted".into());
+                };
+                let viewport = RectF::new(
+                    vec2f(0., 0.),
+                    app.window_bounds(&window_id).expect("window bounds").size(),
+                );
+                let Some(last_char) = bounds(
+                    app,
+                    window_id,
+                    &format!("menu-label-end:{}", crate::t!("workspace-favorites-empty")),
+                ) else {
+                    return AssertionOutcome::failure(
+                        "Empty favorites instruction end not painted".into(),
+                    );
+                };
+                if !contains(viewport, hint) || !contains(hint, last_char) || hint.height() < 30. {
+                    return AssertionOutcome::failure(format!(
+                        "Empty favorites instruction has no wrapping space: {hint:?}"
+                    ));
+                }
+                AssertionOutcome::Success
+            },
+        )
 }
 
 pub fn connection_layout(panel_width: f32, save: bool) -> TestStep {
@@ -429,6 +511,11 @@ pub fn open_local_file_manager(index: usize) -> TestStep {
         )
         .expect("fixture file");
         std::fs::create_dir(directory.path().join("projects")).expect("fixture directory");
+        std::fs::write(
+            directory.path().join("other-project-with-a-long-name.txt"),
+            "long-name fixture\n",
+        )
+        .expect("long-name fixture file");
         let group = pane_group_view(app, window_id, 0);
         group.update(app, |group, ctx| {
             let pane = group.pane_id_from_index(index).expect("invoking pane");
@@ -473,6 +560,19 @@ fn fm_position(app: &App, index: usize, part: &str) -> String {
     })
 }
 
+pub fn hover_long_file_name() -> TestStep {
+    TestStep::new("Expose the full long filename without selecting another pane")
+        .with_event_fn(|app, window_id| Event::MouseMoved {
+            position: bounds(app, window_id, &fm_position(app, 0, "row:2:name-text"))
+                .expect("painted long filename")
+                .center(),
+            cmd: false,
+            shift: false,
+            is_synthetic: false,
+        })
+        .set_post_step_pause(Duration::from_millis(250))
+}
+
 pub fn file_manager_layout() -> TestStep {
     TestStep::new("Check both native file-manager legends, transfer targets and file rows")
         .add_named_assertion("Every function key and the transfer target stay within their own pane", |app, window_id| {
@@ -480,6 +580,24 @@ pub fn file_manager_layout() -> TestStep {
                 let Some(root) = bounds(app, window_id, &fm_position(app, index, "pane-root")) else {
                 return AssertionOutcome::failure("File manager has not painted".into());
             };
+                for row in 0..3 {
+                    let Some(name) = bounds(app, window_id, &fm_position(app, index, &format!("row:{row}:name-text"))) else {
+                        return AssertionOutcome::failure(format!("Name text has not painted in pane {index}, row {row}"));
+                    };
+                    if name.width() < 100. || !contains(root, name) {
+                        return AssertionOutcome::failure(format!("File identity has no usable width: pane={index}, name={name:?}"));
+                    }
+                    let painted = app.presenter(window_id).is_some_and(|presenter| {
+                        let presenter = presenter.borrow();
+                        presenter.scene().is_some_and(|scene| {
+                            scene.layers().flat_map(|layer| &layer.glyphs)
+                                .any(|glyph| name.contains_point(glyph.position))
+                        })
+                    });
+                    if !painted {
+                        return AssertionOutcome::failure(format!("No actual filename glyphs in pane {index}, row {row}"));
+                    }
+                }
                 // A narrow pane wraps the legend into two or four rows of equal cells.
                 let legend = ["legend-rows-1", "legend-rows-2", "legend-rows-4"]
                     .into_iter()

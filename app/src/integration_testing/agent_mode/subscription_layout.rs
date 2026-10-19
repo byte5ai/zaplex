@@ -165,6 +165,9 @@ pub struct SubscriptionAgentLayoutSnapshot {
     pub window_size: Vector2F,
     pub input: Option<RectF>,
     pub composer: Option<RectF>,
+    pub composer_last_char: Option<RectF>,
+    pub message_bar: Option<RectF>,
+    pub hint_ends: Vec<(&'static str, Option<RectF>)>,
     pub footer: Option<RectF>,
     pub identity: Option<RectF>,
     pub actions: Vec<SubscriptionAgentActionLayoutPosition>,
@@ -232,6 +235,24 @@ pub fn subscription_agent_layout_snapshot(
         window_size,
         input: positions.get_position(&input_id),
         composer: positions.get_position(&composer_id),
+        composer_last_char: positions.get_position("subscription-composer-last-char"),
+        message_bar: positions.get_position("agent-message-bar"),
+        hint_ends: [
+            ("help", crate::t!("agent-message-bar-for-help")),
+            ("commands", crate::t!("agent-message-bar-for-commands")),
+            (
+                "conversations",
+                crate::t!("agent-message-bar-open-conversation"),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, label)| {
+            (
+                name,
+                positions.get_position(&format!("message-bar-text-end:{label}")),
+            )
+        })
+        .collect(),
         footer: positions.get_position(&footer_id),
         identity: positions.get_position(&subscription_identity_position_id(&conversation_id)),
         actions: ACTION_NAMES

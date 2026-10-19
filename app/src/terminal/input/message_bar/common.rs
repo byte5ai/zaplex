@@ -5,7 +5,7 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
 use warpui::elements::{
     Border, CacheOption, Clipped, Container, CornerRadius, Element, Hoverable, Image,
-    ParentElement, Radius,
+    ParentElement, Radius, Wrap,
 };
 use warpui::platform::Cursor;
 use warpui::prelude::{Align, ConstrainedBox, CrossAxisAlignment, Flex, Text};
@@ -86,6 +86,24 @@ pub fn render_standard_message(message: Message, app: &AppContext) -> Box<dyn El
     render_message_bar_items(&message.items, app)
 }
 
+/// Keep each shortcut with its label, moving whole hints onto another line as needed.
+pub fn render_wrapping_message_bar(message: Message, app: &AppContext) -> Box<dyn Element> {
+    let mut content = Wrap::row()
+        .with_spacing(8.)
+        .with_run_spacing(4.)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center);
+    content.extend(
+        message
+            .items
+            .iter()
+            .map(|item| render_message_bar_items(std::slice::from_ref(item), app)),
+    );
+    Container::new(content.finish())
+        .with_horizontal_padding(*terminal::view::PADDING_LEFT)
+        .with_vertical_padding(styles::VERTICAL_PADDING)
+        .finish()
+}
+
 /// Renders a sequence of message items into a flex row.
 /// Currently used for agent message bar items and zero state message bar items.
 fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn Element> {
@@ -109,14 +127,19 @@ fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn 
             .finish(),
             MessageItem::Text { content, color } => {
                 let font_color = color.unwrap_or(default_font_color);
-                Text::new(
+                let text = Text::new(
                     content.clone(),
                     appearance.ui_font_family(),
                     styles::font_size(app),
                 )
                 .with_color(font_color)
-                .soft_wrap(false)
-                .finish()
+                .soft_wrap(false);
+                #[cfg(feature = "integration_tests")]
+                let text = text.with_saved_char_position(
+                    content.chars().count().saturating_sub(1),
+                    format!("message-bar-text-end:{content}"),
+                );
+                text.finish()
             }
             MessageItem::Hyperlink {
                 content,

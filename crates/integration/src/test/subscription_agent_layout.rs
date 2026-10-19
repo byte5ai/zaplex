@@ -165,6 +165,30 @@ fn validate_layout_snapshot(
             state.name()
         ));
     }
+    if state == SubscriptionAgentLayoutState::SessionEnded {
+        let last_char = required_bounds(
+            width_name,
+            state,
+            "composer instruction end",
+            snapshot.composer_last_char,
+        )?;
+        if !contains(composer, last_char) {
+            return Err(format!("{width_name}: session-ended instruction is clipped: {last_char:?}, composer={composer:?}"));
+        }
+        let message_bar =
+            required_bounds(width_name, state, "shortcut hints", snapshot.message_bar)?;
+        if !contains(viewport, message_bar) {
+            return Err(format!("{width_name}: shortcut hints escape the viewport"));
+        }
+        for (name, end) in &snapshot.hint_ends {
+            let end = required_bounds(width_name, state, name, *end)?;
+            if !contains(message_bar, end) {
+                return Err(format!(
+                    "{width_name}: {name} hint is clipped: {end:?}, bar={message_bar:?}"
+                ));
+            }
+        }
+    }
     if overlaps(composer, footer) {
         return Err(format!(
             "{width_name}/{}: composer overlaps footer",

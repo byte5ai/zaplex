@@ -12,14 +12,17 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{Fill, WarpTheme};
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded,
+    Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Expanded,
     Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    ParentElement, Point, Radius, SavePosition, Text, ZIndex,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Point, Radius,
+    SavePosition, Stack, Text, ZIndex,
 };
 use warpui::event::{DispatchedEvent, ModifiersState};
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::Vector2F;
 use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
     AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, PaintContext,
     SizeConstraint,
@@ -35,6 +38,30 @@ use crate::ui_components::icons::Icon;
 const FILE_SIZE_WIDTH: f32 = 80.0;
 /// File date column width
 const FILE_DATE_WIDTH: f32 = 120.0;
+
+/// Optional metadata yields to a usable file identity column in narrow panes.
+#[derive(Clone, Copy)]
+pub(super) enum FileColumns {
+    Name,
+    NameAndSize,
+    All,
+}
+
+impl FileColumns {
+    pub(super) fn min_width(self) -> f32 {
+        let name = 120.0 + 2.0 * (ROW_PADDING_X + ROW_OUTLINE) + ICON_CELL + ROW_SPACING;
+        match self {
+            Self::Name => name,
+            Self::NameAndSize => name + ROW_SPACING + FILE_SIZE_WIDTH,
+            Self::All => name + 2.0 * ROW_SPACING + FILE_SIZE_WIDTH + FILE_DATE_WIDTH,
+        }
+    }
+
+    fn show_size(self) -> bool {
+        matches!(self, Self::NameAndSize | Self::All)
+    }
+}
+
 /// Leading icon cell (16 px icon + 8 px row spacing) — the header mirrors it
 /// so the Name header sits exactly over the names, not 24 px beside them.
 const ICON_CELL: f32 = 16.0;
@@ -331,8 +358,9 @@ fn mark_cell(
 /// Mouse: a plain click moves the cursor, a double click opens, Cmd/Ctrl-click
 /// toggles the mark, Shift-click marks the range from the cursor.
 #[allow(clippy::too_many_arguments)]
-pub fn render_file_row(
+pub(super) fn render_file_row(
     entry: &FileEntry,
+    columns: FileColumns,
     index: usize,
     listing_generation: u64,
     position_prefix: &str,
@@ -385,12 +413,22 @@ pub fn render_file_row(
         // Name — `Expanded` (tight fit), not `Shrinkable` (loose fit): only a
         // tight-fit child actually consumes the remaining width, and consuming
         // it is what pins Size/Modified into stable right columns.
-        let mut name_text =
-            Text::new_inline(name.clone(), ui_font, ui_font_size).with_color(look.name.into());
+        let mut name_text = Text::new_inline(name.clone(), ui_font, ui_font_size)
+            .with_clip(ClipConfig::ellipsis())
+            .with_color(look.name.into());
         if look.bold {
             name_text = name_text.with_style(Properties::default().weight(Weight::Bold));
         }
-        let name_el = Expanded::new(1.0, name_text.finish()).finish();
+        let name_el = Expanded::new(
+            1.0,
+            SavePosition::new(
+                name_text.finish(),
+                &format!("{row_position_prefix}:{index}:name-text"),
+            )
+            .for_single_frame()
+            .finish(),
+        )
+        .finish();
 
         // Size — right-aligned in its fixed column, like every numeric column.
         let size_text = if matches!(file_type, FileEntryType::Directory) {
@@ -433,7 +471,7 @@ pub fn render_file_row(
         // Assemble row content. `Max` is what pins Size/Modified into stable
         // columns — without it the row hugged its content and the columns
         // wandered with the name length (polish audit FM.2).
-        let row_content = Flex::row()
+        let mut row_content = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(ROW_SPACING)
@@ -446,17 +484,38 @@ pub fn render_file_row(
                 muted_fill,
                 mark_handle.clone(),
             ))
-            .with_child(name_el)
-            .with_child(size_el)
-            .with_child(date_el)
-            .finish();
+            .with_child(name_el);
+        if columns.show_size() {
+            row_content.add_child(size_el);
+        }
+        if matches!(columns, FileColumns::All) {
+            row_content.add_child(date_el);
+        }
+        let row_content = row_content.finish();
 
-        ModifiedClickTarget::new(
+        let row = ModifiedClickTarget::new(
             row_container(row_content, &look),
             Some(SftpBrowserAction::ToggleMark(toggle_reference.clone())),
             Some(SftpBrowserAction::MarkRangeTo(range_reference.clone())),
         )
-        .finish()
+        .finish();
+        let mut stack = Stack::new().with_child(row);
+        if mouse.is_hovered() {
+            stack.add_positioned_child(
+                appearance
+                    .ui_builder()
+                    .tool_tip(name.clone())
+                    .build()
+                    .finish(),
+                OffsetPositioning::offset_from_parent(
+                    Vector2F::new(0., -4.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::TopMiddle,
+                    ChildAnchor::BottomMiddle,
+                ),
+            );
+        }
+        stack.finish()
     })
     // The mark zone and the modifier-click target live inside this row and
     // handle their own presses; deferring to children is what keeps a mark
@@ -607,7 +666,8 @@ fn header_cell(
 /// Render file list header — localized, mirroring the rows' column grid
 /// (leading icon cell included), separated from them by a hairline, and
 /// sortable: each column header orders the list on click (MC parity).
-pub fn render_header(
+pub(super) fn render_header(
+    columns: FileColumns,
     sort: SortState,
     handles: &HashMap<SortColumn, MouseStateHandle>,
     appearance: &Appearance,
@@ -657,17 +717,20 @@ pub fn render_header(
     .with_width(FILE_DATE_WIDTH)
     .finish();
 
-    let header_row = Flex::row()
+    let mut header_row = Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_main_axis_size(MainAxisSize::Max)
         .with_spacing(ROW_SPACING)
         .with_child(icon_spacer)
-        .with_child(name_el)
-        .with_child(size_el)
-        .with_child(date_el)
-        .finish();
+        .with_child(name_el);
+    if columns.show_size() {
+        header_row.add_child(size_el);
+    }
+    if matches!(columns, FileColumns::All) {
+        header_row.add_child(date_el);
+    }
 
-    Container::new(header_row)
+    Container::new(header_row.finish())
         .with_padding_left(8.0)
         .with_padding_right(8.0)
         .with_padding_top(4.0)
@@ -753,7 +816,8 @@ pub fn render_selection_status(
 /// `has_parent_row`) followed by the visible entries — the same space the
 /// keyboard cursor moves in, so the highlight and the keys never disagree.
 #[allow(clippy::too_many_arguments)]
-pub fn render_file_rows(
+pub(super) fn render_file_rows(
+    columns: FileColumns,
     entries: &[FileEntry],
     filtered_indices: &[usize],
     selected: &HashSet<EntryIdentity>,
@@ -793,6 +857,7 @@ pub fn render_file_rows(
         let mark_handle = mark_handles.get(&entry.path).cloned().unwrap_or_default();
         let row = render_file_row(
             entry,
+            columns,
             index,
             listing_generation,
             position_prefix,

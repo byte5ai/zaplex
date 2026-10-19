@@ -3885,21 +3885,25 @@ impl SshManagerPanel {
         if self.nodes.is_empty() && !self.adding_mode {
             let theme = appearance.theme();
             let muted = theme.sub_text_color(theme.surface_2());
+            let instruction = crate::t!("workspace-left-panel-ssh-manager-tree-empty");
+            #[cfg(feature = "integration_tests")]
+            let last_char = instruction.chars().count().saturating_sub(1);
+            let text = Text::new(
+                instruction,
+                appearance.ui_font_family(),
+                appearance.ui_font_subheading(),
+            )
+            .with_color(muted.into());
+            #[cfg(feature = "integration_tests")]
+            let text =
+                text.with_saved_char_position(last_char, "connections-empty-last-char".into());
             col.add_child(
-                Container::new(
-                    Text::new_inline(
-                        crate::t!("workspace-left-panel-ssh-manager-tree-empty"),
-                        appearance.ui_font_family(),
-                        appearance.ui_font_subheading(),
-                    )
-                    .with_color(muted.into())
+                Container::new(text.finish())
+                    .with_padding_top(20.0)
+                    .with_padding_bottom(20.0)
+                    .with_padding_left(ITEM_PADDING_HORIZONTAL)
+                    .with_padding_right(ITEM_PADDING_HORIZONTAL)
                     .finish(),
-                )
-                .with_padding_top(20.0)
-                .with_padding_bottom(20.0)
-                .with_padding_left(ITEM_PADDING_HORIZONTAL)
-                .with_padding_right(ITEM_PADDING_HORIZONTAL)
-                .finish(),
             );
         } else {
             for node in &self.nodes {

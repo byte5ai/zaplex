@@ -321,6 +321,13 @@ impl MenuItemLabel {
             Self::Text(label) => {
                 let mut text = Text::new_inline(label.clone(), font_family, font_size)
                     .with_color(primary_color.into());
+                #[cfg(feature = "integration_tests")]
+                {
+                    text = text.with_saved_char_position(
+                        label.chars().count().saturating_sub(1),
+                        format!("menu-label-end:{label}"),
+                    );
+                }
                 if ellipsize_label {
                     text = text.soft_wrap(false).with_clip(ClipConfig::ellipsis());
                 } else {
@@ -332,15 +339,18 @@ impl MenuItemLabel {
             Self::MultilineText { label, max_lines } => {
                 let max_height_for_n_lines =
                     *max_lines as f32 * font_size * appearance.line_height_ratio();
-                ConstrainedBox::new(
-                    Text::new(label.clone(), font_family, font_size)
-                        .with_color(primary_color.into())
-                        .autosize_text(MINIMUM_MENU_ITEM_FONT_SIZE)
-                        .soft_wrap(true)
-                        .finish(),
-                )
-                .with_max_height(max_height_for_n_lines)
-                .finish()
+                let text = Text::new(label.clone(), font_family, font_size)
+                    .with_color(primary_color.into())
+                    .autosize_text(MINIMUM_MENU_ITEM_FONT_SIZE)
+                    .soft_wrap(true);
+                #[cfg(feature = "integration_tests")]
+                let text = text.with_saved_char_position(
+                    label.chars().count().saturating_sub(1),
+                    format!("menu-label-end:{label}"),
+                );
+                ConstrainedBox::new(text.finish())
+                    .with_max_height(max_height_for_n_lines)
+                    .finish()
             }
             Self::Icon { path, color, .. } => {
                 // TODO figure out the sizes

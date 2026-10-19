@@ -1,5 +1,13 @@
 # Release Configurations
 
+## Gezielte native Layoutprüfung
+
+`native-layout.yml` prüft auf `main` die Agent-, Connections-/Favoriten- und
+Dateimanager-Ansichten auf macrunner mit vier Cargo-Buildjobs. `scenario` grenzt
+einen Wiederholungsversuch auf die betroffene Ansicht und Sprache ein. Der Lauf erzeugt
+Screenshots des nativen Test-Fixtures; er baut weder DMG noch Linux-Daemon und
+ersetzt keine Abnahme eines installierten Releases.
+
 ## Test-DMG: schneller Entwicklungszyklus
 
 `test-dmg.yml` baut nach dem Signing-Vorabcheck die macOS-App und den

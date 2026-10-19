@@ -4254,6 +4254,46 @@ fn active_pane_style_differs_from_selection_and_hover() {
 }
 
 #[test]
+fn narrow_file_list_reserves_name_width_before_metadata() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_app(&mut app);
+        let (window_id, view, _temp) = create_connected_view(
+            &mut app,
+            &[
+                ("acceptance-file.txt", b"a"),
+                ("other-project-with-a-long-name.txt", b"b"),
+            ],
+        );
+        for width in [240., 320., 480.] {
+            let (presenter, _scene) = render_scene_at(&mut app, window_id, vec2f(width, 640.));
+            let root = position(&presenter, &layout_id(&view, &app, "pane-root"));
+            for index in 0..2 {
+                let name = position(
+                    &presenter,
+                    &layout_id(&view, &app, &format!("row:{index}:name-text")),
+                );
+                assert!(
+                    name.width() >= 100.,
+                    "File identity lost at width {width}: {name:?}"
+                );
+                assert!(name.min_x() >= root.min_x() && name.max_x() <= root.max_x());
+            }
+            if width == 240. {
+                assert!(
+                    maybe_position(&presenter, &layout_id(&view, &app, "row:0:size-column"))
+                        .is_none()
+                );
+                assert!(
+                    maybe_position(&presenter, &layout_id(&view, &app, "row:0:date-column"))
+                        .is_none()
+                );
+            }
+        }
+    });
+}
+
+#[test]
 fn column_positions_do_not_move_with_filename_length() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
