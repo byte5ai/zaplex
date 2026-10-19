@@ -22,6 +22,13 @@ werden zusätzlich zum Exitcode geprüft.
 Diagnoselauf. Damit werden nach einem Fund nur betroffene Fälle erneut ausgeführt.
 Die vollständige Suite verbietet eine solche Teilmenge.
 
+Die schmale Ansicht wird über das native Fenstermenü hergestellt und anhand der
+tatsächlichen Fensterbreite geprüft. Der erste Versuch, den rechten Rand des
+bildschirmfüllenden Fensters mit XCTest zu ziehen, änderte dessen Größe nicht;
+dieser Versuch belegt noch keinen App-Resize-Fehler. Die Layout-Erwartung bleibt
+unverändert: höchstens 700 Punkte Breite, alle acht beschrifteten Dateiaktionen
+innerhalb des sichtbaren Fensters und Rückkehr zur bestehenden Shell.
+
 ## Veröffentlichung und Belege
 
 `zap_release.yml` ruft die GUI-Prüfung nach `release_macos` mit `zap-macos-arm64`

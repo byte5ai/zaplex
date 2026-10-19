@@ -28,7 +28,8 @@ prüft das installierte DMG. Ein erfolgreicher Code-Review ersetzt keinen Ablauf
    erhält die Shell. Das Öffnen/Schließen von „Connections“ erhält sie ebenfalls.
 9. Bei höchstens 700 Punkten Fensterbreite bleiben alle acht beschrifteten
    Dateimanager-Aktionen sichtbar, wie in `docs/ui/README.md` vereinbart.
-   Das Fenster wird dafür tatsächlich durch Ziehen schmaler gemacht.
+   Das echte Fenster wird dafür über das native Menü „Move & Resize → Left“
+   schmaler gemacht; ein bloßes Browser-Mockup reicht nicht.
 
 ## Vollständige Produktabnahme
 

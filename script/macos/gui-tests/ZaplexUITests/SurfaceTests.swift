@@ -4,10 +4,10 @@ final class SurfaceTests: GUIFlowTestCase {
     func testNarrowFileManagerKeepsAllActionsVisible() throws {
         // docs/ui/README.md requires all eight labelled actions on narrow panes.
         command("qa_state=741")
-        let edge = window.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: window.frame.width - 1, dy: window.frame.height / 2))
-        let target = edge.withOffset(CGVector(dx: 660 - window.frame.width, dy: 0))
-        edge.press(forDuration: 0.2, thenDragTo: target)
+        selectMenu("Window", "Move & Resize")
+        let left = app.menuItems["Left"]
+        XCTAssertTrue(left.waitForExistence(timeout: 5))
+        left.click()
         let resized = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in self.window.frame.width <= 700 }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [resized], timeout: 5), .completed,
