@@ -9,7 +9,7 @@ denselben Commit des Dispatchs; weitere Merges verändern diesen Lauf nicht.
 | `no-new-cjk` | Leichter Linux-Check auf PRs. Dateipfade werden im Job gefiltert, damit der gleichnamige Pflicht-Status auch bei Dokumentationsänderungen erscheint. |
 | `dependency-security` | Advisory-Prüfung ohne App-Build; zuerst im Batch, zusätzlich manuell aufrufbar. |
 | `pr-check` | Schwere Linux-/macOS-Compile- und Regressionstests; nur aus dem Batch. |
-| `test-dispatch` | Schwere Rust-Tests; nur aus dem Batch. |
+| `test-dispatch` | Schwere Rust-Tests auf Blacksmith Ubuntu 22.04 (16 vCPU / 64 GB); nur aus dem Batch. |
 | `live-sftp-safety` | Schwere SFTP-Integrationstests; nur aus dem Batch. |
 | `cockpit-parity-audit` | Schwere Paritätsprüfung; nur aus dem Batch. Echte Zwei-Host-Abnahme wird nur mit `require_manual_runtime=true` verlangt. Ein automatischer grüner Lauf ersetzt diese Abnahme nicht. |
 | `test-dmg` | Optionaler signierter Test-DMG-Build nach grünen Prüfungen, einschließlich Linux-Daemon. |
