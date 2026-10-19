@@ -1,0 +1,52 @@
+{
+  "run_id": 39303447063,
+  "artifact_id": 12212937860,
+  "app_source": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "test_source": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "version": "1.2.2",
+  "dmg_sha256": "313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3",
+  "locale": "en",
+  "theme": "dark",
+  "reference_revision": "6c956383ad560913dc31fa383104dc489104d561",
+  "screenshots": [
+    {
+      "file": "connections-empty-clipped.png",
+      "original_attachment": "B7A2D393-E154-4C6C-AFF0-DCC0BAE644CE.png",
+      "case": "SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+      "sha256": "e3088822cdcb5be5c1ae7e154dec03a4a7192f58ce49e25e75705b0c36dba8f2",
+      "pixels": [
+        1024,
+        768
+      ],
+      "ax_attachment": "66EF86E3-FF7E-424F-BC69-2E3B6E042A76.txt",
+      "ax_sha256": "3ad7497583ea047cd0a44920f364e2ea9902f27616c5cb88d211331a160df779",
+      "window_frame_points": "{{0.0, 30.0}, {1024.0, 678.0}}"
+    },
+    {
+      "file": "favorites-empty-clipped.png",
+      "original_attachment": "FC1E833A-6ADB-4C93-A8EB-0231DF2ED007.png",
+      "case": "NavigationTests/testSplitLeft",
+      "sha256": "583440a77c0b45fb9ec2ca7a09eaf12d22b88c3a8f0fea6a7c353841d714e131",
+      "pixels": [
+        1024,
+        768
+      ],
+      "ax_attachment": "1ACB2739-F16B-41F3-88B2-775E70CF2442.txt",
+      "ax_sha256": "861709690b9788d57b8552d1c4f29dc6474e22c2722ca7ba7fd874e353e205bf",
+      "window_frame_points": "{{0.0, 30.0}, {1024.0, 678.0}}"
+    },
+    {
+      "file": "file-actions-513-points.png",
+      "original_attachment": "1A927A23-838B-4E18-B4DD-0022C61D611C.png",
+      "case": "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible",
+      "sha256": "287bb4f273db28239f88ff8494d2f6b1732c6da06e64f434a56b796967320984",
+      "pixels": [
+        1024,
+        768
+      ],
+      "ax_attachment": "B50DEE79-8CC1-4BAE-817D-BEE3936643CD.txt",
+      "ax_sha256": "76eff89df27f1a8b28f5cd0087bc913ded7c10838e7ed5cd25ff334e6a051bec",
+      "window_frame_points": "{{0.0, 30.0}, {513.0, 680.0}}"
+    }
+  ]
+}
