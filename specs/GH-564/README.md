@@ -7,8 +7,11 @@ Stand: 20.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
 (#565, #566, #572) sind mit [PR #586](https://github.com/byte5ai/zaplex/pull/586)
 behoben und auf `1800ec77` (1.2.4) nativ nachgeprüft: vier Fälle bestanden,
 30 Originalaufnahmen visuell ausgewertet. [Ergebnis und Grenzen](NATIVE-FIXTURES.md#workspace-korrekturen-nativ-bestätigt-am-20102026).
-Der Agentenfall scheiterte im selben Lauf weiterhin am schmalen Fehlerzustand;
-seine Nachkorrektur wird separat geprüft.
+Der Agentenfall besteht nach [PR #589](https://github.com/byte5ai/zaplex/pull/589)
+auf `513647be` (1.2.6): zwölf Zustände in je zwei Fenstergrößen, drei weitere
+Originalaufnahmen visuell geprüft. [Agenten-Nachweis](NATIVE-FIXTURES.md#agentenkorrektur-nativ-bestätigt-am-20102026).
+Damit sind fünf gezielte Fälle über zwei unterschiedliche Quell-/Teststände
+erfolgreich belegt; es ist kein gemeinsamer vollständiger grüner Lauf.
 Das installierte DMG 1.2.2 auf `cadcb191` wurde bereits geprüft: zwölf lokale
 GUI-Fälle bestanden im ersten Lauf, die übrigen drei nach Testkorrektur im
 gezielten Wiederholungslauf. Der erfolgreiche App-/DMG-Build verwendete vier

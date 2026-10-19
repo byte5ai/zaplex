@@ -15,7 +15,10 @@ sowie die erneute Sichtprüfung der beiden Fehler auf
 `cadcb19130bbe0630f39bdd61b4e183ff154981a` (Paketversion 1.2.2).
 Die [Nachprüfung der Workspace-Korrekturen](NATIVE-FIXTURES.md#workspace-korrekturen-nativ-bestätigt-am-20102026)
 auf `1800ec77` (1.2.4) bestätigt vier native Fälle mit 30 visuell geprüften
-Originalaufnahmen; der separate Agentenfall ist fehlgeschlagen.
+Originalaufnahmen. Der [separate Agentenfall](NATIVE-FIXTURES.md#agentenkorrektur-nativ-bestätigt-am-20102026)
+besteht nach PR #589 auf `513647be` (1.2.6), mit 24 Zustands-/Größenkombinationen
+und drei visuell geprüften Originalaufnahmen. Die fünf erfolgreichen Fälle
+stammen aus zwei unterschiedlichen Quell-/Testständen.
 Weder Altbuild noch Fixtures ersetzen die vollständigen Fallkombinationen.
 
 ## Referenzen und Bewertung

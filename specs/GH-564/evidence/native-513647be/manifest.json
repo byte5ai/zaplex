@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "native-integration-fixtures",
+  "source_sha": "513647beb6f7f7ecd89ea776f2c0e83b10e51710",
+  "test_source_sha": "513647beb6f7f7ecd89ea776f2c0e83b10e51710",
+  "reference_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "run_id": "39343216623",
+  "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39343216623",
+  "package_version": "1.2.6",
+  "artifact_id": 12230745309,
+  "artifact_name": "native-layout-513647beb6f7f7ecd89ea776f2c0e83b10e51710",
+  "dmg_sha256": null,
+  "installed_dmg": false,
+  "image_processing": "None; unchanged original PNG bytes.",
+  "scope": "Native Agent lifecycle case with test-controlled state.",
+  "not_covered": [
+    "installed DMG acceptance",
+    "independent exploratory interaction",
+    "authenticated provider interaction",
+    "live SSH/daemon acceptance",
+    "contrast variant",
+    "OS reduced motion",
+    "complete product acceptance matrix"
+  ],
+  "images": [
+    {
+      "file": "agent/subscription-agent-narrow-540x670.png",
+      "sha256": "c8f3841b905fcfee87378f72fb52db2bb818550cc8587b1f265041a3316ef488",
+      "original_file": "test_subscription_agent_conversation_layout_evidence/2026-10-19T23-49-36/subscription-agent-narrow-540x670.png",
+      "test_case": "test_subscription_agent_conversation_layout_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-49-36",
+      "screenshot_pixels": [
+        540,
+        670
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        540,
+        670
+      ],
+      "window_size_basis": "Native integration test resize and layout assertions; not an AX measurement of an installed DMG.",
+      "theme_basis": "Visually reviewed original capture."
+    },
+    {
+      "file": "agent/subscription-agent-normal-1180x640.png",
+      "sha256": "bdc6b939804a1d59a870831fb9c3b1d62e6026e15cd946015f7e2652c5fc329a",
+      "original_file": "test_subscription_agent_conversation_layout_evidence/2026-10-19T23-49-36/subscription-agent-normal-1180x640.png",
+      "test_case": "test_subscription_agent_conversation_layout_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-49-36",
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1180,
+        640
+      ],
+      "window_size_basis": "Native integration test resize and layout assertions; not an AX measurement of an installed DMG.",
+      "theme_basis": "Visually reviewed original capture."
+    },
+    {
+      "file": "agent/subscription-agent-recoverable-error-540x670.png",
+      "sha256": "dcb171a7588af00c5a090021d8e227055639ec2e22683c0db4d1bbbaa4b919ff",
+      "original_file": "test_subscription_agent_conversation_layout_evidence/2026-10-19T23-49-36/subscription-agent-recoverable-error-540x670.png",
+      "test_case": "test_subscription_agent_conversation_layout_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-49-36",
+      "screenshot_pixels": [
+        540,
+        670
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        540,
+        670
+      ],
+      "window_size_basis": "Native integration test resize and layout assertions; not an AX measurement of an installed DMG.",
+      "theme_basis": "Visually reviewed original capture."
+    }
+  ]
+}

@@ -1,0 +1,148 @@
+{
+  "run_id": "39343216623",
+  "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39343216623",
+  "source_sha": "513647beb6f7f7ecd89ea776f2c0e83b10e51710",
+  "test_source_sha": "513647beb6f7f7ecd89ea776f2c0e83b10e51710",
+  "package_version": "1.2.6",
+  "artifact_id": 12230745309,
+  "workflow_conclusion": "success",
+  "case": "ui_tests::test_subscription_agent_conversation_layout_evidence",
+  "result": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0
+  },
+  "validated_layouts": [
+    {
+      "size": "normal",
+      "state": "no_agent_installed",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "not_signed_in",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "selection_required",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "ready",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "starting",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "responding",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "running_tool",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "waiting_for_approval",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "turn_completed",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "session_ended",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "recoverable_error_with_session",
+      "status": "passed"
+    },
+    {
+      "size": "normal",
+      "state": "recoverable_error_without_session",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "no_agent_installed",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "not_signed_in",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "selection_required",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "ready",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "starting",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "responding",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "running_tool",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "waiting_for_approval",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "turn_completed",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "session_ended",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "recoverable_error_with_session",
+      "status": "passed"
+    },
+    {
+      "size": "narrow",
+      "state": "recoverable_error_without_session",
+      "status": "passed"
+    }
+  ],
+  "visual_review": {
+    "reviewed_original_images": 3,
+    "normal": "Approval instruction and all four approval actions visible at 1180x640.",
+    "narrow": "Ended-session instruction wraps fully; New conversation and Back to shell remain visible at 540x670.",
+    "recoverable_error": "Recovery instruction, primary actions, configuration actions and directory controls fit at 540x670. Change agent/account/model wrap into two rows; configuration remains available.",
+    "limits": [
+      "EN and dark theme only",
+      "Test-controlled lifecycle states, not authenticated provider interaction",
+      "No installed DMG, free exploration, remote acceptance, contrast or OS reduced-motion coverage"
+    ]
+  }
+}
