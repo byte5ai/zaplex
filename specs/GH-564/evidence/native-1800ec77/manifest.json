@@ -1,0 +1,643 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "native-integration-fixtures",
+  "source_sha": "1800ec77c61690f5d2c54ac29e33ce95da832357",
+  "test_source_sha": "1800ec77c61690f5d2c54ac29e33ce95da832357",
+  "reference_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "run_id": "39339343993",
+  "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39339343993",
+  "package_version": "1.2.4",
+  "artifact_id": 12228353039,
+  "artifact_name": "native-layout-1800ec77c61690f5d2c54ac29e33ce95da832357",
+  "dmg_sha256": null,
+  "installed_dmg": false,
+  "image_processing": "None; unchanged original PNG bytes.",
+  "scope": "Four passing native workspace cases with isolated local PTYs/files; EN/DE locale verified before captures. Agent case failed and is not included.",
+  "not_covered": [
+    "installed DMG acceptance",
+    "independent exploratory interaction",
+    "authenticated provider interaction",
+    "live SSH/daemon acceptance",
+    "contrast variant",
+    "OS reduced motion",
+    "complete product acceptance matrix"
+  ],
+  "images": [
+    {
+      "file": "connections-en/native-empty-connections-dark-250.png",
+      "sha256": "a73a927518b0904d306c566c025f2a0b2926848578d6994ff89c0d9e51d684b0",
+      "original_file": "test_native_workspace_empty_states_evidence/2026-10-19T23-12-48/native-empty-connections-dark-250.png",
+      "test_case": "test_native_workspace_empty_states_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-48",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 250,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-en/native-empty-connections-dark-320.png",
+      "sha256": "7602a2045c955564bdbdafbb7685fb4ba1450609f9f6d8fc4dc769ac276d685f",
+      "original_file": "test_native_workspace_empty_states_evidence/2026-10-19T23-12-48/native-empty-connections-dark-320.png",
+      "test_case": "test_native_workspace_empty_states_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-48",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 320,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-en/native-empty-connections-dark-480.png",
+      "sha256": "e7529ef00a94a3af2d17f2e7a4802799821e2ef304c11c0bdc85629769f3de73",
+      "original_file": "test_native_workspace_empty_states_evidence/2026-10-19T23-12-48/native-empty-connections-dark-480.png",
+      "test_case": "test_native_workspace_empty_states_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-48",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 480,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-en/native-empty-connections-light-250.png",
+      "sha256": "f2d2673e003a54b5364d46d44ffca369aae25e037fd9d7ae16801e5d8d737219",
+      "original_file": "test_native_workspace_empty_states_evidence/2026-10-19T23-12-48/native-empty-connections-light-250.png",
+      "test_case": "test_native_workspace_empty_states_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-48",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 250,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-en/native-empty-connections-light-320.png",
+      "sha256": "8e49cbf64691cb04d51e0cfdfa416939d1a96465fe2b6a651d304cb76d016dac",
+      "original_file": "test_native_workspace_empty_states_evidence/2026-10-19T23-12-48/native-empty-connections-light-320.png",
+      "test_case": "test_native_workspace_empty_states_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-48",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 320,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-en/native-empty-connections-light-480.png",
+      "sha256": "db0313cad7aa71e6db3a1cf1cc61b6c7ecad172648c0cec394c145e996ba36ab",
+      "original_file": "test_native_workspace_empty_states_evidence/2026-10-19T23-12-48/native-empty-connections-light-480.png",
+      "test_case": "test_native_workspace_empty_states_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-48",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 480,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-en/native-empty-favorites-dark.png",
+      "sha256": "cf98b10fcfb70ddb9451ee407e5651cdf7b8645bcf38a3159b3a7e550b19d8da",
+      "original_file": "test_native_workspace_empty_states_evidence/2026-10-19T23-12-48/native-empty-favorites-dark.png",
+      "test_case": "test_native_workspace_empty_states_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-48",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 480,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-en/native-empty-favorites-light.png",
+      "sha256": "a3d28ce7543843a245ae76d1f26ba0f88fd5729cb2e481e5d6638d48a483f94f",
+      "original_file": "test_native_workspace_empty_states_evidence/2026-10-19T23-12-48/native-empty-favorites-light.png",
+      "test_case": "test_native_workspace_empty_states_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-48",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 480,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-de/native-empty-connections-dark-250.png",
+      "sha256": "ee4a4e44d1f354acb9100d3b0eb86fb896e72ddd832239feb43c2b6bef162850",
+      "original_file": "test_native_workspace_empty_states_german_evidence/2026-10-19T23-12-54/native-empty-connections-dark-250.png",
+      "test_case": "test_native_workspace_empty_states_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-54",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 250,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-de/native-empty-connections-dark-320.png",
+      "sha256": "03f28d6b97462a16dd9c2587a6c0f3a6f1a4be70a3f9c455c15c3ba96c1da27c",
+      "original_file": "test_native_workspace_empty_states_german_evidence/2026-10-19T23-12-54/native-empty-connections-dark-320.png",
+      "test_case": "test_native_workspace_empty_states_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-54",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 320,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-de/native-empty-connections-dark-480.png",
+      "sha256": "80aec0ae82039ebe464cc12c4ea12f786453c8afcf3ee9a234ba30d62ad71953",
+      "original_file": "test_native_workspace_empty_states_german_evidence/2026-10-19T23-12-54/native-empty-connections-dark-480.png",
+      "test_case": "test_native_workspace_empty_states_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-54",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 480,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-de/native-empty-connections-light-250.png",
+      "sha256": "1a02657600b614d1255251b36bd3c238da78a97873872c41f3b66d1a9f43f7df",
+      "original_file": "test_native_workspace_empty_states_german_evidence/2026-10-19T23-12-54/native-empty-connections-light-250.png",
+      "test_case": "test_native_workspace_empty_states_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-54",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 250,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-de/native-empty-connections-light-320.png",
+      "sha256": "a566f8e43e859f5df5cc2e8b1e2c627b5f31b9c6b15272c8ba59dbe0dd178164",
+      "original_file": "test_native_workspace_empty_states_german_evidence/2026-10-19T23-12-54/native-empty-connections-light-320.png",
+      "test_case": "test_native_workspace_empty_states_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-54",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 320,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-de/native-empty-connections-light-480.png",
+      "sha256": "67ad2e13e007166d6ca4a77c28e86210b57f9d4b634d806f8787ce4fc850c54f",
+      "original_file": "test_native_workspace_empty_states_german_evidence/2026-10-19T23-12-54/native-empty-connections-light-480.png",
+      "test_case": "test_native_workspace_empty_states_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-54",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 480,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-de/native-empty-favorites-dark.png",
+      "sha256": "a1e7922f94d5d12ccea862ae609ad22b507eb970414ae2fab718efa5e63b70f6",
+      "original_file": "test_native_workspace_empty_states_german_evidence/2026-10-19T23-12-54/native-empty-favorites-dark.png",
+      "test_case": "test_native_workspace_empty_states_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-54",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 480,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "connections-de/native-empty-favorites-light.png",
+      "sha256": "b9efc15c2aa0edfe70cd4f54d2523395b727dbd250696e8263968910f6473768",
+      "original_file": "test_native_workspace_empty_states_german_evidence/2026-10-19T23-12-54/native-empty-favorites-light.png",
+      "test_case": "test_native_workspace_empty_states_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-12-54",
+      "screenshot_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1440,
+        640
+      ],
+      "sidebar_width_points": 480,
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-en/native-file-manager-focused-action.png",
+      "sha256": "a947160a150c44532237c1007ee571156cc5d68a6495d9590a84d6d2bb7146d0",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T23-13-00/native-file-manager-focused-action.png",
+      "test_case": "test_native_workspace_file_managers_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-00",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-en/native-file-manager-full-name.png",
+      "sha256": "a6e7ac6fe0517fe2d90764b984d140abaf039518cdaf32354d0b213c563dc852",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T23-13-00/native-file-manager-full-name.png",
+      "test_case": "test_native_workspace_file_managers_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-00",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-en/native-file-managers-narrow-light.png",
+      "sha256": "45435a01985eed58e8b9664dd2e7e055de6d1522e741e9f7b2ab9f9a0749e008",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T23-13-00/native-file-managers-narrow-light.png",
+      "test_case": "test_native_workspace_file_managers_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-00",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-en/native-file-managers-narrow.png",
+      "sha256": "c35ac0b77b7aedee15adae8918d550e178b3603b08659e7c19d82334ca71a2ae",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T23-13-00/native-file-managers-narrow.png",
+      "test_case": "test_native_workspace_file_managers_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-00",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-en/native-file-managers-normal-light.png",
+      "sha256": "dae4b3b5557c56de549a00bca363497aaf6428f4846b2a5dd95ffa523edd8acf",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T23-13-00/native-file-managers-normal-light.png",
+      "test_case": "test_native_workspace_file_managers_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-00",
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1180,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-en/native-file-managers-normal.png",
+      "sha256": "eefe3fad81262c1c8f80fe94460bf152d167cf075789e46abb234f1b5f69bf28",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T23-13-00/native-file-managers-normal.png",
+      "test_case": "test_native_workspace_file_managers_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-00",
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1180,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-en/native-file-managers-restored-terminals.png",
+      "sha256": "c60c925d4170b94d1aaf8168596c64ba92deb42b15e081569e50a841ff723871",
+      "original_file": "test_native_workspace_file_managers_evidence/2026-10-19T23-13-00/native-file-managers-restored-terminals.png",
+      "test_case": "test_native_workspace_file_managers_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-00",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-de/native-file-manager-focused-action.png",
+      "sha256": "2c627196cc2c07a0c779348b5652020fc194424d0f883caf028f17a8bf4f3e17",
+      "original_file": "test_native_workspace_file_managers_german_evidence/2026-10-19T23-13-06/native-file-manager-focused-action.png",
+      "test_case": "test_native_workspace_file_managers_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-06",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-de/native-file-manager-full-name.png",
+      "sha256": "59172be7474b57a691a7db23be8e7e601db3931fb6500c857ec09175c5fc2f44",
+      "original_file": "test_native_workspace_file_managers_german_evidence/2026-10-19T23-13-06/native-file-manager-full-name.png",
+      "test_case": "test_native_workspace_file_managers_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-06",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-de/native-file-managers-narrow-light.png",
+      "sha256": "02ddc93e8c8a85ccdcbf541340f779b755543bedde83234b7708e094b50d651b",
+      "original_file": "test_native_workspace_file_managers_german_evidence/2026-10-19T23-13-06/native-file-managers-narrow-light.png",
+      "test_case": "test_native_workspace_file_managers_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-06",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-de/native-file-managers-narrow.png",
+      "sha256": "76ab1ce060c7155ec330e1390bdc11dba8878ac9db51ac568e9b8a1b4b4cbe74",
+      "original_file": "test_native_workspace_file_managers_german_evidence/2026-10-19T23-13-06/native-file-managers-narrow.png",
+      "test_case": "test_native_workspace_file_managers_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-06",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-de/native-file-managers-normal-light.png",
+      "sha256": "8d9744d39ac9932bca7312a8f138ea99e2160c8cff218e1c9aa43b6b50c57508",
+      "original_file": "test_native_workspace_file_managers_german_evidence/2026-10-19T23-13-06/native-file-managers-normal-light.png",
+      "test_case": "test_native_workspace_file_managers_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-06",
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1180,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-de/native-file-managers-normal.png",
+      "sha256": "93c182f659cc4f86b831b7785da7ce1bf1c2e6ddafbc3aecaac7f23750e241c4",
+      "original_file": "test_native_workspace_file_managers_german_evidence/2026-10-19T23-13-06/native-file-managers-normal.png",
+      "test_case": "test_native_workspace_file_managers_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-06",
+      "screenshot_pixels": [
+        1180,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1180,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    },
+    {
+      "file": "files-de/native-file-managers-restored-terminals.png",
+      "sha256": "ca96a166ace7d5975f6e9fd6da7ad0e9985e3b13690eeffbb0fe2f8246147006",
+      "original_file": "test_native_workspace_file_managers_german_evidence/2026-10-19T23-13-06/native-file-managers-restored-terminals.png",
+      "test_case": "test_native_workspace_file_managers_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-19T23-13-06",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native resize assertion before capture; not AX measurement of installed DMG.",
+      "theme_basis": "Explicit native fixture theme change and visual inspection."
+    }
+  ]
+}

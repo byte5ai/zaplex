@@ -13,6 +13,9 @@ Ergänzend dokumentiert die [native Fixture-Auswertung](NATIVE-FIXTURES.md)
 Teilbelege und Fehler auf `1201fc4f3cafcbab7464343cad8b715d8cf3db2e`
 sowie die erneute Sichtprüfung der beiden Fehler auf
 `cadcb19130bbe0630f39bdd61b4e183ff154981a` (Paketversion 1.2.2).
+Die [Nachprüfung der Workspace-Korrekturen](NATIVE-FIXTURES.md#workspace-korrekturen-nativ-bestätigt-am-20102026)
+auf `1800ec77` (1.2.4) bestätigt vier native Fälle mit 30 visuell geprüften
+Originalaufnahmen; der separate Agentenfall ist fehlgeschlagen.
 Weder Altbuild noch Fixtures ersetzen die vollständigen Fallkombinationen.
 
 ## Referenzen und Bewertung
@@ -77,7 +80,7 @@ Fehlende Testvoraussetzungen sind keine Produktfehler.
 | V01 | C:C3, A6; U | Ohne eingerichteten Host starten | Arbeitsfläche, vorhandene horizontale Navigation und nächster Schritt erkennbar; keine überdeckten Texte oder dekorativen Farbränder | Gesamtansicht und Navigation | not-run — V, G |
 | V02 | C:A4, A6; U | Alle sichtbaren Icons erkunden | Verständliche lokalisierte Tooltips, stabile Geometrie, klare aktive/inaktive Zustände | Hover-/Fokusfolge pro Icon | not-run — V, G |
 | V03 | U | Per Tastatur navigieren und zurückkehren | Sinnvolle Fokusreihenfolge; sichtbarer Fokus; Escape/Zurück und Rückgabe zum Auslöser | Tastaturablauf | not-run — V, G |
-| C01 | C:C1; U | Leere Verbindungsliste verstehen | Vollständige Anleitung einschließlich Ordner- und Plus-Aktion, auch schmal | Leerzustand DE/EN, 250/320/480 | fail — EN/dunkel am DMG 1.2.2 (#565); übrige Varianten V |
+| C01 | C:C1; U | Leere Verbindungsliste verstehen | Vollständige Anleitung einschließlich Ordner- und Plus-Aktion, auch schmal | Leerzustand DE/EN, 250/320/480 | Teilnachweis pass — native 1.2.4, DE/EN, Hell/Dunkel, 250/320/480 (#565); installiertes DMG der Korrektur V |
 | C02 | C:C1; U | Ordner und Host anlegen/bearbeiten | Eindeutige Feldnamen, Validierung, Speichern/Abbrechen; keine doppelte Konfiguration | Formular leer/ungültig/gültig | not-run — V, G |
 | C03 | C:C1, A1, A2 | Konfigurierten Host finden/favorisieren | Identität priorisiert; feste Stecker-/Sternslots; Offline-Host bleibt hier sichtbar | Lange Registry-Zeilen, Sternwechsel | not-run — V, G |
 | C04 | C:C1, C4; U | Verbinden, Fehler erkennen, abbrechen | Lade-/Fehlerzustand mit verständlichem nächstem Schritt; kein festhängender Dialog | Echte Verbindung und definierter Fehler | not-run — V, G, R |
@@ -92,7 +95,7 @@ Fehlende Testvoraussetzungen sind keine Produktfehler.
 | A02 | C:I2, A3 | Verbrauch und Herkunft verstehen | 5 h/Woche untereinander, Reset direkt unter Spur; Schätzlegende und Herkunft; wartende Session dezent markiert | Echte Kontodaten mit isoliertem Profil | not-run — V, G, P |
 | A03 | U; GH-160 | Agent/Konto/Modell auswählen | Ohne CLI, ohne Anmeldung und bei mehreren Konten ehrliche Zustände und gangbarer nächster Schritt | Startkarte leer/geladen/Fehler/Abbruch | not-run — V, G, P |
 | L01 | L1, L2, L5 | Plus und vier Split-Menüs öffnen | Gleiche gemeinsame Einträge/Reihenfolge; Tabzusätze nur bei Plus; Menü vor Screenshot sichtbar | Fünf offene Menüs | not-run — V, G; Altbelege teilweise zu früh |
-| L02 | L2; U | Leere Favoriten verstehen | Vollständige Anleitung zur Favorisierung sichtbar, auch am Fensterrand | DE/EN, normale/schmale Breite | fail — EN/dunkel am DMG 1.2.2 (#566); übrige Varianten V |
+| L02 | L2; U | Leere Favoriten verstehen | Vollständige Anleitung zur Favorisierung sichtbar, auch am Fensterrand | DE/EN, normale/schmale Breite | Teilnachweis pass — native 1.2.4, DE/EN, Hell/Dunkel (#566); übrige Einstiege, Randlagen und DMG V |
 | L03 | L3, L4; C:C2 | Favorit bzw. weiteren Host wählen | Name verbindet einmal; nur Nichtfavoriten im Untermenü; Stern-Änderung konsistent | Registry + Menü + echte Verbindung | not-run — V, G, R |
 | L04 | L4; C:C2 | Separates Favoriten-Flyout bedienen | Ellipse verbindet nicht; seitliches Flyout hält Elternmenü sichtbar; Randplatzierung/Fokus/Zurück stimmen | Maus und Tastatur an beiden Rändern | not-run — V, G, R |
 | L05 | L6; C:P2 | Split per Escape/Außenklick abbrechen | Keine neue Pane/Session; ursprüngliche Shell und Fokus bleiben | Vorher/Nachher mit Shellzustand | not-run — V, G |

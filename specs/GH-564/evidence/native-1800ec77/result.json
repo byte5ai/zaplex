@@ -1,0 +1,47 @@
+{
+  "run_id": "39339343993",
+  "source_sha": "1800ec77c61690f5d2c54ac29e33ce95da832357",
+  "test_source_sha": "1800ec77c61690f5d2c54ac29e33ce95da832357",
+  "package_version": "1.2.4",
+  "workflow_conclusion": "failure",
+  "workspace_result": {
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0
+  },
+  "cases": [
+    {
+      "name": "ui_tests::test_native_workspace_empty_states_evidence",
+      "status": "passed"
+    },
+    {
+      "name": "ui_tests::test_native_workspace_empty_states_german_evidence",
+      "status": "passed"
+    },
+    {
+      "name": "ui_tests::test_native_workspace_file_managers_evidence",
+      "status": "passed"
+    },
+    {
+      "name": "ui_tests::test_native_workspace_file_managers_german_evidence",
+      "status": "passed"
+    }
+  ],
+  "other_case": {
+    "name": "ui_tests::test_subscription_agent_conversation_layout_evidence",
+    "status": "failed",
+    "reason": "narrow/recoverable_error_with_session input max_y=671.8 exceeds window height=670; not included in this evidence set"
+  },
+  "visual_review": {
+    "reviewed_original_images": 30,
+    "connections": "Complete folder/server instruction in EN/DE, dark/light, sidebar widths 250/320/480.",
+    "favorites": "Complete disabled instruction in EN/DE, dark/light; one launch-menu placement at a normal window width.",
+    "files": "Names and headers visible in both panes at 1180x640 and 760x640 in EN/DE and dark/light; metadata hidden at narrow width, all eight F-actions and destination visible. Full-name tooltip, F7 dialog after focus change, and retained shell draft observed.",
+    "limits": [
+      "No installed-DMG verification of these fixes",
+      "No free exploration or complete menu-entry/edge-placement matrix",
+      "No actual SSH or provider interaction",
+      "No OS reduced-motion or contrast-theme verification"
+    ]
+  }
+}

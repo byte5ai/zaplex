@@ -160,6 +160,7 @@ enum CLIVoiceInputState {
 const PLUGIN_CHIP_DEBOUNCE: Duration = Duration::from_secs(3);
 const SUBSCRIPTION_IDENTITY_LABEL_MAX_WIDTH: f32 = 240.;
 const SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH: f32 = 360.;
+const SUBSCRIPTION_IDENTITY_FIELD_MIN_WIDTH: f32 = 120.;
 const SUBSCRIPTION_ACTION_LABEL_MAX_WIDTH: f32 = 240.;
 const SUBSCRIPTION_ACTION_MIN_RUN_WIDTH: f32 = 320.;
 
@@ -1970,7 +1971,7 @@ fn subscription_target_status(
     for field in conversation_identity_fields(target, session, lifecycle) {
         fields.add_child(
             WrapFill::new(
-                SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH,
+                SUBSCRIPTION_IDENTITY_FIELD_MIN_WIDTH,
                 subscription_status_text(format!("{}: {}", field.label, field.value), app),
             )
             .finish(),

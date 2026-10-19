@@ -1,11 +1,13 @@
-# Native Fixture-Auswertung am 19.10.2026
+# Native Fixture- und DMG-Nachweise
 
-**Keine UX-Gesamtfreigabe.** Zwei visuelle Fehler sind im aktuellen nativen
-Integrationstest-Build nachgewiesen, obwohl dessen Tests erfolgreich sind.
-Die freien Nutzerabläufe, das installierte DMG und echte Provider-/Remote-Zugänge
-wurden damit nicht abgenommen.
+**Keine UX-Gesamtfreigabe.** Connections, Favoriten und Dateipanes sind nach
+PR #586 auf `1800ec77` nativ erfolgreich geprüft und visuell ausgewertet.
+[Der aktuelle Teilnachweis](#workspace-korrekturen-nativ-bestätigt-am-20102026)
+ersetzt für diese konkreten Ansichten die unten gesicherten historischen Fehler.
+Der Agentenfall ist separat fehlgeschlagen. Fixtures, installiertes DMG und freie
+Exploration bleiben getrennte Nachweise.
 
-## Herkunft und Aussagegrenzen
+## Historische Herkunft und Aussagegrenzen
 
 - [Batch 39246675914](https://github.com/byte5ai/zaplex/actions/runs/39246675914),
   Quell- und Teststand `1201fc4f3cafcbab7464343cad8b715d8cf3db2e`, Paketversion 1.2.1.
@@ -217,3 +219,38 @@ nicht um einen vollständigen grünen Lauf der neuen Tests. `local_gui` und
 `product_acceptance` bleiben im Teillauf korrekt `not-run`; der Release-Gate
 wird nicht umgangen. Die Gesamtprüfung benötigt weiterhin die in #562/#564
 benannten Varianten und die separat angeforderte GUI-/Remote-/Providerumgebung.
+
+
+## Workspace-Korrekturen nativ bestätigt am 20.10.2026
+
+[Run 39339343993](https://github.com/byte5ai/zaplex/actions/runs/39339343993),
+App- und Testrevision `1800ec77c61690f5d2c54ac29e33ce95da832357`, Version 1.2.4:
+**Vier Workspace-Fälle bestanden, null übersprungen.** Der gesamte Lauf ist
+wegen des separaten Agentenfalls fehlgeschlagen. Diese Auswertung erklärt den
+Lauf nicht nachträglich für grün.
+
+Die [30 Original-PNGs samt SHA-256 und Herkunft](evidence/native-1800ec77/manifest.json)
+sind unverändert archiviert und sämtlich visuell geprüft. Das
+[Ergebnisprotokoll](evidence/native-1800ec77/result.json) trennt Fallstatus,
+Sichtprüfung und Aussagegrenzen. Native App mit echtem Display, echten isolierten
+lokalen Dateien und PTYs; kein installiertes DMG. Die angeforderte Sprache wurde
+im jeweiligen Prozess vor den Aufnahmen ausdrücklich geprüft.
+
+| Korrektur / konkrete Variante | Beobachtung | Ergebnis |
+|---|---|---|
+| #565, Connections leer, DE/EN × Hell/Dunkel × 250/320/480 Punkte Sidebar | Ordner- und Plus-/Serverhinweis vollständig sichtbar; letzte gerenderte Zeichenbounds innerhalb des Panels. Beispiele: [DE/250 dunkel](evidence/native-1800ec77/connections-de/native-empty-connections-dark-250.png), [EN/250 hell](evidence/native-1800ec77/connections-en/native-empty-connections-light-250.png). | pass für diese Anleitung und Varianten |
+| #566, Favoriten leer, DE/EN × Hell/Dunkel, gemeinsames Startmenü | Vollständiger Hinweis einschließlich „Seitenleiste“ / „sidebar“ in zwei bzw. drei Zeilen; deaktivierte Hilfe bleibt im Menü. Beispiele: [DE dunkel](evidence/native-1800ec77/connections-de/native-empty-favorites-dark.png), [EN hell](evidence/native-1800ec77/connections-en/native-empty-favorites-light.png). | pass für diesen Menüplatz; übrige Einstiege/Randlagen nicht geprüft |
+| #572, zwei Dateipanes, 1180×640 und 760×640, DE/EN × Hell/Dunkel | Name-Spaltenkopf und drei Namen bleiben in beiden Panes lesbar. Schmal entfallen Größe/Datum; Zielwahl und F2–F8/F10 bleiben sichtbar. Reale Namens-Textbounds mit mindestens 100 Punkten Breite und gezeichnete Glyphen geprüft. Beispiele: [DE schmal dunkel](evidence/native-1800ec77/files-de/native-file-managers-narrow.png), [EN schmal hell](evidence/native-1800ec77/files-en/native-file-managers-narrow-light.png). | pass für diese Ansichten |
+| Vollständiger Dateiname und F7-Fokusfolge | [Tooltip](evidence/native-1800ec77/files-de/native-file-manager-full-name.png) zeigt `other-project-with-a-long-name.txt`. Nach Fokuswechsel öffnet F7 den [Ordnerdialog links](evidence/native-1800ec77/files-de/native-file-manager-focused-action.png); rechts bleibt die Liste erhalten. | pass für diese feste lokale Folge |
+| Rückkehr zur Shell | Nach Dialogabbruch und Schließen beider Dateiansichten sind beide Terminals und der [Entwurf `printf file-manager-draft`](evidence/native-1800ec77/files-de/native-file-managers-restored-terminals.png) erhalten. | pass für diesen lokalen Rückweg |
+
+Der separate Agentenfall scheitert wie zuvor in Run 39337035377 bei
+`narrow/recoverable_error_with_session`: Eingabebereich bis y=671,8 bei
+670 Punkten Fensterhöhe. PR #587 hatte eine andere Hilfeansicht geändert;
+die Annahme, damit die Überhöhe zu beseitigen, wurde durch den zweiten Lauf
+widerlegt. Die vier erfolgreichen Workspace-Fälle werden bei der weiteren
+Agenten-Nachprüfung nicht wiederholt.
+
+Die vollständige #564-Matrix bleibt davon getrennt: kein neuer installierter
+DMG-Nachweis dieser Korrekturen, keine freie Exploration, keine echte
+Remote-/Providerinteraktion und keine Kontrast-/Reduced-Motion-Abnahme.

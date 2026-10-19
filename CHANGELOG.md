@@ -2,9 +2,13 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.5] — 2026-10-20
+
+- Agent-Ansicht: Identitätsfelder teilen sich verfügbare Zeilen, statt bei schmalen Fenstern unnötig alle untereinander zu stehen; Wiederherstellungsaktionen bleiben im sichtbaren Bereich (#153).
+
 ## [1.2.4] — 2026-10-20
 
-- Agent-Ansicht: Der Einstiegshinweis erscheint nur im startbereiten Zustand; laufende, beendete und fehlgeschlagene Sessions behalten Platz für ihre tatsächlichen Aktionen (#153).
+- Native Layout-Prüfung: Unabhängige Fälle werden auch nach einem fehlgeschlagenen Fall ausgeführt; bereits erfolgreiche Fälle können bei gezielten Wiederholungen ausgespart werden.
 
 ## [1.2.3] — 2026-10-20
 
