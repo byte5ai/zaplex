@@ -21,6 +21,22 @@ Es gibt keine zeitgesteuerten Workflows mehr. Ein neuer Batch auf demselben Ref
 bricht einen noch laufenden Batch ab. Eine Auslösung auf einem anderen Branch
 scheitert vor den schweren Jobs.
 
+### Nach einem Runnerfehler bei den Pakettests fortsetzen
+
+`resume_run_id` kann einen abgeschlossenen, fehlgeschlagenen `main`-Batch angeben,
+wenn Dependency-, Compile-/Regression-, SFTP- und Dokumentationstests erfolgreich
+waren und nur die Pakettests scheiterten. Die Vorprüfung liest die tatsächlichen
+Jobs/Schritte dieses Laufs und vergleicht seinen Quellstand mit dem neuen Commit.
+Nur Änderungen an der begrenzten Runner-/Fortsetzungslogik und den Belegen zu #564
+sind zulässig; geänderte App-, Cargo-, Toolchain- oder andere Prüfeingaben verweigern
+die Wiederverwendung. Paketwahl, Testumgebung und Dokumentationstest-Kommando
+müssen ebenfalls gleich bleiben.
+
+Danach laufen nur die Pakettests und die angeforderten Artefaktstufen. Die bereits
+erfolgreichen Jobs und Dokumentationstests werden übernommen; Quellcommit und
+Ursprungslauf stehen im Job-Summary. Ohne `resume_run_id` bleibt der vollständige
+Ablauf erhalten. Coverage-Läufe unterstützen diese begrenzte Fortsetzung nicht.
+
 ## Freigabe und Ablauf
 
 1. Mehrere PRs nach den leichten Checks mergen.

@@ -22,9 +22,14 @@ on:
         description: With coverage, also attribute executed functions to each test and measure coverage without the pruning candidates (#472)
         type: boolean
         default: false
+      resume_run_id:
+        description: Failed main batch with green compile/SFTP/doc gates; reuse only if their inputs are unchanged
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ci-batch-${{ github.ref }}
@@ -37,6 +42,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       dmg_tag: ${{ steps.inputs.outputs.dmg_tag }}
+      reuse_checks: ${{ steps.resume.outputs.reuse_checks }}
     steps:
       - name: Require a main dispatch
         shell: bash
@@ -66,31 +72,52 @@ jobs:
           fi
           echo "dmg_tag=$tag" >> "$GITHUB_OUTPUT"
 
+      - name: Validate reuse of passed gates
+        id: resume
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          COVERAGE: ${{ inputs.coverage }}
+        run: |
+          python3 script/shell-ssh-runner-guard-tests
+          python3 script/ci-batch-resume-tests
+          python3 script/ci-batch-resume
+
   dependency_security:
     needs: preflight
+    if: needs.preflight.outputs.reuse_checks != 'true'
     uses: ./.github/workflows/dependency-security.yml
 
   compile_checks:
-    needs: dependency_security
+    needs: [preflight, dependency_security]
+    if: needs.preflight.outputs.reuse_checks != 'true'
     uses: ./.github/workflows/pr-check.yml
     secrets: inherit
 
   tests:
-    needs: compile_checks
+    needs: [preflight, compile_checks]
+    if: >
+      !cancelled() && needs.preflight.result == 'success' &&
+      (needs.compile_checks.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
     uses: ./.github/workflows/test-dispatch.yml
     with:
       coverage: ${{ inputs.coverage }}
       per_test_coverage: ${{ inputs.per_test_coverage }}
+      run_doc_tests: ${{ needs.preflight.outputs.reuse_checks != 'true' }}
     secrets: inherit
 
   live_sftp:
-    needs: compile_checks
+    needs: [preflight, compile_checks]
+    if: needs.preflight.outputs.reuse_checks != 'true'
     uses: ./.github/workflows/live-sftp-safety.yml
     secrets: inherit
 
   test_dmg:
     needs: [preflight, tests, live_sftp]
-    if: inputs.artifacts == 'test-dmg'
+    if: >
+      !cancelled() && inputs.artifacts == 'test-dmg' && needs.preflight.result == 'success' &&
+      needs.tests.result == 'success' &&
+      (needs.live_sftp.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
     uses: ./.github/workflows/test-dmg.yml
     with:
       dmg_tag: ${{ needs.preflight.outputs.dmg_tag }}
@@ -99,7 +126,10 @@ jobs:
 
   remote_server:
     needs: [preflight, tests, live_sftp]
-    if: inputs.artifacts == 'remote-server'
+    if: >
+      !cancelled() && inputs.artifacts == 'remote-server' && needs.preflight.result == 'success' &&
+      needs.tests.result == 'success' &&
+      (needs.live_sftp.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
     uses: ./.github/workflows/build-remote-server.yml
     with:
       dmg_tag: ${{ needs.preflight.outputs.dmg_tag }}

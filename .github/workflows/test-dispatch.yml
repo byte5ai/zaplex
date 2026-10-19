@@ -41,6 +41,11 @@ on:
         type: boolean
         required: false
         default: false
+      run_doc_tests:
+        description: "False only when ci-batch verified passing documentation tests on unchanged source."
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -101,6 +106,8 @@ jobs:
     name: cargo test (Linux)
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 120
+    env:
+      ZAPLEX_TEST_RUNNER_LABEL: ${{ inputs.runs_on }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -354,7 +361,7 @@ jobs:
         shell: bash
 
       - name: Package documentation tests
-        if: ${{ !inputs.coverage && !cancelled() }}
+        if: ${{ !inputs.coverage && inputs.run_doc_tests && !cancelled() }}
         env:
           PKG: ${{ inputs.package }}
           FILTER: ${{ inputs.filter }}
