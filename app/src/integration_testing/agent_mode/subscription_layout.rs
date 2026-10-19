@@ -167,6 +167,7 @@ pub struct SubscriptionAgentLayoutSnapshot {
     pub composer: Option<RectF>,
     pub composer_last_char: Option<RectF>,
     pub message_bar: Option<RectF>,
+    pub start_hint: Option<RectF>,
     pub hint_ends: Vec<(&'static str, Option<RectF>)>,
     pub footer: Option<RectF>,
     pub identity: Option<RectF>,
@@ -237,6 +238,7 @@ pub fn subscription_agent_layout_snapshot(
         composer: positions.get_position(&composer_id),
         composer_last_char: positions.get_position("subscription-composer-last-char"),
         message_bar: positions.get_position("agent-message-bar"),
+        start_hint: positions.get_position("subscription-start-hint"),
         hint_ends: [
             ("help", crate::t!("agent-message-bar-for-help")),
             ("commands", crate::t!("agent-message-bar-for-commands")),

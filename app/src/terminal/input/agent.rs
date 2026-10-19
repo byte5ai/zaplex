@@ -14,6 +14,7 @@ use crate::{
         },
         InputType,
     },
+    ai::subscription_agent::{AgentLifecycle, SubscriptionSessionRegistry},
     appearance::Appearance,
     context_chips::spacing::{self},
     features::FeatureFlag,
@@ -246,10 +247,15 @@ impl Input {
             column.add_child(ChildView::new(&self.inline_plan_menu_view).finish());
         }
 
-        if self
-            .agent_shortcut_view_model
-            .as_ref(app)
-            .is_shortcut_view_open()
+        let show_start_hint = self
+            .active_agent_view_conversation_id(app)
+            .and_then(|id| SubscriptionSessionRegistry::as_ref(app).lifecycle(&id))
+            .is_none_or(|lifecycle| matches!(lifecycle, AgentLifecycle::Ready));
+        if show_start_hint
+            && self
+                .agent_shortcut_view_model
+                .as_ref(app)
+                .is_shortcut_view_open()
         {
             let agent_view_controller = self.agent_view_controller.as_ref(app);
             let (is_ambient_agent, has_submitted_first_prompt) =
@@ -273,13 +279,18 @@ impl Input {
                     AgentViewState::Inactive => (false, true),
                 };
 
-            column.add_child(render_agent_shortcuts_view(
+            let shortcuts = render_agent_shortcuts_view(
                 AgentShortcutsViewContext {
                     is_ambient_agent,
                     has_submitted_first_prompt,
                 },
                 app,
-            ));
+            );
+            #[cfg(feature = "integration_tests")]
+            let shortcuts = SavePosition::new(shortcuts, "subscription-start-hint")
+                .for_single_frame()
+                .finish();
+            column.add_child(shortcuts);
         }
         column.add_children([ChildView::new(&self.agent_status_view).finish(), input]);
 
