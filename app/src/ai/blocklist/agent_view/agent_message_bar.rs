@@ -5,6 +5,8 @@ use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
+#[cfg(feature = "integration_tests")]
+use warpui::elements::SavePosition;
 use warpui::elements::{Container, Element, Empty, MouseStateHandle};
 use warpui::keymap::Keystroke;
 use warpui::platform::OperatingSystem;
@@ -36,7 +38,7 @@ use crate::terminal::input::message_bar::attached_context::{
     AttachedBlocksMessageProducer, AttachedContextArgs, AttachedTextSelectionMessageProducer,
 };
 use crate::terminal::input::message_bar::common::{
-    disableable_message_item_color_overrides, render_standard_message_bar,
+    disableable_message_item_color_overrides, render_wrapping_message_bar,
 };
 use crate::terminal::input::message_bar::{
     ChipHorizontalAlignment, EmptyMessageProducer, Message, MessageItem, MessageProvider,
@@ -349,10 +351,6 @@ impl View for AgentMessageBar {
             return Empty::new().finish();
         };
 
-        // Zaplex (Phase 3c A1): removed the ambient credits banner UI.
-        // After localization, `ambient_only_credits_remaining` is always None, so the original branch only ever took the None path.
-        let right_element: Option<Box<dyn warpui::Element>> = None;
-
         // Append a Figma MCP chip to the message if applicable.
         match self.figma_button_status(app) {
             Some(FigmaMcpStatus::NotInstalled) => {
@@ -382,7 +380,11 @@ impl View for AgentMessageBar {
             Some(FigmaMcpStatus::Running) | None => {}
         }
 
-        let message_bar = render_standard_message_bar(message, right_element, app);
+        let message_bar = render_wrapping_message_bar(message, app);
+        #[cfg(feature = "integration_tests")]
+        let message_bar = SavePosition::new(message_bar, "agent-message-bar")
+            .for_single_frame()
+            .finish();
         if self.agent_view_controller.as_ref(app).is_inline() {
             Container::new(message_bar)
                 .with_background(agent_view_bg_fill(app))

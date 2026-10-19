@@ -16,6 +16,7 @@ use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
 use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
+use crate::sftp_manager::file_list::FileColumns;
 use crate::terminal::view::terminal_identity;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
@@ -5261,6 +5262,32 @@ impl SftpBrowserView {
     /// Render the file list. `pane_focused` dims the cursor and the marks of
     /// an inactive pane without hiding them.
     fn render_file_list(&self, appearance: &Appearance, pane_focused: bool) -> Box<dyn Element> {
+        SizeConstraintSwitch::new(
+            self.render_file_list_columns(appearance, pane_focused, FileColumns::All),
+            vec![
+                (
+                    SizeConstraintCondition::WidthLessThan(FileColumns::NameAndSize.min_width()),
+                    self.render_file_list_columns(appearance, pane_focused, FileColumns::Name),
+                ),
+                (
+                    SizeConstraintCondition::WidthLessThan(FileColumns::All.min_width()),
+                    self.render_file_list_columns(
+                        appearance,
+                        pane_focused,
+                        FileColumns::NameAndSize,
+                    ),
+                ),
+            ],
+        )
+        .finish()
+    }
+
+    fn render_file_list_columns(
+        &self,
+        appearance: &Appearance,
+        pane_focused: bool,
+        columns: FileColumns,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
 
         // Filter the entries — same source of truth as the keyboard cursor.
@@ -5282,12 +5309,14 @@ impl SftpBrowserView {
         }
 
         // Header row — its columns sort the list on click.
-        let header = super::file_list::render_header(self.sort, &self.header_handles, appearance);
+        let header =
+            super::file_list::render_header(columns, self.sort, &self.header_handles, appearance);
 
         // File rows (the `..` row first, when there is a parent)
         let row_position_prefix = self.layout_position_id("row");
         let panel_position_id = self.layout_position_id("panel");
         let rows = super::file_list::render_file_rows(
+            columns,
             &self.entries,
             &filtered_indices,
             &self.selected,

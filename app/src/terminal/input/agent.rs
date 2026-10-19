@@ -291,23 +291,25 @@ impl Input {
 }
 
 fn subscription_composer_unavailable(reason: String, appearance: &Appearance) -> Box<dyn Element> {
-    Container::new(
-        Text::new_inline(
-            reason,
-            appearance.ui_font_family(),
-            appearance.monospace_font_size(),
-        )
-        .with_color(
-            appearance
-                .theme()
-                .sub_text_color(appearance.theme().background())
-                .into_solid(),
-        )
-        .finish(),
+    #[cfg(feature = "integration_tests")]
+    let last_char = reason.chars().count().saturating_sub(1);
+    let text = Text::new(
+        reason,
+        appearance.ui_font_family(),
+        appearance.monospace_font_size(),
     )
-    .with_horizontal_padding(8.)
-    .with_vertical_padding(8.)
-    .finish()
+    .with_color(
+        appearance
+            .theme()
+            .sub_text_color(appearance.theme().background())
+            .into_solid(),
+    );
+    #[cfg(feature = "integration_tests")]
+    let text = text.with_saved_char_position(last_char, "subscription-composer-last-char".into());
+    Container::new(text.finish())
+        .with_horizontal_padding(8.)
+        .with_vertical_padding(8.)
+        .finish()
 }
 
 pub mod styles {

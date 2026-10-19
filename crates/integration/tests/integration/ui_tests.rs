@@ -300,9 +300,15 @@ integration_tests! {
     #[cfg(target_os="macos")]
     test_native_workspace_connections_evidence,
     #[cfg(target_os="macos")]
+    test_native_workspace_empty_states_evidence,
+    #[cfg(target_os="macos")]
+    test_native_workspace_empty_states_german_evidence,
+    #[cfg(target_os="macos")]
     test_native_workspace_panes_evidence,
     #[cfg(target_os="macos")]
     test_native_workspace_file_managers_evidence,
+    #[cfg(target_os="macos")]
+    test_native_workspace_file_managers_german_evidence,
 
     // Middle-click-paste is only implemented for Linux right now.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

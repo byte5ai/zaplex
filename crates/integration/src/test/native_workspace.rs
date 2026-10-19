@@ -9,7 +9,7 @@ use warp::integration_testing::{
         wait_until_bootstrapped_single_pane_for_tab,
     },
 };
-use warpui::integration::TestStep;
+use warpui::integration::{AssertionOutcome, TestStep};
 
 use crate::Builder;
 
@@ -43,6 +43,39 @@ pub fn test_native_workspace_connections_evidence() -> Builder {
         .with_step(native::open_favorites())
         .with_step(native::favorite_flyout().with_take_screenshot("native-favorite-flyout.png"))
         .with_step(native::dismiss_flyout())
+}
+
+pub fn test_native_workspace_empty_states_evidence() -> Builder {
+    empty_states_evidence("en")
+}
+
+pub fn test_native_workspace_empty_states_german_evidence() -> Builder {
+    empty_states_evidence("de")
+}
+
+fn empty_states_evidence(locale: &'static str) -> Builder {
+    warp::i18n::set_locale(locale);
+    let mut builder = Builder::new()
+        .with_real_display()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(verify_locale(locale))
+        .with_step(native::resize(1440., 640.));
+    for (light, name) in [(false, "dark"), (true, "light")] {
+        builder = builder.with_step(native::theme(light));
+        for width in [250, 320, 480] {
+            builder = builder.with_step(
+                native::empty_connections(width as f32)
+                    .with_take_screenshot(format!("native-empty-connections-{name}-{width}.png")),
+            );
+        }
+        builder = builder
+            .with_step(
+                native::empty_favorites()
+                    .with_take_screenshot(format!("native-empty-favorites-{name}.png")),
+            )
+            .with_step(TestStep::new("Close empty favorites menu").with_keystrokes(&["escape"]));
+    }
+    builder
 }
 
 pub fn test_native_workspace_panes_evidence() -> Builder {
@@ -81,10 +114,19 @@ pub fn test_native_workspace_panes_evidence() -> Builder {
 }
 
 pub fn test_native_workspace_file_managers_evidence() -> Builder {
+    file_managers_evidence("en")
+}
+
+pub fn test_native_workspace_file_managers_german_evidence() -> Builder {
+    file_managers_evidence("de")
+}
+
+fn file_managers_evidence(locale: &'static str) -> Builder {
+    warp::i18n::set_locale(locale);
     Builder::new()
-        .with_setup(|_| warp::i18n::init(Some("en")))
         .with_real_display()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(verify_locale(locale))
         .with_step(native::resize(1180., 640.))
         .with_step(native::split_local_right())
         .with_step(wait_until_bootstrapped_pane(0, 0))
@@ -105,6 +147,21 @@ pub fn test_native_workspace_file_managers_evidence() -> Builder {
         .with_step(
             native::file_manager_layout().with_take_screenshot("native-file-managers-narrow.png"),
         )
+        .with_step(native::theme(true))
+        .with_step(
+            native::file_manager_layout()
+                .with_take_screenshot("native-file-managers-narrow-light.png"),
+        )
+        .with_step(native::resize(1180., 640.))
+        .with_step(
+            native::file_manager_layout()
+                .with_take_screenshot("native-file-managers-normal-light.png"),
+        )
+        .with_step(native::resize(760., 640.))
+        .with_step(
+            native::hover_long_file_name()
+                .with_take_screenshot("native-file-manager-full-name.png"),
+        )
         .with_step(native::inactive_file_manager_action())
         .with_step(
             native::focused_file_manager_action()
@@ -118,4 +175,17 @@ pub fn test_native_workspace_file_managers_evidence() -> Builder {
             native::assert_retained_terminals()
                 .with_take_screenshot("native-file-managers-restored-terminals.png"),
         )
+}
+
+fn verify_locale(locale: &'static str) -> TestStep {
+    TestStep::new("Verify the actual UI locale before capturing evidence").add_named_assertion(
+        "The requested language is active",
+        move |_, _| {
+            let active = warp::i18n::current_languages();
+            if active.first().map(ToString::to_string).as_deref() != Some(locale) {
+                return AssertionOutcome::failure(format!("Expected {locale}, got {active:?}"));
+            }
+            AssertionOutcome::Success
+        },
+    )
 }

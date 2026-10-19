@@ -1,0 +1,77 @@
+name: Targeted native layout verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Native layout scenario to verify
+        type: choice
+        options: [all, agent, connections-en, connections-de, files-en, files-de]
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  layout:
+    # ci-lint: allow-CI006  Main-only manual workflow; ephemeral VM per job
+    runs-on: macrunner
+    timeout-minutes: 30
+    env:
+      CHANNEL: oss
+      CARGO_BUILD_JOBS: '4'
+      WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: '1'
+      ZAPLEX_SHELL_PATH: /bin/zsh
+    steps:
+      - name: Require main
+        run: test "$GITHUB_REF" = refs/heads/main
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          cache_key: macos-aarch64-check
+          is_self_hosted: false
+          install_release_deps: false
+      - name: Verify selected native layouts
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+          ZAPLEX_INTEGRATION_TEST_ARTIFACTS_DIR: ${{ runner.temp }}/native-layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=()
+          case "$SCENARIO" in
+            all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence) ;;
+            agent) tests=(test_subscription_agent_conversation_layout_evidence) ;;
+            connections-en) tests=(test_native_workspace_empty_states_evidence) ;;
+            connections-de) tests=(test_native_workspace_empty_states_german_evidence) ;;
+            files-en) tests=(test_native_workspace_file_managers_evidence) ;;
+            files-de) tests=(test_native_workspace_file_managers_german_evidence) ;;
+            *) exit 1 ;;
+          esac
+          cargo test --locked -p integration --test integration -- --list > "$RUNNER_TEMP/native-layout-tests.txt"
+          for test_name in "${tests[@]}"; do
+            grep -Fx "ui_tests::$test_name: test" "$RUNNER_TEMP/native-layout-tests.txt"
+            cargo test --locked -p integration --test integration "ui_tests::$test_name" -- --exact --nocapture
+            case "$test_name" in
+              test_subscription_agent_*)
+                captures=(subscription-agent-normal-1180x640 subscription-agent-narrow-540x670) ;;
+              test_native_workspace_empty_states*)
+                captures=(native-empty-connections-dark-250 native-empty-connections-dark-320 native-empty-connections-dark-480 native-empty-connections-light-250 native-empty-connections-light-320 native-empty-connections-light-480 native-empty-favorites-dark native-empty-favorites-light) ;;
+              test_native_workspace_file_managers*)
+                captures=(native-file-managers-normal native-file-managers-narrow native-file-managers-normal-light native-file-managers-narrow-light native-file-manager-full-name native-file-manager-focused-action native-file-managers-restored-terminals) ;;
+            esac
+            for capture in "${captures[@]}"; do
+              find "$ZAPLEX_INTEGRATION_TEST_ARTIFACTS_DIR/$test_name" -type f -name "$capture.png" -size +0c -print -quit | grep -q .
+            done
+          done
+      - name: Upload native layout evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-layout-${{ github.sha }}
+          path: ${{ runner.temp }}/native-layout/
+          if-no-files-found: error
+          retention-days: 14

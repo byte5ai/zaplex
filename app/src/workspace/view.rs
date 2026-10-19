@@ -2477,7 +2477,7 @@ fn favorites_menu_items_from_sources(
         );
     } else if favorites.is_empty() {
         items.push(
-            MenuItemFields::new(crate::t!("workspace-favorites-empty"))
+            MenuItemFields::new_multiline(crate::t!("workspace-favorites-empty"), 4)
                 .with_disabled(true)
                 .into_item(),
         );
