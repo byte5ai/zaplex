@@ -1,6 +1,12 @@
 [advisories]
 git-fetch-with-cli = true
 ignore = [
+    # Standalone crates merged into zbus 6; ashpd and notify-rust still require zbus 5.
+    # Expiry and locked dependency paths enforced by script/dependency-security-baseline-tests.
+    # Temporary until 2026-11-15; migration tracked in https://github.com/byte5ai/zaplex/issues/570.
+    { id = "RUSTSEC-2026-0370", reason = "Unmaintained after the zbus 6 merge, not a reported vulnerability. Published ashpd and notify-rust still require zbus 5; remove with the coordinated migration in #570." },
+    { id = "RUSTSEC-2026-0371", reason = "Unmaintained after the zbus 6 merge, not a reported vulnerability. Published ashpd and notify-rust still require zbus 5; remove with the coordinated migration in #570." },
+    { id = "RUSTSEC-2026-0372", reason = "Unmaintained after the zbus 6 merge, not a reported vulnerability. Published ashpd and notify-rust still require zbus 5; remove with the coordinated migration in #570." },
     { id = "RUSTSEC-2026-0367", reason = "zip < 9 remains only through candle-core (optional nld_onnx_model feature, not part of the macOS app build), which reads and writes .npz archives and never calls the affected extract APIs; remove once candle-core depends on zip >= 9." },
     { id = "RUSTSEC-2026-0368", reason = "zip < 9 remains only through candle-core (optional nld_onnx_model feature, not part of the macOS app build), which reads and writes .npz archives and never calls the affected extract APIs; remove once candle-core depends on zip >= 9." },
     { id = "RUSTSEC-2026-0369", reason = "zip < 9 remains only through candle-core (optional nld_onnx_model feature, not part of the macOS app build), which reads and writes .npz archives and never calls the affected extract APIs; remove once candle-core depends on zip >= 9." },

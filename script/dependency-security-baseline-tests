@@ -2,6 +2,7 @@
 
 """Static regression checks for the dependency-security CI baseline."""
 
+from datetime import datetime, timezone
 from pathlib import Path
 import re
 import sys
@@ -131,6 +132,48 @@ packages = lock_packages((REPO_ROOT / "Cargo.lock").read_text())
 versions: dict[str, list[str]] = {}
 for package in packages:
     versions.setdefault(str(package["name"]), []).append(str(package["version"]))
+
+# cargo-deny 0.20.2 does not yet support expiry/allow on individual ignores.
+# Bound only these three maintenance exceptions until their coordinated migration (#570).
+zbus_exceptions = {
+    "zvariant": (
+        "RUSTSEC-2026-0370",
+        {"4.2.0", "5.12.0"},
+        {
+            ("zbus", "4.4.0"), ("zbus", "5.16.0"), ("zbus_macros", "5.16.0"),
+            ("zbus_names", "3.0.0"), ("zbus_names", "4.3.2"),
+        },
+    ),
+    "zbus_names": (
+        "RUSTSEC-2026-0371",
+        {"3.0.0", "4.3.2"},
+        {("zbus", "4.4.0"), ("zbus", "5.16.0"), ("zbus_macros", "5.16.0")},
+    ),
+    "zvariant_derive": (
+        "RUSTSEC-2026-0372",
+        {"4.2.0", "5.12.0"},
+        {("zvariant", "4.2.0"), ("zvariant", "5.12.0")},
+    ),
+}
+for name, (advisory, allowed_versions, allowed_parents) in zbus_exceptions.items():
+    if f'"{advisory}"' not in section(deny, "advisories"):
+        continue
+    if "#570" not in ignored.get(advisory, ""):
+        fail(f"temporary {advisory} exception needs its migration tracker #570")
+    if datetime.now(timezone.utc).date().isoformat() >= "2026-11-15":
+        fail(f"temporary {advisory} exception expired; finish migration #570")
+    if not set(versions.get(name, [])) <= allowed_versions:
+        fail(f"temporary {advisory} exception does not cover new {name} versions")
+    actual_parents = {
+        (str(package["name"]), str(package["version"]))
+        for package in packages
+        if any(
+            dependency.split(" ", 1)[0] == name
+            for dependency in re.findall(r'"([^"]+)"', str(package["dependencies"]))
+        )
+    }
+    if not actual_parents <= allowed_parents:
+        fail(f"temporary {advisory} exception does not cover new {name} dependency paths")
 
 for name, minimum in {
     "anyhow": "1.0.103",
