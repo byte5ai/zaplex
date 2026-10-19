@@ -185,7 +185,8 @@ jobs:
         shell: bash
 
       - name: Native window mouse routing regressions
-        run: cargo test --locked -p warpui --lib platform::mac::window::tests:: -- --nocapture
+        run: >
+          cargo test --locked -p warpui --lib platform::mac::window::tests:: -- --nocapture
         shell: bash
 
       - name: Native subscription Agent layout evidence
