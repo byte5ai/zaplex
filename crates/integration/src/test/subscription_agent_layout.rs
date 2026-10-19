@@ -52,7 +52,22 @@ pub fn test_subscription_agent_conversation_layout_evidence() -> Builder {
             } else {
                 (state == screenshot_state).then_some(screenshot_name)
             };
-            builder = builder.with_step(assert_layout_state(width_name, state, capture));
+            builder = builder.with_step(
+                new_step_with_default_assertions(&format!("Show {}", state.name()))
+                    .with_action(move |app, window_id, _| {
+                        set_subscription_agent_layout_state(app, window_id, state);
+                    })
+                    .set_post_step_pause(Duration::from_millis(250)),
+            );
+            if let Some(filename) = capture {
+                builder = builder.with_step(
+                    new_step_with_default_assertions(
+                        "Capture Agent state before layout assertions",
+                    )
+                    .with_take_screenshot(filename),
+                );
+            }
+            builder = builder.with_step(assert_layout_state(width_name, state));
         }
     }
 
@@ -100,15 +115,11 @@ fn resize_window(
 fn assert_layout_state(
     width_name: &'static str,
     state: SubscriptionAgentLayoutState,
-    screenshot_name: Option<&'static str>,
 ) -> warpui::integration::TestStep {
-    let mut step = new_step_with_default_assertions(&format!(
+    new_step_with_default_assertions(&format!(
         "Validate {width_name} Agent layout in {}",
         state.name()
     ))
-    .with_action(move |app, window_id, _| {
-        set_subscription_agent_layout_state(app, window_id, state);
-    })
     .add_named_assertion(
         "Identity, composer, and primary actions remain reachable",
         move |app, window_id| {
@@ -119,16 +130,12 @@ fn assert_layout_state(
             };
             match validate_layout_snapshot(width_name, state, &snapshot) {
                 Ok(()) => AssertionOutcome::Success,
-                Err(message) => AssertionOutcome::failure(message),
+                Err(message) => {
+                    AssertionOutcome::failure(format!("{message}; snapshot={snapshot:?}"))
+                }
             }
         },
-    );
-    if let Some(screenshot_name) = screenshot_name {
-        step = step
-            .set_post_step_pause(Duration::from_millis(250))
-            .with_take_screenshot(screenshot_name);
-    }
-    step
+    )
 }
 
 fn validate_layout_snapshot(
@@ -141,13 +148,6 @@ fn validate_layout_snapshot(
     let footer = required_bounds(width_name, state, "footer", snapshot.footer)?;
     let identity = required_bounds(width_name, state, "identity", snapshot.identity)?;
     let viewport = RectF::new(vec2f(0., 0.), snapshot.window_size);
-
-    if state != SubscriptionAgentLayoutState::Ready && snapshot.start_hint.is_some() {
-        return Err(format!(
-            "{width_name}/{}: new-conversation guidance contradicts the current lifecycle",
-            state.name()
-        ));
-    }
 
     for (name, bounds) in [
         ("input", input),

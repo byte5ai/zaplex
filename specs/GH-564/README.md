@@ -1,32 +1,28 @@
-# Native UI-/UX-Abnahme: Vorprüfung und gesicherte Altbuild-Belege
+# Native UI-/UX-Abnahme: Teilnachweise und korrigierte Befunde
 
-Stand: 19.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
+Stand: 20.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
 übergreifend [#562](https://github.com/byte5ai/zaplex/issues/562).
 
-**Keine Gesamtfreigabe.** Das aktuelle DMG ist gebaut und installiert geprüft:
-12 lokale GUI-Tests bestanden im ersten Lauf; die drei übrigen bestanden nach
-Testkorrektur im gezielten Wiederholungslauf. Die vollständige
-DMG-/Explorationsabnahme fehlt; Details im [Fortsetzungsnachweis](NATIVE-FIXTURES.md#gezielte-fortsetzung-und-installiertes-dmg).
-Zusätzlich zu dieser Altbuild-Auswertung liegen jetzt
-[native Integrationstest-Belege](NATIVE-FIXTURES.md) vor:
-15 Originalaufnahmen auf `1201fc4f` sowie drei erneut geprüfte Aufnahmen auf
-`cadcb191` (Paketversion 1.2.2). Beide visuellen Fehler bestehen weiterhin.
-Im [Batch 39257382471](https://github.com/byte5ai/zaplex/actions/runs/39257382471)
-sind alle Code-/Testprüfungen und der Linux-Daemon-Build erfolgreich. Der
-macOS-App-Build verlor die Runner-Verbindung. Die gezielte Fortsetzung
-[39295080993](https://github.com/byte5ai/zaplex/actions/runs/39295080993)
-baute danach App und DMG erfolgreich mit vier Cargo-Jobs und übernahm den
-vorhandenen Linux-Daemon. Es wurde kein neuer Gesamtbatch ausgeführt.
-Die vor dem nächsten Lauf festgelegte [Prüfmatrix](MATRIX.md) enthält die
-Sollzustände, Nutzeraufgaben, Varianten, benötigten Nachweise und die konkreten
-Gründe für `not-run`. Freie Exploration wurde nicht durchgeführt.
+**Keine Gesamtfreigabe.** Die Fehler in Connections, Favoriten und Dateipanes
+(#565, #566, #572) sind mit [PR #586](https://github.com/byte5ai/zaplex/pull/586)
+behoben und auf `1800ec77` (1.2.4) nativ nachgeprüft: vier Fälle bestanden,
+30 Originalaufnahmen visuell ausgewertet. [Ergebnis und Grenzen](NATIVE-FIXTURES.md#workspace-korrekturen-nativ-bestätigt-am-20102026).
+Der Agentenfall scheiterte im selben Lauf weiterhin am schmalen Fehlerzustand;
+seine Nachkorrektur wird separat geprüft.
+Das installierte DMG 1.2.2 auf `cadcb191` wurde bereits geprüft: zwölf lokale
+GUI-Fälle bestanden im ersten Lauf, die übrigen drei nach Testkorrektur im
+gezielten Wiederholungslauf. Der erfolgreiche App-/DMG-Build verwendete vier
+Cargo-Jobs und übernahm den bereits gebauten Blacksmith-Daemon. Diese Ergebnisse
+bleiben gültige Belege für ihren Quellstand; sie prüfen die neuen Layoutänderungen
+noch nicht am installierten DMG. Es gab keinen neuen Gesamtbatch oder Release.
 
-Diese Altbuild-Auswertung hat vorhandene native Screenshots visuell bewertet und
-mit den versionierten Sollvorgaben verglichen. Sie hat keine neue native
-App-Interaktion ausgeführt. Die früheren deterministischen Funktionstests sind
-keine explorativen Abläufe und werden hier nicht dazu umdeklariert.
+Die folgenden Altbuild-Belege sowie die früheren nativen Aufnahmen auf
+`1201fc4f` und `cadcb191` dokumentieren den Zustand **vor** den Korrekturen.
+Die vorab festgelegte [Prüfmatrix](MATRIX.md) bleibt Maßstab für die vollständige
+Varianten-/Bedienungsabnahme. Freie Exploration und echte Remote-/Providerabläufe
+werden durch deterministische Fixtures nicht als durchgeführt erklärt.
 
-## Prüfgegenstand und Herkunft
+## Historischer Prüfgegenstand und Herkunft
 
 | Merkmal | Verifizierter Stand |
 |---|---|
@@ -105,8 +101,7 @@ in zwei Läufen; der Systembanner verdeckt diese Stelle nicht.
 
 UX-Folge: Neue Nutzer erfahren nicht vollständig, wie sie den ersten Server
 anlegen. Die Toolbar bleibt erreichbar; eine vollständige Sackgasse ist damit
-nicht bewiesen. Aktuelles `render_tree` in `app/src/ssh_manager/panel.rs` verwendet
-weiterhin `Text::new_inline` für den vollständigen Übersetzungstext. Das ist ein
+nicht bewiesen. Das damalige `render_tree` in `app/src/ssh_manager/panel.rs` verwendete `Text::new_inline` für den vollständigen Übersetzungstext. Das ist ein
 passender Codebefund, kein neuer nativer Repro.
 
 Testauftrag: neuer Build, DE/EN, Sidebar 250/320/480 Punkte; vollständiger
@@ -121,9 +116,9 @@ Soll: verständlicher Hinweis auf Favorisieren eines Hosts in der Sidebar.
 Ist: Der Text endet sichtbar nach „No favorite hosts yet — ★ a h…“ (E03).
 Terminal und neuer Agent bleiben lesbar; keine vollständige Blockade nachgewiesen.
 
-Die vollständige Übersetzung `workspace-favorites-empty` wird auf aktuellem
-`main` weiterhin als deaktivierter Menüeintrag eingefügt; die genaue Ursache
-der Breitenbegrenzung ist noch zu untersuchen. Testauftrag: Plus/vier Splits,
+Die vollständige Übersetzung `workspace-favorites-empty` wurde auf dem damals
+geprüften `main` als deaktivierter einzeiliger Menüeintrag eingefügt. PR #586
+stellt diesen Hinweis mehrzeilig dar; die deaktivierte Hilfe bleibt erhalten. Testauftrag: Plus/vier Splits,
 DE/EN, normale/Mindestbreite und Fensterränder; vollständige sichtbare Anleitung,
 Abbruch ohne neue Pane und Fokus zurück. Ein fehlender Favorit benötigt dafür
 keinen echten Remotezugang.
