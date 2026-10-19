@@ -1,13 +1,19 @@
 import unittest
 
-from report import assess
+from report import assess, validate_selection
 
 
 class AcceptanceReportTests(unittest.TestCase):
+    def test_selection_rejects_empty_unknown_duplicate_and_option_injection(self):
+        for value in ("", "NavigationTests/testUnknown", "--skip-testing:ZaplexUITests",
+                      "NavigationTests/testSplitUp,NavigationTests/testSplitUp"):
+            self.assertFalse(validate_selection(value))
+        self.assertTrue(validate_selection("NavigationTests/testSplitUp,NavigationTests/testSplitDown"))
+
     def result(self, **changes):
-        summary = {"passedTests": 12, "failedTests": 0, "skippedTests": 0}
+        summary = {"passedTests": 14, "failedTests": 0, "skippedTests": 0}
         summary.update(changes)
-        return assess(summary, "full", 12, 0)
+        return assess(summary, "full", 14, 0)
 
     def test_green_local_suite_cannot_claim_remote_visual_or_agent_acceptance(self):
         result = self.result()
@@ -18,15 +24,15 @@ class AcceptanceReportTests(unittest.TestCase):
 
     def test_empty_skipped_failed_incomplete_and_extra_tests_fail(self):
         for changes in ({"passedTests": 0}, {"skippedTests": 1}, {"failedTests": 1},
-                        {"passedTests": 11}, {"passedTests": 13}, {"passedTests": "12"},
+                        {"passedTests": 13}, {"passedTests": 15}, {"passedTests": "14"},
                         {"failedTests": False}):
             with self.subTest(changes=changes):
                 self.assertEqual(self.result(**changes)["selected_tests"], "fail")
-        self.assertEqual(assess({}, "full", 12, 0)["selected_tests"], "fail")
+        self.assertEqual(assess({}, "full", 14, 0)["selected_tests"], "fail")
 
     def test_exit_failure_cannot_be_hidden_by_green_summary(self):
-        summary = {"passedTests": 12, "failedTests": 0, "skippedTests": 0}
-        self.assertEqual(assess(summary, "full", 12, 65)["local_gui"], "fail")
+        summary = {"passedTests": 14, "failedTests": 0, "skippedTests": 0}
+        self.assertEqual(assess(summary, "full", 14, 65)["local_gui"], "fail")
 
     def test_subset_and_changed_expected_count_cannot_pass_full_gate(self):
         summary = {"passedTests": 3, "failedTests": 0, "skippedTests": 0}

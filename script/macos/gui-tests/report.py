@@ -7,7 +7,26 @@ import sys
 from pathlib import Path
 
 
-SUITES = {"full": 12, "terminal": 3, "navigation": 8}
+SUITES = {"full": 14, "terminal": 3, "navigation": 8, "surfaces": 2}
+CASES = {
+    "SmokeTests/testTerminalExecutesAndRendersOutput",
+    "SmokeTests/testNewWindowRunsItsOwnShell",
+    "SmokeTests/testNativeCloseButtonClosesWindow",
+    "SmokeTests/testRelaunchAcceptsTerminalInput",
+    "NavigationTests/testTabsKeepIndependentShells",
+    "NavigationTests/testClosingTabPreservesOriginalShell",
+    "NavigationTests/testSplitRight", "NavigationTests/testSplitLeft",
+    "NavigationTests/testSplitDown", "NavigationTests/testSplitUp",
+    "NavigationTests/testCancelSplitKeepsOriginalShell",
+    "NavigationTests/testSettingsReturnToOriginalShell",
+    "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell",
+    "SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+}
+
+
+def validate_selection(selection):
+    cases = selection.split(",")
+    return len(cases) == len(set(cases)) and set(cases) <= CASES
 
 
 def assess(summary, suite, expected, exit_code):
@@ -16,8 +35,8 @@ def assess(summary, suite, expected, exit_code):
         for key in ("passedTests", "failedTests", "skippedTests")
     )
     passed = (
-        suite in SUITES
-        and expected == SUITES[suite]
+        ((suite in SUITES and expected == SUITES[suite])
+         or (suite == "selected" and 0 < expected <= len(CASES)))
         and exit_code == 0
         and valid_counts
         and summary["passedTests"] == expected
@@ -39,6 +58,8 @@ def assess(summary, suite, expected, exit_code):
 
 
 def main():
+    if sys.argv[1] == "--validate-selection":
+        return 0 if validate_selection(sys.argv[2]) else 1
     artifact_dir, suite, expected, exit_code = sys.argv[1:]
     root = Path(artifact_dir)
     try:
@@ -48,6 +69,9 @@ def main():
     except (OSError, ValueError):
         summary = {}
     report = assess(summary, suite, int(expected), int(exit_code))
+    digest_file = root / "dmg.sha256"
+    digest = digest_file.read_text().split()[0] if digest_file.is_file() else ""
+    report["dmg_sha256"] = digest if re.fullmatch(r"[a-f0-9]{64}", digest) else None
     for filename, key in (("test-source-sha.txt", "test_source_sha"),
                           ("app-source-sha.txt", "app_source_sha")):
         path = root / filename

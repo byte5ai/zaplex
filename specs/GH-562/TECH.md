@@ -14,10 +14,13 @@ pro Prüfung neuen numerischen Marker, der nur zusammen mit dem korrekten
 Shellzustand den erwarteten Text ergibt. TSV-OCR liefert Positionen relativ
 zum fotografierten Fenster; Klicks werden aus frischen Aufnahmen abgeleitet.
 
-Die Suites `terminal` und `navigation` dienen der gezielten Diagnose. `full`
+Die Suites `terminal`, `navigation` und `surfaces` dienen der gezielten Diagnose. `full`
 führt alle Fälle aus. Der Aufrufer eines wiederverwendbaren Workflows kann die
 Suite nicht reduzieren. Die Zahl ausgeführter Fälle und die Fehler-/Skipzahlen
 werden zusätzlich zum Exitcode geprüft.
+`only_tests` erlaubt ausschließlich bekannte, eindeutige Testnamen für einen
+Diagnoselauf. Damit werden nach einem Fund nur betroffene Fälle erneut ausgeführt.
+Die vollständige Suite verbietet eine solche Teilmenge.
 
 ## Veröffentlichung und Belege
 

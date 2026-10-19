@@ -2,9 +2,9 @@ import AppKit
 import XCTest
 
 // Expectations come from GH-562 and the approved pane launch design, not app internals.
-final class NavigationTests: XCTestCase {
-    private var app: XCUIApplication!
-    private var window: XCUIElement { app.windows.firstMatch }
+class GUIFlowTestCase: XCTestCase {
+    var app: XCUIApplication!
+    var window: XCUIElement { app.windows.firstMatch }
 
     private struct Word {
         let text: String
@@ -29,7 +29,7 @@ final class NavigationTests: XCTestCase {
         }
     }
 
-    private func evidence(_ name: String, text: String? = nil) {
+    func evidence(_ name: String, text: String? = nil) {
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = name
         screenshot.lifetime = .keepAlways
@@ -71,7 +71,7 @@ final class NavigationTests: XCTestCase {
     }
 
     @discardableResult
-    private func visible(_ phrase: String, timeout: TimeInterval = 15) throws -> CGRect {
+    func visible(_ phrase: String, timeout: TimeInterval = 15) throws -> CGRect {
         let expected = phrase.split(separator: " ").map(String.init)
         let deadline = Date().addingTimeInterval(timeout)
         var last: [Word] = []
@@ -94,7 +94,7 @@ final class NavigationTests: XCTestCase {
     }
 
     @discardableResult
-    private func output(state: Int) throws -> CGRect {
+    func output(state: Int) throws -> CGRect {
         let marker = Int.random(in: 100000...999999)
         // The nonce is new for each assertion; old scrollback cannot satisfy it.
         // Non-exported state distinguishes an existing shell from a new one.
@@ -104,20 +104,23 @@ final class NavigationTests: XCTestCase {
         return rect
     }
 
-    private func selectMenu(_ menu: String, _ item: String) {
+    func selectMenu(_ menu: String, _ item: String) {
         app.menuBars.menuBarItems[menu].click()
         let target = app.menuItems[item]
         XCTAssertTrue(target.waitForExistence(timeout: 5), "Menu item missing: \(item)")
         target.click()
     }
 
-    private func clickVisible(_ phrase: String) throws {
+    func clickVisible(_ phrase: String) throws {
         // Coordinates are derived from a fresh screenshot of this window.
         let rect = try visible(phrase)
         window.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: rect.midX, dy: rect.midY)).click()
     }
 
+}
+
+final class NavigationTests: GUIFlowTestCase {
     func testTabsKeepIndependentShells() throws {
         app.typeText("qa_state=741\n")
         try output(state: 741)

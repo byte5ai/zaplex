@@ -4,9 +4,10 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")" && pwd)
 art=${1:?Usage: run ARTIFACT_DIRECTORY}
 suite=${2:-full}
+selection=${3:-}
 filters=()
 case "$suite" in
-  full) expected=12 ;;
+  full) expected=14 ;;
   terminal)
     expected=3
     filters=(-only-testing:ZaplexUITests/SmokeTests -skip-testing:ZaplexUITests/SmokeTests/testNativeCloseButtonClosesWindow)
@@ -15,11 +16,27 @@ case "$suite" in
     expected=8
     filters=(-only-testing:ZaplexUITests/NavigationTests)
     ;;
+  surfaces)
+    expected=2
+    filters=(-only-testing:ZaplexUITests/SurfaceTests)
+    ;;
   *) echo "Unknown suite: $suite" >&2; exit 2 ;;
 esac
+if [[ -n "$selection" ]]; then
+  [[ "$suite" != full ]] || { echo "Full acceptance cannot select individual cases" >&2; exit 2; }
+  /usr/bin/python3 "$root/report.py" --validate-selection "$selection"
+  IFS=, read -r -a cases <<< "$selection"
+  filters=()
+  for testcase in "${cases[@]}"; do
+    filters+=("-only-testing:ZaplexUITests/$testcase")
+  done
+  expected=${#cases[@]}
+  suite=selected
+fi
 mkdir -p "$art"
 art=$(cd "$art" && pwd)
 printf '%s\n' "$suite" > "$art/suite.txt"
+printf '%s\n' "$selection" > "$art/selected-cases.txt"
 work=$(mktemp -d)
 cp -R "$root/project.yml" "$root/ZaplexUITests" "$work/"
 
@@ -48,6 +65,7 @@ set -e
 if [[ -d "$art/tests.xcresult" ]]; then
   xcrun xcresulttool export attachments --path "$art/tests.xcresult" --output-path "$art/attachments"
   xcrun xcresulttool get test-results summary --path "$art/tests.xcresult" > "$art/summary.json"
+  xcrun xcresulttool get test-results tests --path "$art/tests.xcresult" > "$art/test-cases.json"
   # A green xcodebuild with no matching tests must never pass the gate.
   /usr/bin/python3 "$root/report.py" "$art" "$suite" "$expected" "$result"
 else

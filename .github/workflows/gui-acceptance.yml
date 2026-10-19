@@ -10,8 +10,12 @@ on:
       suite:
         description: All local flows or a diagnostic subset (not complete product acceptance)
         type: choice
-        options: [full, terminal, navigation]
+        options: [full, terminal, navigation, surfaces]
         default: full
+      only_tests:
+        description: Optional comma-separated Class/testMethod names for diagnosis; forbidden with full
+        required: false
+        type: string
   workflow_call:
     inputs:
       artifact_name:
@@ -94,13 +98,14 @@ jobs:
       - name: Exercise user flows in the installed app
         env:
           SUITE: ${{ inputs.artifact_name != '' && 'full' || inputs.suite || 'full' }}
+          ONLY_TESTS: ${{ inputs.only_tests }}
         run: |
           echo "Local GUI suite: $SUITE" >> "$GITHUB_STEP_SUMMARY"
           echo 'Remote, visual reference comparison and exploratory agent: not-run (see #562).' >> "$GITHUB_STEP_SUMMARY"
           if [[ "$SUITE" != full ]]; then
             echo 'Diagnostic subset only — not a full DMG acceptance.' >> "$GITHUB_STEP_SUMMARY"
           fi
-          bash script/macos/gui-tests/run "$RUNNER_TEMP/gui-evidence" "$SUITE"
+          bash script/macos/gui-tests/run "$RUNNER_TEMP/gui-evidence" "$SUITE" "$ONLY_TESTS"
 
       - name: Preserve evidence even on failure
         if: always()

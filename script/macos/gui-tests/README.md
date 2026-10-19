@@ -18,11 +18,13 @@ Zaplex-Einstellungen und keine Anmeldedaten im Testprofil.
 | Split rechts/links/unten/oben | Neue Shell ist unabhängig; Ausgabeposition stimmt mit der gewählten Richtung überein |
 | Split abbrechen | Escape erhält die ursprüngliche Shell; kein neuer Pane bleibt zurück |
 | Einstellungen | Sichtbar geöffnet; nach Escape bleibt die ursprüngliche Shell benutzbar |
+| Dateimanager | Zeigt die Datei im Pane-Arbeitsverzeichnis und Dateiaktionen; Zurückwechseln erhält die Shell |
+| Connections | Öffnet sichtbar; Schließen erhält die ursprüngliche Shell |
 
 Die erwartete Ausgabe steht nie vollständig im eingegebenen Befehl. Tesseract
 liest die gerenderten Pixel; bloßes Echo der Eingabe oder ein interner Modellzustand
 reicht nicht. XCTest-Anhänge enthalten Screenshots und den Accessibility-Baum.
-Alle zwölf Fälle müssen ausgeführt werden und bestehen; übersprungene Tests,
+Alle vierzehn Fälle müssen ausgeführt werden und bestehen; übersprungene Tests,
 Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
 
 ## Ausführung
@@ -34,6 +36,10 @@ Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
   `suite=navigation` prüft nur die acht neuen Navigationsfälle. Shellzustände
   werden durch nicht exportierte Variablen und pro Prüfung neue Ausgabemarker
   geprüft. TSV-OCR liefert die Positionen der sichtbaren Ausgabe und Menüpunkte.
+  `suite=surfaces` prüft Dateimanager und Connections. `only_tests` begrenzt
+  Diagnoseläufe auf bekannte Testnamen (`Klasse/testMethode`, kommagetrennt);
+  damit können nur fehlgeschlagene Fälle erneut ausgeführt werden. `full`
+  lehnt eine solche Einschränkung ab.
 - Im Batch: `test-dmg.yml` ruft den Workflow nach dem Verpacken auf und übergibt
   genau dessen DMG-Artefakt. Fehler lassen den Test-DMG-Workflow scheitern.
   Im Batch wird immer die vollständige Suite ausgeführt.

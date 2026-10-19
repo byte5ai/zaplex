@@ -23,6 +23,9 @@ prüft das installierte DMG. Ein erfolgreicher Code-Review ersetzt keinen Ablauf
    ausgelassene Tests, fehlende Ergebnisse oder Zeitüberschreitungen reichen nicht.
 7. Screenshots, OCR, Accessibility-Baum, Testergebnis, Test-Revision und
    DMG-Digest bleiben erhalten. Prüfbelege sind keine Release-Installer.
+8. Der Dateimanager öffnet im Arbeitsverzeichnis des aktiven Pane, zeigt eine
+   dort angelegte Testdatei und die beschrifteten Dateiaktionen. Zurückwechseln
+   erhält die Shell. Das Öffnen/Schließen von „Connections“ erhält sie ebenfalls.
 
 ## Vollständige Produktabnahme
 
