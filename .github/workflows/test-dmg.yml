@@ -21,10 +21,27 @@
 
 name: Test DMG
 
-# Called only by ci-batch.yml when a test DMG is explicitly requested.
+# New builds are called by ci-batch; direct dispatch only resumes a failed app build.
 on:
+  workflow_dispatch:
+    inputs:
+      resume_run_id:
+        description: Failed main batch with passed gates and an available Linux daemon artifact
+        required: true
+        type: string
+      dmg_tag:
+        description: Must match the original source VERSION
+        type: string
+        default: v1.2.2
+      fast:
+        description: Resume requires the original release profile (false)
+        type: boolean
+        default: false
   workflow_call:
     inputs:
+      resume_run_id:
+        type: string
+        default: ''
       dmg_tag:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
         type: string
@@ -36,6 +53,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: test-dmg-${{ github.ref }}
@@ -62,8 +80,22 @@ jobs:
       - name: Resolve immutable source commit
         id: resolve-source-sha
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          DMG_TAG: ${{ inputs.dmg_tag }}
+          FAST: ${{ inputs.fast }}
         run: |
           set -euo pipefail
+          if [[ -n "$RESUME_RUN_ID" ]]; then
+            python3 script/test-dmg-resume-tests
+            python3 script/test-dmg-resume
+            exit 0
+          fi
+          [[ "$GITHUB_WORKFLOW" == 'CI batch' ]] || {
+            echo "A direct dispatch requires resume_run_id." >&2
+            exit 1
+          }
           SOURCE_SHA="$(git rev-parse "${GITHUB_SHA}^{commit}")"
           if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Unable to resolve an immutable source commit" >&2
@@ -72,10 +104,12 @@ jobs:
           echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Verify macOS packaging split
+        if: inputs.resume_run_id == ''
         run: python3 script/test-macos-bundle
         shell: bash
 
       - name: Verify release version and Phase A readiness
+        if: inputs.resume_run_id == ''
         env:
           DMG_TAG: ${{ inputs.dmg_tag }}
         run: |
@@ -90,6 +124,7 @@ jobs:
         shell: bash
 
   signing_preflight:
+    if: inputs.resume_run_id == ''
     name: Validate macOS signing identity
     # macOS is required for Keychain, codesign and notarytool validation.
     # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
@@ -121,6 +156,7 @@ jobs:
   # packed in the release-asset layout the install script expects (binary named
   # `zaplex` inside `zap-remote-server-linux-x86_64.tar.gz`, see setup.rs tarball_basename()).
   build_remote_server:
+    if: inputs.resume_run_id == ''
     name: Build bundled remote-server (Linux musl x86_64)
     # Fast large runner (16 vCPU / 64 GB) — this is a static **musl** build, so the
     # glibc-consistency reason the client jobs pin `ubuntu-22.04` does not apply
@@ -216,6 +252,9 @@ jobs:
           retention-days: 7
 
   build_app:
+    if: >
+      !cancelled() && needs.readiness.result == 'success' &&
+      (needs.signing_preflight.result == 'success' || inputs.resume_run_id != '')
     name: Prepare Test app (macOS Apple Silicon)
     # The macrunner image ships Xcode 27; prepare_environment verifies the Metal toolchain.
     # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
@@ -252,6 +291,9 @@ jobs:
       - name: Build and prepare unsigned aarch64 app
         id: bundle_app
         run: |
+          # app/build.rs embeds GITHUB_SHA; a resume runs a newer workflow only.
+          GITHUB_SHA="$(git rev-parse HEAD)"
+          export GITHUB_SHA
           extra_args=()
           if [[ -n "$BUILD_FLAG" ]]; then
             extra_args+=("$BUILD_FLAG")
@@ -261,6 +303,7 @@ jobs:
             --read-passwords-from-env "${extra_args[@]}"
         shell: bash
         env:
+          CARGO_BUILD_JOBS: "4"
           BUILD_FLAG: ${{ inputs.fast && '--debug' || '' }}
           GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
@@ -295,6 +338,9 @@ jobs:
       source_sha: ${{ needs.readiness.outputs.source_sha }}
 
   build_dmg:
+    if: >
+      !cancelled() && needs.readiness.result == 'success' && needs.build_app.result == 'success' &&
+      (needs.build_remote_server.result == 'success' || inputs.resume_run_id != '')
     name: Sign and package Test DMG (macOS Apple Silicon)
     # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
     runs-on: macrunner
@@ -322,6 +368,8 @@ jobs:
         with:
           name: zap-remote-server-linux-x86_64
           path: resources/bundled/remote-server/
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.resume_run_id || github.run_id }}
 
       # The runtime reads these files from the signed app resources. Insert
       # both the archive and its digest before sealing the app's signature.
