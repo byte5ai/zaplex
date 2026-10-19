@@ -784,6 +784,14 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  gui_acceptance:
+    name: Verify installed release DMG
+    needs: [prepare_metadata, release_macos]
+    uses: ./.github/workflows/gui-acceptance.yml
+    with:
+      artifact_name: zap-macos-arm64
+      source_sha: ${{ needs.prepare_metadata.outputs.release_sha }}
+
   publish_release:
     name: Publish GitHub Release
     # ci-lint: allow-CI005  This Linux job only publishes already-built artifacts.
@@ -801,12 +809,20 @@ jobs:
       - build_remote_server
       - release_macos
       - release_linux
+      - gui_acceptance
     steps:
-      - name: Download all artifacts
+      - name: Download release packages only
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
+          pattern: zap-*
           merge-multiple: true
+
+      - name: Download release description
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-body
+          path: dist
 
       # release-body artifact is for GitHub Release description, not an artifact to attach to Release assets.
       # Move it early from dist/ to separate path, avoid `files: dist/*` treating it as asset upload.
@@ -864,17 +880,17 @@ jobs:
           files: dist/*
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Delete this run's workflow artifacts immediately after successful release to free up Actions storage quota.
+      # Delete intermediate packages after publishing; retain GUI evidence for diagnosis.
       # Installers are already attached to GitHub Release (independent storage, doesn't consume Actions storage),
       # workflow artifacts are just an intermediary pipeline from build job → publish job, no point keeping them.
       # Only execute after Release creation succeeds (if: success()), keep artifacts on failure for review.
-      - name: Delete workflow artifacts to free Actions storage
+      - name: Delete intermediate package artifacts
         if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          ids=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" --jq '.artifacts[].id')
+          ids=$(gh api --paginate "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" --jq '.artifacts[] | select((.name | startswith("zap-")) or .name == "release-body") | .id')
           for id in $ids; do
             echo "Deleting artifact $id"
             gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id"

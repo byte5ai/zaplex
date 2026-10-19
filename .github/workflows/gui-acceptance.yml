@@ -8,9 +8,9 @@ on:
         required: true
         type: string
       suite:
-        description: Full acceptance or terminal-only diagnosis (not full acceptance)
+        description: All local flows or a diagnostic subset (not complete product acceptance)
         type: choice
-        options: [full, terminal]
+        options: [full, terminal, navigation]
         default: full
   workflow_call:
     inputs:
@@ -18,6 +18,11 @@ on:
         description: DMG artifact from the calling workflow
         required: true
         type: string
+      source_sha:
+        description: Immutable source revision of the built app
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -31,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ inputs.source_sha || github.sha }}
           persist-credentials: false
 
       - name: Verify GUI prerequisites
@@ -77,12 +83,20 @@ jobs:
           [[ ${#dmgs[@]} -eq 1 ]]
           bash script/macos/gui-tests/install-dmg "${dmgs[0]}" "$RUNNER_TEMP/gui-evidence"
           git rev-parse HEAD > "$RUNNER_TEMP/gui-evidence/test-source-sha.txt"
+          if [[ -n "$APP_SOURCE_SHA" ]]; then
+            [[ "$APP_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$(git rev-parse HEAD)" == "$APP_SOURCE_SHA" ]]
+            printf '%s\n' "$APP_SOURCE_SHA" > "$RUNNER_TEMP/gui-evidence/app-source-sha.txt"
+          fi
+        env:
+          APP_SOURCE_SHA: ${{ inputs.source_sha }}
 
       - name: Exercise user flows in the installed app
         env:
           SUITE: ${{ inputs.artifact_name != '' && 'full' || inputs.suite || 'full' }}
         run: |
-          echo "GUI suite: $SUITE" >> "$GITHUB_STEP_SUMMARY"
+          echo "Local GUI suite: $SUITE" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Remote, visual reference comparison and exploratory agent: not-run (see #562).' >> "$GITHUB_STEP_SUMMARY"
           if [[ "$SUITE" != full ]]; then
             echo 'Diagnostic subset only — not a full DMG acceptance.' >> "$GITHUB_STEP_SUMMARY"
           fi

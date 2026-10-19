@@ -6,10 +6,14 @@ art=${1:?Usage: run ARTIFACT_DIRECTORY}
 suite=${2:-full}
 filters=()
 case "$suite" in
-  full) expected=4 ;;
+  full) expected=12 ;;
   terminal)
     expected=3
-    filters=(-skip-testing:ZaplexUITests/SmokeTests/testNativeCloseButtonClosesWindow)
+    filters=(-only-testing:ZaplexUITests/SmokeTests -skip-testing:ZaplexUITests/SmokeTests/testNativeCloseButtonClosesWindow)
+    ;;
+  navigation)
+    expected=8
+    filters=(-only-testing:ZaplexUITests/NavigationTests)
     ;;
   *) echo "Unknown suite: $suite" >&2; exit 2 ;;
 esac
@@ -34,7 +38,7 @@ bundles=("$work"/build/Build/Products/*.xctestrun)
 [[ ${#bundles[@]} -eq 1 ]] || { echo "Expected exactly one xctestrun file" >&2; exit 1; }
 
 set +e
-macrunner-gui-run --timeout 360 --artifacts "$art/gui" -- \
+macrunner-gui-run --timeout 540 --artifacts "$art/gui" -- \
   xcodebuild test-without-building -xctestrun "${bundles[0]}" \
   -destination 'platform=macOS' -parallel-testing-enabled NO \
   -resultBundlePath "$art/tests.xcresult" "${filters[@]}" > "$art/tests.log" 2>&1
@@ -45,13 +49,7 @@ if [[ -d "$art/tests.xcresult" ]]; then
   xcrun xcresulttool export attachments --path "$art/tests.xcresult" --output-path "$art/attachments"
   xcrun xcresulttool get test-results summary --path "$art/tests.xcresult" > "$art/summary.json"
   # A green xcodebuild with no matching tests must never pass the gate.
-  /usr/bin/python3 - "$art/summary.json" "$expected" <<'PY'
-import json, sys
-summary = json.load(open(sys.argv[1]))
-if not (summary.get('passedTests') == int(sys.argv[2]) and summary.get('failedTests') == 0
-        and summary.get('skippedTests') == 0):
-    raise SystemExit('All selected GUI tests must execute and pass; see summary.json')
-PY
+  /usr/bin/python3 "$root/report.py" "$art" "$suite" "$expected" "$result"
 else
   echo "No XCTest result bundle was produced" >&2
   exit 1
