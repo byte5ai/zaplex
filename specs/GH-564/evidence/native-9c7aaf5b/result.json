@@ -55,7 +55,7 @@
       456
     ]
   },
-  "visual_review": "Primary recovery actions are above additional target-selection and directory controls. Change agent/account/model each occupy a separate row. Full footer exceeds window by1.8 points. The original test remains failed.",
+  "visual_review": "Primary recovery actions are above additional target-selection and directory controls. Change agent/account/model each occupy a separate row. Input container exceeds window by 1.8 points. The original test remains failed.",
   "not_covered": [
     "installed DMG",
     "live provider interaction",

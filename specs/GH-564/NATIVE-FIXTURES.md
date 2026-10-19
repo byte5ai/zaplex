@@ -4,7 +4,8 @@
 PR #586 auf `1800ec77` nativ erfolgreich geprüft und visuell ausgewertet.
 [Der aktuelle Teilnachweis](#workspace-korrekturen-nativ-bestätigt-am-20102026)
 ersetzt für diese konkreten Ansichten die unten gesicherten historischen Fehler.
-Der Agentenfall ist separat fehlgeschlagen. Fixtures, installiertes DMG und freie
+Der [Agentenfall](#agentenkorrektur-nativ-bestätigt-am-20102026) besteht nach
+PR #589 separat auf `513647be` (1.2.6). Fixtures, installiertes DMG und freie
 Exploration bleiben getrennte Nachweise.
 
 ## Historische Herkunft und Aussagegrenzen
@@ -279,4 +280,41 @@ Assertion gesichert und Logs enthalten den vollständigen Layout-Snapshot.
 Die weitere Korrektur entfernt die erzwungene volle Zeile der drei kurzen
 Wechselaktionen und verwendet denselben natürlichen Umbruch wie die primären
 Aktionen. Der unwirksame Versuch an den Identitätsfeldern wird zurückgenommen.
-Eine erfolgreiche native Nachprüfung dieser Korrektur liegt hier noch nicht vor.
+Die anschließende erfolgreiche Nachprüfung ist im folgenden Abschnitt dokumentiert.
+
+
+## Agentenkorrektur nativ bestätigt am 20.10.2026
+
+[Run 39343216623](https://github.com/byte5ai/zaplex/actions/runs/39343216623)
+ist vollständig erfolgreich abgeschlossen: **1 bestanden, 0 fehlgeschlagen,
+0 übersprungen**. App- und Testrevision
+`513647beb6f7f7ecd89ea776f2c0e83b10e51710`, Version 1.2.6,
+[PR #589](https://github.com/byte5ai/zaplex/pull/589).
+
+Der native Test prüft zwölf Lifecycle-Zustände jeweils bei 1180×640 und
+540×670 Punkten. Alle 24 Layout-Prüfschritte bestehen, einschließlich beider
+wiederherstellbarer Fehlerzustände mit und ohne Session. Die drei ausgewählten
+[Originalaufnahmen](evidence/native-513647be/manifest.json) wurden unverändert
+archiviert, anhand ihrer SHA-256 geprüft und einzeln visuell ausgewertet.
+[Ergebnis und vollständige Zustandsliste](evidence/native-513647be/result.json).
+
+| Aufnahme | Visuelle Beobachtung |
+|---|---|
+| [Normal, wartende Freigabe](evidence/native-513647be/agent/subscription-agent-normal-1180x640.png) | Anleitung und alle vier Freigabeaktionen sichtbar. |
+| [Schmal, beendete Session](evidence/native-513647be/agent/subscription-agent-narrow-540x670.png) | Vollständiger umgebrochener Handlungshinweis; „New conversation“ und „Back to shell“ sichtbar. |
+| [Schmal, wiederherstellbarer Fehler](evidence/native-513647be/agent/subscription-agent-recoverable-error-540x670.png) | Wiederherstellungsaktionen, Konfigurationsaktionen und Verzeichniswahl passen ins Fenster. Agent-/Konto-/Modellwechsel belegen zwei statt drei Zeilen und bleiben verfügbar. |
+
+Damit ist der Layoutbefund aus #153 zusammen mit den ursprünglichen Änderungen
+in PR #586 nativ nachgeprüft. Die erfolglosen Zwischenansätze aus PR #587/#588
+sind durch die vorherigen Läufe widerlegt und zurückgenommen; deren zusätzliche
+Fehlerdiagnostik bleibt erhalten.
+
+Die vier erfolgreichen Workspace-Fälle auf `1800ec77` wurden nicht wiederholt.
+Zusammen liegen fünf erfolgreiche Fälle und 33 visuell geprüfte Originalbilder
+auf **zwei unterschiedlichen Quell-/Testständen** vor. Der aktuelle Agentenlauf
+wiederholt weder DMG-/Daemon-Build noch den vollständigen CI-Batch.
+
+Der Agentennachweis gilt für englische, dunkle Darstellung mit gesetzten
+Lifecycle-Zuständen. Er prüft weder reale angemeldete Provider noch ein neu
+installiertes DMG, freie Exploration, Remoteabläufe, Kontrast oder OS Reduced
+Motion. Die vollständige #564/#562-Abnahme wird dadurch nicht erteilt.
