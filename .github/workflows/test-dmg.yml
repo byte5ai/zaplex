@@ -304,6 +304,8 @@ jobs:
         shell: bash
         env:
           CARGO_BUILD_JOBS: "4"
+          # Avoid the observed HTTP/2 framing failure while fetching the registry.
+          CARGO_HTTP_MULTIPLEXING: "false"
           BUILD_FLAG: ${{ inputs.fast && '--debug' || '' }}
           GIT_RELEASE_TAG: ${{ inputs.dmg_tag }}
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
