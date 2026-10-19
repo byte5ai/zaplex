@@ -332,6 +332,8 @@ jobs:
           retention-days: 1
 
   gui_acceptance:
+    if: >
+      !cancelled() && needs.readiness.result == 'success' && needs.build_dmg.result == 'success'
     name: Verify installed DMG user flows
     needs: [readiness, build_dmg]
     uses: ./.github/workflows/gui-acceptance.yml

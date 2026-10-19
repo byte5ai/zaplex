@@ -54,6 +54,15 @@ Erfolgreiche Compile-/Paket-/SFTP-Prüfungen und der Blacksmith-Daemon werden ni
 wiederholt. Der ursprüngliche Batch bleibt als fehlgeschlagener Lauf erhalten;
 der Fortsetzungslauf verknüpft seine Belege mit ihm im Job-Summary.
 
+Falls ein erfolgreicher Test-DMG-Fortsetzungslauf die GUI-Abnahme übersprungen
+hat, kann `gui-resume.yml` ausschließlich diese Prüfung nachholen. Der Dispatch
+auf `main` verlangt `artifact_run_id` und den ursprünglichen `source_sha`.
+Vor einem macOS-Job prüft er erfolgreiche App-/DMG-Jobs, den übersprungenen
+GUI-Job, das verfügbare Artefakt und unveränderte App-/Testeingaben zwischen
+Quellcommit und Artefakt-Workflow. Das vorhandene DMG wird installiert; weder
+App noch Paket werden erneut gebaut. GUI-Tests und Quellnachweis verwenden
+den angegebenen ursprünglichen Commit.
+
 ## Freigabe und Ablauf
 
 1. Mehrere PRs nach den leichten Checks mergen.

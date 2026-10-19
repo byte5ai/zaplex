@@ -18,6 +18,10 @@ on:
         type: string
   workflow_call:
     inputs:
+      artifact_run_id:
+        description: Verified earlier Test DMG run; empty uses the current run
+        type: string
+        default: ''
       artifact_name:
         description: DMG artifact from the calling workflow
         required: true
@@ -30,6 +34,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   gui:
@@ -77,6 +82,8 @@ jobs:
         with:
           name: ${{ inputs.artifact_name }}
           path: ${{ runner.temp }}/dmg
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
 
       - name: Install unchanged app from DMG
         shell: bash

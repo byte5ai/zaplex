@@ -1,0 +1,44 @@
+name: Resume installed DMG acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Successful Test DMG continuation with skipped GUI acceptance
+        type: string
+        required: true
+      source_sha:
+        description: Original immutable app source commit (40 hex characters)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    name: Verify existing DMG provenance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate original app source and successful artifact jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+          APP_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          python3 script/gui-resume-tests
+          python3 script/gui-resume
+
+  gui:
+    needs: verify
+    uses: ./.github/workflows/gui-acceptance.yml
+    with:
+      artifact_name: zap-test-dmg-aarch64
+      artifact_run_id: ${{ inputs.artifact_run_id }}
+      source_sha: ${{ inputs.source_sha }}

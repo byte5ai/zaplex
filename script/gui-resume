@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Run skipped GUI acceptance against an existing, source-matched Test DMG."""
+
+import os
+from pathlib import Path
+import re
+import runpy
+import subprocess
+import sys
+
+helpers = runpy.run_path(str(Path(__file__).with_name("test-dmg-resume")))
+command, api, pages = (helpers[name] for name in ("command", "api", "pages"))
+
+
+def validate(run, jobs, artifacts, paths):
+    if any(run.get(key) != value for key, value in {
+        "status": "completed", "conclusion": "success", "event": "workflow_dispatch",
+        "head_branch": "main", "path": ".github/workflows/test-dmg.yml",
+    }.items()) or run.get("head_repository", {}).get("full_name") != helpers["REPO"]:
+        raise ValueError("Expected a successful main Test DMG continuation")
+    if not re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha", "")):
+        raise ValueError("Invalid workflow source")
+    by_name = {job["name"]: job for job in jobs}
+    if len(by_name) != len(jobs):
+        raise ValueError("Ambiguous job names")
+    for name in ("Verify Phase A release readiness", "Prepare Test app (macOS Apple Silicon)",
+                 "Sign and package Test DMG (macOS Apple Silicon)"):
+        if by_name.get(name, {}).get("conclusion") != "success":
+            raise ValueError(f"Missing successful artifact prerequisite: {name}")
+    if by_name.get("Verify installed DMG user flows", {}).get("conclusion") != "skipped":
+        raise ValueError("Only skipped GUI acceptance can be resumed here")
+    matches = [a for a in artifacts if a["name"] == "zap-test-dmg-aarch64"]
+    if len(matches) != 1 or matches[0].get("expired") is not False:
+        raise ValueError("Missing, expired or ambiguous DMG artifact")
+    if any(p not in helpers["ALLOWED"] and not p.startswith("specs/GH-564/") for p in paths):
+        raise ValueError("App, packaging or GUI test inputs differ from the artifact workflow")
+
+
+def main():
+    run_id, source = os.environ.get("ARTIFACT_RUN_ID", ""), os.environ.get("APP_SOURCE_SHA", "")
+    if (not run_id.isdecimal() or not re.fullmatch(r"[0-9a-f]{40}", source)
+            or os.environ.get("GITHUB_REPOSITORY") != helpers["REPO"]
+            or os.environ.get("GITHUB_REF") != "refs/heads/main"
+            or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"):
+        raise ValueError("Main dispatch, artifact run and immutable app source required")
+    run = api(f"actions/runs/{run_id}")
+    jobs, artifacts = (pages(f"actions/runs/{run_id}/{key}", key) for key in ("jobs", "artifacts"))
+    validate(run, jobs, artifacts, [])
+    head = run["head_sha"]
+    command("git", "fetch", "--no-tags", "origin", source, head)
+    command("git", "merge-base", "--is-ancestor", source, head)
+    validate(run, jobs, artifacts, command("git", "diff", "--name-only", source, head).splitlines())
+    with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+        summary.write(f"GUI only: existing DMG from run {run_id}, app/test source `{source}`. "
+                      "App and packaging are not rebuilt.\n")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, subprocess.SubprocessError) as error:
+        print(f"GUI resume refused: {error}", file=sys.stderr)
+        sys.exit(1)
