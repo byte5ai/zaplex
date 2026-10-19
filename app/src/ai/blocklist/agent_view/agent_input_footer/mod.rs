@@ -160,7 +160,6 @@ enum CLIVoiceInputState {
 const PLUGIN_CHIP_DEBOUNCE: Duration = Duration::from_secs(3);
 const SUBSCRIPTION_IDENTITY_LABEL_MAX_WIDTH: f32 = 240.;
 const SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH: f32 = 360.;
-const SUBSCRIPTION_IDENTITY_FIELD_MIN_WIDTH: f32 = 120.;
 const SUBSCRIPTION_ACTION_LABEL_MAX_WIDTH: f32 = 240.;
 const SUBSCRIPTION_ACTION_MIN_RUN_WIDTH: f32 = 320.;
 
@@ -1971,7 +1970,7 @@ fn subscription_target_status(
     for field in conversation_identity_fields(target, session, lifecycle) {
         fields.add_child(
             WrapFill::new(
-                SUBSCRIPTION_IDENTITY_FIELD_MIN_WIDTH,
+                SUBSCRIPTION_IDENTITY_MIN_RUN_WIDTH,
                 subscription_status_text(format!("{}: {}", field.label, field.value), app),
             )
             .finish(),
@@ -2287,45 +2286,27 @@ fn subscription_target_change_actions(conversation_id: &str, app: &AppContext) -
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_run_spacing(4.)
         .with_spacing(4.)
-        .with_child(
-            WrapFill::new(
-                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
-                subscription_action_button(
-                    crate::t!("ai-footer-subscription-change-agent"),
-                    AgentInputFooterAction::BeginSubscriptionAgentSelection {
-                        conversation_id: conversation_id.to_string(),
-                    },
-                    app,
-                ),
-            )
-            .finish(),
-        )
-        .with_child(
-            WrapFill::new(
-                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
-                subscription_action_button(
-                    crate::t!("ai-footer-subscription-change-account"),
-                    AgentInputFooterAction::BeginSubscriptionAccountSelection {
-                        conversation_id: conversation_id.to_string(),
-                    },
-                    app,
-                ),
-            )
-            .finish(),
-        )
-        .with_child(
-            WrapFill::new(
-                SUBSCRIPTION_ACTION_MIN_RUN_WIDTH,
-                subscription_action_button(
-                    crate::t!("ai-footer-subscription-change-model"),
-                    AgentInputFooterAction::BeginSubscriptionModelSelection {
-                        conversation_id: conversation_id.to_string(),
-                    },
-                    app,
-                ),
-            )
-            .finish(),
-        )
+        .with_child(subscription_action_button(
+            crate::t!("ai-footer-subscription-change-agent"),
+            AgentInputFooterAction::BeginSubscriptionAgentSelection {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ))
+        .with_child(subscription_action_button(
+            crate::t!("ai-footer-subscription-change-account"),
+            AgentInputFooterAction::BeginSubscriptionAccountSelection {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ))
+        .with_child(subscription_action_button(
+            crate::t!("ai-footer-subscription-change-model"),
+            AgentInputFooterAction::BeginSubscriptionModelSelection {
+                conversation_id: conversation_id.to_string(),
+            },
+            app,
+        ))
         .finish()
 }
 

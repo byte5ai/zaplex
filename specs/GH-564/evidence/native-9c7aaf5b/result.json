@@ -1,0 +1,64 @@
+{
+  "run_id": "39341539630",
+  "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39341539630",
+  "source_sha": "9c7aaf5bc39a4622047627ab4139895ddbf07d21",
+  "test_source_sha": "9c7aaf5bc39a4622047627ab4139895ddbf07d21",
+  "package_version": "1.2.5",
+  "case": "ui_tests::test_subscription_agent_conversation_layout_evidence",
+  "result": "failed",
+  "failed_state": "narrow/recoverable_error_with_session",
+  "artifact_id": 12229078204,
+  "image": {
+    "file": "subscription-agent-recoverable-error-540x670.png",
+    "original_file": "test_subscription_agent_conversation_layout_evidence/2026-10-19T23-33-07/subscription-agent-recoverable-error-540x670.png",
+    "sha256": "be709137559ed81c2c854b472d37e17124eb4e3c94e45a5b042b681fe10e1aa7",
+    "image_processing": "None; unchanged original PNG bytes.",
+    "screenshot_pixels": [
+      540,
+      670
+    ],
+    "locale": "en",
+    "theme": "dark",
+    "reduced_motion": null
+  },
+  "window_size_points": [
+    540,
+    670
+  ],
+  "bounds_points": {
+    "input": [
+      252,
+      70,
+      539,
+      671.8
+    ],
+    "composer": [
+      268,
+      132.4,
+      535.9829,
+      179.59999
+    ],
+    "footer": [
+      268,
+      179.6,
+      539,
+      667.8
+    ],
+    "identity": [
+      268,
+      204,
+      523,
+      424
+    ],
+    "primary_actions_y": [
+      432,
+      456
+    ]
+  },
+  "visual_review": "Primary recovery actions are above additional target-selection and directory controls. Change agent/account/model each occupy a separate row. Full footer exceeds window by1.8 points. The original test remains failed.",
+  "not_covered": [
+    "installed DMG",
+    "live provider interaction",
+    "free exploration"
+  ]
+}
