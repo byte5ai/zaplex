@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.2] — 2026-10-19
+
+- Dateimanager: Die Verzeichnisreservierung hält das ursprüngliche Dateisystemobjekt bis zur abgeschlossenen Eigentumsprüfung geöffnet; ein zwischenzeitlich ersetztes Verzeichnis wird auch bei sofortiger Inode-Wiederverwendung erkannt.
+
 ## [1.2.1] — 2026-10-18
 
 - macOS: Die Ampel-Buttons zum Schließen, Minimieren und für Vollbild erhalten wieder die vollständige native Klickfolge. Tab- und Pane-Dragging sowie die versionsabhängige Behandlung der Fensterränder bleiben erhalten.
