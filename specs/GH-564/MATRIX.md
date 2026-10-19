@@ -67,8 +67,7 @@ Animationen, Drag, Fokusübergänge und Recovery. Keine persönlichen Profile.
 Gründe: **V** = vollständige Fall-/Variantenkombination noch nicht geprüft; **G** = begrenzter interaktiver Zugriff auf die
 ephemere native GUI noch nicht bereitgestellt; **R** = isolierter Remote-Zugang
 noch nicht nachgewiesen; **P** = autorisierte isolierte Providerprofile fehlen.
-Das aktuelle DMG ist vorhanden und installiert geprüft (12 lokale Tests bestanden,
-drei fehlgeschlagen; siehe [Nachweis](NATIVE-FIXTURES.md#gezielte-fortsetzung-und-installiertes-dmg)).
+Das aktuelle DMG ist vorhanden und installiert geprüft (zwölf lokale Tests im ersten Lauf und die drei übrigen nach Testkorrektur bestanden; siehe [Nachweis](NATIVE-FIXTURES.md#gezielte-fortsetzung-und-installiertes-dmg)).
 Diese Teilbelege erfüllen keine gesamte Fall-/Variantenkombination; deshalb V.
 Die explorative Durchführung und interaktive Vollständigkeitsprüfung benötigt G.
 Fehlende Testvoraussetzungen sind keine Produktfehler.

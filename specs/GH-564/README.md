@@ -4,7 +4,8 @@ Stand: 19.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
 übergreifend [#562](https://github.com/byte5ai/zaplex/issues/562).
 
 **Keine Gesamtfreigabe.** Das aktuelle DMG ist gebaut und installiert geprüft:
-12 lokale GUI-Tests bestanden, drei fehlgeschlagen. Die vollständige
+12 lokale GUI-Tests bestanden im ersten Lauf; die drei übrigen bestanden nach
+Testkorrektur im gezielten Wiederholungslauf. Die vollständige
 DMG-/Explorationsabnahme fehlt; Details im [Fortsetzungsnachweis](NATIVE-FIXTURES.md#gezielte-fortsetzung-und-installiertes-dmg).
 Zusätzlich zu dieser Altbuild-Auswertung liegen jetzt
 [native Integrationstest-Belege](NATIVE-FIXTURES.md) vor:
@@ -160,8 +161,10 @@ Die autorisierte Fortsetzung auf `cadcb191` ist ausgeführt. Das signierte und
 notarisierte DMG enthält den vorhandenen Linux-Daemon; die erfolgreichen
 Codeprüfungen wurden übernommen. Alle 15 lokalen GUI-Fälle wurden in
 [39303447063](https://github.com/byte5ai/zaplex/actions/runs/39303447063)
-ausgeführt, mit 12 bestandenen und drei fehlgeschlagenen Fällen. Die konkreten
-Test-/Eingabebefunde sind in #562 nachzuverfolgen. Kein neuer Gesamtbatch und
+ausgeführt, mit 12 bestandenen und drei fehlgeschlagenen Fällen. Die drei Fälle bestehen nach Testkorrektur in
+[39329863382](https://github.com/byte5ai/zaplex/actions/runs/39329863382) am
+unveränderten DMG; die beiden Testrevisionen sind getrennt dokumentiert.
+Kein neuer Gesamtbatch und
 keine Release-Veröffentlichung wurden gestartet.
 
 Auch ein grüner neuer 15-Fälle-Lauf erledigt diese Matrix nicht. Danach folgen

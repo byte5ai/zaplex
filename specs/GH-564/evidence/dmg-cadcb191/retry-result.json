@@ -1,0 +1,46 @@
+{
+  "run_id": 39329863382,
+  "artifact_id": 12222904038,
+  "artifact_digest": "sha256:fb8dc4e73f7890dfc0981147ebabeb0fa8e924b27c1b56cb1991753a47b0603f",
+  "acceptance": {
+    "schema_version": 1,
+    "suite": "selected",
+    "selected_tests": "pass",
+    "local_gui": "not-run",
+    "remote_and_providers": "not-run",
+    "visual_reference_comparison": "not-run",
+    "exploratory_agent": "not-run",
+    "product_acceptance": "not-run",
+    "counts": {
+      "passedTests": 3,
+      "failedTests": 0,
+      "skippedTests": 0
+    },
+    "test_process_exit": 0,
+    "required_cases": [
+      "NavigationTests/testCancelSplitKeepsOriginalShell",
+      "NavigationTests/testSplitLeft",
+      "SmokeTests/testNativeCloseButtonClosesWindow"
+    ],
+    "executed_cases_match": true,
+    "dmg_sha256": "313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3",
+    "test_source_sha": "1f2a9b16595318ef695873b8ebbf3f5414a2fff0",
+    "app_source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a"
+  },
+  "acceptance_sha256": "47ced35356bbd2ef4f4483970d9286f8e03f650e8253161c8ee4307333259611",
+  "window_count_before_close": 3,
+  "window_count_after_close": 2,
+  "command_rejection_counts": {},
+  "screenshots": [
+    {
+      "file": "cancel-preserves-shell.png",
+      "original_attachment": "855076FD-8118-4363-8B48-9004DD68BCA2.png",
+      "sha256": "53c11b7acb984052821df7d6526e7777bb47e2fc0bc5509ae9271e2fe9ab9fbe"
+    },
+    {
+      "file": "left-split-independent-shells.png",
+      "original_attachment": "DA9D15B8-2DFB-420A-B368-9151D4E5E834.png",
+      "sha256": "5297782eeff0b1b07a1034a6307f881f1aeb51ed5a87eaeab396f32e669edbe1"
+    }
+  ]
+}

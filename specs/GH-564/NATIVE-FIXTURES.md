@@ -183,3 +183,37 @@ Der Banner oben rechts verdeckt Teile der App. Die hier bewerteten Anleitungen
 links bzw. die untere Aktionsleiste bleiben vollständig einsehbar. Verdeckte
 Bereiche werden nicht bewertet. Weitere Varianten, freie Bedienung und echte
 Remote-/Providerabläufe bleiben ohne den dafür angeforderten Zugang ungeprüft.
+
+
+## Gezielte Nachprüfung: drei zuvor fehlgeschlagene Fälle bestanden
+
+[Run 39329863382](https://github.com/byte5ai/zaplex/actions/runs/39329863382)
+führt nach [PR #583](https://github.com/byte5ai/zaplex/pull/583) genau die drei
+zuvor fehlgeschlagenen Fälle aus: **3 bestanden, 0 fehlgeschlagen, 0 übersprungen**.
+Die Swift-Tests wurden im macOS-Job erfolgreich kompiliert. Testrevision:
+`1f2a9b16595318ef695873b8ebbf3f5414a2fff0`; App weiterhin `cadcb191`, DMG-Digest
+unverändert `313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3`.
+Kein App-/Daemon-Neubau und keine Wiederholung der zwölf erfolgreichen Fälle.
+
+- Schließen: AX zählt vorher drei und danach zwei Fenster. Die korrigierte
+  Assertion prüft die Anzahl statt des neu aufgelösten `firstMatch`.
+- Split-Abbruch: [Bild](evidence/dmg-cadcb191/cancel-preserves-shell.png) zeigt
+  dieselbe Shell mit `qa_state=741` nach Escape und nach dem anschließenden
+  Pane-Wechselversuch; kein zusätzliches Pane bleibt bestehen.
+- Split links: [Bild](evidence/dmg-cadcb191/left-split-independent-shells.png)
+  zeigt frische Ausgabe im linken Pane mit Zustand 963 und die erhaltene
+  ursprüngliche Shell rechts mit Zustand 741.
+
+Vor jedem Return wurde die vollständig angekommene Eingabe geprüft; jeder
+Befehl wurde genau einmal abgeschickt. Der Lauf erfasste keine der ausgewählten
+App-Ablehnungen. Das stützt die Korrektur der Eingabesynchronisierung, beweist
+aber rückwirkend nicht die Ursache beider früheren Eingabefehler.
+
+[retry-result.json](evidence/dmg-cadcb191/retry-result.json) enthält die exakten
+Fall-IDs, Revisionen, Digests und Belegzuordnung. Zusammen mit dem vorherigen
+Lauf liegt damit für jeden der 15 lokalen Fälle ein Erfolg am selben DMG vor.
+Es handelt sich ausdrücklich um zwei Läufe mit unterschiedlichen Testrevisionen,
+nicht um einen vollständigen grünen Lauf der neuen Tests. `local_gui` und
+`product_acceptance` bleiben im Teillauf korrekt `not-run`; der Release-Gate
+wird nicht umgangen. Die Gesamtprüfung benötigt weiterhin die in #562/#564
+benannten Varianten und die separat angeforderte GUI-/Remote-/Providerumgebung.
