@@ -12,6 +12,15 @@ on:
         type: string
         required: true
 
+      only_tests:
+        description: Optional failed Class/testMethod cases, comma-separated (diagnostic only)
+        type: string
+        default: ''
+      current_tests:
+        description: Use current main XCTest sources against the unchanged app
+        type: boolean
+        default: false
+
 permissions:
   contents: read
   actions: read
@@ -31,10 +40,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
           APP_SOURCE_SHA: ${{ inputs.source_sha }}
+          ONLY_TESTS: ${{ inputs.only_tests }}
         run: |
           python3 script/gui-resume-tests
           python3 script/macos/gui-tests/launcher_tests.py
           python3 script/gui-resume
+          if [[ -n "$ONLY_TESTS" ]]; then
+            python3 script/macos/gui-tests/report.py --validate-selection "$ONLY_TESTS"
+          fi
 
   gui:
     needs: verify
@@ -43,3 +56,6 @@ jobs:
       artifact_name: zap-test-dmg-aarch64
       artifact_run_id: ${{ inputs.artifact_run_id }}
       source_sha: ${{ inputs.source_sha }}
+      test_source_sha: ${{ inputs.current_tests && github.sha || inputs.source_sha }}
+      suite: ${{ inputs.only_tests != '' && 'navigation' || 'full' }}
+      only_tests: ${{ inputs.only_tests }}

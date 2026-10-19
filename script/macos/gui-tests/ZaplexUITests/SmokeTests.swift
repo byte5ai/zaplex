@@ -88,13 +88,17 @@ final class SmokeTests: XCTestCase {
     }
 
     func testNativeCloseButtonClosesWindow() throws {
+        let count = app.windows.count
+        XCTAssertGreaterThan(count, 0)
         let window = app.windows.firstMatch
         let close = window.buttons[XCUIIdentifierCloseWindow]
         XCTAssertTrue(close.waitForExistence(timeout: 5), "Native close button is missing")
         close.click()
+        // firstMatch resolves again after closing and can point at a restored window.
         let closed = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in !window.exists }, object: nil)
+            predicate: NSPredicate { _, _ in self.app.windows.count == count - 1 }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [closed], timeout: 10), .completed, "Close button had no effect")
+        evidence("after-native-close")
     }
 
     func testRelaunchAcceptsTerminalInput() throws {

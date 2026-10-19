@@ -112,8 +112,16 @@ class GUIFlowTestCase: XCTestCase {
 
     func command(_ text: String) {
         app.typeText(text)
-        // A separate Return waits for typing/UI updates instead of embedding a
-        // newline in the text injection. Submit exactly once; never retry a command.
+        // Event synthesis can finish before the editor has applied all text.
+        // Synchronize on the public AX value; output still requires rendered pixels.
+        let typed = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                (self.window.textViews.firstMatch.value as? String)?.contains(text) == true
+            }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [typed], timeout: 10), .completed,
+                       "Typed command did not reach the focused editor")
+        evidence("before-single-return")
+        // Submit exactly once; never hide a lost Return by retrying the command.
         app.typeKey(.return, modifierFlags: [])
     }
 
