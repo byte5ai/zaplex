@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "build_run_id": 39295080993,
+  "gui_run_id": 39303447063,
+  "dmg_artifact_id": 12212247062,
+  "gui_artifact_id": 12212937860,
+  "app_source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "test_source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "launcher_source_sha": "9e200e30a39eb11d22020afa599e5838ec724104",
+  "package_version": "1.2.2",
+  "dmg_sha256": "313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3",
+  "counts": {
+    "passedTests": 12,
+    "failedTests": 3,
+    "skippedTests": 0
+  },
+  "executed_case_set_complete": true,
+  "cases": [
+    {
+      "name": "NavigationTests/testCancelSplitKeepsOriginalShell",
+      "result": "Failed"
+    },
+    {
+      "name": "NavigationTests/testClosingTabPreservesOriginalShell",
+      "result": "Passed"
+    },
+    {
+      "name": "NavigationTests/testSettingsReturnToOriginalShell",
+      "result": "Passed"
+    },
+    {
+      "name": "NavigationTests/testSplitDown",
+      "result": "Passed"
+    },
+    {
+      "name": "NavigationTests/testSplitLeft",
+      "result": "Failed"
+    },
+    {
+      "name": "NavigationTests/testSplitRight",
+      "result": "Passed"
+    },
+    {
+      "name": "NavigationTests/testSplitUp",
+      "result": "Passed"
+    },
+    {
+      "name": "NavigationTests/testTabsKeepIndependentShells",
+      "result": "Passed"
+    },
+    {
+      "name": "SmokeTests/testNativeCloseButtonClosesWindow",
+      "result": "Failed"
+    },
+    {
+      "name": "SmokeTests/testNewWindowRunsItsOwnShell",
+      "result": "Passed"
+    },
+    {
+      "name": "SmokeTests/testRelaunchAcceptsTerminalInput",
+      "result": "Passed"
+    },
+    {
+      "name": "SmokeTests/testTerminalExecutesAndRendersOutput",
+      "result": "Passed"
+    },
+    {
+      "name": "SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+      "result": "Passed"
+    },
+    {
+      "name": "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell",
+      "result": "Passed"
+    },
+    {
+      "name": "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible",
+      "result": "Passed"
+    }
+  ],
+  "native_close_window_count": {
+    "before": 8,
+    "after": 7,
+    "source": "XCTest Accessibility attachments"
+  },
+  "scope": "Installed unchanged DMG; full local deterministic suite. No remote/provider or independent exploratory acceptance.",
+  "original_evidence_sha256": {
+    "acceptance.json": "f442a9ff19a61959c7f68493b0e179f70e932330f098ecf00292fb8ea6f351b0",
+    "summary.json": "3fa98eee8c29a9e847bf0a8eed9cb7d31f9ddea3925b0664ce08a113b93abae6",
+    "test-cases.json": "bea24b3d05c44fb1b1bb1af4790f2a512030a113a251421a610d13b6f6e00acf"
+  },
+  "failed_case_evidence": [
+    {
+      "test": "NavigationTests/testCancelSplitKeepsOriginalShell",
+      "file": "B34C78D8-D22F-4E8B-B874-DE5F3C8353E9.png",
+      "observation": "Failed in setup before cancel flow; command visible in input, no expected output.",
+      "saved_file": "setup-command-not-executed.png",
+      "sha256": "a955157e2468937390bde0f76f3e76122dae3c1b1c6ed2a00a54fa8cce31e8b8",
+      "image_processing": "None; unchanged original PNG bytes"
+    },
+    {
+      "test": "NavigationTests/testSplitLeft",
+      "file": "5BA2519E-B87F-4A16-B4EB-21905ADA3C44.png",
+      "observation": "New left pane visible; command remains in input, no expected output.",
+      "saved_file": "left-pane-command-not-executed.png",
+      "sha256": "0dd5520c5f0342e1d5b38cc7ee53e2c549d3cf84031d2591e349c7069291d746",
+      "image_processing": "None; unchanged original PNG bytes"
+    },
+    {
+      "test": "SmokeTests/testNativeCloseButtonClosesWindow",
+      "before_ax": "E68C6C0F-8795-474A-8EC9-770967EA1AA8.txt",
+      "after_ax": "86C26A8A-45D7-4EA2-A460-9214FFF02A1C.txt",
+      "observation": "Window count decreases 8 to 7; firstMatch query still resolves to another window.",
+      "before_ax_sha256": "bab3255f008b0ccea1e39945b276c4ccc0a02b84b0226793c8565a911524db8e",
+      "before_window_titles": [
+        "Local \u00b7 ~",
+        "Local \u00b7 ~",
+        "Local \u00b7 ~ \u00b7 b198b9a1",
+        "Local \u00b7 ~ \u00b7 e8733261",
+        "Local \u00b7 ~",
+        "Local \u00b7 ~ \u00b7 99e1d74b",
+        "Local \u00b7 ~",
+        "Local \u00b7 ~ \u00b7 3aa36e55"
+      ],
+      "after_ax_sha256": "87b48ab1953f05825b733e6e3fded4ee6898b755b6afcfcc28a62a8fe087ac72",
+      "after_window_titles": [
+        "Local \u00b7 ~",
+        "Local \u00b7 ~ \u00b7 b198b9a1",
+        "Local \u00b7 ~ \u00b7 e8733261",
+        "Local \u00b7 ~",
+        "Local \u00b7 ~ \u00b7 99e1d74b",
+        "Local \u00b7 ~",
+        "Local \u00b7 ~ \u00b7 3aa36e55"
+      ]
+    }
+  ]
+}
