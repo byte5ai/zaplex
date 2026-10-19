@@ -61,7 +61,9 @@ Vor einem macOS-Job prüft er erfolgreiche App-/DMG-Jobs, den übersprungenen
 GUI-Job, das verfügbare Artefakt und unveränderte App-/Testeingaben zwischen
 Quellcommit und Artefakt-Workflow. Das vorhandene DMG wird installiert; weder
 App noch Paket werden erneut gebaut. GUI-Tests und Quellnachweis verwenden
-den angegebenen ursprünglichen Commit.
+den angegebenen ursprünglichen Commit. Der Shell-Teststarter wird separat vom
+Workflow-Commit geladen; `launcher-source-sha.txt` dokumentiert diese Revision,
+während App- und XCTest-Quellstand unverändert bleiben.
 
 ## Freigabe und Ablauf
 
