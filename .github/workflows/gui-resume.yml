@@ -33,6 +33,7 @@ jobs:
           APP_SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           python3 script/gui-resume-tests
+          python3 script/macos/gui-tests/launcher_tests.py
           python3 script/gui-resume
 
   gui:
