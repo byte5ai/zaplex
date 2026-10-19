@@ -129,7 +129,7 @@ def main():
         report["selected_tests"] = "fail"
         report["local_gui"] = "fail" if suite == "full" else "not-run"
         report["product_acceptance"] = "fail"
-        report["error"] = "Missing artifact identity or incomplete/mismatched executed test cases"
+        report["error"] = "Missing artifact identity, incomplete test set or failing test cases"
     (root / "acceptance.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return 0 if report["selected_tests"] == "pass" else 1

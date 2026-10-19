@@ -3,7 +3,7 @@ import XCTest
 final class SurfaceTests: GUIFlowTestCase {
     func testNarrowFileManagerKeepsAllActionsVisible() throws {
         // docs/ui/README.md requires all eight labelled actions on narrow panes.
-        app.typeText("qa_state=741\n")
+        command("qa_state=741")
         let edge = window.coordinate(withNormalizedOffset: .zero)
             .withOffset(CGVector(dx: window.frame.width - 1, dy: window.frame.height / 2))
         let target = edge.withOffset(CGVector(dx: 660 - window.frame.width, dy: 0))
@@ -24,7 +24,7 @@ final class SurfaceTests: GUIFlowTestCase {
     }
 
     func testFileManagerUsesPaneDirectoryAndReturnsToShell() throws {
-        app.typeText("qa_dir=$(mktemp -d /tmp/zaplex-gui.XXXXXX); cd \"$qa_dir\"; printf 'fixture\\n' > SAMPLE; qa_state=741\n")
+        command("qa_dir=$(mktemp -d /tmp/zaplex-gui.XXXXXX); cd \"$qa_dir\"; printf 'fixture\\n' > SAMPLE; qa_state=741")
         try output(state: 741)
         app.typeKey("e", modifierFlags: [.command, .shift])
         try visible("SAMPLE")
@@ -37,9 +37,9 @@ final class SurfaceTests: GUIFlowTestCase {
     }
 
     func testConnectionsPanelKeepsTerminalUsable() throws {
-        app.typeText("qa_state=741\n")
+        command("qa_state=741")
         app.typeKey("5", modifierFlags: .control)
-        try visible("Connections")
+        try visible("No SSH servers yet.")
         evidence("connections-empty-state")
         app.typeKey("5", modifierFlags: .control)
         try output(state: 741)

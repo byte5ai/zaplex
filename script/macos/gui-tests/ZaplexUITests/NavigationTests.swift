@@ -19,7 +19,11 @@ class GUIFlowTestCase: XCTestCase {
         app.launch()
         XCTAssertTrue(window.waitForExistence(timeout: 30))
         // Restored tabs from another case must not affect this case's workspace.
+        let count = app.windows.count
         app.typeKey("n", modifierFlags: .command)
+        let opened = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in self.app.windows.count == count + 1 }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [opened], timeout: 15), .completed)
         try output(state: 963)
     }
 
@@ -100,10 +104,17 @@ class GUIFlowTestCase: XCTestCase {
         let marker = Int.random(in: 100000...999999)
         // The nonce is new for each assertion; old scrollback cannot satisfy it.
         // Non-exported state distinguishes an existing shell from a new one.
-        app.typeText("printf 'ZQA %s %s\\n' \(marker) \"${qa_state:-963}\"\n")
+        command("printf 'ZQA %s %s\\n' \(marker) \"${qa_state:-963}\"")
         let rect = try visible("ZQA \(marker) \(state)")
         evidence("shell-state-\(state)")
         return rect
+    }
+
+    func command(_ text: String) {
+        app.typeText(text)
+        // A separate Return waits for typing/UI updates instead of embedding a
+        // newline in the text injection. Submit exactly once; never retry a command.
+        app.typeKey(.return, modifierFlags: [])
     }
 
     func selectMenu(_ menu: String, _ item: String) {
@@ -124,11 +135,11 @@ class GUIFlowTestCase: XCTestCase {
 
 final class NavigationTests: GUIFlowTestCase {
     func testTabsKeepIndependentShells() throws {
-        app.typeText("qa_state=741\n")
+        command("qa_state=741")
         try output(state: 741)
         selectMenu("File", "New Terminal Tab")
         try output(state: 963)
-        app.typeText("qa_state=852\n")
+        command("qa_state=852")
         selectMenu("Tab", "Switch to Previous Tab")
         try output(state: 741)
         selectMenu("Tab", "Switch to Next Tab")
@@ -136,7 +147,7 @@ final class NavigationTests: GUIFlowTestCase {
     }
 
     func testClosingTabPreservesOriginalShell() throws {
-        app.typeText("qa_state=741\n")
+        command("qa_state=741")
         selectMenu("File", "New Terminal Tab")
         try output(state: 963)
         selectMenu("Tab", "Close the Current Tab")
@@ -144,7 +155,7 @@ final class NavigationTests: GUIFlowTestCase {
     }
 
     private func split(_ direction: String) throws {
-        app.typeText("qa_state=741\n")
+        command("qa_state=741")
         try output(state: 741)
         selectMenu("Tab", "Split Pane \(direction)")
         evidence("split-launch-menu-\(direction)")
@@ -168,7 +179,7 @@ final class NavigationTests: GUIFlowTestCase {
     func testSplitUp() throws { try split("Up") }
 
     func testCancelSplitKeepsOriginalShell() throws {
-        app.typeText("qa_state=741\n")
+        command("qa_state=741")
         selectMenu("Tab", "Split Pane Right")
         try visible("Terminal")
         evidence("split-before-cancel")
@@ -180,11 +191,13 @@ final class NavigationTests: GUIFlowTestCase {
     }
 
     func testSettingsReturnToOriginalShell() throws {
-        app.typeText("qa_state=741\n")
+        command("qa_state=741")
         app.typeKey(",", modifierFlags: .command)
-        try visible("Appearance")
+        try visible("Settings")
+        try visible("Keyboard shortcuts")
         evidence("settings-open")
-        app.typeKey(.escape, modifierFlags: [])
+        // Settings is a tab, not a modal dialog.
+        selectMenu("Tab", "Close the Current Tab")
         try output(state: 741)
     }
 }

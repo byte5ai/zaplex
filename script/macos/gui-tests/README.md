@@ -17,7 +17,7 @@ Zaplex-Einstellungen und keine Anmeldedaten im Testprofil.
 | Tab schließen | Ursprüngliche Shell bleibt erhalten und nimmt Eingaben an |
 | Split rechts/links/unten/oben | Neue Shell ist unabhängig; Ausgabeposition stimmt mit der gewählten Richtung überein |
 | Split abbrechen | Escape erhält die ursprüngliche Shell; kein neuer Pane bleibt zurück |
-| Einstellungen | Sichtbar geöffnet; nach Escape bleibt die ursprüngliche Shell benutzbar |
+| Einstellungen | Sichtbar als Tab geöffnet; nach Schließen des Tabs bleibt die ursprüngliche Shell benutzbar |
 | Dateimanager | Zeigt die Datei im Pane-Arbeitsverzeichnis und Dateiaktionen; Zurückwechseln erhält die Shell |
 | Connections | Öffnet sichtbar; Schließen erhält die ursprüngliche Shell |
 | Schmaler Dateimanager | Bei höchstens 700 Punkten Breite bleiben alle acht Dateiaktionen sichtbar |
