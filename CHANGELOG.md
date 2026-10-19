@@ -2,9 +2,13 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.6] — 2026-10-20
+
+- Agent-Ansicht: Die Aktionen zum Wechseln von Agent, Konto und Modell teilen sich bei schmalen Fenstern eine Zeile; die vollständige Wiederherstellungskonfiguration bleibt erreichbar (#153).
+
 ## [1.2.5] — 2026-10-20
 
-- Agent-Ansicht: Identitätsfelder teilen sich verfügbare Zeilen, statt bei schmalen Fenstern unnötig alle untereinander zu stehen; Wiederherstellungsaktionen bleiben im sichtbaren Bereich (#153).
+- Native Agentenprüfung: Screenshots werden vor den Geometrie-Assertions gesichert; Fehler protokollieren die vollständigen Layoutbounds für eine gezielte Diagnose.
 
 ## [1.2.4] — 2026-10-20
 

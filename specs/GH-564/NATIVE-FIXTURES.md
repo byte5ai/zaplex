@@ -254,3 +254,29 @@ Agenten-Nachprüfung nicht wiederholt.
 Die vollständige #564-Matrix bleibt davon getrennt: kein neuer installierter
 DMG-Nachweis dieser Korrekturen, keine freie Exploration, keine echte
 Remote-/Providerinteraktion und keine Kontrast-/Reduced-Motion-Abnahme.
+
+
+## Diagnose nach drei fehlgeschlagenen Agentenläufen
+
+Der ausschließlich auf den Agentenfall begrenzte
+[Run 39341539630](https://github.com/byte5ai/zaplex/actions/runs/39341539630)
+scheitert auf `9c7aaf5b` (1.2.5) erneut mit denselben Bounds. Damit ist auch die
+Annahme widerlegt, eine kleinere Umbruchschwelle der Identitätsfelder würde
+diesen Überstand beseitigen. Die vier erfolgreichen Workspace-Fälle wurden
+nicht wiederholt.
+
+Die vor der Assertion gesicherte [Fehleraufnahme](evidence/native-9c7aaf5b/subscription-agent-recoverable-error-540x670.png)
+und der vollständige Snapshot zeigen nun die gesamte Konfiguration unterhalb
+der primären Wiederherstellungsaktionen: Agent-/Konto-/Modellwechsel sowie
+Verzeichniswahl. [Herkunft, Prüfsumme und Bounds](evidence/native-9c7aaf5b/result.json).
+Diese Konfiguration ist auch bei einem wiederherstellbaren Fehler absichtlich
+verfügbar, unter anderem für eine nicht mehr verfügbare Route; die bestehende
+Zustandslogik und ihr Regressionstest bleiben erhalten.
+
+Die Pipeline wurde vor einem weiteren Versuch überprüft: genau ein Fall läuft,
+bereits erfolgreiche Fälle bleiben ausgespart, Fehlerbilder werden vor der
+Assertion gesichert und Logs enthalten den vollständigen Layout-Snapshot.
+Die weitere Korrektur entfernt die erzwungene volle Zeile der drei kurzen
+Wechselaktionen und verwendet denselben natürlichen Umbruch wie die primären
+Aktionen. Der unwirksame Versuch an den Identitätsfeldern wird zurückgenommen.
+Eine erfolgreiche native Nachprüfung dieser Korrektur liegt hier noch nicht vor.
