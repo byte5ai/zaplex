@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Resume an app build at its original source, retaining passed batch evidence."""
+
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+REPO = "byte5ai/zaplex"
+PASSED = {
+    "Validate main batch",
+    "dependency_security / cargo deny check advisories",
+    "compile_checks / detect build-relevant changes",
+    "compile_checks / cargo check (Linux x86_64)",
+    "compile_checks / cargo check (macOS Apple Silicon)",
+    "compile_checks / keymap validation (Linux x86_64)",
+    "tests / cargo test (Linux)",
+    "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+    "test_dmg / Verify Phase A release readiness",
+    "test_dmg / Validate macOS signing identity",
+    "test_dmg / Build bundled remote-server (Linux musl x86_64)",
+}
+APP = "test_dmg / Prepare Test app (macOS Apple Silicon)"
+ALLOWED = {
+    ".github/workflows/test-dmg.yml",
+    "script/test-dmg-resume",
+    "script/test-dmg-resume-tests",
+    "docs/ci-batch.md",
+}
+
+
+def validate(run, jobs, artifacts, changed_paths):
+    if any(run.get(key) != value for key, value in {
+        "status": "completed", "conclusion": "failure",
+        "event": "workflow_dispatch", "head_branch": "main",
+        "path": ".github/workflows/ci-batch.yml",
+    }.items()) or run.get("head_repository", {}).get("full_name") != REPO:
+        raise ValueError("Expected a completed failed main batch from this repository")
+    if not re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha", "")):
+        raise ValueError("Invalid original source commit")
+    by_name = {job["name"]: job for job in jobs}
+    if len(by_name) != len(jobs):
+        raise ValueError("Ambiguous job names")
+    for name in PASSED:
+        if by_name.get(name, {}).get("conclusion") != "success":
+            raise ValueError(f"Missing successful prerequisite: {name}")
+    if by_name.get(APP, {}).get("conclusion") != "failure":
+        raise ValueError("Original app build must have failed")
+    if any(job.get("conclusion") in ("failure", "cancelled") and job["name"] != APP
+           for job in jobs):
+        raise ValueError("Another job failed or was cancelled")
+    matches = [a for a in artifacts if a["name"] == "zap-remote-server-linux-x86_64"]
+    if len(matches) != 1 or matches[0].get("expired") is not False:
+        raise ValueError("Missing, expired or ambiguous daemon artifact")
+    if any(path not in ALLOWED and not path.startswith("specs/GH-564/")
+           for path in changed_paths):
+        raise ValueError("Source, tests or other build inputs changed since the original batch")
+
+
+def command(*args):
+    return subprocess.check_output(args, text=True, timeout=60)
+
+
+def api(path):
+    return json.loads(command("gh", "api", f"repos/{REPO}/{path}"))
+
+
+def pages(path, key):
+    result = json.loads(command(
+        "gh", "api", "--paginate", "--slurp", f"repos/{REPO}/{path}?per_page=100"
+    ))
+    return [item for page in result for item in page[key]]
+
+
+def validate_profile(batch, version, tag, fast):
+    # ci-batch pins the acceptance profile and its readiness gate verifies VERSION.
+    match = re.search(r"(?ms)^  test_dmg:\n.*?(?=^  \w+:|\Z)", batch)
+    if not match or "      fast: false\n" not in match.group():
+        raise ValueError("Original batch does not pin the release profile")
+    if fast != "false" or tag != f"v{version.strip()}":
+        raise ValueError("Resume must retain the original version and release profile")
+
+
+def main():
+    run_id = os.environ.get("RESUME_RUN_ID", "")
+    if (not run_id.isdecimal() or os.environ.get("GITHUB_REPOSITORY") != REPO
+            or os.environ.get("GITHUB_REF") != "refs/heads/main"
+            or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"):
+        raise ValueError("Direct main dispatch with an original batch ID required")
+    run = api(f"actions/runs/{run_id}")
+    source = run.get("head_sha", "")
+    jobs = pages(f"actions/runs/{run_id}/jobs", "jobs")
+    artifacts = pages(f"actions/runs/{run_id}/artifacts", "artifacts")
+    validate(run, jobs, artifacts, [])
+    command("git", "fetch", "--no-tags", "origin", source)
+    command("git", "merge-base", "--is-ancestor", source, "HEAD")
+    validate(run, jobs, artifacts,
+             command("git", "diff", "--name-only", source, "HEAD").splitlines())
+    validate_profile(command("git", "show", f"{source}:.github/workflows/ci-batch.yml"),
+                     command("git", "show", f"{source}:VERSION"),
+                     os.environ.get("DMG_TAG"), os.environ.get("FAST"))
+    with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+        output.write(f"sha={source}\n")
+    with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+        summary.write(
+            f"Resuming app/DMG/GUI only from [batch {run_id}]"
+            f"(https://github.com/{REPO}/actions/runs/{run_id}). "
+            f"Original app, packaging and test source: `{source}`. "
+            "Passed gates and the original Linux daemon artifact are retained; "
+            "Cargo app compilation is limited to four parallel jobs.\n"
+        )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, subprocess.SubprocessError) as error:
+        print(f"Test DMG resume refused: {error}", file=sys.stderr)
+        sys.exit(1)

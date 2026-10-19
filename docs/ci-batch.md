@@ -37,6 +37,23 @@ erfolgreichen Jobs und Dokumentationstests werden übernommen; Quellcommit und
 Ursprungslauf stehen im Job-Summary. Ohne `resume_run_id` bleibt der vollständige
 Ablauf erhalten. Coverage-Läufe unterstützen diese begrenzte Fortsetzung nicht.
 
+### Nach einem Runnerfehler beim App-Build fortsetzen
+
+Ein direkter `test-dmg.yml`-Dispatch auf `main` mit `resume_run_id` setzt nur den
+fehlgeschlagenen App-Build und seine DMG-/GUI-Folgeschritte fort. Der ursprüngliche
+Batch muss alle Code-/Test-, Readiness- und Signaturprüfungen sowie den Linux-
+Daemon-Build bestanden haben. Dessen eindeutiges, noch nicht abgelaufenes Artefakt
+wird aus dem Ursprungslauf geladen und vor dem Bündeln per SHA-256 geprüft.
+
+Die Vorprüfung verweigert andere Fehler, geänderte App-/Prüfeingaben, einen
+abweichenden Versions-Tag und das Debug-Profil. App, Verpackung und GUI-Tests
+checken ausdrücklich den ursprünglichen Quellcommit aus. Nur die Fortsetzungs-
+Workflow-Datei stammt vom neuen `main`; ein gewöhnlicher GitHub-Rerun würde auch
+die alte Workflow-Datei behalten. Das App-Build-Limit ist `CARGO_BUILD_JOBS=4`.
+Erfolgreiche Compile-/Paket-/SFTP-Prüfungen und der Blacksmith-Daemon werden nicht
+wiederholt. Der ursprüngliche Batch bleibt als fehlgeschlagener Lauf erhalten;
+der Fortsetzungslauf verknüpft seine Belege mit ihm im Job-Summary.
+
 ## Freigabe und Ablauf
 
 1. Mehrere PRs nach den leichten Checks mergen.
