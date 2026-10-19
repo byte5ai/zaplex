@@ -1,0 +1,279 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-19",
+  "evidence_kind": "historical-native-screenshots",
+  "target_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "reference_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "release_tag": "v1.2.0-rc1",
+  "release_source_sha": "83db26188f2df30023e6c0d649d3b305730751cb",
+  "release_source_basis": "Live GitHub annotated tag dereferenced to its commit; original acceptance.json has app_source_sha=null.",
+  "independently_recorded_app_source_sha": null,
+  "dmg_sha256": "4c7fae29904f46ec20f9fe1fdbb82c189ef8501d172984030b4b53ba873ab5bc",
+  "asset_id": 650971257,
+  "app_version": "v1.2.0-rc1",
+  "bundle_version": "1.2.0",
+  "native_current_build_acceptance": "not-run",
+  "exploratory_agent": "not-run",
+  "image_processing": "None: exact original PNG bytes copied from exported XCTest attachments.",
+  "evidence": [
+    {
+      "id": "E01",
+      "file": "connections-original.png",
+      "sha256": "1500828081f9c8a9e0df135c06d0eb951f68edddee6adaf1c6977a8b0839fd2e",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39234535044",
+      "artifact_name": "macos-gui-evidence-39234535044-1",
+      "original_file": "849D7893-D2C6-4BBF-99D7-5D5753DC90D5.png",
+      "original_attachment_name": "missing-visible-content_0_38D7A906-B784-453B-A3C7-6483723C3FC0.png",
+      "captured_at_utc": "2026-10-19T10:07:27.647000+00:00",
+      "test_case": "SurfaceTests/testConnectionsPanelKeepsTerminalUsable()",
+      "test_source_sha": "767a43779ce10a06a4fa3587a1ccca093096da07",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": null,
+      "window_frame_source": null,
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content. No contemporaneous AX window frame in this attachment; use E02 for measured geometry."
+    },
+    {
+      "id": "E02",
+      "file": "connections-empty.png",
+      "sha256": "94e8b4fe48b7cdd1250fc690a3592a4032f43937034b1563bd4f058e0aa3ebf8",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39235741317",
+      "artifact_name": "macos-gui-evidence-39235741317-1",
+      "original_file": "1C7DEC16-D9DA-4711-8638-2C9F97832193.png",
+      "original_attachment_name": "connections-empty-state_0_5434FF97-2518-480B-B587-5EF8275897AE.png",
+      "captured_at_utc": "2026-10-19T10:14:04.528000+00:00",
+      "test_case": "SurfaceTests/testConnectionsPanelKeepsTerminalUsable()",
+      "test_source_sha": "4e87335139ae89ecadcd73d4bd4ec63ba54ed2b6",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        1024.0,
+        678.0
+      ],
+      "window_frame_source": "D30F08A2-A9D7-42B5-B3E6-24F89EF71695.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    },
+    {
+      "id": "E03",
+      "file": "split-menu-empty.png",
+      "sha256": "e0b35e6efa52e518c507850b2412fd4746f4e5f44e50070a37e1ab76173dfed8",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39234535044",
+      "artifact_name": "macos-gui-evidence-39234535044-1",
+      "original_file": "3F9D1BB2-445E-42B3-9E81-941BF2A6A344.png",
+      "original_attachment_name": "split-before-cancel_0_52F6FBE9-5DCD-4DA2-9E22-027C9187DDAC.png",
+      "captured_at_utc": "2026-10-19T10:04:08.016000+00:00",
+      "test_case": "NavigationTests/testCancelSplitKeepsOriginalShell()",
+      "test_source_sha": "767a43779ce10a06a4fa3587a1ccca093096da07",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        1024.0,
+        678.0
+      ],
+      "window_frame_source": "EA5EAB4D-1B10-46E1-B178-D0E9420FA95A.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    },
+    {
+      "id": "E04",
+      "file": "file-manager-normal.png",
+      "sha256": "7906311c6bcada587aa971c8f1223c9fb8dd77602df040971b97d661cf2d8b1d",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39234535044",
+      "artifact_name": "macos-gui-evidence-39234535044-1",
+      "original_file": "319B5CE7-9746-4169-9277-19D8516B9348.png",
+      "original_attachment_name": "file-manager-directory-and-actions_0_49BBCA8F-AABE-45D9-8066-6313A3484F28.png",
+      "captured_at_utc": "2026-10-19T10:07:54.584000+00:00",
+      "test_case": "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell()",
+      "test_source_sha": "767a43779ce10a06a4fa3587a1ccca093096da07",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        1024.0,
+        678.0
+      ],
+      "window_frame_source": "C2B93B36-A2AE-42E1-AFA3-091532DC31CB.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    },
+    {
+      "id": "E05",
+      "file": "file-manager-narrow.png",
+      "sha256": "7298398cb018ae9e8038793a584a1d5f5471d6e05c9af060dd017504e4f4d63c",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39236377328",
+      "artifact_name": "macos-gui-evidence-39236377328-1",
+      "original_file": "2B982E37-2833-4B0C-A833-B97252629924.png",
+      "original_attachment_name": "file-manager-narrow-all-actions_0_DE75893F-5F16-4391-A3C0-7E443C19C66B.png",
+      "captured_at_utc": "2026-10-19T10:19:07.709000+00:00",
+      "test_case": "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible()",
+      "test_source_sha": "0b980268dcfe31f4a9fee27856cbfa9f411f7824",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        513.0,
+        680.0
+      ],
+      "window_frame_source": "07BBE5F8-CD23-4DDE-85F6-39E686F684BA.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    },
+    {
+      "id": "E06",
+      "file": "settings.png",
+      "sha256": "bf5a9d94925770f356109d708b18ed1a8869aa7d3a788b9288d0746513985148",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39235741317",
+      "artifact_name": "macos-gui-evidence-39235741317-1",
+      "original_file": "39CC47C2-10C6-4C39-A341-72C33FF0F06E.png",
+      "original_attachment_name": "settings-open_0_2D7621AF-5374-4DE9-B8F8-B9593BB1A6F9.png",
+      "captured_at_utc": "2026-10-19T10:13:52.150000+00:00",
+      "test_case": "NavigationTests/testSettingsReturnToOriginalShell()",
+      "test_source_sha": "4e87335139ae89ecadcd73d4bd4ec63ba54ed2b6",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        1024.0,
+        678.0
+      ],
+      "window_frame_source": "5B59A828-0362-4347-B6A0-6EB48FD91546.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    },
+    {
+      "id": "E07",
+      "file": "split-right.png",
+      "sha256": "4887f55dc68b40f215554e85d67b4d105122fde6784a5f10ce340f7761bc0cde",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39234535044",
+      "artifact_name": "macos-gui-evidence-39234535044-1",
+      "original_file": "1ACAE596-59AF-4275-96D2-DB06B8381E53.png",
+      "original_attachment_name": "split-geometry-Right_0_3A721D18-BBF9-4778-83AF-1102DF448550.png",
+      "captured_at_utc": "2026-10-19T10:06:09.742000+00:00",
+      "test_case": "NavigationTests/testSplitRight()",
+      "test_source_sha": "767a43779ce10a06a4fa3587a1ccca093096da07",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        1024.0,
+        678.0
+      ],
+      "window_frame_source": "445BBC0E-9565-4680-9812-9904E9E1A126.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    },
+    {
+      "id": "E08",
+      "file": "split-left.png",
+      "sha256": "5f2db9db085bdcd91e18562c1920b8bded8261ac898f6ef720dcc5bb636920ca",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39234535044",
+      "artifact_name": "macos-gui-evidence-39234535044-1",
+      "original_file": "59A219E9-ECB9-4B63-B25E-2D395F0DCCC0.png",
+      "original_attachment_name": "split-geometry-Left_0_71E9E6D8-AA25-4778-90DB-7D1791943E55.png",
+      "captured_at_utc": "2026-10-19T10:05:44.873000+00:00",
+      "test_case": "NavigationTests/testSplitLeft()",
+      "test_source_sha": "767a43779ce10a06a4fa3587a1ccca093096da07",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        1024.0,
+        678.0
+      ],
+      "window_frame_source": "01619D44-40DA-43D5-AC88-79A23041BD9F.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    },
+    {
+      "id": "E09",
+      "file": "split-down.png",
+      "sha256": "aaaf5a7a8b643ec3dfde7606b2c5cf54304f00de51edaa475189cc46354bb010",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39234535044",
+      "artifact_name": "macos-gui-evidence-39234535044-1",
+      "original_file": "5DA0256D-79C0-4664-86B9-D66A572E5764.png",
+      "original_attachment_name": "split-geometry-Down_0_362F0B17-0209-4B43-9ABF-C2CFB5360D86.png",
+      "captured_at_utc": "2026-10-19T10:05:13.370000+00:00",
+      "test_case": "NavigationTests/testSplitDown()",
+      "test_source_sha": "767a43779ce10a06a4fa3587a1ccca093096da07",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        1024.0,
+        678.0
+      ],
+      "window_frame_source": "BDA26DC8-B6E7-4C19-8339-CAE083BFC2B2.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    },
+    {
+      "id": "E10",
+      "file": "split-up.png",
+      "sha256": "39da186ec6e8825f4e767b5c4fb2f36172d299887595352fcc12f5c8688a2c73",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39234535044",
+      "artifact_name": "macos-gui-evidence-39234535044-1",
+      "original_file": "9A8B1BC3-A3B7-42F5-A593-31F657C238D1.png",
+      "original_attachment_name": "split-geometry-Up_0_01A2682C-02A4-440F-B8BC-9B30811659D0.png",
+      "captured_at_utc": "2026-10-19T10:06:32.390000+00:00",
+      "test_case": "NavigationTests/testSplitUp()",
+      "test_source_sha": "767a43779ce10a06a4fa3587a1ccca093096da07",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        1024.0,
+        678.0
+      ],
+      "window_frame_source": "BB999F9A-3FF1-4703-B055-F7426A8001FE.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    },
+    {
+      "id": "E11",
+      "file": "menu-capture-too-early.png",
+      "sha256": "fb506161737723babbcd12040ad2bf1b628826395154d9cc1f20dba13780e1f6",
+      "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39234535044",
+      "artifact_name": "macos-gui-evidence-39234535044-1",
+      "original_file": "6EE5D719-2F8D-402A-B362-B70288975A57.png",
+      "original_attachment_name": "split-launch-menu-Right_0_DE023151-6B92-456E-B9CC-D451E688410A.png",
+      "captured_at_utc": "2026-10-19T10:05:59.886000+00:00",
+      "test_case": "NavigationTests/testSplitRight()",
+      "test_source_sha": "767a43779ce10a06a4fa3587a1ccca093096da07",
+      "screenshot_pixels": [
+        1024,
+        768
+      ],
+      "window_frame_points": [
+        0.0,
+        30.0,
+        1024.0,
+        678.0
+      ],
+      "window_frame_source": "497661C3-9EA8-45F5-8F62-879345DA9F81.txt",
+      "limitation": "System banner obscures the upper-right app area; no conclusion for obscured content."
+    }
+  ]
+}
