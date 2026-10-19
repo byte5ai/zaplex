@@ -4,18 +4,39 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")" && pwd)
 art=${1:?Usage: run ARTIFACT_DIRECTORY}
 suite=${2:-full}
+selection=${3:-}
 filters=()
 case "$suite" in
-  full) expected=4 ;;
+  full) expected=15 ;;
   terminal)
     expected=3
-    filters=(-skip-testing:ZaplexUITests/SmokeTests/testNativeCloseButtonClosesWindow)
+    filters=(-only-testing:ZaplexUITests/SmokeTests -skip-testing:ZaplexUITests/SmokeTests/testNativeCloseButtonClosesWindow)
+    ;;
+  navigation)
+    expected=8
+    filters=(-only-testing:ZaplexUITests/NavigationTests)
+    ;;
+  surfaces)
+    expected=3
+    filters=(-only-testing:ZaplexUITests/SurfaceTests)
     ;;
   *) echo "Unknown suite: $suite" >&2; exit 2 ;;
 esac
+if [[ -n "$selection" ]]; then
+  [[ "$suite" != full ]] || { echo "Full acceptance cannot select individual cases" >&2; exit 2; }
+  /usr/bin/python3 "$root/report.py" --validate-selection "$selection"
+  IFS=, read -r -a cases <<< "$selection"
+  filters=()
+  for testcase in "${cases[@]}"; do
+    filters+=("-only-testing:ZaplexUITests/$testcase")
+  done
+  expected=${#cases[@]}
+  suite=selected
+fi
 mkdir -p "$art"
 art=$(cd "$art" && pwd)
 printf '%s\n' "$suite" > "$art/suite.txt"
+printf '%s\n' "$selection" > "$art/selected-cases.txt"
 work=$(mktemp -d)
 cp -R "$root/project.yml" "$root/ZaplexUITests" "$work/"
 
@@ -34,7 +55,7 @@ bundles=("$work"/build/Build/Products/*.xctestrun)
 [[ ${#bundles[@]} -eq 1 ]] || { echo "Expected exactly one xctestrun file" >&2; exit 1; }
 
 set +e
-macrunner-gui-run --timeout 360 --artifacts "$art/gui" -- \
+macrunner-gui-run --timeout 540 --artifacts "$art/gui" -- \
   xcodebuild test-without-building -xctestrun "${bundles[0]}" \
   -destination 'platform=macOS' -parallel-testing-enabled NO \
   -resultBundlePath "$art/tests.xcresult" "${filters[@]}" > "$art/tests.log" 2>&1
@@ -44,14 +65,9 @@ set -e
 if [[ -d "$art/tests.xcresult" ]]; then
   xcrun xcresulttool export attachments --path "$art/tests.xcresult" --output-path "$art/attachments"
   xcrun xcresulttool get test-results summary --path "$art/tests.xcresult" > "$art/summary.json"
+  xcrun xcresulttool get test-results tests --path "$art/tests.xcresult" > "$art/test-cases.json"
   # A green xcodebuild with no matching tests must never pass the gate.
-  /usr/bin/python3 - "$art/summary.json" "$expected" <<'PY'
-import json, sys
-summary = json.load(open(sys.argv[1]))
-if not (summary.get('passedTests') == int(sys.argv[2]) and summary.get('failedTests') == 0
-        and summary.get('skippedTests') == 0):
-    raise SystemExit('All selected GUI tests must execute and pass; see summary.json')
-PY
+  /usr/bin/python3 "$root/report.py" "$art" "$suite" "$expected" "$result"
 else
   echo "No XCTest result bundle was produced" >&2
   exit 1

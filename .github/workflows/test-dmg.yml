@@ -288,10 +288,11 @@ jobs:
 
   gui_acceptance:
     name: Verify installed DMG user flows
-    needs: build_dmg
+    needs: [readiness, build_dmg]
     uses: ./.github/workflows/gui-acceptance.yml
     with:
       artifact_name: zap-test-dmg-aarch64
+      source_sha: ${{ needs.readiness.outputs.source_sha }}
 
   build_dmg:
     name: Sign and package Test DMG (macOS Apple Silicon)
