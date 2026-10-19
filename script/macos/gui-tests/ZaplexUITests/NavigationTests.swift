@@ -19,7 +19,7 @@ class GUIFlowTestCase: XCTestCase {
         XCTAssertTrue(window.waitForExistence(timeout: 30))
         // Restored tabs from another case must not affect this case's workspace.
         app.typeKey("n", modifierFlags: .command)
-        try output(state: 0)
+        try output(state: 963)
     }
 
     override func tearDownWithError() throws {
@@ -98,7 +98,7 @@ class GUIFlowTestCase: XCTestCase {
         let marker = Int.random(in: 100000...999999)
         // The nonce is new for each assertion; old scrollback cannot satisfy it.
         // Non-exported state distinguishes an existing shell from a new one.
-        app.typeText("printf 'ZQA %s %s\\n' \(marker) \"${qa_state:-0}\"\n")
+        app.typeText("printf 'ZQA %s %s\\n' \(marker) \"${qa_state:-963}\"\n")
         let rect = try visible("ZQA \(marker) \(state)")
         evidence("shell-state-\(state)")
         return rect
@@ -125,7 +125,7 @@ final class NavigationTests: GUIFlowTestCase {
         app.typeText("qa_state=741\n")
         try output(state: 741)
         selectMenu("File", "New Tab")
-        try output(state: 0)
+        try output(state: 963)
         app.typeText("qa_state=852\n")
         selectMenu("Tab", "Switch to Previous Tab")
         try output(state: 741)
@@ -136,7 +136,7 @@ final class NavigationTests: GUIFlowTestCase {
     func testClosingTabPreservesOriginalShell() throws {
         app.typeText("qa_state=741\n")
         selectMenu("File", "New Tab")
-        try output(state: 0)
+        try output(state: 963)
         selectMenu("Tab", "Close the Current Tab")
         try output(state: 741)
     }
@@ -147,7 +147,7 @@ final class NavigationTests: GUIFlowTestCase {
         selectMenu("Tab", "Split Pane \(direction)")
         evidence("split-launch-menu-\(direction)")
         try clickVisible("Terminal")
-        let newOutput = try output(state: 0)
+        let newOutput = try output(state: 963)
         selectMenu("Tab", "Activate Previous Pane")
         let original = try output(state: 741)
         switch direction {
