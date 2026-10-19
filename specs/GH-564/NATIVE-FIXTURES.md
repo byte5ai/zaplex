@@ -163,3 +163,23 @@ Die drei Fälle bleiben im Lauf fehlgeschlagen. Bestandene Fälle werden nicht
 erneut ausgeführt; es wurde kein weiterer Lauf ohne neue Korrektur gestartet.
 Diese lokale deterministische Suite ersetzt weder die vollständige Varianten-
 matrix noch Remote-/Provider-Abnahme und unabhängige Exploration.
+
+
+## Sichtvergleich am installierten DMG 1.2.2
+
+Die folgenden Originalaufnahmen aus GUI-Lauf 39303447063 wurden nachträglich
+visuell gegen C:C1, L2 und C:F2 der vorab festgelegten Matrix geprüft. Damit sind
+Funktionserfolg und visuelles Ergebnis getrennt bewertet. Herkunft, Prüfsummen
+und AX-Fenstermaße: [visual-review.json](evidence/dmg-cadcb191/visual-review.json).
+Englisch, dunkel; keine Aussage über unaufgenommene Varianten oder Exploration.
+
+| Fall / konkrete Variante | Sichtbare Beobachtung und Sollvergleich | Ergebnis |
+|---|---|---|
+| C01, leere Connections, 1024×678 Punkte Fenster, etwa 250 Punkte Sidebar | Die Anleitung endet hinter „Use the folder b…“; der nächste Schritt mit Plus fehlt. Die betreffende linke Fläche ist nicht vom Systembanner verdeckt. [Originalbild](evidence/dmg-cadcb191/connections-empty-clipped.png). | **fail**, #565; nun am aktuellen DMG bestätigt. |
+| L02, leere Favoriten im linken Split-Menü, 1024×678 Punkte | „No favorite hosts yet — ★ a h…“ bleibt abgeschnitten. Die Anweisung zum Favorisieren ist nicht vollständig sichtbar. [Originalbild](evidence/dmg-cadcb191/favorites-empty-clipped.png). | **fail**, #566; nun am aktuellen DMG bestätigt. |
+| F02, einzelner Dateimanager, AX-Fenster 513×680 Punkte | Alle acht Aktionen F2–F8/F10 mit Kurzbeschriftung in zwei Reihen, Dateiname SAMPLE und Zielwahl sichtbar. [Originalbild](evidence/dmg-cadcb191/file-actions-513-points.png). | **pass nur für diese Ansicht**; keine Freigabe der gesamten Breitenfolge oder der zwei schmalen Dateipanes aus #572. |
+
+Der Banner oben rechts verdeckt Teile der App. Die hier bewerteten Anleitungen
+links bzw. die untere Aktionsleiste bleiben vollständig einsehbar. Verdeckte
+Bereiche werden nicht bewertet. Weitere Varianten, freie Bedienung und echte
+Remote-/Providerabläufe bleiben ohne den dafür angeforderten Zugang ungeprüft.
