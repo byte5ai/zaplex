@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Exercise runner admission without ever reaching host provisioning."""
+
+import os
+from pathlib import Path
+import subprocess
+import unittest
+
+
+SCRIPT = Path(__file__).resolve().with_name("run-shell-ssh-fixtures")
+
+
+class RunnerGuardTests(unittest.TestCase):
+    def check_runner(self, allowed, **changes):
+        env = {
+            "PATH": os.defpath,
+            "GITHUB_ACTIONS": "true",
+            "RUNNER_OS": "Linux",
+            "RUNNER_ENVIRONMENT": "self-hosted",
+            "RUNNER_NAME": "blacksmith-test-16vcpu",
+            "ZAPLEX_TEST_RUNNER_LABEL": "blacksmith-16vcpu-ubuntu-2204",
+            **changes,
+        }
+        # Missing command deliberately exits at usage validation, before mktemp,
+        # sudo, package installation, account creation or SSH service changes.
+        result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Usage:" if allowed else "SSH fixtures require", result.stderr)
+
+    def test_selected_blacksmith_pool_is_admitted(self):
+        self.check_runner(True)
+
+    def test_github_hosted_linux_is_admitted(self):
+        self.check_runner(True, RUNNER_ENVIRONMENT="github-hosted", RUNNER_NAME="GitHub Actions")
+
+    def test_generic_self_hosted_machine_is_refused(self):
+        self.check_runner(False, RUNNER_NAME="persistent-devhost")
+
+    def test_name_alone_does_not_admit_a_runner(self):
+        for label in ("", "self-hosted", "blacksmith-4vcpu-ubuntu-2204"):
+            with self.subTest(label=label):
+                self.check_runner(False, ZAPLEX_TEST_RUNNER_LABEL=label)
+
+    def test_non_ci_and_non_linux_are_refused(self):
+        self.check_runner(False, GITHUB_ACTIONS="false")
+        self.check_runner(False, RUNNER_OS="macOS", RUNNER_ENVIRONMENT="github-hosted")
+
+
+if __name__ == "__main__":
+    unittest.main()

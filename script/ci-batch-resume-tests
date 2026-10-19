@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Negative controls for reuse of previously passed CI gates."""
+
+import copy
+from pathlib import Path
+import runpy
+import unittest
+
+
+module = runpy.run_path(str(Path(__file__).resolve().with_name("ci-batch-resume")))
+validate = module["validate"]
+validate_test_inputs = module["validate_test_inputs"]
+
+
+class ResumeTests(unittest.TestCase):
+    def setUp(self):
+        self.run = {
+            "status": "completed", "conclusion": "failure", "event": "workflow_dispatch",
+            "head_branch": "main", "path": ".github/workflows/ci-batch.yml",
+            "head_repository": {"full_name": "byte5ai/zaplex"},
+        }
+        self.jobs = [{"name": name, "conclusion": "success"} for name in (
+            "dependency_security / cargo deny check advisories",
+            "compile_checks / detect build-relevant changes",
+            "compile_checks / cargo check (Linux x86_64)",
+            "compile_checks / cargo check (macOS Apple Silicon)",
+            "compile_checks / keymap validation (Linux x86_64)",
+            "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+        )]
+        self.jobs.append({"name": "tests / cargo test (Linux)", "conclusion": "failure", "steps": [
+            {"name": "Isolated package tests", "conclusion": "failure"},
+            {"name": "Package documentation tests", "conclusion": "success"},
+            {"name": "Rust workspace coverage tests", "conclusion": "skipped"},
+        ]})
+
+    def test_runner_fix_and_evidence_only_can_reuse(self):
+        validate(self.run, self.jobs, ["script/run-shell-ssh-fixtures", "specs/GH-564/evidence/image.png"])
+
+    def test_missing_or_failed_gates_are_not_reused(self):
+        for index in range(6):
+            with self.subTest(index=index):
+                missing = copy.deepcopy(self.jobs)
+                del missing[index]
+                with self.assertRaises(ValueError):
+                    validate(self.run, missing, [])
+                failed = copy.deepcopy(self.jobs)
+                failed[index]["conclusion"] = "failure"
+                with self.assertRaises(ValueError):
+                    validate(self.run, failed, [])
+
+    def test_wrong_run_context_is_rejected(self):
+        for key, value in (("head_branch", "feature"), ("event", "pull_request"),
+                           ("status", "in_progress"), ("conclusion", "success"),
+                           ("head_repository", {"full_name": "other/repository"})):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                validate({**self.run, key: value}, self.jobs, [])
+
+    def test_failed_docs_or_coverage_cannot_use_package_resume(self):
+        for index, result in ((1, "failure"), (1, "skipped"), (2, "success")):
+            changed = copy.deepcopy(self.jobs)
+            changed[-1]["steps"][index]["conclusion"] = result
+            with self.subTest(index=index, result=result), self.assertRaises(ValueError):
+                validate(self.run, changed, [])
+
+    def test_changed_build_inputs_require_revalidation(self):
+        for path in ("app/src/main.rs", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
+                     ".github/workflows/pr-check.yml", ".github/actions/prepare_environment/action.yml",
+                     "script/run-live-sftp-safety"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                validate(self.run, self.jobs, [path])
+
+    def test_ambiguous_duplicate_jobs_are_rejected(self):
+        with self.assertRaises(ValueError):
+            validate(self.run, self.jobs + [self.jobs[0]], [])
+
+    def test_changed_package_environment_or_doc_command_is_rejected(self):
+        inputs = "".join(f"      {name}:\n        default: {value}\n" for name, value in (
+            ("package", "warp"), ("filter", "''"), ("coverage", "false"), ("per_test_coverage", "false"),
+        ))
+        previous = "on:\n  workflow_call:\n    inputs:\n" + inputs + """permissions:
+  contents: read
+env:
+  CHANNEL: oss
+jobs:
+  test:
+    name: cargo test (Linux)
+    steps:
+      - name: Isolated package tests
+        run: cargo nextest run --locked -p warp
+      - name: Package documentation tests
+        if: ${{ !inputs.coverage && !cancelled() }}
+        run: cargo test --locked --doc -p warp
+"""
+        current = previous.replace("    steps:", "    env:\n      ZAPLEX_TEST_RUNNER_LABEL: ${{ inputs.runs_on }}\n    steps:")
+        current = current.replace("!inputs.coverage &&", "!inputs.coverage && inputs.run_doc_tests &&")
+        validate_test_inputs(previous, current)
+        for old, new in (("CHANNEL: oss", "CHANNEL: stable"), ("default: warp", "default: warpui"),
+                         ("--doc -p warp", "--doc -p warp --all-features")):
+            with self.subTest(old=old), self.assertRaises(ValueError):
+                validate_test_inputs(previous, current.replace(old, new))
+
+
+if __name__ == "__main__":
+    unittest.main()

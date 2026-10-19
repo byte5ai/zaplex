@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 # Provision loopback-only SSH shells for the existing integration suite.
 set -euo pipefail
-if [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_OS:-} != Linux || ${RUNNER_ENVIRONMENT:-} != github-hosted ]]; then
-  echo 'SSH fixtures require an ephemeral GitHub-hosted Linux runner.' >&2
+ephemeral_runner=false
+if [[ ${RUNNER_ENVIRONMENT:-} == github-hosted ]]; then
+  ephemeral_runner=true
+elif [[ ${ZAPLEX_TEST_RUNNER_LABEL:-} == blacksmith-16vcpu-ubuntu-2204 && ${RUNNER_NAME:-} == blacksmith-* ]]; then
+  # This workflow-selected Blacksmith pool uses ephemeral Firecracker microVMs.
+  # A generic self-hosted runner must not provision accounts or stop host SSH.
+  ephemeral_runner=true
+fi
+if [[ ${GITHUB_ACTIONS:-} != true || ${RUNNER_OS:-} != Linux || $ephemeral_runner != true ]]; then
+  echo 'SSH fixtures require an ephemeral GitHub-hosted or approved Blacksmith Linux runner.' >&2
   exit 2
 fi
 if [[ ${1:-} != -- || $# -lt 2 ]]; then
