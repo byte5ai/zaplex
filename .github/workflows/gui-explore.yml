@@ -1,0 +1,94 @@
+name: Explore installed DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Successful Test DMG continuation containing the unchanged app
+        type: string
+        required: true
+      source_sha:
+        description: Original immutable app source commit
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Verify existing artifact provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+          APP_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: python3 script/gui-resume
+
+  explore:
+    needs: verify
+    # ci-lint: allow-CI006  Main-only manual exploration in an ephemeral VM
+    runs-on: macrunner
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Fetch verified existing DMG
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: zap-test-dmg-aarch64
+          path: ${{ runner.temp }}/dmg
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run_id }}
+      - name: Prepare installed app for live exploration
+        env:
+          APP_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          shopt -s nullglob
+          dmgs=("$RUNNER_TEMP"/dmg/*.dmg)
+          test "${#dmgs[@]}" = 1
+          art="$RUNNER_TEMP/exploration"
+          bash script/macos/gui-tests/install-dmg "${dmgs[0]}" "$art"
+          printf '%s\n' "$APP_SOURCE_SHA" > "$art/app-source-sha.txt"
+          printf '%s\n' "$GITHUB_SHA" > "$art/harness-source-sha.txt"
+          printf '%s\n' "$GITHUB_RUN_ID" > "$art/run-id.txt"
+          printf '%s\n' "$art" > /tmp/zaplex-exploration-path
+          macrunner-gui-check --prepare --screenshot "$art/initial-desktop.png"
+          peekaboo --version > "$art/peekaboo-version.txt"
+          sw_vers > "$art/macos.txt"
+          open /Applications/Zaplex.app
+      - name: Allow bounded live interaction
+        run: |
+          set -euo pipefail
+          art="$RUNNER_TEMP/exploration"
+          echo 'Live exploration window: 10 minutes; finish by creating exploration/finished.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Job success is infrastructure availability, not a product acceptance verdict.' >> "$GITHUB_STEP_SUMMARY"
+          deadline=$((SECONDS + 600))
+          while [[ ! -f "$art/finished" && $SECONDS -lt $deadline ]]; do
+            sleep 2
+          done
+          if [[ ! -f "$art/finished" ]]; then
+            echo 'Interaction window expired; inspect evidence for completed and untested tasks.' > "$art/session-expired.txt"
+          fi
+      - name: End exploration processes
+        if: always()
+        run: |
+          peekaboo app quit --app Zaplex || true
+          peekaboo daemon stop || true
+      - name: Preserve exploration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gui-exploration-${{ github.run_id }}
+          path: ${{ runner.temp }}/exploration/
+          if-no-files-found: error
+          retention-days: 14
