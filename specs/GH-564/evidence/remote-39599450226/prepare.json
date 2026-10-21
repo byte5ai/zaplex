@@ -1,0 +1,10 @@
+{
+  "exclusive_target": true,
+  "run_id": "39599450226",
+  "app_version": "v1.2.2",
+  "archive_sha256": "6267db5492e65162cf837faebbf8c681475e171a6a8094a37242166220d99d9c",
+  "daemon_sha256": "e8fb4de5bdbcd446d92fde8cc884cad16887c495bee0dd1c944f885c313e2b1d",
+  "upload_verified": true,
+  "acceptance": "pending-native-interaction",
+  "auth": "API test profiles; subscriptions excluded"
+}

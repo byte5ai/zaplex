@@ -71,8 +71,11 @@ Animationen, Drag, Fokusübergänge und Recovery. Keine persönlichen Profile.
 ## Fälle
 
 Gründe: **V** = vollständige Fall-/Variantenkombination noch nicht geprüft; **G** =
-interaktive Durchführung noch nicht erfolgt (Zugang seit 21.10.2026 praktisch nachgewiesen); **R** = isolierter Remote-Zugang
-noch nicht nachgewiesen; **P** = autorisierte isolierte Providerprofile fehlen.
+interaktive Durchführung noch nicht erfolgt (Zugang seit 21.10.2026 praktisch nachgewiesen); **R** = weitere Remote-Fallvarianten
+noch nicht durchgeführt; **P** = Provider-/Kontovarianten noch nicht geprüft,
+bei Abo-Funktionen sind weiterhin echte Logins erforderlich.
+Der isolierte Remote-Zugang und beide API-Testprofile sind seit der
+[Remote-Teilabnahme](REMOTE-2026-10-21.md) praktisch nachgewiesen.
 Das aktuelle DMG ist vorhanden und installiert geprüft (zwölf lokale Tests im ersten Lauf und die drei übrigen nach Testkorrektur bestanden; siehe [Nachweis](NATIVE-FIXTURES.md#gezielte-fortsetzung-und-installiertes-dmg)).
 Diese Teilbelege erfüllen keine gesamte Fall-/Variantenkombination; deshalb V.
 Die [erste direkte Exploration](EXPLORATION-2026-10-21.md) liefert Teilbelege und neue Fehler.
@@ -87,7 +90,7 @@ Fehlende Testvoraussetzungen sind keine Produktfehler.
 | C01 | C:C1; U | Leere Verbindungsliste verstehen | Vollständige Anleitung einschließlich Ordner- und Plus-Aktion, auch schmal | Leerzustand DE/EN, 250/320/480 | Teilnachweis pass — native 1.2.4, DE/EN, Hell/Dunkel, 250/320/480 (#565); installiertes DMG der Korrektur V |
 | C02 | C:C1; U | Ordner und Host anlegen/bearbeiten | Eindeutige Feldnamen, Validierung, Speichern/Abbrechen; keine doppelte Konfiguration | Formular leer/ungültig/gültig | Teilprüfung fail — 1.2.2, EN: D04/D05; Auswahl-Cancel pass; übrige Varianten V |
 | C03 | C:C1, A1, A2 | Konfigurierten Host finden/favorisieren | Identität priorisiert; feste Stecker-/Sternslots; Offline-Host bleibt hier sichtbar | Lange Registry-Zeilen, Sternwechsel | not-run — V, G |
-| C04 | C:C1, C4; U | Verbinden, Fehler erkennen, abbrechen | Lade-/Fehlerzustand mit verständlichem nächstem Schritt; kein festhängender Dialog | Echte Verbindung und definierter Fehler | not-run — V, G, R |
+| C04 | C:C1, C4; U | Verbinden, Fehler erkennen, abbrechen | Lade-/Fehlerzustand mit verständlichem nächstem Schritt; kein festhängender Dialog | Echte Verbindung und definierter Fehler | Teilnachweis pass — 1.2.2, EN: echter Key-Host-Import und persistente Remote-Shell; Fehler/Abbruch und Varianten V, G, R |
 | C05 | C:C4–C7, A5 | Vorhandene Session wiederfinden | Recovery-Hierarchie, aktuelle Identität, Metadaten, Offen-Markierung und Reihenfolge stimmen | Inventar und Klick auf Session | not-run — V, G, R |
 | C06 | C:C6; U | Session beenden / Löschdialog abbrechen | Ziel und laufender Agent verständlich; Abbruch erhält Session; Bestätigung wirkt nur auf das benannte Ziel | Isolierte Session, Dialogfolge | not-run — V, G, R, P |
 | S01 | C:C3, T2 | Zwischen KI-Sessions und KI-Konten wechseln | Getrennte Einträge und Scrollbereiche, volle Sidebarhöhe; lokaler Leerzustand bleibt ehrlich | Beide Ansichten, leer und gefüllt | not-run — V, G, P |
@@ -121,7 +124,7 @@ Fehlende Testvoraussetzungen sind keine Produktfehler.
 | F09 | C:F3, F5; U | F5 Kopieren / F6 Verschieben | Quelle/Ziel klar, Mehrfachauswahl berücksichtigt; Konflikt, Fortschritt, Abbruch und Fehler wieder auflösbar | Echte lokale/Remote-Transfers, Inhaltsvergleich | not-run — V, G, R |
 | F10 | C:F5; U | F7 Ordner / F8 Löschen | Name/Fehler verständlich; Bestätigung zählt Ordner samt Inhalt und Dateien getrennt; Abbruch ohne Verlust | Ausschließlich künstliche Testdaten | not-run — V, G |
 | F11 | C:F1 | Dateimanager bei laufender Shell schließen | CWD-Übernahme oder ehrlicher Hinweis; kein blindes cd bei unklarer Identität, kein Entwurfsverlust | Freier/belegter Prompt, verschachtelte Shell | not-run — V, G, R |
-| R01 | C:R1 | Offline/Reconnect abwarten | Sperre und Ursache sichtbar; gleiche Route/Generation, freigegebene Eingabe erst nach Ready | Echte Trennung, Vorher/Nachher + Video | not-run — V, G, R |
+| R01 | C:R1 | Offline/Reconnect abwarten | Sperre und Ursache sichtbar; gleiche Route/Generation, freigegebene Eingabe erst nach Ready | Echte Trennung, Vorher/Nachher + Video | Teilnachweis pass — SSH-ControlMaster beendet; gleiche Shell-PID, Marker und CWD nach automatischer Wiederverbindung; Offline-Anzeige/Generation/Video und Varianten V, G, R |
 | R02 | C:R1, R2 | Timeout, Retry, Abbruch, einfacher Terminalmodus | Verständlicher Ausgang; keine lokale Ersatzshell; Corrupt ohne tote Aktionen; einfacher Modus mit dauerhaftem Hinweis | Je echter Zustand und Folgeaktion | not-run — V, G, R |
 | E01 | U | Einstellungen öffnen, ändern, zurück | Als Tab erkennbar; Änderung sichtbar; Zurück zur bestehenden Shell ohne Zustandsverlust | Einstellung vorher/nachher + Shellmarker | Teilprüfung: Theme-Wechsel und Ansichten-Rückkehr pass; D06 nach Wechsel fail; Shellmarker und übrige Varianten V |
 | E02 | U | Settings suchen und Unterseiten bedienen | Suchtreffer/Leerzustand, Toggles, Felder, Dropdowns, Speichern/Abbrechen und Dateizugang verständlich | Inventar unten, jede erreichbare Kontrolle | not-run — V, G |
