@@ -1,30 +1,78 @@
 //! Native form acceptance uses the real loaded view and its painted geometry.
 
 use pathfinder_geometry::rect::RectF;
+use std::sync::Arc;
+use warp_ssh_manager::{SecretKind, SshSecretStore, SshSecretStoreError};
 use warpui::integration::{AssertionOutcome, TestStep};
 use warpui::SingletonEntity;
+use zeroize::Zeroizing;
 
-use super::{Appearance, StatusBanner};
+use super::{Appearance, SshServerView, StatusBanner};
 use crate::integration_testing::{
     native_workspace::{bounds, LONG_HOST},
     ssh_manager::{create_server_via_db, ssh_server_view},
-    view_getters::workspace_view,
+    view_getters::pane_group_view,
 };
+use crate::pane_group::{pane::ssh_server_pane::SshServerPane, Direction};
+
+// This layout fixture neither reads the machine's keychain nor tests credential persistence.
+// Unexpected writes fail instead of silently pretending to save a secret.
+struct EmptyLayoutSecrets;
+
+impl SshSecretStore for EmptyLayoutSecrets {
+    fn get(
+        &self,
+        _node_id: &str,
+        _kind: SecretKind,
+    ) -> Result<Option<Zeroizing<String>>, SshSecretStoreError> {
+        Ok(None)
+    }
+
+    fn set(
+        &self,
+        _node_id: &str,
+        _kind: SecretKind,
+        _secret: &str,
+    ) -> Result<(), SshSecretStoreError> {
+        Err(SshSecretStoreError::Keyring(
+            "Unexpected secret write in layout fixture".into(),
+        ))
+    }
+
+    fn delete(&self, _node_id: &str, _kind: SecretKind) -> Result<(), SshSecretStoreError> {
+        Err(SshSecretStoreError::Keyring(
+            "Unexpected secret deletion in layout fixture".into(),
+        ))
+    }
+}
 
 pub fn open_form() -> TestStep {
     TestStep::new("Open a saved host with a long name beside the local shell")
         .with_action(|app, window_id, _| {
             let id = create_server_via_db(LONG_HOST, None);
-            workspace_view(app, window_id).update(app, |workspace, ctx| {
-                workspace.open_ssh_server(id, ctx);
+            pane_group_view(app, window_id, 0).update(app, |group, ctx| {
+                let node_id = id.clone();
+                let view = ctx.add_typed_action_view(move |ctx| {
+                    SshServerView::new_with_secret_store(node_id, Arc::new(EmptyLayoutSecrets), ctx)
+                });
+                let pane = SshServerPane::from_view(id, view, ctx);
+                group.add_pane_with_direction(Direction::Left, pane, true, ctx);
             });
         })
         .add_named_assertion(
             "The actual server form finished loading",
             |app, window_id| {
                 ssh_server_view(app, window_id).read(app, |view, _| {
-                    if view.reload_in_flight || view.server.is_none() {
+                    if view.reload_in_flight {
                         return AssertionOutcome::failure("Server form is still loading".into());
+                    }
+                    if let Some(StatusBanner::Error(message)) = &view.status {
+                        return AssertionOutcome::failure(format!(
+                            "Server form load failed: {message}"
+                        ));
+                    }
+                    if view.server.is_none() {
+                        return AssertionOutcome::failure("Loaded fixture has no server".into());
                     }
                     AssertionOutcome::Success
                 })

@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.8] — 2026-10-21
+
+- Native SSH-Formularprüfung: Isolierten leeren Secret-Store bereits beim Erzeugen der Testansicht verwenden und frühe Ladefehler mit Diagnosebildern sichern.
+
 ## [1.2.7] — 2026-10-21
 
 - SSH-Formulare: Bereits geöffnete Text- und Passwortfelder aktualisieren ihre Textfarben beim Theme-Wechsel; Entwürfe, Auswahl und Fokus bleiben erhalten (#595).

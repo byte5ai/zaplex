@@ -31,7 +31,11 @@ fn ssh_form_evidence(locale: &'static str) -> Builder {
         .with_step(verify_locale(locale))
         .with_step(native::resize(1024., 640.))
         .with_step(native::theme(false))
-        .with_step(native::open_form())
+        .with_step(
+            TestStep::new("Capture the native fixture before loading its form")
+                .with_take_screenshot("native-ssh-form-before-load.png"),
+        )
+        .with_step(native::open_form().with_take_screenshot("native-ssh-form-loading.png"))
         .with_step(native::form_draft());
     for (light, name) in [(false, "dark"), (true, "light"), (false, "dark-again")] {
         builder = builder.with_step(native::theme(light));
