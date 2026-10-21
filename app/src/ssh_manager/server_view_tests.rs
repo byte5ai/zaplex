@@ -10,6 +10,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::{mock_terminal_colors, Details, WarpTheme};
+use warpui::color::ColorU;
 use warpui::platform::WindowStyle;
 use warpui::{App, Presenter, WindowInvalidation};
 
@@ -20,6 +22,90 @@ use crate::workspace::view::spawn_card::tests::{
     assert_spawn_dialog_preserves_draft_until_explicit_close, click_modal_backdrop,
     render_modal_fixture, ModalBackdropTestRoot,
 };
+
+#[test]
+fn open_server_editors_follow_theme_changes_without_losing_drafts_or_focus() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut view = SshServerView::new_with_secret_store(
+                "theme-fixture".to_string(),
+                Arc::new(MockSecretStore::new()),
+                ctx,
+            );
+            // Keep the asynchronous database load from changing the in-memory draft.
+            view.reload_generation = view.reload_generation.wrapping_add(1);
+            view.reload_in_flight = false;
+            view.update_form_interaction(ctx);
+            view
+        });
+        let editors = view.read(&app, |view, _| {
+            [
+                view.name_editor.clone(),
+                view.host_editor.clone(),
+                view.port_editor.clone(),
+                view.user_editor.clone(),
+                view.password_editor.clone(),
+                view.key_path_editor.clone(),
+                view.onekey_label_editor.clone(),
+                view.onekey_user_editor.clone(),
+                view.onekey_key_path_editor.clone(),
+                view.onekey_secret_editor.clone(),
+                view.root_password_editor.clone(),
+                view.startup_command_editor.clone(),
+                view.notes_editor.clone(),
+            ]
+        });
+        for editor in &editors {
+            editor.update(&mut app, |editor, ctx| {
+                editor.set_buffer_text("unsaved draft", ctx);
+            });
+        }
+        editors[1].update(&mut app, |editor, ctx| {
+            ctx.focus_self();
+            editor.select_all(ctx);
+        });
+        let focused = app.focused_view_id(window_id);
+        assert_eq!(focused, Some(editors[1].id()));
+        let appearance = Appearance::handle(&app);
+        let dark = appearance.read(&app, |appearance, _| appearance.theme().clone());
+        let light = WarpTheme::new(
+            ColorU::white().into(),
+            ColorU::black(),
+            ColorU::new(18, 123, 156, 255).into(),
+            None,
+            Some(Details::Lighter),
+            mock_terminal_colors(),
+            None,
+            Some("Light".to_string()),
+            None,
+        );
+        assert_ne!(dark.active_ui_text_color(), light.active_ui_text_color());
+        for theme in [light, dark] {
+            let expected_text = theme.active_ui_text_color();
+            let expected_disabled = theme.disabled_ui_text_color();
+            appearance.update(&mut app, |appearance, ctx| appearance.set_theme(theme, ctx));
+            for editor in &editors {
+                editor.read(&app, |editor, ctx| {
+                    // Read the same resolved style consumed by EditorView::render.
+                    let colors = editor.text_colors(Appearance::as_ref(ctx));
+                    assert_eq!(colors.default_color, expected_text);
+                    assert_eq!(colors.disabled_color, expected_disabled);
+                    assert_eq!(colors.hint_color, expected_disabled);
+                    assert_eq!(editor.buffer_text(ctx), "unsaved draft");
+                });
+            }
+            assert_eq!(app.focused_view_id(window_id), focused);
+            editors[1].read(&app, |editor, ctx| {
+                assert_eq!(editor.selected_text(ctx), "unsaved draft");
+            });
+        }
+    });
+}
 
 /// In-process mock bypassing OS keychain. Supports error injection to simulate NoBackend / Keyring errors.
 struct MockSecretStore {

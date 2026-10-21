@@ -2,6 +2,11 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.7] — 2026-10-21
+
+- SSH-Formulare: Bereits geöffnete Text- und Passwortfelder aktualisieren ihre Textfarben beim Theme-Wechsel; Entwürfe, Auswahl und Fokus bleiben erhalten (#595).
+- SSH-Formulare: Titel und die Aktionen Testen/Verbinden/Speichern umbrechen in schmalen Panes; ungültige Hostwerte erhalten eine eigene Erklärung statt der Meldung für einen leeren Host (#593, #594).
+
 ## [1.2.6] — 2026-10-20
 
 - Agent-Ansicht: Die Aktionen zum Wechseln von Agent, Konto und Modell teilen sich bei schmalen Fenstern eine Zeile; die vollständige Wiederherstellungskonfiguration bleibt erreichbar (#153).

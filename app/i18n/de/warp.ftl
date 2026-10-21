@@ -679,6 +679,7 @@ workspace-left-panel-ssh-manager-diagnostics-session-output = { $session } · Au
 workspace-left-panel-ssh-manager-diagnostics-session-process = { $session } · Prozessspeicher
 workspace-left-panel-ssh-manager-detail-user = Benutzer
 workspace-left-panel-ssh-manager-error-host-required = Host darf nicht leer sein.
+workspace-left-panel-ssh-manager-error-host-invalid = Hostname, IP-Adresse oder SSH-Alias ohne Leerraum oder Steuerzeichen eingeben; der Wert darf nicht mit „-“ beginnen.
 workspace-left-panel-ssh-manager-error-name-required = Name darf nicht leer sein.
 workspace-left-panel-ssh-manager-error-port-invalid = Port muss eine Zahl zwischen 1 und 65535 sein.
 workspace-left-panel-ssh-manager-error-startup-command-single-line = Der Startbefehl muss einzeilig sein.

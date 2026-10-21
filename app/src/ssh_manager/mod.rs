@@ -60,11 +60,18 @@ fn endpoint_validation_message(error: warp_ssh_manager::SshEndpointValidationErr
     use warp_ssh_manager::SshEndpointValidationError;
 
     match error {
-        SshEndpointValidationError::EmptyHost | SshEndpointValidationError::InvalidHost => {
+        SshEndpointValidationError::EmptyHost => {
             crate::t!("workspace-left-panel-ssh-manager-error-host-required")
+        }
+        SshEndpointValidationError::InvalidHost => {
+            crate::t!("workspace-left-panel-ssh-manager-error-host-invalid")
         }
         SshEndpointValidationError::InvalidPort => {
             crate::t!("workspace-left-panel-ssh-manager-error-port-invalid")
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

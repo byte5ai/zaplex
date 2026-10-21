@@ -23,6 +23,10 @@ use crate::{
     workspace::WorkspaceAction,
 };
 
+pub use crate::ssh_manager::server_view::acceptance::{
+    draft as form_draft, form_layout, open_form, reject_invalid_host,
+};
+
 pub const LONG_HOST: &str = "production-europe-west-development-0123456789";
 const HOST_IDS: &str = "native_workspace_host_ids";
 const HOST_GEOMETRY: &str = "native_workspace_host_geometry";

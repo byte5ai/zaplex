@@ -3228,6 +3228,7 @@ workspace-left-panel-ssh-manager-status-saved = ✓ Saved
 workspace-left-panel-ssh-manager-error-name-required = Name cannot be empty.
 workspace-left-panel-ssh-manager-error-port-invalid = Port must be a number between 1 and 65535.
 workspace-left-panel-ssh-manager-error-host-required = Host cannot be empty.
+workspace-left-panel-ssh-manager-error-host-invalid = Enter a host name, IP address or SSH alias without whitespace or control characters; it must not start with '-'.
 workspace-left-panel-ssh-manager-error-startup-command-single-line = Startup command must be a single line.
 workspace-left-panel-ssh-manager-connect = Connect
 workspace-left-panel-ssh-manager-disconnect = Disconnect
