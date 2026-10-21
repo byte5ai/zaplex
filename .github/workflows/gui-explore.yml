@@ -72,6 +72,8 @@ jobs:
           art="$RUNNER_TEMP/exploration"
           echo 'Live exploration window: 10 minutes; finish by creating exploration/finished.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Job success is infrastructure availability, not a product acceptance verdict.' >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p /tmp/macrunner-operator
+          printf 'repo=%s run=%s until=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$(( $(date +%s) + 600 ))" > /tmp/macrunner-operator/open
           deadline=$((SECONDS + 600))
           while [[ ! -f "$art/finished" && $SECONDS -lt $deadline ]]; do
             sleep 2
@@ -82,6 +84,12 @@ jobs:
       - name: End exploration processes
         if: always()
         run: |
+          if [[ -f /tmp/macrunner-operator/open ]]; then
+            mv /tmp/macrunner-operator/open /tmp/macrunner-operator/closed
+          fi
+          if [[ -d /tmp/macrunner-operator ]]; then
+            ditto /tmp/macrunner-operator "$RUNNER_TEMP/exploration/operator"
+          fi
           peekaboo app quit --app Zaplex || true
           peekaboo daemon stop || true
       - name: Preserve exploration evidence
