@@ -7394,7 +7394,7 @@ impl EditorView {
             .unwrap_or_else(|| Properties::default().weight(appearance.monospace_font_weight()))
     }
 
-    fn text_colors(&self, appearance: &Appearance) -> TextColors {
+    pub(crate) fn text_colors(&self, appearance: &Appearance) -> TextColors {
         self.text_options
             .text_colors_override
             .clone()

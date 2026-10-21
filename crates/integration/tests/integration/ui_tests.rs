@@ -300,6 +300,10 @@ integration_tests! {
     #[cfg(target_os="macos")]
     test_native_workspace_connections_evidence,
     #[cfg(target_os="macos")]
+    test_native_ssh_form_evidence,
+    #[cfg(target_os="macos")]
+    test_native_ssh_form_german_evidence,
+    #[cfg(target_os="macos")]
     test_native_workspace_empty_states_evidence,
     #[cfg(target_os="macos")]
     test_native_workspace_empty_states_german_evidence,

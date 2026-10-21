@@ -15,6 +15,44 @@ use crate::Builder;
 
 // A 640px content height fits the macOS CI display below its menu bar and Dock.
 
+pub fn test_native_ssh_form_evidence() -> Builder {
+    ssh_form_evidence("en")
+}
+
+pub fn test_native_ssh_form_german_evidence() -> Builder {
+    ssh_form_evidence("de")
+}
+
+fn ssh_form_evidence(locale: &'static str) -> Builder {
+    warp::i18n::set_locale(locale);
+    let mut builder = Builder::new()
+        .with_real_display()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(verify_locale(locale))
+        .with_step(native::resize(1024., 640.))
+        .with_step(native::theme(false))
+        .with_step(native::open_form())
+        .with_step(native::form_draft());
+    for (light, name) in [(false, "dark"), (true, "light"), (false, "dark-again")] {
+        builder = builder.with_step(native::theme(light));
+        for width in [1024, 760] {
+            builder = builder
+                .with_step(native::resize(width as f32, 640.))
+                .with_step(
+                    native::form_layout()
+                        .with_take_screenshot(format!("native-ssh-form-{name}-{width}.png")),
+                );
+        }
+    }
+    for action in ["test", "connect", "save"] {
+        builder = builder.with_step(native::form_draft()).with_step(
+            native::reject_invalid_host(action)
+                .with_take_screenshot(format!("native-ssh-form-invalid-{action}.png")),
+        );
+    }
+    builder
+}
+
 pub fn test_native_workspace_connections_evidence() -> Builder {
     let mut builder = Builder::new()
         .with_setup(|_| warp::i18n::init(Some("en")))

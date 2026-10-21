@@ -24,13 +24,13 @@ use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryT
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
 use instant::Instant;
 use remote_server::proto::{MemoryMeasurement, MemoryMeasurementStatus, SessionInfo};
-use warp_core::ui::appearance::Appearance;
+use warp_core::ui::appearance::{Appearance, AppearanceEvent};
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
     Container, CornerRadius, CrossAxisAlignment, Element, Fill, Flex, Hoverable, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Stack, Text,
-    Wrap,
+    MainAxisSize, MouseStateHandle, ParentElement, Radius, SavePosition, ScrollbarWidth,
+    Shrinkable, Stack, Text, Wrap,
 };
 use warpui::fonts::Weight;
 use warpui::platform::{Cursor, FilePickerConfiguration};
@@ -2912,7 +2912,7 @@ impl SshServerView {
         };
         Some(
             Container::new(
-                Text::new_inline(text, appearance.ui_font_family(), appearance.ui_font_size())
+                Text::new(text, appearance.ui_font_family(), appearance.ui_font_size())
                     .with_color(color)
                     .finish(),
             )
@@ -3421,19 +3421,23 @@ fn make_editor(
 ) -> ViewHandle<EditorView> {
     let placeholder = placeholder.to_string();
     ctx.add_typed_action_view(move |ctx| {
+        ctx.subscribe_to_model(
+            &Appearance::handle(ctx),
+            |editor: &mut EditorView, _, event, ctx| {
+                if let AppearanceEvent::ThemeChanged = event {
+                    let colors = server_editor_text_colors(Appearance::as_ref(ctx));
+                    editor.set_text_colors(colors, ctx);
+                }
+            },
+        );
         let options = {
             let appearance = Appearance::as_ref(ctx);
-            let theme = appearance.theme();
             SingleLineEditorOptions {
                 is_password,
                 text: TextOptions {
                     font_size_override: Some(appearance.ui_font_size()),
                     font_family_override: Some(appearance.monospace_font_family()),
-                    text_colors_override: Some(TextColors {
-                        default_color: theme.active_ui_text_color(),
-                        disabled_color: theme.disabled_ui_text_color(),
-                        hint_color: theme.disabled_ui_text_color(),
-                    }),
+                    text_colors_override: Some(server_editor_text_colors(appearance)),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -3443,6 +3447,15 @@ fn make_editor(
         editor.set_placeholder_text(&placeholder, ctx);
         editor
     })
+}
+
+fn server_editor_text_colors(appearance: &Appearance) -> TextColors {
+    let theme = appearance.theme();
+    TextColors {
+        default_color: theme.active_ui_text_color(),
+        disabled_color: theme.disabled_ui_text_color(),
+        hint_color: theme.disabled_ui_text_color(),
+    }
 }
 
 fn password_lookup_for_server_form(server: &SshServerInfo) -> (Option<String>, SecretKind) {
@@ -3660,13 +3673,15 @@ impl View for SshServerView {
             .finish();
         }
 
-        // ---- header row: title + Save button on right + status banner ----
+        // Keep the title above wrapping actions so narrow form panes retain every button.
         let title_text = self
             .node
             .as_ref()
             .map(|n| n.name.clone())
             .unwrap_or_default();
-        let title = Text::new_inline(
+        #[cfg(feature = "integration_tests")]
+        let title_end = title_text.chars().count().saturating_sub(1);
+        let title = Text::new(
             title_text,
             appearance.ui_font_family(),
             appearance.ui_font_heading_2(),
@@ -3676,22 +3691,33 @@ impl View for SshServerView {
                 .theme()
                 .main_text_color(appearance.theme().background())
                 .into(),
-        )
-        .finish();
+        );
+        #[cfg(feature = "integration_tests")]
+        let title = title.with_saved_char_position(title_end, "ssh-form-title-end".into());
+        let title = title.finish();
 
-        // Title on left / [Test] [Connect] [Save] buttons on right.
-        let buttons = Flex::row()
+        let buttons = Wrap::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(8.0)
-            .with_child(self.render_test_button(appearance))
-            .with_child(self.render_connect_button(appearance))
-            .with_child(self.render_save_button(appearance, self.is_dirty(app)))
-            .with_main_axis_size(MainAxisSize::Min)
+            .with_run_spacing(8.0)
+            .with_child(
+                SavePosition::new(self.render_test_button(appearance), "ssh-form-test").finish(),
+            )
+            .with_child(
+                SavePosition::new(self.render_connect_button(appearance), "ssh-form-connect")
+                    .finish(),
+            )
+            .with_child(
+                SavePosition::new(
+                    self.render_save_button(appearance, self.is_dirty(app)),
+                    "ssh-form-save",
+                )
+                .finish(),
+            )
             .finish();
-        let header = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        let header = Flex::column()
+            .with_spacing(8.0)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(title)
             .with_child(buttons)
             .finish();
@@ -3822,7 +3848,11 @@ impl View for SshServerView {
         )
         .finish();
 
-        let content = Align::new(scrollable).top_center().finish();
+        let content = SavePosition::new(
+            Align::new(scrollable).top_center().finish(),
+            "ssh-form-viewport",
+        )
+        .finish();
         if self.show_onekey_manager {
             let mut stack = Stack::new().with_child(content);
             stack.add_child(self.render_onekey_manager(app, appearance));
@@ -4009,3 +4039,7 @@ fn humanize_ssh_transport_error(raw: Option<&str>) -> String {
 #[cfg(test)]
 #[path = "server_view_tests.rs"]
 mod tests;
+
+#[cfg(feature = "integration_tests")]
+#[path = "server_view_acceptance.rs"]
+pub(crate) mod acceptance;
