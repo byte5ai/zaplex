@@ -1,5 +1,9 @@
 # Native Fixture- und DMG-Nachweise
 
+Die spätere [direkte Exploration vom 21.10.2026](EXPLORATION-2026-10-21.md)
+ist gesondert dokumentiert: echte interaktive Bedienung des vorhandenen DMGs,
+23 Originalaufnahmen und neue Korrekturaufträge #593/#594/#595.
+
 **Keine UX-Gesamtfreigabe.** Connections, Favoriten und Dateipanes sind nach
 PR #586 auf `1800ec77` nativ erfolgreich geprüft und visuell ausgewertet.
 [Der aktuelle Teilnachweis](#workspace-korrekturen-nativ-bestätigt-am-20102026)

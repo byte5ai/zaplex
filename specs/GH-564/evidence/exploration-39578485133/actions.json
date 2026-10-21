@@ -1,0 +1,331 @@
+{
+  "method": "Operator commands chosen after viewing the previous capture. Command exit status is not product success; foreground typing sometimes reports 1 despite visible input. See narrative for observations.",
+  "actions": [
+    {
+      "time": "2026-10-21T09:40:52.230664+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "79,53",
+        "--snapshot",
+        "ps1_5de1b2fca6b45efe26279e7852768b9d",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:41:13.808397+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "79,53",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:41:36.007556+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "42,87",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:42:04.282192+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "111,148",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:42:33.893410+00:00",
+      "args": [
+        "type",
+        "bad host name",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "time": "2026-10-21T09:42:58.848790+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "609,107",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:43:14.961883+00:00",
+      "args": [
+        "press",
+        "escape",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:43:32.446985+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "1003,18",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:44:00.717142+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "67,333",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:44:24.217197+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "574,225",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:44:49.017648+00:00",
+      "args": [
+        "type",
+        "Light",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "time": "2026-10-21T09:45:19.622378+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "103,220",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:45:38.641831+00:00",
+      "args": [
+        "press",
+        "escape",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:45:55.082918+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "223,53",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:46:12.441911+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "218,18",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:46:58.902415+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "43,87",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:47:15.169784+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "221,122",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:47:55.422992+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "43,87",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:48:10.754637+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "113,148",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:48:45.887887+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "499,335",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-21T09:49:01.222493+00:00",
+      "args": [
+        "type",
+        "example.invalid",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "time": "2026-10-21T09:49:19.794803+00:00",
+      "args": [
+        "click",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "37",
+        "--at",
+        "882,108",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    }
+  ]
+}
