@@ -1,0 +1,216 @@
+{
+  "run_id": 39599450226,
+  "app_source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "harness_source_sha": "619adaa2a1e84fddffc6be5e6c043823469b2f4b",
+  "artifact_id": 12345014396,
+  "dmg_sha256": "313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3",
+  "locale": "en",
+  "theme": "dark",
+  "reduced_motion": "not verified",
+  "assessment": "manual native observation; no full matrix acceptance",
+  "screenshots": [
+    {
+      "file": "01-initial.png",
+      "sha256": "349d6974ed0fc0bb70e50101ed6c2789e11641787147dce72ef287ee24fd0948",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "02-connections.png",
+      "sha256": "eab3a78128f715a7ea80a2121a5940c6bd773e9cf97cdd2f15c057c2c1e6517a",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "03-add.png",
+      "sha256": "3f96d6209cfb0e0d57c347a2ded02606d1d053f10536707e1f5461837cfdcde7",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "04-imported.png",
+      "sha256": "b741a275344130c3e36ac3f7ce8edb8686504c4d61fd8ef9183f1d7679baf6fb",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "05-connect.png",
+      "sha256": "57687e8274c59cf18f5201b6c94c4f88900d8adaad1cc099468eaa302b738f80",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "06-marker-input.png",
+      "sha256": "095d6c245747a073e02a1ce974dec00628d32faf8b593970f62eb073eaea26dd",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "07-marker-command.png",
+      "sha256": "60ec5d95d7bb8e8d21a99b9221f7aae2ce52adea72dd877a975f041e63d814f9",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "08-before-drop.png",
+      "sha256": "c448fff0779fcec0dbd2b5a7d8a96290b560c217e4026d27a8589dac199611e5",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "09-local-pane.png",
+      "sha256": "5d5a9826b6df82ba5fae5aba48f4a1d9d773b43cdd2db315e30f01477c42f8ab",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "10-drop-command.png",
+      "sha256": "81ea9a03fb65ba6e68c6819b411e815467417502226d54e60abd60795ffba8c9",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "11-drop-executed.png",
+      "sha256": "ce6540443523af4acf625410ab3351acd34ea4481966270b09850c3e67968a5c",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "12-reconnected.png",
+      "sha256": "40b9b714b119cc6baa9be3032d5e85efd77f69979ca00a1fd376a08463388ae7",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "13-after-command.png",
+      "sha256": "5a90d3ea99f2ef60618b54df874875fd05a03a3e2956a36ed51147e13483f772",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "14-after-drop.png",
+      "sha256": "7e99108898aa562c2520740783034287f5e4c6ea50a53630f1952bc1e1113d5f",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "15-cli-help-command.png",
+      "sha256": "10b09a179a26b5c371f34805f4dc9f221db975793309424bbc8fc6c9107e04db",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "16-cli-help.png",
+      "sha256": "e96b93a82e9831aed4a7bb1e9c8f7165a8e21f24bca81a8b438a00dda91d8b56",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "17-claude-command.png",
+      "sha256": "edc880862117f7d85074998830f2fef28b6a2ba410039b8c785586f9fadc80c5",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "18-claude-result.png",
+      "sha256": "ef3396374a25d9d069244583743adcfd9ed6b7a1e5ba1289259da486e237352f",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "19-claude-completed.png",
+      "sha256": "ac3e75e7f968c786616edb710650863d31bf0adda863e9df2682a024e559c211",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "20-codex-command.png",
+      "sha256": "dd064be6bf8dd6c39d99b9745011774cd0305528115dbe184b3c74fe6b6b95dc",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "21-codex-running.png",
+      "sha256": "bd6a9e5bd2f94d071a17c156aa42f19c20f3ef9de0aa3716836e553812712d54",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "22-local-before-logs.png",
+      "sha256": "ce6540443523af4acf625410ab3351acd34ea4481966270b09850c3e67968a5c",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "23-logs-command.png",
+      "sha256": "78cfa9cacb0a4ca2da3a3afb3be79b574d98ac9ae82f9e5339a93d886f4405c1",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "24-logs-ready.png",
+      "sha256": "a880aa969935351d38ea726bb6a442970e7649f46b4520d72f5e728c9ebc8121",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "25-provider-results.png",
+      "sha256": "fe83ba909fb403f33cc8584b8fcd7bd37214098357038121718c56fb6c7fe2b6",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "26-remote-files.png",
+      "sha256": "fe83ba909fb403f33cc8584b8fcd7bd37214098357038121718c56fb6c7fe2b6",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "27-file-manager-loaded.png",
+      "sha256": "709c88656dab32c22b57c45410e777c5ee0b4d5afc9802680d4697b982b25d23",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "28-log-list-command.png",
+      "sha256": "66a8088bcb073d27873d65bf775fae5fe12b8709a555d8d5082023f817948a8d",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    },
+    {
+      "file": "29-log-list.png",
+      "sha256": "8a1af200be4565479afd30fc95d751e3628b45f7635fda4c3f05f971d945d9ad",
+      "width": 1024,
+      "height": 678,
+      "storage": "private original; not committed"
+    }
+  ]
+}

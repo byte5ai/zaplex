@@ -7,6 +7,11 @@ Stand: 21.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
 ist durchgeführt: 23 Originalaufnahmen, beobachteter Theme-Wechsel und Rückwege,
 drei neue konkrete Formularbefunde (#593/#594/#595). Der lokale Bedienzugang ist nachgewiesen.
 
+Die anschließende [native Remote-Teilabnahme](REMOTE-2026-10-21.md) bestätigt
+SSH-Import, Daemon-Shell, erhaltene Shell-PID/Marker/CWD nach Verbindungsabbruch
+und Antworten von Claude Code/Codex innerhalb dieser Shell. 29 Originalaufnahmen
+sind privat gesichert. API-Testprofile belegen keine Abo-Funktionen.
+
  Die Fehler in Connections, Favoriten und Dateipanes
 (#565, #566, #572) sind mit [PR #586](https://github.com/byte5ai/zaplex/pull/586)
 behoben und auf `1800ec77` (1.2.4) nativ nachgeprüft: vier Fälle bestanden,

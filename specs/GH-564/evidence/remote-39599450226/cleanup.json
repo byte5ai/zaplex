@@ -1,0 +1,5 @@
+{
+  "cleanup": "owned-processes-stopped-and-data-trashed",
+  "daemon_processes": 1,
+  "owned_processes": 2
+}
