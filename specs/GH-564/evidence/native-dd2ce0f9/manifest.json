@@ -1,0 +1,490 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "native-integration-fixtures",
+  "source_sha": "dd2ce0f91c6bce19ac2675cf9454cf07ae2a8d6a",
+  "test_source_sha": "dd2ce0f91c6bce19ac2675cf9454cf07ae2a8d6a",
+  "reference_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "run_id": "39631099296",
+  "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39631099296",
+  "package_version": "1.2.8",
+  "artifact_id": 12359591635,
+  "artifact_name": "native-layout-dd2ce0f91c6bce19ac2675cf9454cf07ae2a8d6a",
+  "artifact_digest": "sha256:ed08c3eb4ea739404204056deba9f2652a39e3f5eaa5337059573738899b2a22",
+  "dmg_sha256": null,
+  "installed_dmg": false,
+  "image_processing": "None; unchanged original PNG bytes.",
+  "scope": "SSH form actions, invalid-host explanation and Dark/Light/Dark theme transitions; isolated secret-store fixture.",
+  "not_covered": [
+    "installed DMG acceptance",
+    "OS keychain and credential persistence",
+    "valid host save or real SSH connection",
+    "independent exploration",
+    "full form scrolling and keyboard navigation",
+    "contrast and OS reduced motion",
+    "complete product acceptance matrix"
+  ],
+  "images": [
+    {
+      "file": "en/native-ssh-form-before-load.png",
+      "sha256": "17a182fd046fe2293c11a24e3b8cc882dce353ba24a9dab2b0345cfa9dfefec8",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-before-load.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "diagnostic"
+    },
+    {
+      "file": "en/native-ssh-form-dark-1024.png",
+      "sha256": "4511a5c06b315bb1bb80d5063d7be292dae3ff976605226e76ad1b074419eeb3",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-dark-1024.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "en/native-ssh-form-dark-760.png",
+      "sha256": "3972c423b5f3c75eaac7bd6fc30ce7e86292f4a761767b627c9a438cca3bbe3b",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-dark-760.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "en/native-ssh-form-dark-again-1024.png",
+      "sha256": "18d9be61151a387701e0aff95fe5a6747aaf471581b232e6accca083063913df",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-dark-again-1024.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "en/native-ssh-form-dark-again-760.png",
+      "sha256": "8a9d4cdca08627aa7f8f3b5cecca6722ec209156ba53e65fdff66f65c0589e84",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-dark-again-760.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "en/native-ssh-form-invalid-connect.png",
+      "sha256": "de6942bf3c8f6b9e4725ff353a28aba64a4116515ea7445778594dae90453b1d",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-invalid-connect.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "en/native-ssh-form-invalid-save.png",
+      "sha256": "de6942bf3c8f6b9e4725ff353a28aba64a4116515ea7445778594dae90453b1d",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-invalid-save.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "en/native-ssh-form-invalid-test.png",
+      "sha256": "de6942bf3c8f6b9e4725ff353a28aba64a4116515ea7445778594dae90453b1d",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-invalid-test.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "en/native-ssh-form-light-1024.png",
+      "sha256": "122de3efb717229520098f308737decca1a9f4bbe43c6db6067c6dd3e97cb272",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-light-1024.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "en/native-ssh-form-light-760.png",
+      "sha256": "c5d86304652db75fcbb83eae63ca7a7e6a85ba7077508cbec8eb9e9e5dfd948e",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-light-760.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "en/native-ssh-form-loading.png",
+      "sha256": "ee275e5f0d34d88a65e4ade692b57ec27725b35d1084d23be82c8a26b2ac9918",
+      "original_file": "test_native_ssh_form_evidence/2026-10-21T16-07-25/native-ssh-form-loading.png",
+      "test_case": "test_native_ssh_form_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-25",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "diagnostic"
+    },
+    {
+      "file": "de/native-ssh-form-before-load.png",
+      "sha256": "cac89b6a2490fb0f42884d52e6bc54c5301cef15dbe0b77d90b7704bdeac2eb2",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-before-load.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "diagnostic"
+    },
+    {
+      "file": "de/native-ssh-form-dark-1024.png",
+      "sha256": "ec636b01d1c2a279a119cc84e30c083e7fd6315d1b83a4f1d8f3eb31687ade34",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-dark-1024.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "de/native-ssh-form-dark-760.png",
+      "sha256": "3d69e98b30b17edb411e6b17b35aebfc24d21ce81c8d0f2d9fd543c32a4d38b7",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-dark-760.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "de/native-ssh-form-dark-again-1024.png",
+      "sha256": "6ac4fe39caab768ed6e4f1529f665be0a3bacd91563151dfe9a96c6f2c5f5344",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-dark-again-1024.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "de/native-ssh-form-dark-again-760.png",
+      "sha256": "11381c3fba6461bd36cba7d2f943a08eadf9a199e4203fb927b943557e3e4dbe",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-dark-again-760.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "de/native-ssh-form-invalid-connect.png",
+      "sha256": "8f4539996e7014dfb475ec8723c73b74c24983d1275c56e68bee215e6a0e2db2",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-invalid-connect.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "de/native-ssh-form-invalid-save.png",
+      "sha256": "8f4539996e7014dfb475ec8723c73b74c24983d1275c56e68bee215e6a0e2db2",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-invalid-save.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "de/native-ssh-form-invalid-test.png",
+      "sha256": "232bb42911993d2631edb9d2f1237af86cf661f4121bad6eb8e0a1527f7a58ed",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-invalid-test.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "de/native-ssh-form-light-1024.png",
+      "sha256": "0d16279579afdddad4d7124fd52f4d7b0e52ff2db48705d6371aa974ababc121",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-light-1024.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "de/native-ssh-form-light-760.png",
+      "sha256": "b49af24602f14f61df60b23dcd473e88850c1c0c1fe172e350ea80d36c56e44e",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-light-760.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "reduced_motion": null,
+      "window_size_points": [
+        760,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "regression-evidence"
+    },
+    {
+      "file": "de/native-ssh-form-loading.png",
+      "sha256": "7a3fca9aff930a7bcdab733b8573c54d3fdf02a64cdfd580d03fa3c19bea3cb5",
+      "original_file": "test_native_ssh_form_german_evidence/2026-10-21T16-07-34/native-ssh-form-loading.png",
+      "test_case": "test_native_ssh_form_german_evidence",
+      "capture_timestamp_from_directory": "2026-10-21T16-07-34",
+      "screenshot_pixels": [
+        1024,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "reduced_motion": null,
+      "window_size_points": [
+        1024,
+        640
+      ],
+      "window_size_basis": "Native integration resize; dimensions match original PNG, not an installed DMG AX measurement.",
+      "visual_reviewed": true,
+      "role": "diagnostic"
+    }
+  ]
+}

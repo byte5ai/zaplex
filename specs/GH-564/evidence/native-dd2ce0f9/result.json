@@ -1,0 +1,42 @@
+{
+  "run_id": "39631099296",
+  "source_sha": "dd2ce0f91c6bce19ac2675cf9454cf07ae2a8d6a",
+  "package_version": "1.2.8",
+  "workflow_conclusion": "success",
+  "job_duration_seconds": 309,
+  "compile_duration_seconds": 212,
+  "cases": [
+    {
+      "name": "ui_tests::test_native_ssh_form_evidence",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 302
+    },
+    {
+      "name": "ui_tests::test_native_ssh_form_german_evidence",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 302
+    }
+  ],
+  "visual_review": {
+    "original_images_reviewed": 22,
+    "regression_images": 18,
+    "diagnostic_images": 4,
+    "form_actions": "pass: complete title and three full actions at both widths, both locales, all three theme stages",
+    "theme": "pass: visible field text follows Dark/Light/Dark; selected host draft retained",
+    "invalid_host": "pass: complete localized explanation after independent Test/Connect/Save clicks, both locales",
+    "separate_defect": "https://github.com/byte5ai/zaplex/issues/601"
+  },
+  "not_covered": [
+    "installed DMG acceptance",
+    "OS keychain and credential persistence",
+    "valid host save or real SSH connection",
+    "independent exploration",
+    "full form scrolling and keyboard navigation",
+    "contrast and OS reduced motion",
+    "complete product acceptance matrix"
+  ]
+}

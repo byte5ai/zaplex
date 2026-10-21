@@ -19,6 +19,10 @@ Originalaufnahmen. Der [separate Agentenfall](NATIVE-FIXTURES.md#agentenkorrektu
 besteht nach PR #589 auf `513647be` (1.2.6), mit 24 Zustands-/Größenkombinationen
 und drei visuell geprüften Originalaufnahmen. Die fünf erfolgreichen Fälle
 stammen aus zwei unterschiedlichen Quell-/Testständen.
+Die [SSH-Formular-Nachprüfung](SSH-FORM-2026-10-21.md) auf `dd2ce0f9` (1.2.8)
+bestätigt die Korrekturen #593/#594/#595 in zwei nativen Fällen (DE/EN), mit
+22 visuell geprüften Originalaufnahmen. Die benachbarte schmale Terminal-Pane
+zeigt weiterhin abgeschnittene Einführungstexte (#601).
 Weder Altbuild noch Fixtures ersetzen die vollständigen Fallkombinationen.
 
 ## Referenzen und Bewertung
@@ -84,11 +88,11 @@ Fehlende Testvoraussetzungen sind keine Produktfehler.
 
 | ID | Sollquelle | Nutzeraufgabe / Zustand | Erwartete Darstellung und Interaktion | Nachweis | Aktueller Status / Grund |
 |---|---|---|---|---|---|
-| V01 | C:C3, A6; U | Ohne eingerichteten Host starten | Arbeitsfläche, vorhandene horizontale Navigation und nächster Schritt erkennbar; keine überdeckten Texte oder dekorativen Farbränder | Gesamtansicht und Navigation | not-run — V, G |
+| V01 | C:C3, A6; U | Ohne eingerichteten Host starten | Arbeitsfläche, vorhandene horizontale Navigation und nächster Schritt erkennbar; keine überdeckten Texte oder dekorativen Farbränder | Gesamtansicht und Navigation | Teilbefund fail — 1.2.8: Einführungstexte in schmaler Terminal-Pane abgeschnitten (#601); Gesamteinstieg/übrige Varianten V, G |
 | V02 | C:A4, A6; U | Alle sichtbaren Icons erkunden | Verständliche lokalisierte Tooltips, stabile Geometrie, klare aktive/inaktive Zustände | Hover-/Fokusfolge pro Icon | not-run — V, G |
 | V03 | U | Per Tastatur navigieren und zurückkehren | Sinnvolle Fokusreihenfolge; sichtbarer Fokus; Escape/Zurück und Rückgabe zum Auslöser | Tastaturablauf | not-run — V, G |
 | C01 | C:C1; U | Leere Verbindungsliste verstehen | Vollständige Anleitung einschließlich Ordner- und Plus-Aktion, auch schmal | Leerzustand DE/EN, 250/320/480 | Teilnachweis pass — native 1.2.4, DE/EN, Hell/Dunkel, 250/320/480 (#565); installiertes DMG der Korrektur V |
-| C02 | C:C1; U | Ordner und Host anlegen/bearbeiten | Eindeutige Feldnamen, Validierung, Speichern/Abbrechen; keine doppelte Konfiguration | Formular leer/ungültig/gültig | Teilprüfung fail — 1.2.2, EN: D04/D05; Auswahl-Cancel pass; übrige Varianten V |
+| C02 | C:C1; U | Ordner und Host anlegen/bearbeiten | Eindeutige Feldnamen, Validierung, Speichern/Abbrechen; keine doppelte Konfiguration | Formular leer/ungültig/gültig | Teilnachweis pass — 1.2.8, DE/EN: Titel/Aktionen und ungültiger Host nach #593/#594 korrigiert ([Nachweis](SSH-FORM-2026-10-21.md)); historische D04/D05 auf 1.2.2; gültiges Speichern/übrige Varianten V |
 | C03 | C:C1, A1, A2 | Konfigurierten Host finden/favorisieren | Identität priorisiert; feste Stecker-/Sternslots; Offline-Host bleibt hier sichtbar | Lange Registry-Zeilen, Sternwechsel | not-run — V, G |
 | C04 | C:C1, C4; U | Verbinden, Fehler erkennen, abbrechen | Lade-/Fehlerzustand mit verständlichem nächstem Schritt; kein festhängender Dialog | Echte Verbindung und definierter Fehler | Teilnachweis pass — 1.2.2, EN: echter Key-Host-Import und persistente Remote-Shell; Fehler/Abbruch und Varianten V, G, R |
 | C05 | C:C4–C7, A5 | Vorhandene Session wiederfinden | Recovery-Hierarchie, aktuelle Identität, Metadaten, Offen-Markierung und Reihenfolge stimmen | Inventar und Klick auf Session | not-run — V, G, R |
@@ -126,7 +130,7 @@ Fehlende Testvoraussetzungen sind keine Produktfehler.
 | F11 | C:F1 | Dateimanager bei laufender Shell schließen | CWD-Übernahme oder ehrlicher Hinweis; kein blindes cd bei unklarer Identität, kein Entwurfsverlust | Freier/belegter Prompt, verschachtelte Shell | not-run — V, G, R |
 | R01 | C:R1 | Offline/Reconnect abwarten | Sperre und Ursache sichtbar; gleiche Route/Generation, freigegebene Eingabe erst nach Ready | Echte Trennung, Vorher/Nachher + Video | Teilnachweis pass — SSH-ControlMaster beendet; gleiche Shell-PID, Marker und CWD nach automatischer Wiederverbindung; Offline-Anzeige/Generation/Video und Varianten V, G, R |
 | R02 | C:R1, R2 | Timeout, Retry, Abbruch, einfacher Terminalmodus | Verständlicher Ausgang; keine lokale Ersatzshell; Corrupt ohne tote Aktionen; einfacher Modus mit dauerhaftem Hinweis | Je echter Zustand und Folgeaktion | not-run — V, G, R |
-| E01 | U | Einstellungen öffnen, ändern, zurück | Als Tab erkennbar; Änderung sichtbar; Zurück zur bestehenden Shell ohne Zustandsverlust | Einstellung vorher/nachher + Shellmarker | Teilprüfung: Theme-Wechsel und Ansichten-Rückkehr pass; D06 nach Wechsel fail; Shellmarker und übrige Varianten V |
+| E01 | U | Einstellungen öffnen, ändern, zurück | Als Tab erkennbar; Änderung sichtbar; Zurück zur bestehenden Shell ohne Zustandsverlust | Einstellung vorher/nachher + Shellmarker | Teilprüfung: Theme-Wechsel/Ansichten-Rückkehr pass; D06 auf 1.2.8 in DE/EN korrigiert, Entwurf/Fokus/Auswahl erhalten ([Nachweis](SSH-FORM-2026-10-21.md)); Shellmarker/übrige Varianten V |
 | E02 | U | Settings suchen und Unterseiten bedienen | Suchtreffer/Leerzustand, Toggles, Felder, Dropdowns, Speichern/Abbrechen und Dateizugang verständlich | Inventar unten, jede erreichbare Kontrolle | not-run — V, G |
 | E03 | U | Weitere Sidebar-Werkzeuge nutzen | Tooltip/Bezeichnung, Leer-/Lade-/Fehlerzustand, Auswahl und Rückweg ohne Sackgasse | Inventar unten, echte statt Platzhalterzustände | not-run — V, G, R, P |
 | E04 | U | Native Menüs, Kontextmenüs, Palette, Dialoge erkunden | Sinnvolle Benennung, Shortcuts, Fokus und Abbruch; keine wirkungslosen sichtbaren Aktionen | Kontrollinventar mit Zustandsfolge | not-run — V, G |
@@ -134,7 +138,7 @@ Fehlende Testvoraussetzungen sind keine Produktfehler.
 | X02 | U | Lokales Projekt mit mehreren Panes bearbeiten | Tester wählt selbst nächste Schritte; Kontext bleibt nachvollziehbar; unerwartete Zustände werden untersucht | Exploratives Aktionsprotokoll | not-run — V, G |
 | X03 | U | Host/Favorit und Agent/Konto finden | Echte Ziele ohne Codewissen finden, starten, wiederfinden und Fehler auflösen | Exploratives Aktionsprotokoll | not-run — V, G, R, P |
 | X04 | U | Dateien mit eindeutigem Ziel bearbeiten | Auswahl, Transfer, Konflikt/Abbruch und Rückkehr aus sichtbarer UI verständlich | Exploratives Aktionsprotokoll | not-run — V, G, R |
-| X05 | U | Einstellung ändern und Fehler beheben | Tester findet Einstellung und Rückweg; korrigiert eine absichtlich ungültige Eingabe | Exploratives Aktionsprotokoll | Teilprüfung: Theme-Wechsel/Rückweg pass; D06 fail; ungültige Einstellung und übrige Varianten V, G |
+| X05 | U | Einstellung ändern und Fehler beheben | Tester findet Einstellung und Rückweg; korrigiert eine absichtlich ungültige Eingabe | Exploratives Aktionsprotokoll | Teilprüfung: Theme-Wechsel/Rückweg pass; D06 gezielt auf 1.2.8 korrigiert ([Regression, keine neue Exploration](SSH-FORM-2026-10-21.md)); ungültige Einstellung/übrige Varianten V, G |
 
 ## Kontrollinventar für den nächsten Lauf
 
