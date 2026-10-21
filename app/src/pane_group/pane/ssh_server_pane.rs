@@ -29,6 +29,14 @@ impl SshServerPane {
         let id_for_view = node_id.clone();
         let server_view =
             ctx.add_typed_action_view(move |ctx| SshServerView::new(id_for_view, ctx));
+        Self::from_view(node_id, server_view, ctx)
+    }
+
+    pub(crate) fn from_view<V: View>(
+        node_id: String,
+        server_view: ViewHandle<SshServerView>,
+        ctx: &mut ViewContext<V>,
+    ) -> Self {
         let pane_configuration = server_view.as_ref(ctx).pane_configuration();
         let pane_view = ctx.add_typed_action_view(|ctx| {
             let pane_id = PaneId::from_ssh_server_pane_ctx(ctx);
