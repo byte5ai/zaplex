@@ -5,7 +5,7 @@ Stand: 21.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
 
 **Keine Gesamtfreigabe.** Die [erste direkte Exploration vom 21.10.2026](EXPLORATION-2026-10-21.md)
 ist durchgeführt: 23 Originalaufnahmen, beobachteter Theme-Wechsel und Rückwege,
-drei neue konkrete Formularbefunde. Der lokale Bedienzugang ist nachgewiesen.
+drei neue konkrete Formularbefunde (#593/#594/#595). Der lokale Bedienzugang ist nachgewiesen.
 
  Die Fehler in Connections, Favoriten und Dateipanes
 (#565, #566, #572) sind mit [PR #586](https://github.com/byte5ai/zaplex/pull/586)

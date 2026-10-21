@@ -72,7 +72,8 @@
       },
       "snapshot_id": "ps1_5de1b2fca6b45efe26279e7852768b9d",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:40:21.534Z"
     },
     {
       "file": "02-connections.png",
@@ -112,7 +113,8 @@
       },
       "snapshot_id": "ps1_22484d1aefd24d8a8bbd0570a98e3e34",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:40:55.868Z"
     },
     {
       "file": "03-connections-foreground.png",
@@ -152,7 +154,8 @@
       },
       "snapshot_id": "ps1_f5109236771edc1f9953287b90989be0",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:41:17.434Z"
     },
     {
       "file": "04-add-host.png",
@@ -192,7 +195,8 @@
       },
       "snapshot_id": "ps1_beeb00f993cb85b6a50af99af0ef23ca",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:41:39.459Z"
     },
     {
       "file": "05-host-form.png",
@@ -232,7 +236,8 @@
       },
       "snapshot_id": "ps1_d5045c980051299467c35cf0bce83420",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:42:06.708Z"
     },
     {
       "file": "06-host-invalid.png",
@@ -272,7 +277,8 @@
       },
       "snapshot_id": "ps1_4e008fba1a229e018e6e61e0267f070b",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:42:36.509Z"
     },
     {
       "file": "07-host-save-invalid.png",
@@ -312,7 +318,8 @@
       },
       "snapshot_id": "ps1_dc5241c99ef23e7ec05f66da55bfea89",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:43:01.399Z"
     },
     {
       "file": "08-host-escape.png",
@@ -352,7 +359,8 @@
       },
       "snapshot_id": "ps1_11ebc608af7e0193160250d33378e01b",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:43:17.658Z"
     },
     {
       "file": "09-settings-menu.png",
@@ -392,7 +400,8 @@
       },
       "snapshot_id": "ps1_7e3f9c6f53030269d3dd647c80329087",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:43:34.902Z"
     },
     {
       "file": "10-appearance.png",
@@ -432,7 +441,8 @@
       },
       "snapshot_id": "ps1_471787926f79845ea6160e85fe4c6004",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:44:03.171Z"
     },
     {
       "file": "11-theme-choice.png",
@@ -472,7 +482,8 @@
       },
       "snapshot_id": "ps1_34f6c75ca6931ebe9b1b974688b51214",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:44:27.557Z"
     },
     {
       "file": "12-theme-light-search.png",
@@ -512,7 +523,8 @@
       },
       "snapshot_id": "ps1_20b05186f71af13354dc20f5bc8cedee",
       "theme": "dark",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:44:51.769Z"
     },
     {
       "file": "13-theme-light-applied.png",
@@ -552,7 +564,8 @@
       },
       "snapshot_id": "ps1_186816e2d1c86d4ab710d968ad3e0489",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:45:22.255Z"
     },
     {
       "file": "14-theme-escape.png",
@@ -592,7 +605,8 @@
       },
       "snapshot_id": "ps1_3d99350a89f335e573faa40f3366ac2b",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:45:41.405Z"
     },
     {
       "file": "15-theme-panel-closed.png",
@@ -632,7 +646,8 @@
       },
       "snapshot_id": "ps1_91e9c282cfdd913b471909dcb20084fe",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:45:57.650Z"
     },
     {
       "file": "16-return-workspace.png",
@@ -672,7 +687,8 @@
       },
       "snapshot_id": "ps1_6a58aa5963b2082a6553cb1e9fe53c5e",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:46:15.896Z"
     },
     {
       "file": "17-add-again.png",
@@ -712,7 +728,8 @@
       },
       "snapshot_id": "ps1_d1ea035c9e13f7e719a1d56402be3277",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:47:01.366Z"
     },
     {
       "file": "18-add-cancel.png",
@@ -752,7 +769,8 @@
       },
       "snapshot_id": "ps1_79ac776a8bc5ddae4e8fefa56d641880",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:47:17.690Z"
     },
     {
       "file": "19-add-for-light-check.png",
@@ -792,7 +810,8 @@
       },
       "snapshot_id": "ps1_5b28fba50907533b3b174dbe24c6534f",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:47:58.032Z"
     },
     {
       "file": "20-fresh-host-light.png",
@@ -832,7 +851,8 @@
       },
       "snapshot_id": "ps1_07aafdbafd193878f50e92ded3d58849",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:48:14.235Z"
     },
     {
       "file": "21-valid-host-focus.png",
@@ -872,7 +892,8 @@
       },
       "snapshot_id": "ps1_0947ff988f39d719a29dbdd008888b63",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:48:48.481Z"
     },
     {
       "file": "22-valid-host-typed.png",
@@ -912,7 +933,8 @@
       },
       "snapshot_id": "ps1_2fe82c7eb48b20177a66e29ba7af2896",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:49:03.867Z"
     },
     {
       "file": "23-valid-host-save.png",
@@ -952,7 +974,12 @@
       },
       "snapshot_id": "ps1_8075daa86ce4c712bcd23b72825a2575",
       "theme": "light",
-      "theme_basis": "Visual inspection of this original capture."
+      "theme_basis": "Visual inspection of this original capture.",
+      "capture_started_at": "2026-10-21T09:49:23.272Z"
     }
-  ]
+  ],
+  "artifact_id": 12335398952,
+  "artifact_name": "gui-exploration-39578485133",
+  "workflow_conclusion": "success",
+  "product_acceptance": "not-run"
 }

@@ -47,13 +47,13 @@ kein Text blind erneut abgeschickt. Diese Werkzeugmeldungen sind keine Appfehler
 
 ## Neue Korrekturaufträge
 
-- **D04 / P2:** Formularheader muss Test, Connect und Save bei der tatsächlich
+- **D04 / P2 / [#593](https://github.com/byte5ai/zaplex/issues/593):** Formularheader muss Test, Connect und Save bei der tatsächlich
   durch „Create a blank server“ erzeugten schmalen Pane vollständig darstellen.
   `server_view.rs` baut Titel und drei Buttons in nicht umbrechenden Flex-Zeilen.
-- **D05 / P2:** Nichtleere ungültige Hosts brauchen eine passende Erklärung.
+- **D05 / P2 / [#594](https://github.com/byte5ai/zaplex/issues/594):** Nichtleere ungültige Hosts brauchen eine passende Erklärung.
   `endpoint_validation_message` führt `EmptyHost` und `InvalidHost` auf denselben
   Text „Host cannot be empty.“ zusammen. Die Validierung selbst wurde nicht umgangen.
-- **D06 / P1:** Bestehende Editorfelder müssen beim Theme-Wechsel ihre Textfarben
+- **D06 / P1 / [#595](https://github.com/byte5ai/zaplex/issues/595):** Bestehende Editorfelder müssen beim Theme-Wechsel ihre Textfarben
   aktualisieren. `make_editor` übernimmt `text_colors_override` beim Erzeugen;
   der Vergleich von altem und neuem Formular ist der native Befund, die genaue
   Änderung im Editor-/Appearance-Pfad bleibt Implementierungsarbeit.
