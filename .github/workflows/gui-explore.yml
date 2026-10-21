@@ -11,6 +11,10 @@ on:
         description: Original immutable app source commit
         type: string
         required: true
+      remote_target:
+        description: Prepare the isolated Linux acceptance target (private captures)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,6 +40,9 @@ jobs:
     # ci-lint: allow-CI006  Main-only manual exploration in an ephemeral VM
     runs-on: macrunner
     timeout-minutes: 30
+    concurrency:
+      group: gui-exploration-target
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -66,6 +73,14 @@ jobs:
           peekaboo --version > "$art/peekaboo-version.txt"
           sw_vers > "$art/macos.txt"
           open /Applications/Zaplex.app
+      - name: Prepare isolated remote target
+        if: inputs.remote_target
+        env:
+          MACRUNNER_TEST_SSH_KEY: ${{ secrets.MACRUNNER_TEST_SSH_KEY }}
+          MACRUNNER_TEST_KNOWN_HOSTS: ${{ secrets.MACRUNNER_TEST_KNOWN_HOSTS }}
+          MACRUNNER_TEST_HOST: ${{ secrets.MACRUNNER_TEST_HOST }}
+          MACRUNNER_TEST_PORT: ${{ secrets.MACRUNNER_TEST_PORT }}
+        run: python3 script/macos/gui-tests/remote-target prepare
       - name: Allow bounded live interaction
         run: |
           set -euo pipefail
@@ -92,11 +107,22 @@ jobs:
           fi
           peekaboo app quit --app Zaplex || true
           peekaboo daemon stop || true
+      - name: Collect remote facts and clean up owned target processes
+        if: always() && inputs.remote_target
+        run: python3 script/macos/gui-tests/remote-target cleanup
       - name: Preserve exploration evidence
-        if: always()
+        if: always() && !inputs.remote_target
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: gui-exploration-${{ github.run_id }}
           path: ${{ runner.temp }}/exploration/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve reviewed remote metadata only
+        if: always() && inputs.remote_target
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: remote-exploration-${{ github.run_id }}
+          path: ${{ runner.temp }}/remote-public/
           if-no-files-found: error
           retention-days: 14

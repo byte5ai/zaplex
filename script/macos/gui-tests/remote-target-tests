@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Linux checks for exclusive ownership and scoped remote fixture cleanup."""
+import json
+import os
+from pathlib import Path
+import runpy
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+REMOTE = runpy.run_path(str(Path(__file__).with_name("remote-target")))["REMOTE"]
+
+
+class RemoteOwnership(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.home = Path(self.directory.name)
+
+    def call(self, phase, run="123"):
+        return subprocess.run(["python3", "-c", REMOTE, phase, run],
+                              env={**os.environ, "HOME": str(self.home)},
+                              capture_output=True, text=True, timeout=10)
+
+    def test_existing_data_is_not_overwritten(self):
+        root = self.home / ".zaplex"
+        root.mkdir()
+        (root / "important").write_text("keep")
+        self.assertNotEqual(self.call("prepare").returncode, 0)
+        self.assertEqual((root / "important").read_text(), "keep")
+        self.assertFalse((root / "acceptance-owner").exists())
+
+    def test_other_run_cannot_clean_up(self):
+        self.assertEqual(self.call("prepare").returncode, 0)
+        self.assertNotEqual(self.call("cleanup", "456").returncode, 0)
+        self.assertEqual((self.home / ".zaplex/acceptance-owner").read_text(), "123")
+
+    def test_cleanup_only_stops_owned_process_and_preserves_data(self):
+        self.assertEqual(self.call("prepare").returncode, 0)
+        binary = self.home / ".zaplex/remote-server/zaplex-test"
+        shutil.copy2("/usr/bin/sleep", binary)
+        owned = subprocess.Popen([str(binary), "60"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        unrelated = subprocess.Popen(["sleep", "60"], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            result = self.call("cleanup")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["daemon_processes"], 1)
+            self.assertIsNotNone(owned.poll())
+            self.assertIsNone(unrelated.poll())
+            self.assertFalse((self.home / ".zaplex").exists())
+            self.assertTrue((self.home / ".local/share/Trash/files/zaplex-acceptance-123/remote-server/zaplex-test").is_file())
+        finally:
+            for process in (owned, unrelated):
+                if process.poll() is None:
+                    process.terminate()
+                process.wait(timeout=5)
+
+
+unittest.main()
