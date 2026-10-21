@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""Prepare/clean the opt-in, main-only remote GUI acceptance fixture.
+
+Raw logs and captures stay in the ephemeral VM or are fetched privately by the
+operator. Only constructed, endpoint-free facts go into the public artifact.
+"""
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import plistlib
+import re
+import subprocess
+import sys
+import tarfile
+
+
+REMOTE = r'''
+import hashlib, json, os, signal, sys, time
+from pathlib import Path
+phase, run = sys.argv[1:]
+root = Path.home() / ".zaplex"
+assert not root.is_symlink(), "refusing redirected app data"
+root = root.resolve()
+owner = root / "acceptance-owner"
+if phase == "prepare":
+    # Refuse existing app data or another test's runtime, even after a failed job.
+    root.mkdir(mode=0o700)
+    owner.write_text(run)
+    (root / "remote-server").mkdir()
+    (root / "acceptance").mkdir()
+    print(json.dumps({"exclusive_target": True}))
+else:
+    if not root.exists():
+        print(json.dumps({"cleanup": "nothing-created"}))
+        sys.exit(0)
+    assert owner.read_text() == run, "target belongs to another run"
+    processes = {}
+    owned = set()
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            if proc.stat().st_uid != os.getuid():
+                continue
+            stat = (proc / "stat").read_text().rsplit(") ", 1)[1].split()
+            pid = int(proc.name)
+            processes[pid] = (int(stat[1]), stat[19])
+            executable = (proc / "exe").resolve()
+            if executable.is_relative_to(root / "remote-server"):
+                owned.add(pid)
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+    daemons = len(owned)
+    while True:
+        descendants = {pid for pid, (ppid, _) in processes.items() if ppid in owned}
+        if descendants <= owned:
+            break
+        owned |= descendants
+    # Check process start time before signalling; never terminate unrelated tester tasks.
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid in owned:
+            try:
+                stat = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()
+                if stat[19] == processes[pid][1] and stat[0] != "Z":
+                    os.kill(pid, sig)
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+        time.sleep(1)
+    for pid in owned:
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()
+            assert stat[19] != processes[pid][1] or stat[0] == "Z", "owned process survived"
+        except FileNotFoundError:
+            pass
+    # Reversible cleanup; keep only this run's data in the target's trash.
+    trash = Path.home() / ".local/share/Trash/files"
+    trash.mkdir(parents=True, exist_ok=True)
+    destination = trash / f"zaplex-acceptance-{run}"
+    assert not destination.exists()
+    root.rename(destination)
+    print(json.dumps({"cleanup": "owned-processes-stopped-and-data-trashed",
+                      "daemon_processes": daemons, "owned_processes": len(owned)}))
+'''
+
+
+def main():
+    assert os.environ["GITHUB_REF"] == "refs/heads/main"
+    assert os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
+    run = os.environ["GITHUB_RUN_ID"]
+    assert run.isdecimal()
+    phase = sys.argv[1]
+    assert phase in ("prepare", "cleanup")
+    private = Path(os.environ["RUNNER_TEMP"]) / "remote-private"
+    public = Path(os.environ["RUNNER_TEMP"]) / "remote-public"
+    private.mkdir(mode=0o700, exist_ok=True)
+    public.mkdir(exist_ok=True)
+    config = Path.home() / ".ssh/config"
+
+    def execute(args, *, data=None):
+        result = subprocess.run(args, input=data, capture_output=True, timeout=120)
+        with (private / "commands.log").open("ab") as log:
+            log.write(result.stdout + result.stderr)
+        if result.returncode:
+            raise RuntimeError(f"{args[0]} failed; diagnostics remain private")
+        return result.stdout
+
+    def remote(action):
+        print(f"Remote fixture: {action}", flush=True)
+        output = execute(["ssh", "-F", str(config), "zaplex-test",
+                          f"python3 - {action} {run}"], data=REMOTE.encode())
+        return json.loads(output)
+
+    if phase == "cleanup":
+        if (private / "configured").exists():
+            report = remote("cleanup")
+        else:
+            report = {"cleanup": "nothing-configured"}
+        (public / "cleanup.json").write_text(json.dumps(report, indent=2))
+        return
+
+    host = os.environ["MACRUNNER_TEST_HOST"]
+    port = os.environ["MACRUNNER_TEST_PORT"]
+    assert re.fullmatch(r"[A-Za-z0-9.:-]+", host)
+    assert port.isdecimal() and 1 <= int(port) <= 65535
+    assert not config.exists(), "expected fresh VM SSH configuration"
+    config.parent.mkdir(mode=0o700, exist_ok=True)
+    for filename, variable in (("key", "MACRUNNER_TEST_SSH_KEY"),
+                               ("known-hosts", "MACRUNNER_TEST_KNOWN_HOSTS")):
+        value = os.environ[variable]
+        assert value.strip(), f"missing {variable}"
+        path = private / filename
+        path.write_text(value.rstrip() + "\n")
+        path.chmod(0o600)
+    config.write_text(
+        f"Host zaplex-test\n  HostName {host}\n  Port {port}\n  User tester\n"
+        f'  IdentityFile "{private / "key"}"\n'
+        f'  UserKnownHostsFile "{private / "known-hosts"}"\n'
+        "  StrictHostKeyChecking yes\n  IdentitiesOnly yes\n  BatchMode yes\n"
+        "  ConnectTimeout 15\n  ServerAliveInterval 15\n  ServerAliveCountMax 2\n")
+    config.chmod(0o600)
+    (private / "configured").touch()
+    report = remote("prepare")
+    print("Remote fixture: verify and transfer bundled daemon", flush=True)
+    app = Path("/Applications/Zaplex.app/Contents")
+    version = plistlib.loads((app / "Info.plist").read_bytes())["WarpVersion"]
+    assert re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", version)
+    bundle = app / "Resources/bundled/remote-server"
+    archive = bundle / "zap-remote-server-linux-x86_64.tar.gz"
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert digest == Path(str(archive) + ".sha256").read_text().split()[0]
+    binary = private / "zaplex"
+    with tarfile.open(archive) as tar:
+        members = [member for member in tar if Path(member.name).name == "zaplex" and member.isfile()]
+        assert len(members) == 1
+        binary.write_bytes(tar.extractfile(members[0]).read())
+    execute(["scp", "-F", str(config), str(binary),
+             f"zaplex-test:.zaplex/remote-server/zaplex-{version}"])
+    remote_path = f".zaplex/remote-server/zaplex-{version}"
+    output = execute(["ssh", "-F", str(config), "zaplex-test",
+                      f"chmod 700 {remote_path} && sha256sum {remote_path}"])
+    binary_digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    assert output.decode().split()[0] == binary_digest
+    report.update(run_id=run, app_version=version, archive_sha256=digest,
+                  daemon_sha256=binary_digest, upload_verified=True,
+                  acceptance="pending-native-interaction", auth="API test profiles; subscriptions excluded")
+    (public / "prepare.json").write_text(json.dumps(report, indent=2))
+    print("Isolated SSH alias and matching bundled daemon ready; acceptance pending.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        # Paths, endpoints and remote stderr must never enter public Actions logs.
+        print(f"Remote fixture {sys.argv[1]} failed ({type(error).__name__}); inspect private diagnostics.", file=sys.stderr)
+        sys.exit(1)
