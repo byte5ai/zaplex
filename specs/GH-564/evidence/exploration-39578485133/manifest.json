@@ -1,0 +1,958 @@
+{
+  "run_id": "39578485133",
+  "app_source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "harness_source_sha": "a00e12b1d7040e20e0cfbe91e9a175b25f791046",
+  "dmg_sha256": "313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3",
+  "tasks": [
+    {
+      "ids": [
+        "C02",
+        "X01"
+      ],
+      "task": "Find host creation; inspect labels, reject invalid input and cancel without creating a host",
+      "expected": "Understandable next action and errors; cancellation returns to the same workspace without a saved host"
+    },
+    {
+      "ids": [
+        "E01",
+        "X05"
+      ],
+      "task": "Find a setting, change it visibly and return to the existing working context",
+      "expected": "Discoverable control; visible effect; original shell/context preserved"
+    }
+  ],
+  "method": "Choose each next action from a freshly observed screenshot; no pre-scripted interaction sequence",
+  "limits": [
+    "Existing DMG 1.2.2, not later layout fixes",
+    "No authenticated providers or remote acceptance",
+    "No aggregate full-matrix pass"
+  ],
+  "package_version": "1.2.2",
+  "reference_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "run_url": "https://github.com/byte5ai/zaplex/actions/runs/39578485133",
+  "image_processing": "None; unchanged original PNG bytes fetched from the live job.",
+  "locale": "en",
+  "reduced_motion": null,
+  "images": [
+    {
+      "file": "01-start.png",
+      "sha256": "349d6974ed0fc0bb70e50101ed6c2789e11641787147dce72ef287ee24fd0948",
+      "window": {
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "window": {
+          "index": 0,
+          "title": "Local \u00b7 ~",
+          "window_id": 37
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_5de1b2fca6b45efe26279e7852768b9d",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "snapshot_id": "ps1_5de1b2fca6b45efe26279e7852768b9d",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "02-connections.png",
+      "sha256": "349d6974ed0fc0bb70e50101ed6c2789e11641787147dce72ef287ee24fd0948",
+      "window": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "reference_id": "ps1_22484d1aefd24d8a8bbd0570a98e3e34",
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local \u00b7 ~"
+        }
+      },
+      "snapshot_id": "ps1_22484d1aefd24d8a8bbd0570a98e3e34",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "03-connections-foreground.png",
+      "sha256": "6f571a2e16dbb0a80f402344561fd396354e7dcf5264994ebf9694d6c0fd4207",
+      "window": {
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_f5109236771edc1f9953287b90989be0",
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "origin": "top_left",
+        "version": 1,
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "snapshot_id": "ps1_f5109236771edc1f9953287b90989be0",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "04-add-host.png",
+      "sha256": "acc93e4209174a02dfc82804a1547ed537f73892dcb35c4654add435c7135eef",
+      "window": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "version": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_beeb00f993cb85b6a50af99af0ef23ca",
+        "native_scale": 1,
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ]
+      },
+      "snapshot_id": "ps1_beeb00f993cb85b6a50af99af0ef23ca",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "05-host-form.png",
+      "sha256": "843c2c103077ba522859507dcc01694ca0f14087cda97a1cebd625cadce82201",
+      "window": {
+        "reference_id": "ps1_d5045c980051299467c35cf0bce83420",
+        "native_scale": 1,
+        "origin": "top_left",
+        "version": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "SSH server"
+        },
+        "display": {
+          "index": 0
+        }
+      },
+      "snapshot_id": "ps1_d5045c980051299467c35cf0bce83420",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "06-host-invalid.png",
+      "sha256": "8bbd6d8b93f20a527cc53a6aad39f026ad031cf180401e0cc40c6bad1732cbb0",
+      "window": {
+        "output_scale": 1,
+        "origin": "top_left",
+        "version": 1,
+        "reference_id": "ps1_4e008fba1a229e018e6e61e0267f070b",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "index": 0,
+          "title": "SSH server",
+          "window_id": 37
+        },
+        "logical_space": "global_display_points"
+      },
+      "snapshot_id": "ps1_4e008fba1a229e018e6e61e0267f070b",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "07-host-save-invalid.png",
+      "sha256": "4013c9f41e9a6b5a8ab26960da6bb057ea82cdc9794a53cdf9b5f31aa5e57eb9",
+      "window": {
+        "version": 1,
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_dc5241c99ef23e7ec05f66da55bfea89",
+        "origin": "top_left",
+        "window": {
+          "index": 0,
+          "title": "SSH server",
+          "window_id": 37
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ]
+      },
+      "snapshot_id": "ps1_dc5241c99ef23e7ec05f66da55bfea89",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "08-host-escape.png",
+      "sha256": "4013c9f41e9a6b5a8ab26960da6bb057ea82cdc9794a53cdf9b5f31aa5e57eb9",
+      "window": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "SSH server",
+          "window_id": 37,
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "version": 1,
+        "reference_id": "ps1_11ebc608af7e0193160250d33378e01b"
+      },
+      "snapshot_id": "ps1_11ebc608af7e0193160250d33378e01b",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "09-settings-menu.png",
+      "sha256": "d57c0ff1b558ae70846fd1c4b9f68a1303e6b7a90b294ef8c43a20a0cd626f6c",
+      "window": {
+        "reference_id": "ps1_7e3f9c6f53030269d3dd647c80329087",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Settings",
+          "index": 0
+        },
+        "native_scale": 1
+      },
+      "snapshot_id": "ps1_7e3f9c6f53030269d3dd647c80329087",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "10-appearance.png",
+      "sha256": "a705a004b5526d9db22ac737b8c4b65b881ce96ac2e450e1260ea6a9aa3903b5",
+      "window": {
+        "window": {
+          "window_id": 37,
+          "title": "Settings",
+          "index": 0
+        },
+        "version": 1,
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_471787926f79845ea6160e85fe4c6004",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1
+      },
+      "snapshot_id": "ps1_471787926f79845ea6160e85fe4c6004",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "11-theme-choice.png",
+      "sha256": "cab344fa094c2ff5380746a009a24cd81df746cadcdb917c8bbbd940c69addce",
+      "window": {
+        "window": {
+          "index": 0,
+          "title": "Settings",
+          "window_id": 37
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "version": 1,
+        "reference_id": "ps1_34f6c75ca6931ebe9b1b974688b51214",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        }
+      },
+      "snapshot_id": "ps1_34f6c75ca6931ebe9b1b974688b51214",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "12-theme-light-search.png",
+      "sha256": "b5af81129617123664fd312a707c21a18fdb82caf960d55b559851cea6b03b7f",
+      "window": {
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_20b05186f71af13354dc20f5bc8cedee",
+        "native_scale": 1,
+        "output_scale": 1,
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Settings"
+        },
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "snapshot_id": "ps1_20b05186f71af13354dc20f5bc8cedee",
+      "theme": "dark",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "13-theme-light-applied.png",
+      "sha256": "e34131a192eea16b7cd7c2b58571a5730ea9968069f6fc2f70cc52ce9c306baa",
+      "window": {
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "window_id": 37,
+          "title": "Settings",
+          "index": 0
+        },
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "output_scale": 1,
+        "reference_id": "ps1_186816e2d1c86d4ab710d968ad3e0489",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1
+      },
+      "snapshot_id": "ps1_186816e2d1c86d4ab710d968ad3e0489",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "14-theme-escape.png",
+      "sha256": "c419b23a72bd6b7ac9495ec52da247cadde17d3b15e78b0f5575d9d555c20d12",
+      "window": {
+        "output_scale": 1,
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "title": "Settings",
+          "window_id": 37,
+          "index": 0
+        },
+        "reference_id": "ps1_3d99350a89f335e573faa40f3366ac2b",
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left"
+      },
+      "snapshot_id": "ps1_3d99350a89f335e573faa40f3366ac2b",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "15-theme-panel-closed.png",
+      "sha256": "fa149f9457015067c6e836ea83e4883c828b4d571ce632346006a866ca0b095e",
+      "window": {
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_91e9c282cfdd913b471909dcb20084fe",
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 37
+        },
+        "output_scale": 1
+      },
+      "snapshot_id": "ps1_91e9c282cfdd913b471909dcb20084fe",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "16-return-workspace.png",
+      "sha256": "a7502841d005f74079b5bb28611dc2d66aa736baf6c9c71f73a68754641a6fe5",
+      "window": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_6a58aa5963b2082a6553cb1e9fe53c5e",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "window": {
+          "window_id": 37,
+          "title": "SSH server",
+          "index": 0
+        },
+        "logical_space": "global_display_points"
+      },
+      "snapshot_id": "ps1_6a58aa5963b2082a6553cb1e9fe53c5e",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "17-add-again.png",
+      "sha256": "b877d801d5702f778097ac30ca2257a206b38aa55ab8218d9a2b92ac5164b484",
+      "window": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "reference_id": "ps1_d1ea035c9e13f7e719a1d56402be3277",
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "window": {
+          "index": 0,
+          "title": "SSH server",
+          "window_id": 37
+        }
+      },
+      "snapshot_id": "ps1_d1ea035c9e13f7e719a1d56402be3277",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "18-add-cancel.png",
+      "sha256": "a7502841d005f74079b5bb28611dc2d66aa736baf6c9c71f73a68754641a6fe5",
+      "window": {
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "origin": "top_left",
+        "reference_id": "ps1_79ac776a8bc5ddae4e8fefa56d641880",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "SSH server"
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "logical_space": "global_display_points"
+      },
+      "snapshot_id": "ps1_79ac776a8bc5ddae4e8fefa56d641880",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "19-add-for-light-check.png",
+      "sha256": "bb7430ae6c7e6613642e81a6cac068abafc6f2797870df046feb0162ed266b0c",
+      "window": {
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "SSH server"
+        },
+        "origin": "top_left",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "reference_id": "ps1_5b28fba50907533b3b174dbe24c6534f",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "snapshot_id": "ps1_5b28fba50907533b3b174dbe24c6534f",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "20-fresh-host-light.png",
+      "sha256": "fef441e921e1d6fedf868986f3ab20d808e365a716175a852a06f6b79f758b7f",
+      "window": {
+        "native_scale": 1,
+        "origin": "top_left",
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "title": "SSH server",
+          "window_id": 37,
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_07aafdbafd193878f50e92ded3d58849",
+        "version": 1,
+        "display": {
+          "index": 0
+        }
+      },
+      "snapshot_id": "ps1_07aafdbafd193878f50e92ded3d58849",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "21-valid-host-focus.png",
+      "sha256": "fef441e921e1d6fedf868986f3ab20d808e365a716175a852a06f6b79f758b7f",
+      "window": {
+        "window": {
+          "window_id": 37,
+          "title": "SSH server",
+          "index": 0
+        },
+        "reference_id": "ps1_0947ff988f39d719a29dbdd008888b63",
+        "logical_space": "global_display_points",
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "snapshot_id": "ps1_0947ff988f39d719a29dbdd008888b63",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "22-valid-host-typed.png",
+      "sha256": "c17be07c48f101678fc7cae822da854e6dce845b46ccfa4f0154f56144c74582",
+      "window": {
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "SSH server"
+        },
+        "output_scale": 1,
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_2fe82c7eb48b20177a66e29ba7af2896",
+        "origin": "top_left"
+      },
+      "snapshot_id": "ps1_2fe82c7eb48b20177a66e29ba7af2896",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    },
+    {
+      "file": "23-valid-host-save.png",
+      "sha256": "86588f1734e5c50146c906af695ea218013e1aa639f98e81dd3254351ed27cf4",
+      "window": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_8075daa86ce4c712bcd23b72825a2575",
+        "version": 1,
+        "output_scale": 1,
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "SSH server"
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "snapshot_id": "ps1_8075daa86ce4c712bcd23b72825a2575",
+      "theme": "light",
+      "theme_basis": "Visual inspection of this original capture."
+    }
+  ]
+}

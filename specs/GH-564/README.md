@@ -1,9 +1,13 @@
 # Native UI-/UX-Abnahme: Teilnachweise und korrigierte Befunde
 
-Stand: 20.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
+Stand: 21.10.2026. Auftrag [#564](https://github.com/byte5ai/zaplex/issues/564),
 übergreifend [#562](https://github.com/byte5ai/zaplex/issues/562).
 
-**Keine Gesamtfreigabe.** Die Fehler in Connections, Favoriten und Dateipanes
+**Keine Gesamtfreigabe.** Die [erste direkte Exploration vom 21.10.2026](EXPLORATION-2026-10-21.md)
+ist durchgeführt: 23 Originalaufnahmen, beobachteter Theme-Wechsel und Rückwege,
+drei neue konkrete Formularbefunde. Der lokale Bedienzugang ist nachgewiesen.
+
+ Die Fehler in Connections, Favoriten und Dateipanes
 (#565, #566, #572) sind mit [PR #586](https://github.com/byte5ai/zaplex/pull/586)
 behoben und auf `1800ec77` (1.2.4) nativ nachgeprüft: vier Fälle bestanden,
 30 Originalaufnahmen visuell ausgewertet. [Ergebnis und Grenzen](NATIVE-FIXTURES.md#workspace-korrekturen-nativ-bestätigt-am-20102026).
@@ -148,8 +152,8 @@ das bedeutet nicht, dass die App keine hat. Der bereits bekannte native
 Schließen-Fehler des alten DMG und dessen Korrektur #558 bleiben beim aktuellen
 DMG erneut zu prüfen (bestehender Auftrag #559/#562).
 
-Der aktuelle Gesamtvergleich benötigt den noch nicht bereitgestellten
-begrenzten explorativen GUI-Zugriff sowie
+Der lokale explorative GUI-Zugriff ist seit 21.10.2026 praktisch nachgewiesen.
+Der Gesamtvergleich benötigt weitere lokale Aufgaben sowie
 isolierte Remote-/Provider-Testzugänge. Der bestehende private Infrastrukturauftrag
 wurde live gelesen und ist offen; hier werden weder private Endpunkte noch
 Zugangsdaten veröffentlicht. Saubere, nicht durch Systembanner verdeckte
