@@ -6,7 +6,7 @@ on:
       scenario:
         description: Native layout scenario to verify
         type: choice
-        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form]
+        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form, terminal-introduction]
         default: all
 
 permissions:
@@ -43,7 +43,8 @@ jobs:
           set -euo pipefail
           tests=()
           case "$SCENARIO" in
-            all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence test_native_ssh_form_evidence test_native_ssh_form_german_evidence) ;;
+            all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence test_native_ssh_form_evidence test_native_ssh_form_german_evidence test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence) ;;
+            terminal-introduction) tests=(test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence) ;;
             ssh-form) tests=(test_native_ssh_form_evidence test_native_ssh_form_german_evidence) ;;
             agent) tests=(test_subscription_agent_conversation_layout_evidence) ;;
             connections-en) tests=(test_native_workspace_empty_states_evidence) ;;
@@ -61,6 +62,8 @@ jobs:
               continue
             fi
             case "$test_name" in
+              test_native_terminal_introduction*)
+                captures=(terminal-introduction-dark-1024 terminal-introduction-dark-760 terminal-introduction-light-1024 terminal-introduction-light-760 terminal-introduction-dismissed) ;;
               test_native_ssh_form*)
                 captures=(native-ssh-form-dark-1024 native-ssh-form-dark-760 native-ssh-form-light-1024 native-ssh-form-light-760 native-ssh-form-dark-again-1024 native-ssh-form-dark-again-760 native-ssh-form-invalid-test native-ssh-form-invalid-connect native-ssh-form-invalid-save) ;;
               test_subscription_agent_*)

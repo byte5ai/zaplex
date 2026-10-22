@@ -1,13 +1,15 @@
+#[cfg(feature = "integration_tests")]
+use warpui::elements::SavePosition;
+
 use settings::Setting;
 use warp_core::{report_if_error, ui::Icon};
 use warpui::{
     elements::{
-        ChildAnchor, Container, CrossAxisAlignment, Flex, MainAxisSize, OffsetPositioning,
-        ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable, Stack, Text,
+        Align, Container, CrossAxisAlignment, Flex, MainAxisSize, ParentElement, Shrinkable, Text,
     },
     fonts::{Properties, Weight},
     keymap::Keystroke,
-    prelude::{vec2f, ConstrainedBox, Cursor, Empty, Hoverable, MouseStateHandle},
+    prelude::{ConstrainedBox, Cursor, Empty, Hoverable, MouseStateHandle},
     scene::{Border, CornerRadius, Radius},
     ui_components::{
         checkbox::Checkbox,
@@ -25,7 +27,7 @@ use crate::{
     terminal::{
         self,
         event::BlockType,
-        input::message_bar::{common::render_standard_message, Message, MessageItem},
+        input::message_bar::{common::render_wrapping_message, Message, MessageItem},
         model_events::{ModelEvent, ModelEventDispatcher},
         settings::{TerminalSettings, TerminalSettingsChangedEvent},
         view::TerminalAction,
@@ -146,6 +148,20 @@ impl View for TerminalViewZeroStateBlock {
         let theme = appearance.theme();
 
         let title_font_size = appearance.monospace_font_size() + 6.;
+        let title_text = crate::t!("terminal-zero-state-title");
+        let title_label = Text::new(
+            title_text.clone(),
+            appearance.ui_font_family(),
+            title_font_size,
+        )
+        .with_color(theme.main_text_color(theme.background()).into_solid())
+        .with_style(Properties::default().weight(Weight::Bold))
+        .soft_wrap(true);
+        #[cfg(feature = "integration_tests")]
+        let title_label = title_label.with_saved_char_position(
+            title_text.chars().count().saturating_sub(1),
+            "terminal-introduction-title-end".into(),
+        );
         let title = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
@@ -162,16 +178,7 @@ impl View for TerminalViewZeroStateBlock {
                 .with_margin_right(8.)
                 .finish(),
             )
-            .with_child(
-                Text::new(
-                    crate::t!("terminal-zero-state-title"),
-                    appearance.ui_font_family(),
-                    title_font_size,
-                )
-                .with_color(theme.main_text_color(theme.background()).into_solid())
-                .with_style(Properties::default().weight(Weight::Bold))
-                .finish(),
-            )
+            .with_child(Shrinkable::new(1., title_label.finish()).finish())
             .finish();
 
         let mut content = Flex::column()
@@ -184,7 +191,7 @@ impl View for TerminalViewZeroStateBlock {
             );
 
         let mut items = vec![
-            render_standard_message(
+            render_wrapping_message(
                 Message::new(vec![MessageItem::clickable(
                     vec![
                         MessageItem::keystroke(ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone()),
@@ -197,7 +204,7 @@ impl View for TerminalViewZeroStateBlock {
                 )]),
                 app,
             ),
-            render_standard_message(
+            render_wrapping_message(
                 Message::new(vec![MessageItem::clickable(
                     vec![
                         MessageItem::keystroke(Keystroke {
@@ -219,7 +226,7 @@ impl View for TerminalViewZeroStateBlock {
             if let Some(keystroke) =
                 keybinding_name_to_keystroke(TOGGLE_RIGHT_PANEL_BINDING_NAME, app)
             {
-                items.push(render_standard_message(
+                items.push(render_wrapping_message(
                     Message::new(vec![MessageItem::clickable(
                         vec![
                             MessageItem::keystroke(keystroke),
@@ -261,7 +268,7 @@ impl View for TerminalViewZeroStateBlock {
                     .with_child(
                         Shrinkable::new(
                             1.,
-                            render_standard_message(
+                            render_wrapping_message(
                                 Message::from_text(crate::t!(
                                     "terminal-zero-state-autodetect-prompts"
                                 )),
@@ -294,26 +301,28 @@ impl View for TerminalViewZeroStateBlock {
         .with_cursor(Cursor::PointingHand)
         .finish();
 
-        Stack::new()
-            .with_child(
-                Container::new(content.finish())
-                    .with_horizontal_padding(*terminal::view::PADDING_LEFT)
-                    .with_vertical_padding(styles::CONTAINER_VERTICAL_PADDING)
-                    .with_border(
-                        Border::new(1.)
-                            .with_sides(true, false, true, false)
-                            .with_border_fill(theme.outline()),
-                    )
-                    .finish(),
-            )
-            .with_positioned_child(
-                dismiss_button,
-                OffsetPositioning::offset_from_parent(
-                    vec2f(-8., -8.),
-                    ParentOffsetBounds::ParentBySize,
-                    ParentAnchor::BottomRight,
-                    ChildAnchor::BottomRight,
-                ),
+        #[cfg(feature = "integration_tests")]
+        let dismiss_button = SavePosition::new(dismiss_button, "terminal-introduction-dismiss")
+            .for_single_frame()
+            .finish();
+        content.add_child(
+            Container::new(Align::new(dismiss_button).right().finish())
+                .with_margin_top(8.)
+                .finish(),
+        );
+
+        let content = content.finish();
+        #[cfg(feature = "integration_tests")]
+        let content = SavePosition::new(content, "terminal-introduction-content")
+            .for_single_frame()
+            .finish();
+        Container::new(content)
+            .with_horizontal_padding(*terminal::view::PADDING_LEFT)
+            .with_vertical_padding(styles::CONTAINER_VERTICAL_PADDING)
+            .with_border(
+                Border::new(1.)
+                    .with_sides(true, false, true, false)
+                    .with_border_fill(theme.outline()),
             )
             .finish()
     }

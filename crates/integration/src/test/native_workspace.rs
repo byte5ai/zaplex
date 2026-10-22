@@ -8,12 +8,46 @@ use warp::integration_testing::{
         execute_command, util::ExpectedExitStatus, wait_until_bootstrapped_pane,
         wait_until_bootstrapped_single_pane_for_tab,
     },
+    terminal_introduction,
 };
 use warpui::integration::{AssertionOutcome, TestStep};
 
 use crate::Builder;
 
 // A 640px content height fits the macOS CI display below its menu bar and Dock.
+
+pub fn test_native_terminal_introduction_evidence() -> Builder {
+    terminal_introduction_evidence("en")
+}
+
+pub fn test_native_terminal_introduction_german_evidence() -> Builder {
+    terminal_introduction_evidence("de")
+}
+
+fn terminal_introduction_evidence(locale: &'static str) -> Builder {
+    warp::i18n::set_locale(locale);
+    let mut builder = Builder::new()
+        .with_real_display()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(verify_locale(locale))
+        .with_step(native::resize(1024., 640.))
+        .with_step(native::open_form());
+    for (light, theme) in [(false, "dark"), (true, "light")] {
+        builder = builder.with_step(native::theme(light));
+        for width in [1024, 760] {
+            builder = builder
+                .with_step(native::resize(width as f32, 640.))
+                .with_step(
+                    terminal_introduction::layout()
+                        .with_take_screenshot(format!("terminal-introduction-{theme}-{width}.png")),
+                );
+        }
+    }
+    builder.with_step(
+        terminal_introduction::dismiss()
+            .with_take_screenshot("terminal-introduction-dismissed.png"),
+    )
+}
 
 pub fn test_native_ssh_form_evidence() -> Builder {
     ssh_form_evidence("en")

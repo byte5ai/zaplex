@@ -5,7 +5,7 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
 use warpui::elements::{
     Border, CacheOption, Clipped, Container, CornerRadius, Element, Hoverable, Image,
-    ParentElement, Radius, Wrap,
+    ParentElement, Radius, Shrinkable, Wrap,
 };
 use warpui::platform::Cursor;
 use warpui::prelude::{Align, ConstrainedBox, CrossAxisAlignment, Flex, Text};
@@ -86,6 +86,11 @@ pub fn render_standard_message(message: Message, app: &AppContext) -> Box<dyn El
     render_message_bar_items(&message.items, app)
 }
 
+/// Wrap labels within the available width while keeping shortcuts at their natural size.
+pub fn render_wrapping_message(message: Message, app: &AppContext) -> Box<dyn Element> {
+    render_message_items(&message.items, true, app)
+}
+
 /// Keep each shortcut with its label, moving whole hints onto another line as needed.
 pub fn render_wrapping_message_bar(message: Message, app: &AppContext) -> Box<dyn Element> {
     let mut content = Wrap::row()
@@ -107,6 +112,14 @@ pub fn render_wrapping_message_bar(message: Message, app: &AppContext) -> Box<dy
 /// Renders a sequence of message items into a flex row.
 /// Currently used for agent message bar items and zero state message bar items.
 fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn Element> {
+    render_message_items(items, false, app)
+}
+
+fn render_message_items(
+    items: &[MessageItem],
+    wrap_labels: bool,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let default_font_color = styles::default_font_color(app);
 
@@ -133,7 +146,7 @@ fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn 
                     styles::font_size(app),
                 )
                 .with_color(font_color)
-                .soft_wrap(false);
+                .soft_wrap(wrap_labels);
                 #[cfg(feature = "integration_tests")]
                 let text = text.with_saved_char_position(
                     content.chars().count().saturating_sub(1),
@@ -157,7 +170,7 @@ fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn 
                         styles::font_size(app),
                     )
                     .with_color(link_color)
-                    .soft_wrap(false)
+                    .soft_wrap(wrap_labels)
                     .finish()
                 })
                 .on_click(move |_, app, _| {
@@ -179,7 +192,7 @@ fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn 
                 mouse_state,
                 disabled,
             } => {
-                let message_items = render_message_bar_items(clickable_items, app);
+                let message_items = render_message_items(clickable_items, wrap_labels, app);
 
                 if !disabled {
                     let action = action.clone();
@@ -205,7 +218,7 @@ fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn 
                 if !disabled {
                     Hoverable::new(mouse_state.clone(), move |state| {
                         render_message_chip_container(
-                            render_message_bar_items(&chip_items, app),
+                            render_message_items(&chip_items, wrap_labels, app),
                             state.is_hovered(),
                             app,
                         )
@@ -217,7 +230,7 @@ fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn 
                     .finish()
                 } else {
                     render_message_chip_container(
-                        render_message_bar_items(chip_items.as_slice(), app),
+                        render_message_items(chip_items.as_slice(), wrap_labels, app),
                         false,
                         app,
                     )
@@ -269,6 +282,17 @@ fn render_message_bar_items(items: &[MessageItem], app: &AppContext) -> Box<dyn 
             }
         }
 
+        if wrap_labels
+            && matches!(
+                item,
+                MessageItem::Text { .. }
+                    | MessageItem::Hyperlink { .. }
+                    | MessageItem::Clickable { .. }
+                    | MessageItem::Chip { .. }
+            )
+        {
+            child = Shrinkable::new(1., child).finish();
+        }
         row.add_child(child);
     }
 
