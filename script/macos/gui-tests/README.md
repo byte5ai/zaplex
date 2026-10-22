@@ -49,6 +49,12 @@ Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
 - Im Batch: `test-dmg.yml` ruft den Workflow nach dem Verpacken auf und übergibt
   genau dessen DMG-Artefakt. Fehler lassen den Test-DMG-Workflow scheitern.
   Im Batch wird immer die vollständige Suite ausgeführt.
+- Interaktive Exploration: `gui-explore.yml` verwendet ebenfalls das vorhandene
+  DMG. Das Bedienfenster ist auf 30 Minuten begrenzt, weil verzögerte Bild- und
+  Eingabeabrufe wiederholt das frühere Zehn-Minuten-Fenster überschritten haben.
+  Die Datei `finished` im Verzeichnis aus `/tmp/zaplex-exploration-path` beendet
+  das Fenster vorzeitig; anschließend folgen Aufräumen und Belegsicherung.
+  Ein erfolgreicher Bereitstellungslauf ist keine Produktabnahme.
 - Vor Veröffentlichung: `zap_release.yml` prüft sein `zap-macos-arm64`-Artefakt
   mit Tests von der unveränderlichen Build-Revision. Ein Fehler sperrt die
   Veröffentlichung. Belege werden separat aufbewahrt und nicht als Release-Assets
