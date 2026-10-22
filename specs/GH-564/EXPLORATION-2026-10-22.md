@@ -53,3 +53,26 @@ von diesen lokalen Sitzungen nicht abgedeckt. #564/#562 erhalten keine Gesamtfre
 Ein weiterer [Bereitstellungslauf 39759939367](https://github.com/byte5ai/zaplex/actions/runs/39759939367)
 endete nach Ablauf des Bedienfensters ebenfalls infrastrukturell erfolgreich.
 Darin wurde keine weitere Interaktion ausgeführt; er erweitert die Produktbelege nicht.
+
+## Abgeschlossener F10-Rückweg mit Shellnachweis
+
+[Run 39770035744](https://github.com/byte5ai/zaplex/actions/runs/39770035744),
+Harness `693b5d190874bf28b2b68a7492dffbeab0bfb3e7`, verwendet dasselbe unveränderte
+1.2.2-DMG. [Manifest](evidence/exploration-39770035744/manifest.json) und
+[Aktionsprotokoll](evidence/exploration-39770035744/actions.json) sichern acht weitere,
+einzeln betrachtete Originalbilder. Sprache, Theme und Fenstergeometrie sind wie oben.
+
+| Bilder | Handlung und sichtbare Wirkung | Bewertung |
+|---|---|---|
+| [01](evidence/exploration-39770035744/01-start.png) → [02](evidence/exploration-39770035744/02-fixture-input.png) → [03](evidence/exploration-39770035744/03-fixture-ready.png) | Künstliche Dateien im isolierten Verzeichnis; Shell setzt den nicht exportierten Marker `ZAPLEX_PROOF=9537` und zeigt `READY:9537:/tmp/zaplex-acceptance-39770035744`. | Unabhängiger Zustand vor dem Wechsel. |
+| [04](evidence/exploration-39770035744/04-file-manager.png) | Cmd+Shift+E öffnet Dateimanager im richtigen Verzeichnis; `nested` und `ORIGINAL.txt` (5 B) sichtbar. | Tastatureinstieg und Kontext pass. |
+| [05](evidence/exploration-39770035744/05-shell-return.png) | F10 schließt Dateimanager, ursprünglicher Terminalblock und Prompt erscheinen. | Rückweg über F10 sichtbar. |
+| [06](evidence/exploration-39770035744/06-proof-input.png) → [07](evidence/exploration-39770035744/07-proof-input-retry.png) | Erste Texteingabe meldet Werkzeug-Timeout; die Aufnahme zeigt ein leeres Eingabefeld. Erst danach wird ein kürzerer Prüftext eingegeben und vollständig gesehen. | Kein blindes Wiederholen einer möglicherweise bereits eingetragenen Eingabe. |
+| [08](evidence/exploration-39770035744/08-shell-proof.png) | Nach Enter: `AFTER:9537:/tmp/zaplex-acceptance-39770035744` und `ALPHA`. | Ursprünglicher Shellmarker, CWD und Dateiinhalt nach F10 erhalten. Dieser Teil von F01 ist bestanden. |
+
+Der Job endete erfolgreich einschließlich Aufräumen und Beleg-Upload. Die Aufnahme-
+und Bedienbefehle antworteten deutlich verzögert; deshalb wurde der bereits vorab
+geplante Shell-Rückweg priorisiert. Umbenennen-Bestätigung, Elternnavigation und die
+anderen Rückwege wurden in dieser Sitzung nicht ausgeführt. Das F10-Ergebnis gilt
+für die freie lokale Shell in dieser Konfiguration, nicht für belegte/verschachtelte
+Shells oder Remote-Recovery. Die Gesamtbewertung von #564/#562 bleibt unverändert.
