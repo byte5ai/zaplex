@@ -15,6 +15,12 @@ inputs:
     description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
   cache_key:
     description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
+  cache_on_failure:
+    description: Save compiled dependencies even when a later build or test step fails.
+    default: "false"
+  cache_workspace_crates:
+    description: Include workspace crates in the Rust cache; Cargo validates them before reuse.
+    default: "false"
   ssh_key:
     description: SSH private key used to clone the private warp-channel-config repository. Only consumed when running in warpdotdev/warp-internal.
 
@@ -28,13 +34,15 @@ runs:
         INSTALL_TEST_DEPS: ${{ inputs.install_test_deps }}
         INSTALL_RELEASE_DEPS: ${{ inputs.install_release_deps }}
         IS_SELF_HOSTED: ${{ inputs.is_self_hosted }}
+        CACHE_ON_FAILURE_INPUT: ${{ inputs.cache_on_failure }}
+        CACHE_WORKSPACE_CRATES: ${{ inputs.cache_workspace_crates }}
       run: |
         set -euo pipefail
         case "$TARGET_OS" in
           macos|linux|windows|wasm) ;;
           *) echo "::error::Invalid target_os"; exit 1 ;;
         esac
-        for value in "$INSTALL_TEST_DEPS" "$INSTALL_RELEASE_DEPS" "$IS_SELF_HOSTED"; do
+        for value in "$INSTALL_TEST_DEPS" "$INSTALL_RELEASE_DEPS" "$IS_SELF_HOSTED" "$CACHE_ON_FAILURE_INPUT" "$CACHE_WORKSPACE_CRATES"; do
           case "$value" in
             ""|true|false) ;;
             *) echo "::error::Boolean action inputs must be true or false"; exit 1 ;;
@@ -122,6 +130,8 @@ runs:
         # Make sure x86_64-unknown-linux-gnu and wasm32-unknown-unknown builds
         # don't share a cache, despite running on the same _host_ architecture.
         key: ${{ inputs.cache_key != '' && inputs.cache_key || inputs.target_os }}
+        cache-on-failure: ${{ inputs.cache_on_failure }}
+        cache-workspace-crates: ${{ inputs.cache_workspace_crates }}
         # Save on every branch, including main and fix/codex branches, so later
         # runs can reuse dependencies. PR merge refs and release tags only restore.
         save-if: ${{ startsWith(github.ref, 'refs/heads/') }}
