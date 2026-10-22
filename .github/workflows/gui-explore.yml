@@ -39,7 +39,7 @@ jobs:
     needs: verify
     # ci-lint: allow-CI006  Main-only manual exploration in an ephemeral VM
     runs-on: macrunner
-    timeout-minutes: 30
+    timeout-minutes: 50
     concurrency:
       group: gui-exploration-target
       cancel-in-progress: false
@@ -85,11 +85,11 @@ jobs:
         run: |
           set -euo pipefail
           art="$RUNNER_TEMP/exploration"
-          echo 'Live exploration window: 10 minutes; finish by creating exploration/finished.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Live exploration window: 30 minutes; finish by creating exploration/finished.' >> "$GITHUB_STEP_SUMMARY"
           echo 'Job success is infrastructure availability, not a product acceptance verdict.' >> "$GITHUB_STEP_SUMMARY"
           mkdir -p /tmp/macrunner-operator
-          printf 'repo=%s run=%s until=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$(( $(date +%s) + 600 ))" > /tmp/macrunner-operator/open
-          deadline=$((SECONDS + 600))
+          printf 'repo=%s run=%s until=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$(( $(date +%s) + 1800 ))" > /tmp/macrunner-operator/open
+          deadline=$((SECONDS + 1800))
           while [[ ! -f "$art/finished" && $SECONDS -lt $deadline ]]; do
             sleep 2
           done
