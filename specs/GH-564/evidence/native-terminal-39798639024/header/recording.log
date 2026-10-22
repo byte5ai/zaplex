@@ -1,0 +1,40 @@
+[+00:00.000] Step started: Wait for bootstrapping
+[+00:00.334] Assertion started: no pending model events
+[+00:00.753] Assertion passed: no pending model events
+[+00:00.771] Assertion started: no block executing
+[+00:00.771] Assertion passed: no block executing
+[+00:00.788] Assertion started: waiting for bootstrapping
+[+00:02.018] Assertion passed: waiting for bootstrapping
+[+00:02.018] Step succeeded: Wait for bootstrapping
+[+00:02.018] Step started: Resize native workspace to 1024x640
+[+00:02.020] Action executed
+[+00:02.064] Assertion started: Native window reached requested geometry
+[+00:02.064] Assertion passed: Native window reached requested geometry
+[+00:02.064] Step succeeded: Resize native workspace to 1024x640
+[+00:02.065] Step started: Run 'mkdir -p entry-fixture && cd entry-fixture && printf HEADER > ORIGINAL.txt' and verify block exists
+[+00:02.065] Event: TypedCharacters 'mkdir -p entry-fixture && cd entry-fixture && printf HEADER > ORIGINAL.txt'
+[+00:02.078] Event: KeyDown ''
+[+00:02.213] Action executed
+[+00:02.254] Assertion started: no pending model events
+[+00:02.254] Assertion passed: no pending model events
+[+00:02.284] Assertion started: no block executing
+[+00:02.457] Assertion passed: no block executing
+[+00:02.474] Assertion started: assert 'mkdir -p entry-fixture && cd entry-fixture && printf HEADER > ORIGINAL.txt' ran
+[+00:02.474] Assertion passed: assert 'mkdir -p entry-fixture && cd entry-fixture && printf HEADER > ORIGINAL.txt' ran
+[+00:02.491] Assertion started: assert command output
+[+00:02.491] Assertion passed: assert command output
+[+00:02.508] Assertion started: wait for precmd so we have metadata for the next block
+[+00:02.640] Assertion passed: wait for precmd so we have metadata for the next block
+[+00:02.661] Assertion started: assert exit code
+[+00:02.661] Assertion passed: assert exit code
+[+00:02.683] Assertion started: check that input is empty
+[+00:02.683] Assertion passed: check that input is empty
+[+00:02.683] Step succeeded: Run 'mkdir -p entry-fixture && cd entry-fixture && printf HEADER > ORIGINAL.txt' and verify block exists
+[+00:02.683] Step started: Capture the terminal before its header click
+[+00:02.704] Action executed
+[+00:02.704] Step succeeded: Capture the terminal before its header click
+[+00:02.847] Step started: Click the actual terminal header folder button
+[+00:02.910] Action executed
+[+00:03.532] Assertion started: Header click replaces the invoking pane with a file manager
+[+00:03.532] Assertion passed: Header click replaces the invoking pane with a file manager
+[+00:03.532] Step succeeded: Click the actual terminal header folder button
