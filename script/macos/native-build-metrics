@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Record bounded, read-only build diagnostics without process arguments or envs."""
+
+import argparse
+import datetime
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import threading
+import time
+
+
+def command_output(args):
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=10)
+        return {"exit_code": result.returncode, "output": result.stdout.strip()}
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {"error": type(error).__name__}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--seconds", type=int, default=3000)
+    parser.add_argument("--interval", type=int, default=30)
+    args = parser.parse_args()
+    if not 1 <= args.seconds <= 7200 or not 1 <= args.interval <= 60:
+        parser.error("duration must be 1..7200 seconds and interval 1..60 seconds")
+
+    stopped = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopped.set())
+    signal.signal(signal.SIGINT, lambda *_: stopped.set())
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + args.seconds
+    while not stopped.is_set() and time.monotonic() < deadline:
+        processes = command_output(
+            ["ps", "-axo", "pid,ppid,pcpu,rss,vsz,etime,time,comm"]
+        )
+        if "output" in processes:
+            lines = processes["output"].splitlines()
+            rows = [line for line in lines[1:] if len(line.split()) >= 8]
+            rows.sort(key=lambda line: int(line.split()[3]), reverse=True)
+            processes["output"] = "\n".join(lines[:1] + rows[:12])
+        disk = os.statvfs(".")
+        sample = {
+            "at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "processes": processes,
+            "vm_stat": command_output(["vm_stat"]),
+            "swap": command_output(["sysctl", "vm.swapusage"]),
+            "disk_available_bytes": disk.f_bavail * disk.f_frsize,
+        }
+        encoded = json.dumps(sample) + "\n"
+        with args.output.open("a") as output:
+            output.write(encoded)
+        latest = args.output.with_name("resources-latest.json")
+        temporary = latest.with_suffix(".tmp")
+        temporary.write_text(encoded)
+        temporary.replace(latest)
+        print(f"Resource sample saved at {sample['at']}", flush=True)
+        stopped.wait(min(args.interval, max(0, deadline - time.monotonic())))
+
+
+if __name__ == "__main__":
+    main()
