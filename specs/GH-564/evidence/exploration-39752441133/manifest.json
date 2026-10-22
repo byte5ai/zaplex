@@ -1,0 +1,418 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "installed-dmg-direct-exploration",
+  "run_id": "39752441133",
+  "source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "test_source_sha": "fa45c58ef04d7eed1306fbdad9ebd490a36e4f2d",
+  "package_version": "1.2.2",
+  "dmg_sha256": "313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3",
+  "installed_dmg": true,
+  "image_processing": "None; unchanged original PNG bytes.",
+  "images": [
+    {
+      "file": "01-start.png",
+      "sha256": "bc2f40b654c0d2bdf5be647536a1f53c9a5ec7f7f223cea58299d4a1b6654a53",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_ef2f6cfd68d44e69a639b6361e797048",
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "logical_space": "global_display_points"
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "02-fixture-input.png",
+      "sha256": "a7c42b5fe06e13fcd821f2ce5d9ca24d0eee0ee83a0539557aba3310d04ad2f8",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local \u00b7 ~"
+        },
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_3726a71cda2c481b7ce336867fd7e387",
+        "version": 1
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "03-fixture-ready.png",
+      "sha256": "cfbf3e815111e21a68d7b9cf4581fd60d6a0c17711896acf7138cd13ffc91a9a",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local \u00b7 zaplex-acceptance-39752441133",
+          "window_id": 37,
+          "index": 0
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_3930b4659649e444858b3f09daf960e7"
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "04-file-manager.png",
+      "sha256": "6fcb81b0f403362b68f0b1ad99c92d7e3d17ea2879df9b36d0cf13c8dfd13bbc",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "origin": "top_left",
+        "output_scale": 1,
+        "window": {
+          "title": "Local \u00b7 zaplex-acceptance-39752441133",
+          "window_id": 37,
+          "index": 0
+        },
+        "reference_id": "ps1_acea88b35943913baeb2800a72c403fa",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ]
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "05-file-manager-correct-coordinates.png",
+      "sha256": "cfbf3e815111e21a68d7b9cf4581fd60d6a0c17711896acf7138cd13ffc91a9a",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local \u00b7 zaplex-acceptance-39752441133"
+        },
+        "reference_id": "ps1_ac45a75a07ccf12e400a8ac10d6920dd"
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "06-pane-menu.png",
+      "sha256": "1035049855e3c959c8e20a7820972db4a78bdafb46f84e7657f0131ea0e4f756",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local \u00b7 zaplex-acceptance-39752441133"
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_c186231d1ce780f018bc92ac2c32af55",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points"
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "07-file-manager-shortcut.png",
+      "sha256": "1035049855e3c959c8e20a7820972db4a78bdafb46f84e7657f0131ea0e4f756",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Local \u00b7 zaplex-acceptance-39752441133",
+          "index": 0,
+          "window_id": 37
+        },
+        "output_scale": 1,
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_41ea47b5b098dfa1536fa9e55d659125"
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "08-file-manager-keyboard.png",
+      "sha256": "480ade7ba85fea8784e9f62878a2763faa8aa57254dd223203cb1054a98a55f1",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "window": {
+          "title": "Local \u00b7 zaplex-acceptance-39752441133",
+          "window_id": 37,
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "version": 1,
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_b1a66bed6ca17f33b0471ac5658bcdb1"
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "09-nested-directory.png",
+      "sha256": "d489b584d618446092f0f4ef76516b37efbfd0046d7fcdc83b0528ccfed8685b",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "version": 1,
+        "native_scale": 1,
+        "origin": "top_left",
+        "window": {
+          "window_id": 37,
+          "title": "Local \u00b7 nested",
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_3a5c55112d697addb29b9599e68b9739",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    }
+  ]
+}

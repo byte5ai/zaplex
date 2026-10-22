@@ -22,7 +22,12 @@ stammen aus zwei unterschiedlichen Quell-/Testständen.
 Die [SSH-Formular-Nachprüfung](SSH-FORM-2026-10-21.md) auf `dd2ce0f9` (1.2.8)
 bestätigt die Korrekturen #593/#594/#595 in zwei nativen Fällen (DE/EN), mit
 22 visuell geprüften Originalaufnahmen. Die benachbarte schmale Terminal-Pane
-zeigt weiterhin abgeschnittene Einführungstexte (#601).
+zeigte abgeschnittene Einführungstexte (#601). Die Korrektur ist mit PR #603
+gemergt; der Nachprüfungslauf 39753074448 erreichte wegen des 30-Minuten-Buildlimits
+keine Tests. Der native Nachweis bleibt ausstehend.
+Die [Dateimanager-Exploration vom 22.10.](EXPLORATION-2026-10-22.md) am
+unveränderten 1.2.2-DMG ergänzt Tastatureinstieg, Unterordner-Navigation und
+Umbenennen-Dialog; der wirkungslose Ordner-Klick wird in #604 untersucht.
 Weder Altbuild noch Fixtures ersetzen die vollständigen Fallkombinationen.
 
 ## Referenzen und Bewertung
@@ -117,14 +122,14 @@ Fehlende Testvoraussetzungen sind keine Produktfehler.
 | P04 | C:P4, P5 | Pane verschieben/abtrennen | Dieselbe Pane ohne neue PTY; gültige Drop-Zonen; Abbruch erhält Ausgangslayout | Header-Drag in vier Richtungen/Tab | not-run — V, G, R |
 | P05 | J1–J8 | Ganzen Tab als Split einfügen | Ziel bleibt beim Drag sichtbar; Layout/Identitäten bleiben, Quelltab entfällt; Selbst-/ungültiger Drop wirkungslos | Drag/Abbruch, verschachtelte Panes | not-run — V, G, R |
 | P06 | C:P5, R1 | Fenster/Session wiederherstellen | Geometrie, Fokus, Modus, Entwurf und richtige Remote-Identität erhalten; provisorischer Start nicht ins andere Fenster verschiebbar | Neustart/Restore + Drag während Start | not-run — V, G, R |
-| F01 | C:F1, P3 | Dateimanager öffnen/zur Shell zurück | Pane-Kontext und Shellzustand bleiben; F10/Leistenaktion/Pane-X kehren zurück | Drei Rückwege, frischer Shellmarker | not-run — V, G |
+| F01 | C:F1, P3 | Dateimanager öffnen/zur Shell zurück | Pane-Kontext und Shellzustand bleiben; F10/Leistenaktion/Pane-X kehren zurück | Drei Rückwege, frischer Shellmarker | Teilbeobachtung 22.10.: Tastatureinstieg mit richtigem CWD pass; Ordner-Klick ohne sichtbare Wirkung (#604); Rückwege und Shellmarker nach Rückkehr not-run — V, G |
 | F02 | C:F2 | Dateiaktionen bei wenig Platz finden | F2–F8/F10 mit kurzer Beschriftung; eine/zwei/vier gleich breite Reihen; keine versteckten Aktionen | Breitenfolge, alle acht Zellen | not-run — V, G |
 | F03 | C:F2, F5 | Fokus zwischen Dateipanes wechseln | Nur kompatible fokussierte Pane aktiviert Aktionen; Cursor und Markierung unterscheidbar | Zwei Panes mit gleichem Dateinamen | not-run — V, G |
-| F04 | C:F4 | In Elternverzeichnis zurückgehen | Verlassener Ordner wird nach Identität ausgewählt und sichtbar gescrollt | Verschachtelte, sortierte Liste | not-run — V, G |
+| F04 | C:F4 | In Elternverzeichnis zurückgehen | Verlassener Ordner wird nach Identität ausgewählt und sichtbar gescrollt | Verschachtelte, sortierte Liste | not-run — Rückkehr nach oben nicht zugestellt (Bedienzeit abgelaufen); nur Öffnen des Unterordners am 22.10. beobachtet — V, G |
 | F05 | C:F3 | Transferziel bewusst wählen | Dauerhafte Zielzeile; eindeutiger Host/Pfad/Pane; eigener Tab zuerst; Quelle bei F5/F6 erkennbar | Mehrere mögliche Ziele, gleiche Namen | not-run — V, G, R |
 | F06 | C:F3 | Ziel-Pane ändern/schließen | Gewähltes Ziel folgt deren Verzeichnis; nach Schließen/Moduswechsel neue Wahl, nie stiller Ersatz | Ziel ändern, dann Copy/Move | not-run — V, G, R |
 | F07 | C:F5 | Dateien/Ordner markieren | Alle definierten Tastatur-/Mauswege, Identität bei Sortieren/Refresh, sichtbare Zählung; `..` nicht markierbar | Gemischte Auswahl und Liste ändern | not-run — V, G |
-| F08 | C:F1, F5; U | F2 Umbenennen / F3 Ansehen / F4 Bearbeiten | Cursorziel klar, Aktion ausführbar; ungültiger Name/Fehler erklärbar; Rückweg erhält Auswahl | Isolierte Dateien, gültig/ungültig/Abbruch | not-run — V, G |
+| F08 | C:F1, F5; U | F2 Umbenennen / F3 Ansehen / F4 Bearbeiten | Cursorziel klar, Aktion ausführbar; ungültiger Name/Fehler erklärbar; Rückweg erhält Auswahl | Isolierte Dateien, gültig/ungültig/Abbruch | Teilbeobachtung 22.10.: F2 öffnet passenden Dialog, neuer Name sichtbar; Bestätigung/Abbruch und F3/F4 not-run — V, G |
 | F09 | C:F3, F5; U | F5 Kopieren / F6 Verschieben | Quelle/Ziel klar, Mehrfachauswahl berücksichtigt; Konflikt, Fortschritt, Abbruch und Fehler wieder auflösbar | Echte lokale/Remote-Transfers, Inhaltsvergleich | not-run — V, G, R |
 | F10 | C:F5; U | F7 Ordner / F8 Löschen | Name/Fehler verständlich; Bestätigung zählt Ordner samt Inhalt und Dateien getrennt; Abbruch ohne Verlust | Ausschließlich künstliche Testdaten | not-run — V, G |
 | F11 | C:F1 | Dateimanager bei laufender Shell schließen | CWD-Übernahme oder ehrlicher Hinweis; kein blindes cd bei unklarer Identität, kein Entwurfsverlust | Freier/belegter Prompt, verschachtelte Shell | not-run — V, G, R |

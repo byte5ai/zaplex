@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "installed-dmg-direct-exploration",
+  "run_id": "39755300902",
+  "source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "test_source_sha": "c367aea68ae254fbd744bc5fd3b8849fbc4fb6ae",
+  "package_version": "1.2.2",
+  "dmg_sha256": "313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3",
+  "installed_dmg": true,
+  "image_processing": "None; unchanged original PNG bytes.",
+  "images": [
+    {
+      "file": "01-start-retry.png",
+      "sha256": "d875d218fce4ccc52853ce7f1057a2bd0a1a87f1d66a73d186d4ee0477819982",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "version": 1,
+        "native_scale": 1,
+        "output_scale": 1,
+        "reference_id": "ps1_eab70caefbf9ce71ea69354338625b71",
+        "window": {
+          "index": 0,
+          "title": "Local \u00b7 ~",
+          "window_id": 39
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        }
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "02-fixture-input.png",
+      "sha256": "0b0f5021ffc4f27fc92bd630f8f55ac78c4a3a43ca9818ecf95e925a6c1bc5e0",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "window": {
+          "title": "Local \u00b7 ~",
+          "index": 0,
+          "window_id": 39
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "reference_id": "ps1_23b523efa994ff964e78c77d428635ad",
+        "version": 1,
+        "output_scale": 1
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "03-fixture-ready.png",
+      "sha256": "f626a0a69c34f9b94cd7b0031c378fb7914b2aeb8203307d12d93839504afbde",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "window_id": 39,
+          "index": 0,
+          "title": "Local \u00b7 zaplex-acceptance-39755300902"
+        },
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "reference_id": "ps1_187f6e5ca7ae562cd95aabf41667ce75",
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "04-file-manager.png",
+      "sha256": "026766ebfaa1c77683afae6efc6475973bcc566cd97b1495516902ad2f69a295",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_5bcf121082a9d7caca6d4980e6cd7493",
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 39,
+          "title": "Local \u00b7 zaplex-acceptance-39755300902",
+          "index": 0
+        }
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "05-rename-dialog.png",
+      "sha256": "23e1c420e4ddf8c98082a0085bc42e8e5debc1b2e897a9670640b3176b6c92ee",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "version": 1,
+        "origin": "top_left",
+        "window": {
+          "title": "Local \u00b7 zaplex-acceptance-39755300902",
+          "index": 0,
+          "window_id": 39
+        },
+        "reference_id": "ps1_ae0d774c092c3a7caf8ed5f34b6501f1",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    },
+    {
+      "file": "06-rename-input.png",
+      "sha256": "3c4c4be05574b2f403c63f6b8110651fee10782c77f68819c36099dd0685ab7f",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "coordinate_context": {
+        "output_scale": 1,
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "title": "Local \u00b7 zaplex-acceptance-39755300902",
+          "index": 0,
+          "window_id": 39
+        },
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_03dc0ae0e959ae919a8cca34b5537e03"
+      },
+      "locale": "en",
+      "theme": "dark",
+      "reduced_motion": null,
+      "visually_reviewed": true
+    }
+  ]
+}
