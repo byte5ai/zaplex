@@ -1,10 +1,114 @@
 use std::fs;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 
 use super::*;
 use tempfile::tempdir;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn directory_alias_backend() -> (tempfile::TempDir, InMemorySftpBackend) {
+    let root = tempdir().unwrap();
+    fs::create_dir(root.path().join("real")).unwrap();
+    fs::write(root.path().join("real/source.txt"), b"ALPHA").unwrap();
+    symlink("real", root.path().join("alias")).unwrap();
+    let backend = InMemorySftpBackend::new(root.path().to_path_buf());
+    (root, backend)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn alias_rename_preserves_the_listed_file_and_its_contents() {
+    let (root, backend) = directory_alias_backend();
+    let entry = backend
+        .list_dir(Path::new("/alias"))
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(entry.path, Path::new("/alias/source.txt"));
+    let anchor = backend
+        .ownership_anchor_for_listed_entry(&entry.path, &entry.identity)
+        .unwrap();
+    backend
+        .rename_if_matches(&entry.path, Path::new("/alias/renamed.txt"), anchor.clone())
+        .unwrap();
+    assert!(!root.path().join("real/source.txt").exists());
+    assert_eq!(
+        fs::read(root.path().join("real/renamed.txt")).unwrap(),
+        b"ALPHA"
+    );
+    assert!(anchor
+        .matches_path(Path::new("/alias/renamed.txt"))
+        .unwrap());
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn alias_rename_never_replaces_an_existing_destination() {
+    let (root, backend) = directory_alias_backend();
+    fs::write(root.path().join("real/renamed.txt"), b"BETA").unwrap();
+    let entry = backend.lstat(Path::new("/alias/source.txt")).unwrap();
+    let anchor = backend
+        .ownership_anchor_for_listed_entry(&entry.path, &entry.identity)
+        .unwrap();
+    backend
+        .rename_if_matches(&entry.path, Path::new("/alias/renamed.txt"), anchor)
+        .expect_err("existing destination must be preserved");
+    assert_eq!(
+        fs::read(root.path().join("real/source.txt")).unwrap(),
+        b"ALPHA"
+    );
+    assert_eq!(
+        fs::read(root.path().join("real/renamed.txt")).unwrap(),
+        b"BETA"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn alias_rename_rejects_a_retargeted_parent_without_modifying_foreign_files() {
+    let (root, backend) = directory_alias_backend();
+    let outside = tempdir().unwrap();
+    fs::write(outside.path().join("source.txt"), b"FOREIGN SOURCE").unwrap();
+    fs::write(outside.path().join("renamed.txt"), b"FOREIGN DESTINATION").unwrap();
+    let entry = backend.lstat(Path::new("/alias/source.txt")).unwrap();
+    let anchor = backend
+        .ownership_anchor_for_listed_entry(&entry.path, &entry.identity)
+        .unwrap();
+    let changed = Arc::new(AtomicBool::new(false));
+    let backend = backend.with_before_rename({
+        let alias = root.path().join("alias");
+        let outside = outside.path().to_path_buf();
+        let changed = changed.clone();
+        move |_| {
+            if !changed.swap(true, Ordering::SeqCst) {
+                fs::remove_file(&alias).unwrap();
+                symlink(&outside, &alias).unwrap();
+            }
+        }
+    });
+    backend
+        .rename_if_matches(&entry.path, Path::new("/alias/renamed.txt"), anchor)
+        .expect_err("changed parent must reject the mutation");
+    assert!(
+        changed.load(Ordering::SeqCst),
+        "the mutation-boundary hook must run"
+    );
+    assert_eq!(
+        fs::read(root.path().join("real/source.txt")).unwrap(),
+        b"ALPHA"
+    );
+    assert_eq!(
+        fs::read(outside.path().join("source.txt")).unwrap(),
+        b"FOREIGN SOURCE"
+    );
+    assert_eq!(
+        fs::read(outside.path().join("renamed.txt")).unwrap(),
+        b"FOREIGN DESTINATION"
+    );
+}
 
 #[cfg(target_os = "linux")]
 #[test]

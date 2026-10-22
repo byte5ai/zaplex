@@ -6715,7 +6715,7 @@ impl InMemorySftpBackend {
         self.persist_artifact_intent(&tombstone)?;
         let placeholder_file = match identity.file_type {
             FileEntryType::File | FileEntryType::Symlink => {
-                open_confined_new_file(&self.root, &tombstone)?
+                self.open_isolation_placeholder(&tombstone)?
             }
             FileEntryType::Directory => create_local_directory_with_anchor(
                 &local_tombstone,
@@ -8405,6 +8405,35 @@ impl InMemorySftpBackend {
         Ok(local)
     }
 
+    /// Resolve directory aliases before the no-symlink, exclusive file creation.
+    /// The leaf stays unresolved so an existing file or symlink is never replaced.
+    fn open_isolation_placeholder(&self, path: &Path) -> Result<fs::File, SftpOpsError> {
+        #[cfg(unix)]
+        {
+            let local = self.to_local(path)?;
+            let name = local.file_name().ok_or_else(|| {
+                SftpOpsError::Operation("Placeholder target has no file name".to_string())
+            })?;
+            let parent = dunce::canonicalize(local.parent().ok_or_else(|| {
+                SftpOpsError::Operation("Placeholder target has no parent directory".to_string())
+            })?)?;
+            let root = dunce::canonicalize(&self.root)?;
+            let relative = parent.strip_prefix(&root).map_err(|_| {
+                SftpOpsError::Operation(
+                    "Placeholder target parent escapes the backend root".to_string(),
+                )
+            })?;
+            let resolved = PathBuf::from("/").join(relative).join(name);
+            // Apply protected-namespace checks to the resolved spelling as well.
+            self.to_local(&resolved)?;
+            open_confined_new_file(&self.root, &resolved)
+        }
+        #[cfg(not(unix))]
+        {
+            open_confined_new_file(&self.root, path)
+        }
+    }
+
     fn validate_resolved_local_path(
         &self,
         local: &Path,
@@ -9006,7 +9035,7 @@ impl InMemorySftpBackend {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
 
-        let mut parent = visible.parent().unwrap_or(visible);
+        let mut parent = visible.parent().unwrap_or(visible).to_path_buf();
         let registry = self
             .directory_reservation_registry
             .as_ref()
@@ -9016,8 +9045,13 @@ impl InMemorySftpBackend {
                 )
             })?;
         let parent_metadata = loop {
-            match registry.probe_namespace_parent(parent)? {
+            match registry.probe_namespace_parent(&parent)? {
                 Some(metadata) if metadata.is_dir() => break metadata,
+                Some(metadata) if metadata.file_type().is_symlink() => {
+                    // Resolve the user-visible parent alias, never the private
+                    // namespace itself; its ownership checks remain unchanged.
+                    parent = dunce::canonicalize(&parent)?;
+                }
                 Some(_) => {
                     return Err(SftpOpsError::Operation(format!(
                         "Directory reservation parent is not a directory: {}",
@@ -9025,12 +9059,15 @@ impl InMemorySftpBackend {
                     )));
                 }
                 None => {
-                    parent = parent.parent().ok_or_else(|| {
-                        SftpOpsError::Operation(format!(
-                            "No existing directory for reservation at {}",
-                            visible.display()
-                        ))
-                    })?;
+                    parent = parent
+                        .parent()
+                        .ok_or_else(|| {
+                            SftpOpsError::Operation(format!(
+                                "No existing directory for reservation at {}",
+                                visible.display()
+                            ))
+                        })?
+                        .to_path_buf();
                 }
             }
         };
@@ -11159,7 +11196,7 @@ impl SftpBackend for InMemorySftpBackend {
         let source_identity = anchor.identity()?;
         let placeholder_file = match source_identity.file_type {
             FileEntryType::File | FileEntryType::Symlink => {
-                open_confined_new_file(&self.root, new_path)?
+                self.open_isolation_placeholder(new_path)?
             }
             FileEntryType::Directory => create_local_directory_with_anchor(
                 &new_local,
