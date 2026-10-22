@@ -1,0 +1,154 @@
+{
+  "run_id": "39798639024",
+  "source_sha": "75227a198be7279bd13100f2a545d22b0026d3f2",
+  "package_version": "1.2.15",
+  "kind": "native-integration-fixture",
+  "installed_dmg": false,
+  "image_processing": "None; unchanged originals, each visually reviewed.",
+  "cases": [
+    {
+      "test": "test_native_terminal_introduction_evidence",
+      "locale": "en",
+      "recording_directory": "2026-10-22T15-43-46",
+      "result": "pass",
+      "files": [
+        {
+          "file": "en/recording.log",
+          "sha256": "6c59244aa6f4a3ce1261e0546648e1e690853ace2234a8b1235a3205e014c982"
+        },
+        {
+          "file": "en/terminal-introduction-dark-1024.png",
+          "sha256": "9dcea839362c448919c033efaef7d8579952e814a31e9571adcc2309c60fb9dc",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/terminal-introduction-dark-760.png",
+          "sha256": "4ed9f6cadbc2db0be138f35852ed01b39a5d45618efadae3c07c295def40a021",
+          "screenshot_pixels": [
+            760,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/terminal-introduction-dismissed.png",
+          "sha256": "6471c207b6bedb2644ec1523c35e6a3c51d45713d40ffa7552c28906eb7a356c",
+          "screenshot_pixels": [
+            760,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/terminal-introduction-light-1024.png",
+          "sha256": "cc3f49e63a0892740226ba49ce7d2b9b3eb159b0e9ed2819bd2a4d8efccca420",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/terminal-introduction-light-760.png",
+          "sha256": "306c96fadadf80735b3151687c7fee4b2e60e91e71669f4642a708ead6161453",
+          "screenshot_pixels": [
+            760,
+            640
+          ],
+          "visually_reviewed": true
+        }
+      ]
+    },
+    {
+      "test": "test_native_terminal_introduction_german_evidence",
+      "locale": "de",
+      "recording_directory": "2026-10-22T15-43-55",
+      "result": "pass",
+      "files": [
+        {
+          "file": "de/recording.log",
+          "sha256": "61aa5ca0f65560b6a0c663df8d90bb67c3ee61233cf89079614afafdea4ab000"
+        },
+        {
+          "file": "de/terminal-introduction-dark-1024.png",
+          "sha256": "8dd4ee1b796a3ba9abc5d47bc893756b8d20a561e759b8d27c06a97caa58048d",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/terminal-introduction-dark-760.png",
+          "sha256": "0fdbefc45d577f7779766fefa770f64ca3bf261d870df1f5228f665f5b245432",
+          "screenshot_pixels": [
+            760,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/terminal-introduction-dismissed.png",
+          "sha256": "98ec00b8c53036020f533d4d9fd1d73a4ceb0feeb5d8976afe6f22e0bf3545c1",
+          "screenshot_pixels": [
+            760,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/terminal-introduction-light-1024.png",
+          "sha256": "6dfae216fa486c7c17c43a7971ba5bfa80b48417cf6c07328717cee2c68a91ba",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/terminal-introduction-light-760.png",
+          "sha256": "d3c7368ccf514e4e3e3cb24492bea7d06f5766604d11a63657a43a9a99647d02",
+          "screenshot_pixels": [
+            760,
+            640
+          ],
+          "visually_reviewed": true
+        }
+      ]
+    },
+    {
+      "test": "test_native_file_manager_header_entry",
+      "locale": "en",
+      "recording_directory": "2026-10-22T15-44-03",
+      "result": "pass",
+      "files": [
+        {
+          "file": "header/file-manager-header-after.png",
+          "sha256": "70966f1ce154d13fb35a068174639695a4802ab216bfaf7b47dc7a5d0be0e3f3",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "header/file-manager-header-before.png",
+          "sha256": "038995204b7038a3b740f5fb4720192a530134d92e40316cd4d0dcfaa091d83c",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "header/recording.log",
+          "sha256": "295eb550482d48f97f239ad86faa2ba0637f29b62ae62d97c11d2ef57194eaea"
+        }
+      ]
+    }
+  ]
+}
