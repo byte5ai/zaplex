@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.15] — 2026-10-22
+
+- Terminal-Einführungstest aktiviert die Terminal-Pane vor der Ausblendaktion ausdrücklich und prüft den Fokus (#601).
+
 ## [1.2.14] — 2026-10-22
 
 - Native Builds erfassen begrenzt CPU, Speicher und Swap und geben diese Diagnose während des eigenen Jobs lesbar frei.
