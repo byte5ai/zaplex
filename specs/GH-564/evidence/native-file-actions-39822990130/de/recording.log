@@ -1,0 +1,183 @@
+[+00:00.000] Step started: Wait for bootstrapping
+[+00:00.060] Assertion started: no pending model events
+[+00:00.102] Assertion passed: no pending model events
+[+00:00.124] Assertion started: no block executing
+[+00:00.161] Assertion passed: no block executing
+[+00:00.179] Assertion started: waiting for bootstrapping
+[+00:00.497] Assertion passed: waiting for bootstrapping
+[+00:00.497] Step succeeded: Wait for bootstrapping
+[+00:00.498] Step started: Resize native workspace to 1024x640
+[+00:00.499] Action executed
+[+00:00.528] Assertion started: Native window reached requested geometry
+[+00:00.528] Assertion passed: Native window reached requested geometry
+[+00:00.528] Step succeeded: Resize native workspace to 1024x640
+[+00:00.528] Step started: Render the production Zaplex Dark theme
+[+00:00.559] Action executed
+[+00:00.559] Step succeeded: Render the production Zaplex Dark theme
+[+00:00.559] Step started: Run 'mkdir -p native-physical/nested && printf ALPHA > native-physical/ORIGINAL.txt && printf BETA > native-physical/nested/CHILD.txt && ln -s native-physical native-alias && cd native-alias && ZAPLEX_PROOF=2111' and verify block exists
+[+00:00.559] Event: TypedCharacters 'mkdir -p native-physical/nested && printf ALPHA > native-physical/ORIGINAL.txt && printf BETA > native-physical/nested/CHILD.txt && ln -s native-physical native-alias && cd native-alias && ZAPLEX_PROOF=2111'
+[+00:00.570] Event: KeyDown ''
+[+00:00.605] Action executed
+[+00:00.675] Assertion started: no pending model events
+[+00:00.749] Assertion passed: no pending model events
+[+00:00.772] Assertion started: no block executing
+[+00:00.772] Assertion passed: no block executing
+[+00:00.789] Assertion started: assert 'mkdir -p native-physical/nested && printf ALPHA > native-physical/ORIGINAL.txt && printf BETA > native-physical/nested/CHILD.txt && ln -s native-physical native-alias && cd native-alias && ZAPLEX_PROOF=2111' ran
+[+00:00.790] Assertion passed: assert 'mkdir -p native-physical/nested && printf ALPHA > native-physical/ORIGINAL.txt && printf BETA > native-physical/nested/CHILD.txt && ln -s native-physical native-alias && cd native-alias && ZAPLEX_PROOF=2111' ran
+[+00:00.808] Assertion started: assert command output
+[+00:00.808] Assertion passed: assert command output
+[+00:00.825] Assertion started: wait for precmd so we have metadata for the next block
+[+00:00.825] Assertion passed: wait for precmd so we have metadata for the next block
+[+00:00.844] Assertion started: assert exit code
+[+00:00.844] Assertion passed: assert exit code
+[+00:00.862] Assertion started: check that input is empty
+[+00:00.862] Assertion passed: check that input is empty
+[+00:00.862] Step succeeded: Run 'mkdir -p native-physical/nested && printf ALPHA > native-physical/ORIGINAL.txt && printf BETA > native-physical/nested/CHILD.txt && ln -s native-physical native-alias && cd native-alias && ZAPLEX_PROOF=2111' and verify block exists
+[+00:00.862] Step started: Click the actual terminal header folder button
+[+00:00.890] Assertion started: Header click replaces the invoking pane with a file manager
+[+00:00.890] Assertion passed: Header click replaces the invoking pane with a file manager
+[+00:00.890] Step succeeded: Click the actual terminal header folder button
+[+00:00.890] Step started: Select the rendered ORIGINAL.txt row
+[+00:00.894] Action executed
+[+00:00.911] Assertion started: The clicked file is the cursor target
+[+00:00.912] Assertion passed: The clicked file is the cursor target
+[+00:00.912] Step succeeded: Select the rendered ORIGINAL.txt row
+[+00:00.983] Step started: Open Create Folder with F7
+[+00:00.983] Event: KeyDown 'f7'
+[+00:00.986] Step succeeded: Open Create Folder with F7
+[+00:00.986] Step started: Click the visible dialog editor and type its new value
+[+00:00.990] Event: KeyDown 'a'
+[+00:00.992] Event: KeyDown 'C'
+[+00:00.994] Event: KeyDown 'R'
+[+00:00.996] Event: KeyDown 'E'
+[+00:00.999] Event: KeyDown 'A'
+[+00:01.001] Event: KeyDown 'T'
+[+00:01.003] Event: KeyDown 'E'
+[+00:01.005] Event: KeyDown 'D'
+[+00:01.026] Assertion started: Real keyboard input reached the dialog
+[+00:01.026] Assertion passed: Real keyboard input reached the dialog
+[+00:01.026] Step succeeded: Click the visible dialog editor and type its new value
+[+00:01.026] Step started: Confirm folder creation without changing the original cursor target
+[+00:01.026] Event: KeyDown ''
+[+00:01.029] Action executed
+[+00:01.046] Assertion started: Folder exists and the original file remains selected
+[+00:01.046] Assertion passed: Folder exists and the original file remains selected
+[+00:01.046] Step succeeded: Confirm folder creation without changing the original cursor target
+[+00:01.110] Step started: Select the rendered CREATED row
+[+00:01.132] Assertion started: The clicked file is the cursor target
+[+00:01.132] Assertion passed: The clicked file is the cursor target
+[+00:01.132] Step succeeded: Select the rendered CREATED row
+[+00:01.132] Step started: Open another Create Folder dialog
+[+00:01.132] Event: KeyDown 'f7'
+[+00:01.135] Step succeeded: Open another Create Folder dialog
+[+00:01.135] Step started: Click the visible dialog editor and type its new value
+[+00:01.139] Event: KeyDown 'a'
+[+00:01.141] Event: KeyDown 'C'
+[+00:01.144] Event: KeyDown 'A'
+[+00:01.146] Event: KeyDown 'N'
+[+00:01.148] Event: KeyDown 'C'
+[+00:01.150] Event: KeyDown 'E'
+[+00:01.153] Event: KeyDown 'L'
+[+00:01.155] Event: KeyDown 'E'
+[+00:01.158] Event: KeyDown 'D'
+[+00:01.160] Action executed
+[+00:01.178] Assertion started: Real keyboard input reached the dialog
+[+00:01.178] Assertion passed: Real keyboard input reached the dialog
+[+00:01.178] Step succeeded: Click the visible dialog editor and type its new value
+[+00:01.246] Step started: Cancel the typed folder name with Escape
+[+00:01.246] Event: KeyDown ''
+[+00:01.274] Assertion started: Cancel creates no folder and closes the dialog
+[+00:01.274] Assertion passed: Cancel creates no folder and closes the dialog
+[+00:01.274] Step succeeded: Cancel the typed folder name with Escape
+[+00:01.274] Step started: Move to nested with the Down key after cancellation
+[+00:01.274] Event: KeyDown 'down'
+[+00:01.276] Step succeeded: Move to nested with the Down key after cancellation
+[+00:01.276] Step started: Enter opens the next folder after Escape and Down, without another focus action
+[+00:01.276] Event: KeyDown ''
+[+00:01.283] Action executed
+[+00:01.301] Assertion started: Nested directory was opened through keyboard routing
+[+00:01.301] Assertion passed: Nested directory was opened through keyboard routing
+[+00:01.301] Step succeeded: Enter opens the next folder after Escape and Down, without another focus action
+[+00:01.368] Step started: Return to the parent with Backspace
+[+00:01.368] Event: KeyDown ''
+[+00:01.372] Step succeeded: Return to the parent with Backspace
+[+00:01.372] Step started: Select the rendered ORIGINAL.txt row
+[+00:01.394] Assertion started: The clicked file is the cursor target
+[+00:01.394] Assertion passed: The clicked file is the cursor target
+[+00:01.394] Step succeeded: Select the rendered ORIGINAL.txt row
+[+00:01.394] Step started: Open Rename with F2
+[+00:01.394] Event: KeyDown 'f2'
+[+00:01.397] Step succeeded: Open Rename with F2
+[+00:01.398] Step started: Click the visible dialog editor and type its new value
+[+00:01.402] Event: KeyDown 'a'
+[+00:01.404] Event: KeyDown 'R'
+[+00:01.407] Event: KeyDown 'E'
+[+00:01.409] Event: KeyDown 'N'
+[+00:01.411] Event: KeyDown 'A'
+[+00:01.413] Event: KeyDown 'M'
+[+00:01.416] Event: KeyDown 'E'
+[+00:01.418] Event: KeyDown 'D'
+[+00:01.420] Event: KeyDown '.'
+[+00:01.422] Event: KeyDown 't'
+[+00:01.425] Event: KeyDown 'x'
+[+00:01.427] Event: KeyDown 't'
+[+00:01.429] Action executed
+[+00:01.446] Assertion started: Real keyboard input reached the dialog
+[+00:01.446] Assertion passed: Real keyboard input reached the dialog
+[+00:01.446] Step succeeded: Click the visible dialog editor and type its new value
+[+00:01.514] Step started: Confirm the rename through the directory alias
+[+00:01.514] Event: KeyDown ''
+[+00:01.862] Action executed
+[+00:01.879] Assertion started: Rename preserves contents through the logical path
+[+00:01.880] Assertion passed: Rename preserves contents through the logical path
+[+00:01.880] Step succeeded: Confirm the rename through the directory alias
+[+00:01.953] Step started: Select the rendered RENAMED.txt row
+[+00:01.980] Assertion started: The clicked file is the cursor target
+[+00:01.980] Assertion passed: The clicked file is the cursor target
+[+00:01.980] Step succeeded: Select the rendered RENAMED.txt row
+[+00:01.982] Step started: Hover the F3 Details action
+[+00:01.982] Event: MouseMoved
+[+00:01.984] Action executed
+[+00:02.003] Assertion started: Metadata tooltip is visible
+[+00:02.003] Assertion passed: Metadata tooltip is visible
+[+00:02.303] Step succeeded: Hover the F3 Details action
+[+00:02.367] Step started: F3 opens metadata for the selected file
+[+00:02.367] Event: KeyDown 'f3'
+[+00:02.371] Action executed
+[+00:02.389] Assertion started: Details belong to the renamed five-byte file
+[+00:02.389] Assertion passed: Details belong to the renamed five-byte file
+[+00:02.389] Step succeeded: F3 opens metadata for the selected file
+[+00:02.448] Step started: Close File Details with Escape
+[+00:02.448] Event: KeyDown ''
+[+00:02.451] Step succeeded: Close File Details with Escape
+[+00:02.451] Step started: Return to the original shell with F10
+[+00:02.451] Event: KeyDown 'f10'
+[+00:02.458] Step succeeded: Return to the original shell with F10
+[+00:02.458] Step started: Wait for bootstrapping
+[+00:02.477] Assertion started: no pending model events
+[+00:02.477] Assertion passed: no pending model events
+[+00:02.495] Assertion started: no block executing
+[+00:02.495] Assertion passed: no block executing
+[+00:02.520] Assertion started: waiting for bootstrapping
+[+00:02.521] Assertion passed: waiting for bootstrapping
+[+00:02.521] Step succeeded: Wait for bootstrapping
+[+00:02.521] Step started: Run 'test "$ZAPLEX_PROOF" = 2111 && test ! -e ORIGINAL.txt && test -d CREATED && test ! -e CANCELED && test "$(cat RENAMED.txt)" = ALPHA && printf 'FILE-ACTIONS-PASS\n'' and verify block exists
+[+00:02.521] Event: TypedCharacters 'test "$ZAPLEX_PROOF" = 2111 && test ! -e ORIGINAL.txt && test -d CREATED && test ! -e CANCELED && test "$(cat RENAMED.txt)" = ALPHA && printf 'FILE-ACTIONS-PASS\n''
+[+00:02.525] Event: KeyDown ''
+[+00:02.528] Action executed
+[+00:02.528] Action executed
+[+00:02.550] Assertion started: no pending model events
+[+00:02.550] Assertion passed: no pending model events
+[+00:02.567] Assertion started: no block executing
+[+00:02.568] Assertion passed: no block executing
+[+00:02.585] Assertion started: assert 'test "$ZAPLEX_PROOF" = 2111 && test ! -e ORIGINAL.txt && test -d CREATED && test ! -e CANCELED && test "$(cat RENAMED.txt)" = ALPHA && printf 'FILE-ACTIONS-PASS\n'' ran
+[+00:02.585] Assertion passed: assert 'test "$ZAPLEX_PROOF" = 2111 && test ! -e ORIGINAL.txt && test -d CREATED && test ! -e CANCELED && test "$(cat RENAMED.txt)" = ALPHA && printf 'FILE-ACTIONS-PASS\n'' ran
+[+00:02.610] Assertion started: assert command output
+[+00:02.610] Assertion passed: assert command output
+[+00:02.630] Assertion started: wait for precmd so we have metadata for the next block
+[+00:02.630] Assertion passed: wait for precmd so we have metadata for the next block
+[+00:02.647] Assertion started: assert exit code
+[+00:02.647] Assertion passed: assert exit code
+[+00:02.668] Assertion started: check that input is empty
+[+00:02.668] Assertion passed: check that input is empty
+[+00:02.668] Step succeeded: Run 'test "$ZAPLEX_PROOF" = 2111 && test ! -e ORIGINAL.txt && test -d CREATED && test ! -e CANCELED && test "$(cat RENAMED.txt)" = ALPHA && printf 'FILE-ACTIONS-PASS\n'' and verify block exists

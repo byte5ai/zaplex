@@ -1,0 +1,142 @@
+{
+  "run_id": "39828670969",
+  "source_sha": "15d6cc582f77fdbabbc9f8488433c04980194f4b",
+  "package_version": "1.2.20",
+  "kind": "native-integration-fixture",
+  "installed_dmg": false,
+  "image_processing": "None; unchanged originals, individually visually reviewed.",
+  "cases": [
+    {
+      "test": "test_native_font_validation_evidence",
+      "locale": "en",
+      "recording_directory": "2026-10-22T19-17-45",
+      "result": "pass",
+      "files": [
+        {
+          "file": "en/recording.log",
+          "sha256": "475ba66148e397193df60b9d4404692eaa31ce528d1978c987c458086db670d0"
+        },
+        {
+          "file": "en/font-valid-before.png",
+          "sha256": "41e4b8be3fe60cb26879208bd4c89444d3544090015f8e844586257d1c8ef15e",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-invalid-text.png",
+          "sha256": "b5e7738638a43855d3cbe6b4e73cb83a1b384d8cad26aa11a4a56df23efc0cf4",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-invalid-range.png",
+          "sha256": "af21fc353e9b7e9b6f779885f182d91e6e00378eabe44fbe3b1a23de39ff8c29",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-escape-restored.png",
+          "sha256": "ba3d7f0dc57188ffacd1213b912a7bfe8429730bba2e33d7780e3a5ae7b40f09",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-same-value-corrected.png",
+          "sha256": "41e4b8be3fe60cb26879208bd4c89444d3544090015f8e844586257d1c8ef15e",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-shell-preserved.png",
+          "sha256": "27c423610b7919b8631498d70f90871738d5405ae85c49c433a0d01e78a333ab",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        }
+      ]
+    },
+    {
+      "test": "test_native_font_validation_german_evidence",
+      "locale": "de",
+      "recording_directory": "2026-10-22T19-17-49",
+      "result": "pass",
+      "files": [
+        {
+          "file": "de/recording.log",
+          "sha256": "678d4a3ed682be0207c42ec82b128d96c5cee7ce5ef8d372edf63bd9b66451fa"
+        },
+        {
+          "file": "de/font-valid-before.png",
+          "sha256": "780a2403379ae20d6147a59dec48212c54630540ed546864618340962f4299a9",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-invalid-text.png",
+          "sha256": "853d2fb4066687053f4d881f726c5be30caf8f12f1afc97e342ad641b9ed360b",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-invalid-range.png",
+          "sha256": "b0f251bd3aab8472b34c37e58c74bcec91d0b6477b8310d003d2d92e7f79fa7e",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-escape-restored.png",
+          "sha256": "1eb135c992e4c3da9e229c12680b1730990553cc8e07a50959c809fe97d39fc6",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-same-value-corrected.png",
+          "sha256": "780a2403379ae20d6147a59dec48212c54630540ed546864618340962f4299a9",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-shell-preserved.png",
+          "sha256": "86d4c05b16aa90030c0b0df90c46f12827f9cdd087a820ab6bb4f478dd858169",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        }
+      ]
+    }
+  ]
+}

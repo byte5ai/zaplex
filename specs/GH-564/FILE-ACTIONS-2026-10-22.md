@@ -63,3 +63,7 @@ soll die tatsächliche Metadatenaktion verständlich benennen.
 Der Lauf ersetzt keine Prüfung eines neu gebauten main-DMG. Mehrfachmarkierungen,
 Transfers, Konflikte, F8-Löschen, Remote-Dateiaktionen und die übrigen Matrixvarianten
 wurden hier nicht ausgeführt. #564/#562 erhalten keine Gesamtfreigabe.
+
+## Nachprüfung der Korrekturen
+
+#614–#617 sind durch PR #620/#621/#623 korrigiert. Der [native Nachweis](NATIVE-ACTIONS-FONT-2026-10-22.md) auf 1.2.19 besteht in DE/EN mit 18 einzeln geprüften Originalbildern. Die obigen Fehlerbeobachtungen beziehen sich auf das unveränderte DMG 1.2.2.
