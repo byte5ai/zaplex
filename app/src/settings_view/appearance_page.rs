@@ -101,6 +101,15 @@ use warpui::{
     ViewContext, ViewHandle, WindowId,
 };
 
+use warpui::{
+    elements::{
+        Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+        DEFAULT_UI_LINE_HEIGHT_RATIO, Dismiss, Element, Fill, Flex, Hoverable, MouseStateHandle,
+        ParentElement, Radius, SavePosition, Shrinkable,
+    },
+    rendering::ThinStrokes,
+};
+
 use crate::settings::UseThinStrokes;
 use crate::ui_components::color_dot::{TAB_COLOR_OPTIONS, render_color_dot};
 use crate::ui_components::icons::Icon;

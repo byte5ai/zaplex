@@ -4,7 +4,7 @@ use settings::Setting;
 use warpui::elements::get_rich_content_position_id;
 use warpui::integration::{AssertionOutcome, TestStep};
 use warpui::keymap::PerPlatformKeystroke;
-use warpui::{App, Entity, SingletonEntity, ViewHandle, WindowId};
+use warpui::{App, SingletonEntity, ViewHandle, WindowId};
 
 use crate::integration_testing::{native_workspace, view_getters::workspace_view};
 use crate::settings::FontSettings;
