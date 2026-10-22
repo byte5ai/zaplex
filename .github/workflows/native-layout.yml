@@ -6,22 +6,23 @@ on:
       scenario:
         description: Native layout scenario to verify
         type: choice
-        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form, terminal-introduction, file-manager-header]
+        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form, terminal-introduction, file-manager-header, terminal-entry]
         default: all
 
 permissions:
   contents: read
 
 jobs:
-  layout:
+  build:
     # ci-lint: allow-CI006  Main-only manual workflow; ephemeral VM per job
     runs-on: macrunner
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       CHANNEL: oss
       CARGO_BUILD_JOBS: '4'
-      WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: '1'
-      ZAPLEX_SHELL_PATH: /bin/zsh
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
     steps:
       - name: Require main
         run: test "$GITHUB_REF" = refs/heads/main
@@ -31,10 +32,105 @@ jobs:
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
-          cache_key: macos-aarch64-check
+          cache_key: macos-aarch64-native-layout-nodebug
           is_self_hosted: false
           install_release_deps: false
+      - name: Build native test executables once
+        timeout-minutes: 50
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/native-build"
+          /usr/bin/time -l cargo test --locked -p integration --test integration --no-run --message-format=json \
+            > "$RUNNER_TEMP/native-build/compiler.jsonl" \
+            2> >(tee "$RUNNER_TEMP/native-build/build.log" >&2)
+          python3 - <<'PYTHON'
+          import json, os, pathlib, tarfile
+          root = pathlib.Path.cwd()
+          dest = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-build"
+          executables = []
+          harness = None
+          for line in (dest / "compiler.jsonl").read_text().splitlines():
+              if not line.startswith("{"):
+                  continue
+              item = json.loads(line)
+              if item.get("reason") != "compiler-artifact" or not item.get("executable"):
+                  continue
+              if item["target"]["name"] != "integration":
+                  continue
+              path = pathlib.Path(item["executable"]).relative_to(root)
+              executables.append(path)
+              if "test" in item["target"]["kind"]:
+                  harness = str(path)
+          assert harness and pathlib.Path("target/debug/integration") in executables, executables
+          with tarfile.open(dest / "executables.tar.gz", "w:gz") as archive:
+              for path in set(executables):
+                  archive.add(root / path, arcname=str(path))
+          (dest / "manifest.json").write_text(json.dumps({
+              "source_sha": os.environ["GITHUB_SHA"], "workspace": str(root), "harness": harness,
+          }))
+          PYTHON
+      - name: Preserve compiled executables for failed-job retries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-layout-build-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-build/executables.tar.gz
+            ${{ runner.temp }}/native-build/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-layout-compiler-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-build/build.log
+            ${{ runner.temp }}/native-build/compiler.jsonl
+          if-no-files-found: warn
+          retention-days: 14
+
+  layout:
+    needs: build
+    # ci-lint: allow-CI006  Main-only manual workflow; ephemeral VM per job
+    runs-on: macrunner
+    timeout-minutes: 15
+    env:
+      CHANNEL: oss
+      WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: '1'
+      ZAPLEX_SHELL_PATH: /bin/zsh
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          cache_key: macos-aarch64-native-layout-nodebug
+          is_self_hosted: false
+          install_release_deps: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: native-layout-build-${{ github.sha }}
+          path: ${{ runner.temp }}/native-build
+      - name: Restore the verified native executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          import json, os, pathlib
+          manifest = json.loads((pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-build/manifest.json").read_text())
+          assert manifest["source_sha"] == os.environ["GITHUB_SHA"]
+          assert manifest["workspace"] == os.environ["GITHUB_WORKSPACE"]
+          harness = pathlib.PurePosixPath(manifest["harness"])
+          assert not harness.is_absolute() and ".." not in harness.parts
+          assert harness.parts[:3] == ("target", "debug", "deps")
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"NATIVE_LAYOUT_TEST_BIN={manifest['workspace']}/{harness}\n")
+          PYTHON
+          tar -xzf "$RUNNER_TEMP/native-build/executables.tar.gz" -C "$GITHUB_WORKSPACE"
       - name: Verify selected native layouts
+        working-directory: crates/integration
         env:
           SCENARIO: ${{ inputs.scenario }}
           ZAPLEX_INTEGRATION_TEST_ARTIFACTS_DIR: ${{ runner.temp }}/native-layout
@@ -44,6 +140,7 @@ jobs:
           tests=()
           case "$SCENARIO" in
             all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence test_native_ssh_form_evidence test_native_ssh_form_german_evidence test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence test_native_file_manager_header_entry) ;;
+            terminal-entry) tests=(test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence test_native_file_manager_header_entry) ;;
             file-manager-header) tests=(test_native_file_manager_header_entry) ;;
             terminal-introduction) tests=(test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence) ;;
             ssh-form) tests=(test_native_ssh_form_evidence test_native_ssh_form_german_evidence) ;;
@@ -54,11 +151,11 @@ jobs:
             files-de) tests=(test_native_workspace_file_managers_german_evidence) ;;
             *) exit 1 ;;
           esac
-          cargo test --locked -p integration --test integration -- --list > "$RUNNER_TEMP/native-layout-tests.txt"
+          "$NATIVE_LAYOUT_TEST_BIN" --list > "$RUNNER_TEMP/native-layout-tests.txt"
           failed=0
           for test_name in "${tests[@]}"; do
             grep -Fx "ui_tests::$test_name: test" "$RUNNER_TEMP/native-layout-tests.txt"
-            if ! cargo test --locked -p integration --test integration "ui_tests::$test_name" -- --exact --nocapture; then
+            if ! "$NATIVE_LAYOUT_TEST_BIN" "ui_tests::$test_name" --exact --nocapture; then
               failed=1
               continue
             fi
