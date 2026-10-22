@@ -406,6 +406,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_daemon_terminal_acceptance);
     register_test!(test_native_workspace_connections_evidence);
     register_test!(test_native_file_manager_header_entry);
+    register_test!(test_native_file_actions_evidence);
+    register_test!(test_native_file_actions_german_evidence);
     register_test!(test_native_terminal_introduction_evidence);
     register_test!(test_native_terminal_introduction_german_evidence);
     register_test!(test_native_ssh_form_evidence);

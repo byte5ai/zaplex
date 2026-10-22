@@ -20,6 +20,7 @@ pub mod input;
 pub mod keybindings;
 pub mod launch_configs;
 pub mod navigation_palette;
+pub mod file_manager_acceptance;
 pub mod native_workspace;
 pub mod terminal_introduction;
 pub mod notebook;
