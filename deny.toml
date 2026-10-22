@@ -55,6 +55,8 @@ allow-wildcard-paths = true
 
 [sources]
 allow-git = [
+    # Unreleased i18n-config fix for basic-toml, pinned in Cargo.toml.
+    "https://github.com/kellpossible/cargo-i18n",
     # Allow git reference to Core Foundation crates until they publish an updated
     # version to crates.io.
     "https://github.com/servo/core-foundation-rs",

@@ -513,6 +513,9 @@ inherits = "dev"
 opt-level = "s"
 
 [patch.crates-io]
+# Upstream replaced unmaintained basic-toml; remove after i18n-config publishes it.
+# https://github.com/kellpossible/cargo-i18n/pull/176
+i18n-config = { git = "https://github.com/kellpossible/cargo-i18n", rev = "2ce7b1dfe9a8cc224288bf50cbc2a67a6de863c4" }
 # Pinned to the merge commit of servo/core-foundation-rs#746, which fixes a
 # double-retain bug in `CTFontCollection::get_descriptors` that leaks the
 # CoreText font-descriptor NSArray on every call. The fix is not yet in any

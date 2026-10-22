@@ -184,7 +184,9 @@ for name, minimum in {
     "h2": "0.4.16",
     "libgit2-sys": "0.18.8",
     "quick-xml": "0.41.0",
-    "rustls-webpki": "0.103.13",
+    "rustls-webpki": "0.103.16",
+    "webpki-roots": "1.0.10",
+    "webpki-root-certs": "1.0.10",
     "spin": "0.10.1",
 }.items():
     if name not in versions:
@@ -193,8 +195,9 @@ for name, minimum in {
     if too_old:
         fail(f"{name} versions below {minimum}: {', '.join(too_old)}")
 
-if "number_prefix" in versions:
-    fail("unmaintained dependency number_prefix returned to Cargo.lock")
+for name in ("number_prefix", "basic-toml"):
+    if name in versions:
+        fail(f"unmaintained dependency {name} returned to Cargo.lock")
 
 for package in packages:
     if package["name"] in ("proc-macro-error2", "proc-macro-error-attr2"):

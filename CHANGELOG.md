@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.23] — 2026-10-23
+
+- TLS-Zertifikatsprüfung und Wurzelzertifikate aktualisiert; basic-toml durch den fest gepinnten i18n-config-Upstream-Fix entfernt (#632).
+
 ## [1.2.22] — 2026-10-23
 
 - Das Pane-Kopfzeilenmenü erhält Tastaturfokus: Escape schließt es und gibt den Fokus zurück; eine gewählte Folgeaktion behält ihren eigenen Fokus (#629).
