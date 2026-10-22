@@ -16,6 +16,29 @@ use crate::Builder;
 
 // A 640px content height fits the macOS CI display below its menu bar and Dock.
 
+pub fn test_native_file_manager_header_entry() -> Builder {
+    warp::i18n::set_locale("en");
+    Builder::new()
+        .with_real_display()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(native::resize(1024., 640.))
+        .with_step(execute_command(
+            0,
+            0,
+            "mkdir -p entry-fixture && cd entry-fixture && printf HEADER > ORIGINAL.txt".into(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            TestStep::new("Capture the terminal before its header click")
+                .with_take_screenshot("file-manager-header-before.png"),
+        )
+        .with_step(
+            native::open_file_manager_by_header()
+                .with_take_screenshot("file-manager-header-after.png"),
+        )
+}
+
 pub fn test_native_terminal_introduction_evidence() -> Builder {
     terminal_introduction_evidence("en")
 }

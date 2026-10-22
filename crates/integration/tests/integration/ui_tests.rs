@@ -300,6 +300,8 @@ integration_tests! {
     #[cfg(target_os="macos")]
     test_native_workspace_connections_evidence,
     #[cfg(target_os="macos")]
+    test_native_file_manager_header_entry,
+    #[cfg(target_os="macos")]
     test_native_terminal_introduction_evidence,
     #[cfg(target_os="macos")]
     test_native_terminal_introduction_german_evidence,

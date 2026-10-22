@@ -28,6 +28,8 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button_with_color;
 use crate::ui_components::icons;
 use warp_core::ui::Icon as WarpIcon;
+#[cfg(feature = "integration_tests")]
+use warpui::elements::SavePosition;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, CrossAxisAlignment, Flex, MainAxisAlignment, MainAxisSize,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Shrinkable, Stack,
@@ -629,7 +631,7 @@ impl TerminalView {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder().clone();
 
-        icon_button_with_color(
+        let button = icon_button_with_color(
             appearance,
             icons::Icon::Folder,
             false, /* active */
@@ -648,7 +650,15 @@ impl TerminalView {
                 PaneHeaderAction::CustomAction(TerminalAction::OpenFileManagerHere),
             );
         })
-        .finish()
+        .finish();
+        #[cfg(feature = "integration_tests")]
+        let button = SavePosition::new(
+            button,
+            &format!("terminal-open-files:{}", self.pane_configuration().id()),
+        )
+        .for_single_frame()
+        .finish();
+        button
     }
 
     /// Render the agent indicator icon for when a conversation is selected.

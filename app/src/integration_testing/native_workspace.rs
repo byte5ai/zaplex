@@ -346,6 +346,33 @@ fn overflow_id(app: &App, window_id: warpui::WindowId, index: usize) -> String {
     })
 }
 
+pub fn open_file_manager_by_header() -> TestStep {
+    TestStep::new("Click the actual terminal header folder button")
+        .with_click_on_saved_position_fn(|app, window_id| {
+            terminal_at(app, window_id, 0).read(app, |view, _| {
+                format!("terminal-open-files:{}", view.pane_configuration().id())
+            })
+        })
+        .add_named_assertion(
+            "Header click replaces the invoking pane with a file manager",
+            |app, window_id| {
+                let count = app.read(|ctx| {
+                    crate::sftp_manager::fm_registry::FileManagerRegistry::as_ref(ctx)
+                        .panes()
+                        .len()
+                });
+                let visible = pane_group_view(app, window_id, 0)
+                    .read(app, |group, _| group.visible_pane_count());
+                if count != 1 || visible != 1 {
+                    return AssertionOutcome::failure(format!(
+                        "Expected one file manager and one pane, got {count}/{visible}"
+                    ));
+                }
+                AssertionOutcome::Success
+            },
+        )
+}
+
 pub fn split_local_right() -> TestStep {
     TestStep::new("Split the real pane through its overflow menu and choose local")
         .with_click_on_saved_position_fn(|app, window_id| overflow_id(app, window_id, 0))
