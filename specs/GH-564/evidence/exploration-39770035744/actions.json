@@ -1,0 +1,118 @@
+{
+  "method": "Actions selected after fresh visual observations. Typing timeout did not enter text; a shorter command was retried only after inspecting the empty input.",
+  "actions": [
+    {
+      "time": "2026-10-22T11:28:47.609645+00:00",
+      "args": [
+        "click",
+        "--at",
+        "430,630",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "38",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-22T11:29:04.502551+00:00",
+      "args": [
+        "type",
+        "mkdir -p /tmp/zaplex-acceptance-39770035744/nested && cd /tmp/zaplex-acceptance-39770035744 && printf ALPHA > ORIGINAL.txt && printf BETA > nested/CHILD.txt && ZAPLEX_PROOF=9537 && echo READY:$ZAPLEX_PROOF:$PWD",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "38",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "time": "2026-10-22T11:29:39.998401+00:00",
+      "args": [
+        "press",
+        "return",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "38",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-22T11:30:34.792627+00:00",
+      "args": [
+        "press",
+        "cmd+shift+e",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "38",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-22T11:31:13.532747+00:00",
+      "args": [
+        "press",
+        "f10",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "38",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    },
+    {
+      "time": "2026-10-22T11:32:31.344518+00:00",
+      "args": [
+        "type",
+        "printf \"AFTER:%s:%s:\" \"$ZAPLEX_PROOF\" \"$PWD\"; cat ORIGINAL.txt; echo",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "38",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "time": "2026-10-22T11:33:27.671237+00:00",
+      "args": [
+        "type",
+        "echo AFTER:$ZAPLEX_PROOF:$PWD; cat ORIGINAL.txt",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "38",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1
+    },
+    {
+      "time": "2026-10-22T11:34:17.891789+00:00",
+      "args": [
+        "press",
+        "return",
+        "--app",
+        "Zaplex",
+        "--window-id",
+        "38",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0
+    }
+  ]
+}
