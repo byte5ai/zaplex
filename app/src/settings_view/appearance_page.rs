@@ -100,7 +100,6 @@ use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateModel, View,
     ViewContext, ViewHandle, WindowId,
 };
-
 use warpui::{
     elements::{
         Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -4746,7 +4745,9 @@ impl SettingsWidget for TerminalFontWidget {
                 .build()
                 .finish();
             column.add_child(
-                SavePosition::new(message, "settings-terminal-font-size-error").finish(),
+                SavePosition::new(message, "settings-terminal-font-size-error")
+                    .for_single_frame()
+                    .finish(),
             );
         }
         column.finish()

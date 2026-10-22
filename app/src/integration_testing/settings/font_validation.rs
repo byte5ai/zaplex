@@ -6,6 +6,7 @@ use warpui::integration::{AssertionOutcome, TestStep};
 use warpui::keymap::PerPlatformKeystroke;
 use warpui::{App, SingletonEntity, ViewHandle, WindowId};
 
+use crate::editor::EditorView;
 use crate::integration_testing::{native_workspace, view_getters::workspace_view};
 use crate::settings::FontSettings;
 use crate::settings_view::{AppearanceSettingsPageView, SettingsSection};
@@ -69,6 +70,22 @@ pub fn cancel(value: &'static str, effective_size: f32) -> TestStep {
         .with_keystrokes(&["escape"])
         .add_named_assertion("The invalid draft was discarded", move |app, window_id| {
             verify(app, window_id, value, effective_size, false)
+        })
+}
+
+pub fn blur(value: &'static str, effective_size: f32, invalid: bool) -> TestStep {
+    TestStep::new("Leaving the field validates the draft without changing the effective size")
+        .with_click_on_saved_position_fn(|app, window_id| {
+            let editor = app
+                .views_of_type::<EditorView>(window_id)
+                .expect("Settings editors")
+                .into_iter()
+                .find(|editor| editor.read(app, |editor, ctx| editor.buffer_text(ctx) == "font"))
+                .expect("Settings search editor");
+            get_rich_content_position_id(&editor.id())
+        })
+        .add_named_assertion("Blur validates the input", move |app, window_id| {
+            verify(app, window_id, value, effective_size, invalid)
         })
 }
 
