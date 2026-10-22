@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Publish the exact accepted macOS DMG and its matching Linux daemon, without building."""
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import runpy
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parent
+resume = runpy.run_path(str(ROOT / "gui-resume"))
+batch = resume["helpers"]
+report = runpy.run_path(str(ROOT / "macos/gui-tests/report.py"))
+REPO = batch["REPO"]
+api, pages, command = (batch[key] for key in ("api", "pages", "command"))
+DMG = "Zaplex-arm64.dmg"
+DAEMON = "zap-remote-server-linux-x86_64.tar.gz"
+
+
+def validate_runs(build, build_jobs, artifacts, gui, gui_jobs, source):
+    jobs = resume["validate_batch_artifact"](build, build_jobs, artifacts, source)
+    for name in batch["PASSED"]:
+        if jobs.get(name, {}).get("conclusion") != "success":
+            raise ValueError(f"Missing successful release gate: {name}")
+    gui_names = {"test_dmg / Verify installed DMG user flows",
+                 "test_dmg / Verify installed DMG user flows / Installed DMG user flows"}
+    for job in build_jobs:
+        if job.get("conclusion") not in ("success", "skipped") and job["name"] not in gui_names:
+            raise ValueError(f"Unsuccessful batch job: {job['name']}")
+    if any(gui.get(key) != value for key, value in {
+        "status": "completed", "conclusion": "success", "event": "workflow_dispatch",
+        "head_branch": "main", "path": ".github/workflows/gui-resume.yml",
+    }.items()) or gui.get("head_repository", {}).get("full_name") != REPO:
+        raise ValueError("A successful main GUI continuation is required")
+    if not re.fullmatch(r"[a-f0-9]{40}", gui.get("head_sha", "")):
+        raise ValueError("Invalid GUI source commit")
+    by_name = {job["name"]: job for job in gui_jobs}
+    if len(by_name) != len(gui_jobs):
+        raise ValueError("Ambiguous GUI jobs")
+    for name in ("Verify existing DMG provenance", "gui / Installed DMG user flows"):
+        if by_name.get(name, {}).get("conclusion") != "success":
+            raise ValueError(f"Missing successful GUI gate: {name}")
+
+
+def validate_receipt(receipt, summary, tree, source, test_source, digest, info, tag):
+    expected = report["assess"](summary, "full", len(report["CASES"]), receipt.get("test_process_exit"))
+    if (type(receipt.get("test_process_exit")) is not int or expected["local_gui"] != "pass" or
+            not report["matching_test_cases"](tree, report["CASES"]) or
+            any(receipt.get(key) != value for key, value in {
+                "suite": "full", "local_gui": "pass", "selected_tests": "pass",
+                "executed_cases_match": True, "app_source_sha": source,
+                "test_source_sha": test_source, "dmg_sha256": digest,
+                "required_cases": sorted(report["CASES"]),
+            }.items())):
+        raise ValueError("Full GUI acceptance, exact executed cases and artifact identity required")
+    if info.get("WarpVersion") != tag:
+        raise ValueError("Installed app version differs from release tag")
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def validate_assets(assets, files, *, complete):
+    found = set()
+    for asset in assets:
+        name = asset["name"]
+        if (name not in files or name in found or asset.get("state") != "uploaded"
+                or asset.get("digest") != "sha256:" + files[name]):
+            raise ValueError("Release contains unexpected, duplicate or mismatched assets")
+        found.add(name)
+    if complete and found != set(files):
+        raise ValueError("Release asset set is incomplete")
+    return set(files) - found
+
+
+def download(run_id, name, destination):
+    matches = [a for a in pages(f"actions/runs/{run_id}/artifacts", "artifacts") if a["name"] == name]
+    if len(matches) != 1 or matches[0].get("expired") is not False:
+        raise ValueError(f"Missing, expired or ambiguous artifact: {name}")
+    subprocess.run(["gh", "run", "download", str(run_id), "--repo", REPO,
+                    "--name", name, "--dir", str(destination)], check=True, timeout=300)
+
+
+def publish(tag, source, body, dist, files):
+    # A failed upload leaves a private draft; the same proven files can resume it.
+    releases = json.loads(command("gh", "api", "--paginate", "--slurp", f"repos/{REPO}/releases?per_page=100"))
+    existing = [release for page in releases for release in page if release["tag_name"] == tag]
+    if len(existing) > 1:
+        raise ValueError("Ambiguous release")
+    if existing:
+        release = existing[0]
+        if not release["draft"] or release["target_commitish"] != source or release["body"] != body.read_text():
+            raise ValueError("Only this exact unpublished draft may resume")
+    else:
+        command("gh", "release", "create", tag, "--repo", REPO, "--draft", "--target", source,
+                "--title", f"Zaplex {tag}", "--notes-file", str(body))
+        releases = json.loads(command("gh", "release", "view", tag, "--repo", REPO, "--json", "databaseId"))
+        release = api(f"releases/{releases['databaseId']}")
+    release_id = release["id"]
+    missing = validate_assets(release["assets"], files, complete=False)
+    for name in sorted(missing):
+        subprocess.run(["gh", "release", "upload", tag, str(dist / name), "--repo", REPO],
+                       check=True, timeout=300)
+    validate_assets(api(f"releases/{release_id}")["assets"], files, complete=True)
+    command("gh", "release", "edit", tag, "--repo", REPO, "--draft=false", "--latest")
+
+
+def main():
+    if (os.environ.get("GITHUB_REPOSITORY") != REPO or os.environ.get("GITHUB_REF") != "refs/heads/main"
+            or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"):
+        raise ValueError("A manual main dispatch is required")
+    build_id, gui_id, source, tag = (os.environ.get(name, "") for name in (
+        "ARTIFACT_RUN_ID", "GUI_RUN_ID", "APP_SOURCE_SHA", "RELEASE_TAG"))
+    if (not build_id.isdecimal() or not gui_id.isdecimal() or not re.fullmatch(r"[a-f0-9]{40}", source)
+            or not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag)):
+        raise ValueError("Exact run IDs, app commit and stable release version required")
+    build, gui = (api(f"actions/runs/{run_id}") for run_id in (build_id, gui_id))
+    validate_runs(build, pages(f"actions/runs/{build_id}/jobs", "jobs"),
+                  pages(f"actions/runs/{build_id}/artifacts", "artifacts"),
+                  gui, pages(f"actions/runs/{gui_id}/jobs", "jobs"), source)
+    command("git", "fetch", "--no-tags", "origin", "main", source, gui["head_sha"])
+    for revision in (source, gui["head_sha"]):
+        command("git", "merge-base", "--is-ancestor", revision, "origin/main")
+    batch["validate_profile"](command("git", "show", f"{source}:.github/workflows/ci-batch.yml"),
+                              command("git", "show", f"{source}:VERSION"), tag, "false")
+    # Refuse an existing tag at a different object; never move release tags.
+    refs = api(f"git/matching-refs/tags/{tag}")
+    for ref in refs:
+        if ref["ref"] == f"refs/tags/{tag}" and (
+            ref["object"].get("type") != "commit" or ref["object"].get("sha") != source
+        ):
+            raise ValueError("Existing tag differs from the tested commit")
+    root = Path(os.environ["RUNNER_TEMP"]) / "tested-release"
+    root.mkdir()
+    dist, evidence = root / "dist", root / "evidence"
+    download(build_id, "zap-test-dmg-aarch64", dist)
+    download(build_id, "zap-remote-server-linux-x86_64", dist)
+    download(gui_id, f"macos-gui-evidence-{gui_id}-{gui['run_attempt']}", evidence)
+    if {path.name for path in dist.iterdir()} != {DMG, DAEMON, DAEMON + ".sha256"}:
+        raise ValueError("Unexpected package contents")
+    if any(not path.is_file() or path.is_symlink() for path in dist.iterdir()):
+        raise ValueError("Only regular package files are allowed")
+    def read(name):
+        return json.loads((evidence / name).read_text())
+    receipt = read("acceptance.json")
+    validate_receipt(receipt, read("summary.json"), read("test-cases.json"), source,
+                     gui["head_sha"], digest(dist / DMG), read("app-info.json"), tag)
+    checksum = (dist / (DAEMON + ".sha256")).read_text().split()
+    if checksum != [digest(dist / DAEMON), DAEMON]:
+        raise ValueError("Daemon archive checksum differs")
+    (dist / "remote-server-SHA256SUMS").write_text("  ".join(checksum) + "\n")
+    files = {path.name: digest(path) for path in dist.iterdir()}
+    manifest = {"tag": tag, "source_sha": source, "build_run_id": build_id,
+                "gui_run_id": gui_id, "test_source_sha": gui["head_sha"], "assets": files}
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    body = root / "release-body.md"
+    body.write_text(
+        f"Zaplex {tag} für macOS Apple Silicon mit passendem Linux-x86_64-Daemon.\n\n"
+        "Unverändertes signiertes und notarisiertes DMG; alle 15 lokalen GUI-Pflichtfälle bestanden.\n\n"
+        f"- [Build und Regressionstests](https://github.com/{REPO}/actions/runs/{build_id})\n"
+        f"- [Installierte DMG-Prüfung](https://github.com/{REPO}/actions/runs/{gui_id})\n"
+        f"- [Änderungen](https://github.com/{REPO}/blob/{source}/CHANGELOG.md)\n\n"
+        f"App-Commit: `{source}`; Test-Commit: `{gui['head_sha']}`.\n"
+        f"DMG SHA-256: `{files[DMG]}`.\n\n"
+        "Die automatisierte lokale Suite belegt keine vollständige UI-/UX- oder Abo-Abnahme; "
+        f"deren genaue Grenzen stehen in [#562](https://github.com/{REPO}/issues/562).\n")
+    print(json.dumps(manifest, indent=2))
+    if sys.argv[1:] == ["--publish"]:
+        publish(tag, source, body, dist, files)
+    elif sys.argv[1:]:
+        raise ValueError("Unexpected arguments")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
+        print(f"Tested release refused: {error}", file=sys.stderr)
+        sys.exit(1)

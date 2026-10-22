@@ -1,0 +1,62 @@
+name: Publish tested DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Completed main CI batch with successful build and test gates
+        required: true
+        type: string
+      gui_run_id:
+        description: Successful full GUI continuation against the exact DMG
+        required: true
+        type: string
+      source_sha:
+        description: Immutable tested app commit (40 hex characters)
+        required: true
+        type: string
+      release_tag:
+        description: Explicitly approved stable release tag matching the built VERSION
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-tested-dmg
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check release provenance guard
+        run: python3 script/publish-tested-dmg-tests
+      - name: Verify exact packages and full acceptance, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+          GUI_RUN_ID: ${{ inputs.gui_run_id }}
+          APP_SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: python3 script/publish-tested-dmg --publish
+      - name: Preserve publication identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tested-release-identity
+          path: |
+            ${{ runner.temp }}/tested-release/manifest.json
+            ${{ runner.temp }}/tested-release/release-body.md
+          if-no-files-found: warn
+          retention-days: 14

@@ -14,12 +14,31 @@ denselben Commit des Dispatchs; weitere Merges verändern diesen Lauf nicht.
 | `cockpit-parity-audit` | Schwere Paritätsprüfung; nur aus dem Batch. Echte Zwei-Host-Abnahme wird nur mit `require_manual_runtime=true` verlangt. Ein automatischer grüner Lauf ersetzt diese Abnahme nicht. |
 | `test-dmg` | Optionaler signierter Test-DMG-Build nach grünen Prüfungen, einschließlich Linux-Daemon. |
 | `build-remote-server` | Optionaler separater Daemon-Build nach grünen Prüfungen; alternativ zum Test-DMG. |
+| `publish-tested-dmg` | Manuelle Veröffentlichung des bereits gebauten und vollständig GUI-geprüften DMGs samt Linux-Daemon; kein neuer Build. |
 | `stale` | Nur manueller Verwaltungsjob. |
 | `release-tag-guard` / `zap_release` | Bestehende Tag-/Release-Auslösung unverändert; keine Release-Freigabe durch diese Umstellung. |
 
 Es gibt keine zeitgesteuerten Workflows mehr. Ein neuer Batch auf demselben Ref
 bricht einen noch laufenden Batch ab. Eine Auslösung auf einem anderen Branch
 scheitert vor den schweren Jobs.
+
+### Geprüftes DMG unverändert veröffentlichen
+
+`publish-tested-dmg.yml` übernimmt einen abgeschlossenen Main-Batch und dessen
+erfolgreiche vollständige `gui-resume.yml`-Fortsetzung. Alle Compile-, Regression-,
+SFTP-, Signatur- und Paketprüfungen müssen erfolgreich sein. Ausschließlich die
+ursprüngliche GUI-Stufe darf im Batch fehlen oder abgebrochen sein; die Fortsetzung
+muss alle 15 tatsächlichen XCTest-Fälle ohne Fehler oder Auslassung nachweisen.
+App-Commit, Test-Commit, installierte Version und DMG-Prüfsumme werden verglichen.
+
+Die Veröffentlichung enthält das unveränderte `Zaplex-arm64.dmg`, den passenden
+Linux-x86_64-Daemon und dessen Prüfsummen. Sie erzeugt zunächst einen privaten
+Entwurf und veröffentlicht erst nach Prüfung der hochgeladenen Dateidigests.
+Ein unterbrochener Upload kann denselben Entwurf mit den fehlenden Dateien
+fortsetzen; abweichende Dateien oder bereits veröffentlichte Releases werden
+nicht überschrieben. Prüfbelege bleiben getrennt von den Installern erhalten.
+Das Workflow-Token löst durch die Tag-Erzeugung keinen zusätzlichen Build aus.
+Die konkrete Release-Freigabe bleibt Voraussetzung für diesen manuellen Dispatch.
 
 ### Nach einem Runnerfehler bei den Pakettests fortsetzen
 
