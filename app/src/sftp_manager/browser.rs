@@ -39,6 +39,7 @@ use warpui::fonts::{Cache as FontCache, FamilyId};
 use warpui::platform::{Cursor, FilePickerConfiguration, SaveFilePickerConfiguration};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::text_layout::ClipConfig;
+use warpui::ui_components::components::UiComponent;
 use warpui::{
     AppContext, BlurContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
     View, ViewContext, ViewHandle,
@@ -5212,6 +5213,7 @@ impl SftpBrowserView {
                 } else {
                     theme.disabled_ui_text_color()
                 };
+                let tooltip_position_id = self.layout_position_id("details-tooltip");
                 let cell = Hoverable::new(handle, move |mouse| {
                     // The key renders as a quiet keycap chip (surface_2,
                     // hairline border, small radius) instead of a bare accent
@@ -5259,7 +5261,27 @@ impl SftpBrowserView {
                     if enabled && mouse.is_hovered() {
                         container = container.with_background(internal_colors::fg_overlay_1(theme));
                     }
-                    container.finish()
+                    let cell = container.finish();
+                    if key == "F3" && mouse.is_hovered() {
+                        let tooltip = appearance
+                            .ui_builder()
+                            .tool_tip(crate::t!("fm-key-view-tooltip"))
+                            .build()
+                            .finish();
+                        let mut stack = Stack::new().with_child(cell);
+                        stack.add_positioned_overlay_child(
+                            SavePosition::new(tooltip, &tooltip_position_id).finish(),
+                            OffsetPositioning::offset_from_parent(
+                                Vector2F::new(0., -4.),
+                                ParentOffsetBounds::WindowByPosition,
+                                ParentAnchor::TopMiddle,
+                                ChildAnchor::BottomMiddle,
+                            ),
+                        );
+                        stack.finish()
+                    } else {
+                        cell
+                    }
                 })
                 .with_cursor(if enabled {
                     Cursor::PointingHand

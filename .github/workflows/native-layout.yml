@@ -6,7 +6,7 @@ on:
       scenario:
         description: Native layout scenario to verify
         type: choice
-        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form, terminal-introduction, file-manager-header, terminal-entry]
+        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form, terminal-introduction, file-manager-header, terminal-entry, file-actions]
         default: all
 
 permissions:
@@ -168,7 +168,8 @@ jobs:
           set -euo pipefail
           tests=()
           case "$SCENARIO" in
-            all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence test_native_ssh_form_evidence test_native_ssh_form_german_evidence test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence test_native_file_manager_header_entry) ;;
+            all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence test_native_ssh_form_evidence test_native_ssh_form_german_evidence test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence test_native_file_manager_header_entry test_native_file_actions_evidence test_native_file_actions_german_evidence) ;;
+            file-actions) tests=(test_native_file_actions_evidence test_native_file_actions_german_evidence) ;;
             terminal-entry) tests=(test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence test_native_file_manager_header_entry) ;;
             file-manager-header) tests=(test_native_file_manager_header_entry) ;;
             terminal-introduction) tests=(test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence) ;;
@@ -191,6 +192,8 @@ jobs:
             case "$test_name" in
               test_native_file_manager_header_entry)
                 captures=(file-manager-header-before file-manager-header-after) ;;
+              test_native_file_actions*)
+                captures=(file-actions-selected file-actions-created-cursor file-actions-cancel-before file-actions-keyboard-after-cancel file-actions-rename-before file-actions-rename-after file-actions-details-tooltip file-actions-details-dialog file-actions-shell-preserved) ;;
               test_native_terminal_introduction*)
                 captures=(terminal-introduction-dark-1024 terminal-introduction-dark-760 terminal-introduction-light-1024 terminal-introduction-light-760 terminal-introduction-dismissed) ;;
               test_native_ssh_form*)
