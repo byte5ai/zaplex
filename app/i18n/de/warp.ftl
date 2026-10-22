@@ -2325,6 +2325,7 @@ settings-appearance-font-terminal-label = Terminalschrift
 settings-appearance-font-view-all-system = Alle verfügbaren Systemschriften anzeigen
 settings-appearance-font-weight-label = Schriftstärke
 settings-appearance-font-size-label = Schriftgröße (px)
+settings-appearance-font-size-invalid = Gib eine ganze Zahl von { $min } bis { $max } ein. Die bisherige Schriftgröße bleibt erhalten. Escape stellt sie im Feld wieder her.
 settings-appearance-font-line-height-label = Zeilenhöhe
 settings-appearance-font-reset-default = Auf Standard zurücksetzen
 settings-appearance-font-notebook-size-label = Notebook-Schriftgröße

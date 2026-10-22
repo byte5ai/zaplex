@@ -24,7 +24,8 @@ use crate::{
 };
 use about_page::AboutPageView;
 use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AISubpage};
-use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
+use appearance_page::AppearancePageAction;
+pub(crate) use appearance_page::AppearanceSettingsPageView;
 use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent};
 use features_page::{FeaturesPageView, FeaturesSettingsPageEvent};
 use itertools::Itertools as _;

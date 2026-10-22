@@ -1526,6 +1526,7 @@ settings-appearance-font-terminal-label = Terminal font
 settings-appearance-font-view-all-system = View all available system fonts
 settings-appearance-font-weight-label = Font weight
 settings-appearance-font-size-label = Font size (px)
+settings-appearance-font-size-invalid = Enter a whole number from { $min } to { $max }. The current font size is unchanged. Press Escape to restore it.
 settings-appearance-font-line-height-label = Line height
 settings-appearance-font-reset-default = Reset to default
 settings-appearance-font-notebook-size-label = Notebook font size
