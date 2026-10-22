@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.20] — 2026-10-22
+
+- Ungültige Terminal-Schriftgrößen zeigen einen lokalisierten Hinweis mit gültigem Bereich; Escape stellt den wirksamen Wert wieder her. DE/EN-Regressionen prüfen Korrektur und Rückkehr zur Shell.
+
 ## [1.2.19] — 2026-10-22
 
 - F3 im Dateimanager heißt eindeutig „Details“ und erläutert die Metadatenansicht per Tooltip; gezielte native Regressionen prüfen Umbenennen über Verzeichnisaliasse, Cursor und Tastaturfokus.

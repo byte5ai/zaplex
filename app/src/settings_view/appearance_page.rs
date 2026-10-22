@@ -104,7 +104,7 @@ use warpui::{
     elements::{
         Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
         DEFAULT_UI_LINE_HEIGHT_RATIO, Dismiss, Element, Fill, Flex, Hoverable, MouseStateHandle,
-        ParentElement, Radius, Shrinkable,
+        ParentElement, Radius, SavePosition, Shrinkable,
     },
     rendering::ThinStrokes,
 };
@@ -502,6 +502,7 @@ pub struct AppearanceSettingsPageView {
     window_id: WindowId,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
     font_size_editor: ViewHandle<EditorView>,
+    valid_font_size: bool,
     line_height_editor: ViewHandle<EditorView>,
     notebook_font_size_editor: ViewHandle<EditorView>,
     markdown_heading_h1_scale_editor: ViewHandle<EditorView>,
@@ -1371,6 +1372,7 @@ impl AppearanceSettingsPageView {
             markdown_heading_h5_scale_editor,
             markdown_heading_h6_scale_editor,
             font_size_editor,
+            valid_font_size: true,
             line_height_editor,
             new_window_columns_editor,
             valid_new_window_columns: true,
@@ -1627,6 +1629,7 @@ impl AppearanceSettingsPageView {
                 self.update_font_dropdown(ctx);
             }
             AppearanceEvent::MonospaceFontSizeChanged { .. } => {
+                self.valid_font_size = true;
                 let font_size = handle.as_ref(ctx).monospace_font_size();
                 self.font_size_editor.update(ctx, move |editor, ctx| {
                     editor.set_buffer_text(&format!("{font_size}"), ctx);
@@ -1873,7 +1876,15 @@ impl AppearanceSettingsPageView {
     ) {
         match event {
             EditorEvent::Blurred | EditorEvent::Enter => self.set_font_size(ctx),
-            EditorEvent::Escape => ctx.emit(SettingsPageEvent::FocusModal),
+            EditorEvent::Escape => {
+                let font_size = *FontSettings::as_ref(ctx).monospace_font_size.value();
+                self.font_size_editor.update(ctx, |editor, ctx| {
+                    editor.set_buffer_text(&format!("{font_size}"), ctx);
+                });
+                self.valid_font_size = true;
+                ctx.emit(SettingsPageEvent::FocusModal);
+                ctx.notify();
+            }
             _ => {}
         }
     }
@@ -1997,17 +2008,22 @@ impl AppearanceSettingsPageView {
 
     fn set_font_size(&mut self, ctx: &mut ViewContext<Self>) {
         let user_input = self.font_size_editor.as_ref(ctx).buffer_text(ctx);
-        if let Ok(num) = user_input.parse::<usize>() {
-            if (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num) {
-                FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-                    report_if_error!(
-                        font_settings
-                            .monospace_font_size
-                            .set_value(num as f32, ctx,)
-                    );
-                });
-            }
+        let parsed = user_input
+            .parse::<usize>()
+            .ok()
+            .filter(|num| (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(num));
+        self.valid_font_size = parsed.is_some();
+        if let Some(num) = parsed {
+            FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
+                report_if_error!(font_settings.monospace_font_size.set_value(num as f32, ctx));
+            });
         }
+        ctx.notify();
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn terminal_font_size_editor_for_test(&self) -> &ViewHandle<EditorView> {
+        &self.font_size_editor
     }
 
     pub fn set_font_weight(&mut self, value: Weight, ctx: &mut ViewContext<Self>) {
@@ -4675,6 +4691,8 @@ impl SettingsWidget for TerminalFontWidget {
                         .ui_builder()
                         .text_input(view.font_size_editor.clone())
                         .with_style(UiComponentStyles {
+                            border_color: (!view.valid_font_size)
+                                .then(|| themes::theme::Fill::error().into()),
                             width: Some(FONT_SIZE_INPUT_BOX_WIDTH),
                             padding: Some(Coords {
                                 top: appearance.ui_font_size() * 7. / 12.,
@@ -4708,7 +4726,31 @@ impl SettingsWidget for TerminalFontWidget {
         );
 
         self.render_line_height_editor(view, appearance, &mut terminal_font_row);
-        terminal_font_row.finish()
+        let mut column = Flex::column().with_child(terminal_font_row.finish());
+        if !view.valid_font_size {
+            let message = appearance
+                .ui_builder()
+                .wrappable_text(
+                    crate::t!(
+                        "settings-appearance-font-size-invalid",
+                        min = MIN_FONT_SIZE,
+                        max = MAX_FONT_SIZE
+                    ),
+                    true,
+                )
+                .with_style(UiComponentStyles {
+                    font_color: Some(themes::theme::Fill::error().into_solid()),
+                    ..Default::default()
+                })
+                .build()
+                .finish();
+            column.add_child(
+                SavePosition::new(message, "settings-terminal-font-size-error")
+                    .for_single_frame()
+                    .finish(),
+            );
+        }
+        column.finish()
     }
 }
 
