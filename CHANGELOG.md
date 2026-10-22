@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.17] — 2026-10-22
+
+- Dateimanager: Cursorziel beim Aktualisieren nach Objektidentität erhalten; nach Abbruch oder Bestätigung von Umbenennen und Ordneranlage den Tastaturfokus an die Dateiliste zurückgeben (#615, #616).
+
 ## [1.2.16] — 2026-10-22
 
 - Interaktive DMG-Prüfungen erhalten ein begrenztes 30-Minuten-Fenster, damit verzögerte Bedienabrufe zusammenhängende Aufgaben nicht vorzeitig abbrechen (#564).
