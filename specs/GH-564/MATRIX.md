@@ -29,6 +29,7 @@ Die [Dateimanager-Exploration vom 22.10.](EXPLORATION-2026-10-22.md) am
 unveränderten 1.2.2-DMG ergänzt Tastatureinstieg, Unterordner-Navigation und
 Umbenennen-Dialog; der wirkungslose Ordner-Klick wird in #604 untersucht.
 Die [abgeschlossene Dateiaktionsprüfung](FILE-ACTIONS-2026-10-22.md) ergänzt F2-Abbruch, F7, Elternnavigation und F4 mit Inhaltsvergleich; sie findet den pfadabhängigen Rename-Fehler #614 sowie #615/#616/#617.
+Die [Settings-Exploration](SETTINGS-2026-10-22.md) ergänzt Suchtreffer/Leerzustand, Dark→Light, gültige Schriftgrößenänderung und erhaltenen Shellmarker; ungültige Schriftgröße ohne Rückmeldung ist #622.
 Weder Altbuild noch Fixtures ersetzen die vollständigen Fallkombinationen.
 
 ## Referenzen und Bewertung
@@ -136,15 +137,15 @@ Fehlende Testvoraussetzungen sind keine Produktfehler.
 | F11 | C:F1 | Dateimanager bei laufender Shell schließen | CWD-Übernahme oder ehrlicher Hinweis; kein blindes cd bei unklarer Identität, kein Entwurfsverlust | Freier/belegter Prompt, verschachtelte Shell | not-run — V, G, R |
 | R01 | C:R1 | Offline/Reconnect abwarten | Sperre und Ursache sichtbar; gleiche Route/Generation, freigegebene Eingabe erst nach Ready | Echte Trennung, Vorher/Nachher + Video | Teilnachweis pass — SSH-ControlMaster beendet; gleiche Shell-PID, Marker und CWD nach automatischer Wiederverbindung; Offline-Anzeige/Generation/Video und Varianten V, G, R |
 | R02 | C:R1, R2 | Timeout, Retry, Abbruch, einfacher Terminalmodus | Verständlicher Ausgang; keine lokale Ersatzshell; Corrupt ohne tote Aktionen; einfacher Modus mit dauerhaftem Hinweis | Je echter Zustand und Folgeaktion | not-run — V, G, R |
-| E01 | U | Einstellungen öffnen, ändern, zurück | Als Tab erkennbar; Änderung sichtbar; Zurück zur bestehenden Shell ohne Zustandsverlust | Einstellung vorher/nachher + Shellmarker | Teilprüfung: Theme-Wechsel/Ansichten-Rückkehr pass; D06 auf 1.2.8 in DE/EN korrigiert, Entwurf/Fokus/Auswahl erhalten ([Nachweis](SSH-FORM-2026-10-21.md)); Shellmarker/übrige Varianten V |
-| E02 | U | Settings suchen und Unterseiten bedienen | Suchtreffer/Leerzustand, Toggles, Felder, Dropdowns, Speichern/Abbrechen und Dateizugang verständlich | Inventar unten, jede erreichbare Kontrolle | not-run — V, G |
+| E01 | U | Einstellungen öffnen, ändern, zurück | Als Tab erkennbar; Änderung sichtbar; Zurück zur bestehenden Shell ohne Zustandsverlust | Einstellung vorher/nachher + Shellmarker | Teilprüfung: Theme-Wechsel/Ansichten-Rückkehr pass; D06 auf 1.2.8 in DE/EN korrigiert, Entwurf/Fokus/Auswahl erhalten ([Nachweis](SSH-FORM-2026-10-21.md)); Shellmarker/Schließen in EN mit Dark→Light auf 1.2.2 [bestätigt](SETTINGS-2026-10-22.md); übrige Varianten V |
+| E02 | U | Settings suchen und Unterseiten bedienen | Suchtreffer/Leerzustand, Toggles, Felder, Dropdowns, Speichern/Abbrechen und Dateizugang verständlich | Inventar unten, jede erreichbare Kontrolle | Teilnachweis: Suche/Leerzustand/Reset und Schriftänderung pass; ungültige Schriftgröße fail (#622), [EN Dark/Light](SETTINGS-2026-10-22.md); übrige Kontrollen/Varianten V, G |
 | E03 | U | Weitere Sidebar-Werkzeuge nutzen | Tooltip/Bezeichnung, Leer-/Lade-/Fehlerzustand, Auswahl und Rückweg ohne Sackgasse | Inventar unten, echte statt Platzhalterzustände | not-run — V, G, R, P |
-| E04 | U | Native Menüs, Kontextmenüs, Palette, Dialoge erkunden | Sinnvolle Benennung, Shortcuts, Fokus und Abbruch; keine wirkungslosen sichtbaren Aktionen | Kontrollinventar mit Zustandsfolge | not-run — V, G |
+| E04 | U | Native Menüs, Kontextmenüs, Palette, Dialoge erkunden | Sinnvolle Benennung, Shortcuts, Fokus und Abbruch; keine wirkungslosen sichtbaren Aktionen | Kontrollinventar mit Zustandsfolge | Teilprüfung: Theme-Auswahl/Schließen und Settings-Tab-Rückweg pass ([Beleg](SETTINGS-2026-10-22.md)); übrige Menüs/Varianten V, G |
 | X01 | U | Einstieg ohne Host frei lösen | Tester findet aus sichtbarer UI selbst Terminal, Host-Anlage und Rückweg; Hindernisse protokolliert | Exploratives Aktionsprotokoll | Teilprüfung 21.10.: siehe Explorationsbericht; übrige Aufgaben/Varianten V, G |
 | X02 | U | Lokales Projekt mit mehreren Panes bearbeiten | Tester wählt selbst nächste Schritte; Kontext bleibt nachvollziehbar; unerwartete Zustände werden untersucht | Exploratives Aktionsprotokoll | not-run — V, G |
 | X03 | U | Host/Favorit und Agent/Konto finden | Echte Ziele ohne Codewissen finden, starten, wiederfinden und Fehler auflösen | Exploratives Aktionsprotokoll | not-run — V, G, R, P |
 | X04 | U | Dateien mit eindeutigem Ziel bearbeiten | Auswahl, Transfer, Konflikt/Abbruch und Rückkehr aus sichtbarer UI verständlich | Exploratives Aktionsprotokoll | not-run — V, G, R |
-| X05 | U | Einstellung ändern und Fehler beheben | Tester findet Einstellung und Rückweg; korrigiert eine absichtlich ungültige Eingabe | Exploratives Aktionsprotokoll | Teilprüfung: Theme-Wechsel/Rückweg pass; D06 gezielt auf 1.2.8 korrigiert ([Regression, keine neue Exploration](SSH-FORM-2026-10-21.md)); ungültige Einstellung/übrige Varianten V, G |
+| X05 | U | Einstellung ändern und Fehler beheben | Tester findet Einstellung und Rückweg; korrigiert eine absichtlich ungültige Eingabe | Exploratives Aktionsprotokoll | Teilprüfung: Theme-Wechsel/Rückweg pass; D06 gezielt auf 1.2.8 korrigiert ([Regression, keine neue Exploration](SSH-FORM-2026-10-21.md)); ungültige Schriftgröße fail (#622), gültige Korrektur und Shellrückkehr pass ([EN Light](SETTINGS-2026-10-22.md)); übrige Varianten V, G |
 
 ## Kontrollinventar für den nächsten Lauf
 

@@ -1,0 +1,634 @@
+[
+  {
+    "time": "2026-10-22T17:08:09.825423+00:00",
+    "args": [
+      "click",
+      "--at",
+      "982,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"success\" : true,\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"retry_safety\" : \"unsafe\",\n    \"escalation\" : \"observe_before_retry\",\n    \"retry_safe\" : false,\n    \"delivery_mechanism\" : \"global_events\",\n    \"mutation_dispatched\" : true,\n    \"requires_fresh_observation\" : true,\n    \"route\" : \"bridge\",\n    \"state\" : \"dispatched_unverified\",\n    \"delivery_mode\" : \"foreground\",\n    \"effect\" : \"unverifiable\",\n    \"dispatch_state\" : \"dispatched\",\n    \"evidence\" : \"delivery_accepted\"\n  },\n  \"data\" : {\n    \"executionTime\" : 1.0784549713134766,\n    \"waitTime\" : 0,\n    \"inputCoordinates\" : {\n      \"x\" : 982,\n      \"y\" : 53\n    },\n    \"targetPoint\" : {\n      \"original\" : {\n        \"y\" : 53,\n        \"x\" : 982\n      },\n      \"source\" : \"coordinates\",\n      \"resolved\" : {\n        \"y\" : 83,\n        \"x\" : 982\n      },\n      \"coordinate\" : {\n        \"resolved\" : {\n          \"x\" : 982,\n          \"y\" : 83\n        },\n        \"input\" : {\n          \"x\" : 982,\n          \"y\" : 53\n        },\n        \"targetApp\" : \"Zaplex\",\n        \"targetWindow\" : {\n          \"windowID\" : 38,\n          \"bounds\" : {\n            \"width\" : 1024,\n            \"height\" : 678,\n            \"x\" : 0,\n            \"y\" : 30\n          },\n          \"title\" : \"Local · ~\"\n        },\n        \"targetPID\" : 1266,\n        \"coordinateSpace\" : \"window_relative\"\n      }\n    },\n    \"targetWindowId\" : 38,\n    \"deliveryMode\" : \"foreground\",\n    \"targetWindowTitle\" : \"Local · ~\",\n    \"coordinateSpace\" : \"window_relative\",\n    \"targetApp\" : \"Zaplex\",\n    \"clickLocation\" : {\n      \"y\" : 83,\n      \"x\" : 982\n    },\n    \"screenCoordinates\" : {\n      \"y\" : 83,\n      \"x\" : 982\n    },\n    \"clickType\" : \"single\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:08:08.710Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:08:46.365650+00:00",
+    "args": [
+      "click",
+      "--at",
+      "982,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"outcome\" : {\n    \"effect\" : \"unverifiable\",\n    \"mutation_dispatched\" : true,\n    \"requires_fresh_observation\" : true,\n    \"state\" : \"dispatched_unverified\",\n    \"delivery_mode\" : \"foreground\",\n    \"dispatch_state\" : \"dispatched\",\n    \"evidence\" : \"delivery_accepted\",\n    \"retry_safe\" : false,\n    \"retry_safety\" : \"unsafe\",\n    \"route\" : \"bridge\",\n    \"delivery_mechanism\" : \"global_events\",\n    \"escalation\" : \"observe_before_retry\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:08:45.442Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"success\" : true,\n  \"effect\" : \"unverifiable\",\n  \"data\" : {\n    \"targetPoint\" : {\n      \"original\" : {\n        \"y\" : 53,\n        \"x\" : 982\n      },\n      \"resolved\" : {\n        \"y\" : 83,\n        \"x\" : 982\n      },\n      \"coordinate\" : {\n        \"resolved\" : {\n          \"x\" : 982,\n          \"y\" : 83\n        },\n        \"targetWindow\" : {\n          \"title\" : \"Local · ~\",\n          \"bounds\" : {\n            \"height\" : 678,\n            \"y\" : 30,\n            \"x\" : 0,\n            \"width\" : 1024\n          },\n          \"windowID\" : 38\n        },\n        \"coordinateSpace\" : \"window_relative\",\n        \"input\" : {\n          \"x\" : 982,\n          \"y\" : 53\n        },\n        \"targetApp\" : \"Zaplex\",\n        \"targetPID\" : 1266\n      },\n      \"source\" : \"coordinates\"\n    },\n    \"executionTime\" : 0.9067139625549316,\n    \"targetWindowTitle\" : \"Local · ~\",\n    \"screenCoordinates\" : {\n      \"y\" : 83,\n      \"x\" : 982\n    },\n    \"deliveryMode\" : \"foreground\",\n    \"clickType\" : \"single\",\n    \"targetApp\" : \"Zaplex\",\n    \"clickLocation\" : {\n      \"y\" : 83,\n      \"x\" : 982\n    },\n    \"inputCoordinates\" : {\n      \"y\" : 53,\n      \"x\" : 982\n    },\n    \"waitTime\" : 0,\n    \"coordinateSpace\" : \"window_relative\",\n    \"targetWindowId\" : 38\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:09:02.396201+00:00",
+    "args": [
+      "press",
+      "cmd+shift+e",
+      "--app",
+      "Zaplex",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"error\" : {\n    \"hint\" : \"Use a fresh exact non-dialog snapshot for background Agent\\/MCP delivery, an exact window\\/snapshot receipt where the direct CLI permits it, or re-run with --foreground in the CLI \\/ foreground=true in a foreground-capable MCP session. Prefer a semantic action when one exists.\",\n    \"mutation_dispatched\" : false,\n    \"retry_safe\" : true,\n    \"code\" : \"INTERACTION_FAILED\",\n    \"message\" : \"Raw key presses require explicit foreground consent unless a fresh exact receipt pins background delivery.\"\n  },\n  \"effect\" : \"refused\",\n  \"success\" : false,\n  \"outcome\" : {\n    \"mutation_dispatched\" : false,\n    \"evidence\" : \"request_refused\",\n    \"retry_safe\" : true,\n    \"retry_safety\" : \"safe\",\n    \"escalation\" : \"correct_request\",\n    \"state\" : \"refused\",\n    \"requires_fresh_observation\" : false,\n    \"effect\" : \"refused\",\n    \"route\" : \"local\",\n    \"dispatch_state\" : \"none\",\n    \"refusal_reason\" : \"foreground_consent_required\"\n  },\n  \"data\" : null,\n  \"debug_logs\" : [\n\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:09:25.551449+00:00",
+    "args": [
+      "type",
+      "ZAPLEX_PROOF=2212; printf \"GUI-EXPLORATION-READY\\\\n\"; pwd",
+      "--app",
+      "Zaplex",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"outcome\" : {\n    \"evidence\" : \"completion_unknown\",\n    \"delivery_mechanism\" : \"window_targeted_events\",\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"retry_safety\" : \"unsafe\",\n    \"retry_safe\" : false,\n    \"dispatched_unit_count\" : 1,\n    \"delivery_mode\" : \"background\",\n    \"effect\" : \"unverifiable\",\n    \"mutation_dispatched\" : true,\n    \"route\" : \"bridge\",\n    \"escalation\" : \"observe_before_retry\",\n    \"requires_fresh_observation\" : true,\n    \"state\" : \"indeterminate\"\n  },\n  \"effect\" : \"unverifiable\",\n  \"error\" : {\n    \"retry_safe\" : false,\n    \"hint\" : \"Observe the target before retrying this operation.\",\n    \"message\" : \"Type outcome is indeterminate: input may have been delivered; do not retry blindly. At least 1 input unit(s) were emitted. Delivery detail: Invalid input: Invalid target: Exact focused-element receipt is stale: The exact target window could not be verified: AXWindows failed with AX error -25204. Background keystrokes follow the application's own keyboard focus and cannot be aimed at a window that does not hold it; such a window also refuses accessibility focus requests, so no amount of retrying moves focus there in the background. To write into this window without focusing it, observe it and set its editable element's accessibility value (`set-value` command, `set_value` tool).\",\n    \"details\" : \"Invalid input: Invalid target: Exact focused-element receipt is stale: The exact target window could not be verified: AXWindows failed with AX error -25204. Background keystrokes follow the application's own keyboard focus and cannot be aimed at a window that does not hold it; such a window also refuses accessibility focus requests, so no amount of retrying moves focus there in the background. To write into this window without focusing it, observe it and set its editable element's accessibility value (`set-value` command, `set_value` tool). Use foreground delivery only when the window may take focus.\",\n    \"mutation_dispatched\" : true,\n    \"code\" : \"INTERACTION_FAILED\"\n  },\n  \"target_receipt\" : {\n    \"pid\" : 1266,\n    \"process_start_identity\" : 1792688751007379,\n    \"process_start_identity_decimal\" : \"1792688751007379\",\n    \"window_id\" : 38\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:09:25.240Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"success\" : false,\n  \"data\" : null\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:09:35.215316+00:00",
+    "args": [
+      "press",
+      "f10",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"debug_logs\" : [\n    \"[2026-10-22T17:09:34.494Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"outcome\" : {\n    \"dispatched_unit_count\" : 3,\n    \"dispatch_state\" : \"dispatched\",\n    \"mutation_dispatched\" : true,\n    \"retry_safety\" : \"unsafe\",\n    \"route\" : \"bridge\",\n    \"delivery_mechanism\" : \"composite\",\n    \"escalation\" : \"observe_before_retry\",\n    \"state\" : \"dispatched_unverified\",\n    \"delivery_mode\" : \"foreground\",\n    \"evidence\" : \"delivery_accepted\",\n    \"retry_safe\" : false,\n    \"requires_fresh_observation\" : true,\n    \"effect\" : \"unverifiable\"\n  },\n  \"success\" : true,\n  \"data\" : {\n    \"deliveryMode\" : \"foreground\",\n    \"totalPresses\" : 1,\n    \"keys\" : [\n      \"f10\"\n    ],\n    \"count\" : 1,\n    \"executionTime\" : 0.6964130401611328\n  },\n  \"effect\" : \"unverifiable\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:09:56.832476+00:00",
+    "args": [
+      "type",
+      "ZAPLEX_PROOF=2212; printf \"GUI-EXPLORATION-READY\\\\n\"; pwd",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mechanism\" : \"composite\",\n    \"delivery_mode\" : \"foreground\",\n    \"mutation_dispatched\" : true,\n    \"requires_fresh_observation\" : true,\n    \"effect\" : \"unverifiable\",\n    \"retry_safety\" : \"unsafe\",\n    \"dispatched_unit_count\" : 58,\n    \"retry_safe\" : false,\n    \"evidence\" : \"completion_unknown\",\n    \"state\" : \"indeterminate\",\n    \"route\" : \"bridge\"\n  },\n  \"error\" : {\n    \"message\" : \"Typing failed after foreground setup may have changed focus.\",\n    \"hint\" : \"Observe the target before deciding whether to retry typing.\",\n    \"details\" : \"Typing did not return an accepted outcome.\",\n    \"mutation_dispatched\" : true,\n    \"code\" : \"INTERACTION_FAILED\",\n    \"retry_safe\" : false\n  },\n  \"success\" : false,\n  \"data\" : null,\n  \"debug_logs\" : [\n    \"[2026-10-22T17:09:55.581Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:10:27.776515+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"debug_logs\" : [\n    \"[2026-10-22T17:10:26.930Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"data\" : {\n    \"keys\" : [\n      \"return\"\n    ],\n    \"executionTime\" : 0.8039249181747437,\n    \"totalPresses\" : 1,\n    \"deliveryMode\" : \"foreground\",\n    \"count\" : 1\n  },\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"mutation_dispatched\" : true,\n    \"dispatched_unit_count\" : 3,\n    \"escalation\" : \"observe_before_retry\",\n    \"route\" : \"bridge\",\n    \"evidence\" : \"delivery_accepted\",\n    \"requires_fresh_observation\" : true,\n    \"effect\" : \"unverifiable\",\n    \"state\" : \"dispatched_unverified\",\n    \"retry_safe\" : false,\n    \"retry_safety\" : \"unsafe\",\n    \"delivery_mode\" : \"foreground\",\n    \"dispatch_state\" : \"dispatched\",\n    \"delivery_mechanism\" : \"composite\"\n  },\n  \"success\" : true\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:10:52.720122+00:00",
+    "args": [
+      "press",
+      "cmd+,",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"delivery_mechanism\" : \"composite\",\n    \"requires_fresh_observation\" : true,\n    \"mutation_dispatched\" : true,\n    \"effect\" : \"unverifiable\",\n    \"dispatch_state\" : \"dispatched\",\n    \"state\" : \"dispatched_unverified\",\n    \"route\" : \"bridge\",\n    \"retry_safe\" : false,\n    \"retry_safety\" : \"unsafe\",\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mode\" : \"foreground\",\n    \"dispatched_unit_count\" : 3,\n    \"evidence\" : \"delivery_accepted\"\n  },\n  \"data\" : {\n    \"deliveryMode\" : \"foreground\",\n    \"executionTime\" : 0.6573328971862793,\n    \"totalPresses\" : 1,\n    \"count\" : 1,\n    \"keys\" : [\n      \"cmd+comma\"\n    ]\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:10:52.033Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"success\" : true\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:11:28.421467+00:00",
+    "args": [
+      "type",
+      "zzzz-no-match-2212",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"success\" : false,\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"mutation_dispatched\" : true,\n    \"requires_fresh_observation\" : true,\n    \"state\" : \"indeterminate\",\n    \"retry_safety\" : \"unsafe\",\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"dispatched_unit_count\" : 20,\n    \"effect\" : \"unverifiable\",\n    \"delivery_mode\" : \"foreground\",\n    \"route\" : \"bridge\",\n    \"retry_safe\" : false,\n    \"delivery_mechanism\" : \"composite\",\n    \"evidence\" : \"completion_unknown\",\n    \"escalation\" : \"observe_before_retry\"\n  },\n  \"error\" : {\n    \"details\" : \"Typing did not return an accepted outcome.\",\n    \"mutation_dispatched\" : true,\n    \"retry_safe\" : false,\n    \"code\" : \"INTERACTION_FAILED\",\n    \"message\" : \"Typing failed after foreground setup may have changed focus.\",\n    \"hint\" : \"Observe the target before deciding whether to retry typing.\"\n  },\n  \"data\" : null,\n  \"debug_logs\" : [\n    \"[2026-10-22T17:11:27.367Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:11:54.277896+00:00",
+    "args": [
+      "press",
+      "cmd+a",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"outcome\" : {\n    \"retry_safe\" : false,\n    \"dispatched_unit_count\" : 3,\n    \"state\" : \"dispatched_unverified\",\n    \"effect\" : \"unverifiable\",\n    \"route\" : \"bridge\",\n    \"delivery_mechanism\" : \"composite\",\n    \"delivery_mode\" : \"foreground\",\n    \"requires_fresh_observation\" : true,\n    \"evidence\" : \"delivery_accepted\",\n    \"mutation_dispatched\" : true,\n    \"retry_safety\" : \"unsafe\",\n    \"dispatch_state\" : \"dispatched\",\n    \"escalation\" : \"observe_before_retry\"\n  },\n  \"success\" : true,\n  \"data\" : {\n    \"totalPresses\" : 1,\n    \"count\" : 1,\n    \"keys\" : [\n      \"cmd+a\"\n    ],\n    \"executionTime\" : 0.674697995185852,\n    \"deliveryMode\" : \"foreground\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:11:53.578Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"effect\" : \"unverifiable\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:12:00.698305+00:00",
+    "args": [
+      "type",
+      "font",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"debug_logs\" : [\n    \"[2026-10-22T17:11:59.954Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"data\" : null,\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"effect\" : \"unverifiable\",\n    \"evidence\" : \"completion_unknown\",\n    \"dispatched_unit_count\" : 6,\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"delivery_mode\" : \"foreground\",\n    \"retry_safety\" : \"unsafe\",\n    \"escalation\" : \"observe_before_retry\",\n    \"route\" : \"bridge\",\n    \"state\" : \"indeterminate\",\n    \"retry_safe\" : false,\n    \"requires_fresh_observation\" : true,\n    \"delivery_mechanism\" : \"composite\",\n    \"mutation_dispatched\" : true\n  },\n  \"success\" : false,\n  \"error\" : {\n    \"code\" : \"INTERACTION_FAILED\",\n    \"message\" : \"Typing failed after foreground setup may have changed focus.\",\n    \"hint\" : \"Observe the target before deciding whether to retry typing.\",\n    \"details\" : \"Typing did not return an accepted outcome.\",\n    \"retry_safe\" : false,\n    \"mutation_dispatched\" : true\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:12:27.139533+00:00",
+    "args": [
+      "press",
+      "cmd+a",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"data\" : {\n    \"executionTime\" : 0.6692019701004028,\n    \"keys\" : [\n      \"cmd+a\"\n    ],\n    \"totalPresses\" : 1,\n    \"count\" : 1,\n    \"deliveryMode\" : \"foreground\"\n  },\n  \"effect\" : \"unverifiable\",\n  \"success\" : true,\n  \"outcome\" : {\n    \"effect\" : \"unverifiable\",\n    \"delivery_mode\" : \"foreground\",\n    \"route\" : \"bridge\",\n    \"mutation_dispatched\" : true,\n    \"delivery_mechanism\" : \"composite\",\n    \"retry_safety\" : \"unsafe\",\n    \"retry_safe\" : false,\n    \"state\" : \"dispatched_unverified\",\n    \"requires_fresh_observation\" : true,\n    \"dispatch_state\" : \"dispatched\",\n    \"dispatched_unit_count\" : 3,\n    \"evidence\" : \"delivery_accepted\",\n    \"escalation\" : \"observe_before_retry\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:12:26.441Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:12:31.451128+00:00",
+    "args": [
+      "press",
+      "backspace",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"debug_logs\" : [\n    \"[2026-10-22T17:12:30.791Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"outcome\" : {\n    \"evidence\" : \"delivery_accepted\",\n    \"retry_safe\" : false,\n    \"state\" : \"dispatched_unverified\",\n    \"dispatched_unit_count\" : 3,\n    \"route\" : \"bridge\",\n    \"effect\" : \"unverifiable\",\n    \"dispatch_state\" : \"dispatched\",\n    \"escalation\" : \"observe_before_retry\",\n    \"requires_fresh_observation\" : true,\n    \"delivery_mode\" : \"foreground\",\n    \"retry_safety\" : \"unsafe\",\n    \"mutation_dispatched\" : true,\n    \"delivery_mechanism\" : \"composite\"\n  },\n  \"effect\" : \"unverifiable\",\n  \"data\" : {\n    \"deliveryMode\" : \"foreground\",\n    \"executionTime\" : 0.6383579969406128,\n    \"totalPresses\" : 1,\n    \"keys\" : [\n      \"delete\"\n    ],\n    \"count\" : 1\n  },\n  \"success\" : true\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:12:53.768864+00:00",
+    "args": [
+      "click",
+      "--at",
+      "75,333",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"data\" : {\n    \"inputCoordinates\" : {\n      \"y\" : 333,\n      \"x\" : 75\n    },\n    \"deliveryMode\" : \"foreground\",\n    \"targetApp\" : \"Zaplex\",\n    \"targetWindowTitle\" : \"Settings\",\n    \"screenCoordinates\" : {\n      \"y\" : 363,\n      \"x\" : 75\n    },\n    \"clickType\" : \"single\",\n    \"executionTime\" : 0.9541810750961304,\n    \"coordinateSpace\" : \"window_relative\",\n    \"targetPoint\" : {\n      \"coordinate\" : {\n        \"coordinateSpace\" : \"window_relative\",\n        \"input\" : {\n          \"y\" : 333,\n          \"x\" : 75\n        },\n        \"resolved\" : {\n          \"y\" : 363,\n          \"x\" : 75\n        },\n        \"targetPID\" : 1266,\n        \"targetWindow\" : {\n          \"windowID\" : 38,\n          \"bounds\" : {\n            \"y\" : 30,\n            \"width\" : 1024,\n            \"height\" : 678,\n            \"x\" : 0\n          },\n          \"title\" : \"Settings\"\n        },\n        \"targetApp\" : \"Zaplex\"\n      },\n      \"resolved\" : {\n        \"x\" : 75,\n        \"y\" : 363\n      },\n      \"source\" : \"coordinates\",\n      \"original\" : {\n        \"x\" : 75,\n        \"y\" : 333\n      }\n    },\n    \"clickLocation\" : {\n      \"x\" : 75,\n      \"y\" : 363\n    },\n    \"targetWindowId\" : 38,\n    \"waitTime\" : 0\n  },\n  \"outcome\" : {\n    \"retry_safe\" : false,\n    \"delivery_mode\" : \"foreground\",\n    \"effect\" : \"unverifiable\",\n    \"state\" : \"dispatched_unverified\",\n    \"route\" : \"bridge\",\n    \"dispatch_state\" : \"dispatched\",\n    \"evidence\" : \"delivery_accepted\",\n    \"retry_safety\" : \"unsafe\",\n    \"mutation_dispatched\" : true,\n    \"delivery_mechanism\" : \"global_events\",\n    \"requires_fresh_observation\" : true,\n    \"escalation\" : \"observe_before_retry\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:12:52.770Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"success\" : true,\n  \"effect\" : \"unverifiable\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:13:03.649492+00:00",
+    "args": [
+      "click",
+      "--at",
+      "620,228",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"success\" : true,\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"delivery_mechanism\" : \"global_events\",\n    \"delivery_mode\" : \"foreground\",\n    \"retry_safe\" : false,\n    \"dispatch_state\" : \"dispatched\",\n    \"route\" : \"bridge\",\n    \"state\" : \"dispatched_unverified\",\n    \"effect\" : \"unverifiable\",\n    \"requires_fresh_observation\" : true,\n    \"evidence\" : \"delivery_accepted\",\n    \"retry_safety\" : \"unsafe\",\n    \"escalation\" : \"observe_before_retry\",\n    \"mutation_dispatched\" : true\n  },\n  \"data\" : {\n    \"screenCoordinates\" : {\n      \"y\" : 258,\n      \"x\" : 620\n    },\n    \"waitTime\" : 0,\n    \"coordinateSpace\" : \"window_relative\",\n    \"clickLocation\" : {\n      \"y\" : 258,\n      \"x\" : 620\n    },\n    \"targetWindowId\" : 38,\n    \"inputCoordinates\" : {\n      \"y\" : 228,\n      \"x\" : 620\n    },\n    \"targetPoint\" : {\n      \"source\" : \"coordinates\",\n      \"coordinate\" : {\n        \"coordinateSpace\" : \"window_relative\",\n        \"input\" : {\n          \"x\" : 620,\n          \"y\" : 228\n        },\n        \"resolved\" : {\n          \"x\" : 620,\n          \"y\" : 258\n        },\n        \"targetApp\" : \"Zaplex\",\n        \"targetPID\" : 1266,\n        \"targetWindow\" : {\n          \"bounds\" : {\n            \"y\" : 30,\n            \"height\" : 678,\n            \"x\" : 0,\n            \"width\" : 1024\n          },\n          \"title\" : \"Settings\",\n          \"windowID\" : 38\n        }\n      },\n      \"resolved\" : {\n        \"y\" : 258,\n        \"x\" : 620\n      },\n      \"original\" : {\n        \"y\" : 228,\n        \"x\" : 620\n      }\n    },\n    \"targetWindowTitle\" : \"Settings\",\n    \"executionTime\" : 0.8499699831008911,\n    \"targetApp\" : \"Zaplex\",\n    \"deliveryMode\" : \"foreground\",\n    \"clickType\" : \"single\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:13:02.776Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:13:24.127260+00:00",
+    "args": [
+      "click",
+      "--at",
+      "90,131",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"success\" : true,\n  \"data\" : {\n    \"inputCoordinates\" : {\n      \"x\" : 90,\n      \"y\" : 131\n    },\n    \"targetWindowId\" : 38,\n    \"coordinateSpace\" : \"window_relative\",\n    \"executionTime\" : 0.8841890096664429,\n    \"deliveryMode\" : \"foreground\",\n    \"targetWindowTitle\" : \"Settings\",\n    \"waitTime\" : 0,\n    \"targetPoint\" : {\n      \"coordinate\" : {\n        \"input\" : {\n          \"y\" : 131,\n          \"x\" : 90\n        },\n        \"targetApp\" : \"Zaplex\",\n        \"targetPID\" : 1266,\n        \"resolved\" : {\n          \"y\" : 161,\n          \"x\" : 90\n        },\n        \"targetWindow\" : {\n          \"windowID\" : 38,\n          \"title\" : \"Settings\",\n          \"bounds\" : {\n            \"height\" : 678,\n            \"x\" : 0,\n            \"y\" : 30,\n            \"width\" : 1024\n          }\n        },\n        \"coordinateSpace\" : \"window_relative\"\n      },\n      \"original\" : {\n        \"x\" : 90,\n        \"y\" : 131\n      },\n      \"resolved\" : {\n        \"x\" : 90,\n        \"y\" : 161\n      },\n      \"source\" : \"coordinates\"\n    },\n    \"screenCoordinates\" : {\n      \"x\" : 90,\n      \"y\" : 161\n    },\n    \"targetApp\" : \"Zaplex\",\n    \"clickType\" : \"single\",\n    \"clickLocation\" : {\n      \"x\" : 90,\n      \"y\" : 161\n    }\n  },\n  \"effect\" : \"unverifiable\",\n  \"debug_logs\" : [\n    \"[2026-10-22T17:13:23.216Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"outcome\" : {\n    \"escalation\" : \"observe_before_retry\",\n    \"retry_safety\" : \"unsafe\",\n    \"delivery_mode\" : \"foreground\",\n    \"effect\" : \"unverifiable\",\n    \"mutation_dispatched\" : true,\n    \"delivery_mechanism\" : \"global_events\",\n    \"route\" : \"bridge\",\n    \"evidence\" : \"delivery_accepted\",\n    \"state\" : \"dispatched_unverified\",\n    \"retry_safe\" : false,\n    \"requires_fresh_observation\" : true,\n    \"dispatch_state\" : \"dispatched\"\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:13:27.266485+00:00",
+    "args": [
+      "type",
+      "Light",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"data\" : null,\n  \"debug_logs\" : [\n    \"[2026-10-22T17:13:26.616Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"success\" : false,\n  \"error\" : {\n    \"message\" : \"Typing failed after foreground setup may have changed focus.\",\n    \"mutation_dispatched\" : true,\n    \"hint\" : \"Observe the target before deciding whether to retry typing.\",\n    \"details\" : \"Typing did not return an accepted outcome.\",\n    \"code\" : \"INTERACTION_FAILED\",\n    \"retry_safe\" : false\n  },\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mode\" : \"foreground\",\n    \"state\" : \"indeterminate\",\n    \"delivery_mechanism\" : \"composite\",\n    \"route\" : \"bridge\",\n    \"effect\" : \"unverifiable\",\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"retry_safety\" : \"unsafe\",\n    \"evidence\" : \"completion_unknown\",\n    \"mutation_dispatched\" : true,\n    \"dispatched_unit_count\" : 7,\n    \"requires_fresh_observation\" : true,\n    \"retry_safe\" : false\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:13:47.950762+00:00",
+    "args": [
+      "click",
+      "--at",
+      "107,217",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"outcome\" : {\n    \"delivery_mode\" : \"foreground\",\n    \"route\" : \"bridge\",\n    \"dispatch_state\" : \"dispatched\",\n    \"retry_safety\" : \"unsafe\",\n    \"retry_safe\" : false,\n    \"state\" : \"dispatched_unverified\",\n    \"escalation\" : \"observe_before_retry\",\n    \"mutation_dispatched\" : true,\n    \"requires_fresh_observation\" : true,\n    \"delivery_mechanism\" : \"global_events\",\n    \"effect\" : \"unverifiable\",\n    \"evidence\" : \"delivery_accepted\"\n  },\n  \"data\" : {\n    \"clickType\" : \"single\",\n    \"targetWindowId\" : 38,\n    \"executionTime\" : 0.8636599779129028,\n    \"targetApp\" : \"Zaplex\",\n    \"clickLocation\" : {\n      \"y\" : 247,\n      \"x\" : 107\n    },\n    \"targetWindowTitle\" : \"Settings\",\n    \"waitTime\" : 0,\n    \"coordinateSpace\" : \"window_relative\",\n    \"inputCoordinates\" : {\n      \"y\" : 217,\n      \"x\" : 107\n    },\n    \"screenCoordinates\" : {\n      \"y\" : 247,\n      \"x\" : 107\n    },\n    \"targetPoint\" : {\n      \"coordinate\" : {\n        \"coordinateSpace\" : \"window_relative\",\n        \"input\" : {\n          \"x\" : 107,\n          \"y\" : 217\n        },\n        \"targetWindow\" : {\n          \"windowID\" : 38,\n          \"title\" : \"Settings\",\n          \"bounds\" : {\n            \"y\" : 30,\n            \"width\" : 1024,\n            \"x\" : 0,\n            \"height\" : 678\n          }\n        },\n        \"targetPID\" : 1266,\n        \"resolved\" : {\n          \"x\" : 107,\n          \"y\" : 247\n        },\n        \"targetApp\" : \"Zaplex\"\n      },\n      \"resolved\" : {\n        \"y\" : 247,\n        \"x\" : 107\n      },\n      \"source\" : \"coordinates\",\n      \"original\" : {\n        \"y\" : 217,\n        \"x\" : 107\n      }\n    },\n    \"deliveryMode\" : \"foreground\"\n  },\n  \"effect\" : \"unverifiable\",\n  \"debug_logs\" : [\n    \"[2026-10-22T17:13:47.063Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"success\" : true\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:14:01.941882+00:00",
+    "args": [
+      "click",
+      "--at",
+      "223,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"success\" : true,\n  \"outcome\" : {\n    \"route\" : \"bridge\",\n    \"effect\" : \"unverifiable\",\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mechanism\" : \"global_events\",\n    \"state\" : \"dispatched_unverified\",\n    \"evidence\" : \"delivery_accepted\",\n    \"dispatch_state\" : \"dispatched\",\n    \"mutation_dispatched\" : true,\n    \"retry_safety\" : \"unsafe\",\n    \"retry_safe\" : false,\n    \"delivery_mode\" : \"foreground\",\n    \"requires_fresh_observation\" : true\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:14:01.175Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"effect\" : \"unverifiable\",\n  \"data\" : {\n    \"waitTime\" : 0,\n    \"targetWindowTitle\" : \"Settings\",\n    \"targetApp\" : \"Zaplex\",\n    \"targetWindowId\" : 38,\n    \"executionTime\" : 0.7440630197525024,\n    \"coordinateSpace\" : \"window_relative\",\n    \"clickLocation\" : {\n      \"x\" : 223,\n      \"y\" : 83\n    },\n    \"inputCoordinates\" : {\n      \"x\" : 223,\n      \"y\" : 53\n    },\n    \"targetPoint\" : {\n      \"original\" : {\n        \"x\" : 223,\n        \"y\" : 53\n      },\n      \"coordinate\" : {\n        \"coordinateSpace\" : \"window_relative\",\n        \"resolved\" : {\n          \"x\" : 223,\n          \"y\" : 83\n        },\n        \"input\" : {\n          \"x\" : 223,\n          \"y\" : 53\n        },\n        \"targetWindow\" : {\n          \"windowID\" : 38,\n          \"bounds\" : {\n            \"x\" : 0,\n            \"width\" : 1024,\n            \"y\" : 30,\n            \"height\" : 678\n          },\n          \"title\" : \"Settings\"\n        },\n        \"targetApp\" : \"Zaplex\",\n        \"targetPID\" : 1266\n      },\n      \"resolved\" : {\n        \"x\" : 223,\n        \"y\" : 83\n      },\n      \"source\" : \"coordinates\"\n    },\n    \"screenCoordinates\" : {\n      \"x\" : 223,\n      \"y\" : 83\n    },\n    \"deliveryMode\" : \"foreground\",\n    \"clickType\" : \"single\"\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:14:15.140343+00:00",
+    "args": [
+      "click",
+      "--at",
+      "76,96",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"data\" : {\n    \"targetPoint\" : {\n      \"resolved\" : {\n        \"x\" : 76,\n        \"y\" : 126\n      },\n      \"source\" : \"coordinates\",\n      \"original\" : {\n        \"x\" : 76,\n        \"y\" : 96\n      },\n      \"coordinate\" : {\n        \"targetWindow\" : {\n          \"bounds\" : {\n            \"width\" : 1024,\n            \"height\" : 678,\n            \"x\" : 0,\n            \"y\" : 30\n          },\n          \"windowID\" : 38,\n          \"title\" : \"Settings\"\n        },\n        \"targetApp\" : \"Zaplex\",\n        \"input\" : {\n          \"x\" : 76,\n          \"y\" : 96\n        },\n        \"targetPID\" : 1266,\n        \"coordinateSpace\" : \"window_relative\",\n        \"resolved\" : {\n          \"x\" : 76,\n          \"y\" : 126\n        }\n      }\n    },\n    \"deliveryMode\" : \"foreground\",\n    \"executionTime\" : 0.848101019859314,\n    \"inputCoordinates\" : {\n      \"x\" : 76,\n      \"y\" : 96\n    },\n    \"targetWindowTitle\" : \"Settings\",\n    \"screenCoordinates\" : {\n      \"x\" : 76,\n      \"y\" : 126\n    },\n    \"clickLocation\" : {\n      \"x\" : 76,\n      \"y\" : 126\n    },\n    \"targetApp\" : \"Zaplex\",\n    \"coordinateSpace\" : \"window_relative\",\n    \"targetWindowId\" : 38,\n    \"waitTime\" : 0,\n    \"clickType\" : \"single\"\n  },\n  \"success\" : true,\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"state\" : \"dispatched_unverified\",\n    \"evidence\" : \"delivery_accepted\",\n    \"retry_safety\" : \"unsafe\",\n    \"escalation\" : \"observe_before_retry\",\n    \"route\" : \"bridge\",\n    \"dispatch_state\" : \"dispatched\",\n    \"effect\" : \"unverifiable\",\n    \"delivery_mode\" : \"foreground\",\n    \"mutation_dispatched\" : true,\n    \"requires_fresh_observation\" : true,\n    \"delivery_mechanism\" : \"global_events\",\n    \"retry_safe\" : false\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:14:14.269Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:14:18.262489+00:00",
+    "args": [
+      "type",
+      "font",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"data\" : null,\n  \"debug_logs\" : [\n    \"[2026-10-22T17:14:17.657Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"error\" : {\n    \"details\" : \"Typing did not return an accepted outcome.\",\n    \"retry_safe\" : false,\n    \"hint\" : \"Observe the target before deciding whether to retry typing.\",\n    \"message\" : \"Typing failed after foreground setup may have changed focus.\",\n    \"mutation_dispatched\" : true,\n    \"code\" : \"INTERACTION_FAILED\"\n  },\n  \"outcome\" : {\n    \"evidence\" : \"completion_unknown\",\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"route\" : \"bridge\",\n    \"requires_fresh_observation\" : true,\n    \"effect\" : \"unverifiable\",\n    \"state\" : \"indeterminate\",\n    \"retry_safety\" : \"unsafe\",\n    \"retry_safe\" : false,\n    \"delivery_mode\" : \"foreground\",\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mechanism\" : \"composite\",\n    \"mutation_dispatched\" : true,\n    \"dispatched_unit_count\" : 6\n  },\n  \"success\" : false\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:14:35.758673+00:00",
+    "args": [
+      "click",
+      "--at",
+      "662,171",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"data\" : {\n    \"waitTime\" : 0,\n    \"executionTime\" : 0.8788551092147827,\n    \"targetWindowTitle\" : \"Settings\",\n    \"targetWindowId\" : 38,\n    \"coordinateSpace\" : \"window_relative\",\n    \"targetPoint\" : {\n      \"resolved\" : {\n        \"x\" : 662,\n        \"y\" : 201\n      },\n      \"coordinate\" : {\n        \"targetPID\" : 1266,\n        \"coordinateSpace\" : \"window_relative\",\n        \"input\" : {\n          \"y\" : 171,\n          \"x\" : 662\n        },\n        \"targetWindow\" : {\n          \"title\" : \"Settings\",\n          \"bounds\" : {\n            \"x\" : 0,\n            \"y\" : 30,\n            \"width\" : 1024,\n            \"height\" : 678\n          },\n          \"windowID\" : 38\n        },\n        \"targetApp\" : \"Zaplex\",\n        \"resolved\" : {\n          \"y\" : 201,\n          \"x\" : 662\n        }\n      },\n      \"original\" : {\n        \"x\" : 662,\n        \"y\" : 171\n      },\n      \"source\" : \"coordinates\"\n    },\n    \"clickLocation\" : {\n      \"x\" : 662,\n      \"y\" : 201\n    },\n    \"targetApp\" : \"Zaplex\",\n    \"inputCoordinates\" : {\n      \"y\" : 171,\n      \"x\" : 662\n    },\n    \"deliveryMode\" : \"foreground\",\n    \"screenCoordinates\" : {\n      \"y\" : 201,\n      \"x\" : 662\n    },\n    \"clickType\" : \"single\"\n  },\n  \"success\" : true,\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"delivery_mode\" : \"foreground\",\n    \"route\" : \"bridge\",\n    \"mutation_dispatched\" : true,\n    \"retry_safe\" : false,\n    \"dispatch_state\" : \"dispatched\",\n    \"effect\" : \"unverifiable\",\n    \"delivery_mechanism\" : \"global_events\",\n    \"state\" : \"dispatched_unverified\",\n    \"retry_safety\" : \"unsafe\",\n    \"escalation\" : \"observe_before_retry\",\n    \"evidence\" : \"delivery_accepted\",\n    \"requires_fresh_observation\" : true\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:14:34.856Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:14:38.869464+00:00",
+    "args": [
+      "press",
+      "cmd+a",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"debug_logs\" : [\n    \"[2026-10-22T17:14:38.209Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"data\" : {\n    \"executionTime\" : 0.6395111083984375,\n    \"deliveryMode\" : \"foreground\",\n    \"totalPresses\" : 1,\n    \"keys\" : [\n      \"cmd+a\"\n    ],\n    \"count\" : 1\n  },\n  \"outcome\" : {\n    \"dispatched_unit_count\" : 3,\n    \"route\" : \"bridge\",\n    \"state\" : \"dispatched_unverified\",\n    \"delivery_mechanism\" : \"composite\",\n    \"escalation\" : \"observe_before_retry\",\n    \"evidence\" : \"delivery_accepted\",\n    \"dispatch_state\" : \"dispatched\",\n    \"mutation_dispatched\" : true,\n    \"effect\" : \"unverifiable\",\n    \"requires_fresh_observation\" : true,\n    \"delivery_mode\" : \"foreground\",\n    \"retry_safe\" : false,\n    \"retry_safety\" : \"unsafe\"\n  },\n  \"success\" : true\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:14:42.217847+00:00",
+    "args": [
+      "type",
+      "abc",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"evidence\" : \"completion_unknown\",\n    \"route\" : \"bridge\",\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"dispatched_unit_count\" : 5,\n    \"effect\" : \"unverifiable\",\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mechanism\" : \"composite\",\n    \"mutation_dispatched\" : true,\n    \"delivery_mode\" : \"foreground\",\n    \"state\" : \"indeterminate\",\n    \"retry_safety\" : \"unsafe\",\n    \"requires_fresh_observation\" : true,\n    \"retry_safe\" : false\n  },\n  \"data\" : null,\n  \"debug_logs\" : [\n    \"[2026-10-22T17:14:41.615Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"error\" : {\n    \"mutation_dispatched\" : true,\n    \"retry_safe\" : false,\n    \"message\" : \"Typing failed after foreground setup may have changed focus.\",\n    \"code\" : \"INTERACTION_FAILED\",\n    \"hint\" : \"Observe the target before deciding whether to retry typing.\",\n    \"details\" : \"Typing did not return an accepted outcome.\"\n  },\n  \"success\" : false\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:15:08.553954+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"success\" : true,\n  \"outcome\" : {\n    \"evidence\" : \"delivery_accepted\",\n    \"escalation\" : \"observe_before_retry\",\n    \"mutation_dispatched\" : true,\n    \"retry_safe\" : false,\n    \"route\" : \"bridge\",\n    \"effect\" : \"unverifiable\",\n    \"dispatch_state\" : \"dispatched\",\n    \"state\" : \"dispatched_unverified\",\n    \"dispatched_unit_count\" : 3,\n    \"requires_fresh_observation\" : true,\n    \"delivery_mode\" : \"foreground\",\n    \"delivery_mechanism\" : \"composite\",\n    \"retry_safety\" : \"unsafe\"\n  },\n  \"data\" : {\n    \"keys\" : [\n      \"return\"\n    ],\n    \"totalPresses\" : 1,\n    \"executionTime\" : 0.6256970167160034,\n    \"count\" : 1,\n    \"deliveryMode\" : \"foreground\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:15:07.907Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"effect\" : \"unverifiable\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:15:23.107432+00:00",
+    "args": [
+      "click",
+      "--at",
+      "835,238",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"success\" : true,\n  \"effect\" : \"unverifiable\",\n  \"debug_logs\" : [\n    \"[2026-10-22T17:15:22.147Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"outcome\" : {\n    \"state\" : \"dispatched_unverified\",\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mechanism\" : \"global_events\",\n    \"effect\" : \"unverifiable\",\n    \"retry_safe\" : false,\n    \"requires_fresh_observation\" : true,\n    \"retry_safety\" : \"unsafe\",\n    \"mutation_dispatched\" : true,\n    \"route\" : \"bridge\",\n    \"delivery_mode\" : \"foreground\",\n    \"dispatch_state\" : \"dispatched\",\n    \"evidence\" : \"delivery_accepted\"\n  },\n  \"data\" : {\n    \"coordinateSpace\" : \"window_relative\",\n    \"targetWindowTitle\" : \"Settings\",\n    \"screenCoordinates\" : {\n      \"y\" : 268,\n      \"x\" : 835\n    },\n    \"inputCoordinates\" : {\n      \"y\" : 238,\n      \"x\" : 835\n    },\n    \"waitTime\" : 0,\n    \"targetPoint\" : {\n      \"resolved\" : {\n        \"x\" : 835,\n        \"y\" : 268\n      },\n      \"original\" : {\n        \"x\" : 835,\n        \"y\" : 238\n      },\n      \"source\" : \"coordinates\",\n      \"coordinate\" : {\n        \"resolved\" : {\n          \"y\" : 268,\n          \"x\" : 835\n        },\n        \"targetApp\" : \"Zaplex\",\n        \"input\" : {\n          \"y\" : 238,\n          \"x\" : 835\n        },\n        \"targetWindow\" : {\n          \"windowID\" : 38,\n          \"title\" : \"Settings\",\n          \"bounds\" : {\n            \"height\" : 678,\n            \"width\" : 1024,\n            \"x\" : 0,\n            \"y\" : 30\n          }\n        },\n        \"targetPID\" : 1266,\n        \"coordinateSpace\" : \"window_relative\"\n      }\n    },\n    \"targetWindowId\" : 38,\n    \"clickType\" : \"single\",\n    \"deliveryMode\" : \"foreground\",\n    \"executionTime\" : 0.9353619813919067,\n    \"targetApp\" : \"Zaplex\",\n    \"clickLocation\" : {\n      \"x\" : 835,\n      \"y\" : 268\n    }\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:15:52.453656+00:00",
+    "args": [
+      "click",
+      "--at",
+      "665,170",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"debug_logs\" : [\n    \"[2026-10-22T17:15:51.562Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"success\" : true,\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"delivery_mode\" : \"foreground\",\n    \"retry_safety\" : \"unsafe\",\n    \"escalation\" : \"observe_before_retry\",\n    \"route\" : \"bridge\",\n    \"effect\" : \"unverifiable\",\n    \"retry_safe\" : false,\n    \"delivery_mechanism\" : \"global_events\",\n    \"state\" : \"dispatched_unverified\",\n    \"mutation_dispatched\" : true,\n    \"evidence\" : \"delivery_accepted\",\n    \"requires_fresh_observation\" : true,\n    \"dispatch_state\" : \"dispatched\"\n  },\n  \"data\" : {\n    \"inputCoordinates\" : {\n      \"x\" : 665,\n      \"y\" : 170\n    },\n    \"coordinateSpace\" : \"window_relative\",\n    \"targetPoint\" : {\n      \"source\" : \"coordinates\",\n      \"coordinate\" : {\n        \"coordinateSpace\" : \"window_relative\",\n        \"input\" : {\n          \"y\" : 170,\n          \"x\" : 665\n        },\n        \"targetApp\" : \"Zaplex\",\n        \"targetPID\" : 1266,\n        \"targetWindow\" : {\n          \"title\" : \"Settings\",\n          \"bounds\" : {\n            \"height\" : 678,\n            \"width\" : 1024,\n            \"y\" : 30,\n            \"x\" : 0\n          },\n          \"windowID\" : 38\n        },\n        \"resolved\" : {\n          \"y\" : 200,\n          \"x\" : 665\n        }\n      },\n      \"original\" : {\n        \"y\" : 170,\n        \"x\" : 665\n      },\n      \"resolved\" : {\n        \"y\" : 200,\n        \"x\" : 665\n      }\n    },\n    \"screenCoordinates\" : {\n      \"x\" : 665,\n      \"y\" : 200\n    },\n    \"clickType\" : \"single\",\n    \"targetApp\" : \"Zaplex\",\n    \"clickLocation\" : {\n      \"y\" : 200,\n      \"x\" : 665\n    },\n    \"waitTime\" : 0,\n    \"targetWindowTitle\" : \"Settings\",\n    \"targetWindowId\" : 38,\n    \"executionTime\" : 0.8679229021072388,\n    \"deliveryMode\" : \"foreground\"\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:15:55.564905+00:00",
+    "args": [
+      "press",
+      "cmd+a",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"outcome\" : {\n    \"retry_safety\" : \"unsafe\",\n    \"requires_fresh_observation\" : true,\n    \"delivery_mechanism\" : \"composite\",\n    \"delivery_mode\" : \"foreground\",\n    \"dispatch_state\" : \"dispatched\",\n    \"mutation_dispatched\" : true,\n    \"evidence\" : \"delivery_accepted\",\n    \"route\" : \"bridge\",\n    \"effect\" : \"unverifiable\",\n    \"state\" : \"dispatched_unverified\",\n    \"retry_safe\" : false,\n    \"escalation\" : \"observe_before_retry\",\n    \"dispatched_unit_count\" : 3\n  },\n  \"data\" : {\n    \"executionTime\" : 0.6084870100021362,\n    \"deliveryMode\" : \"foreground\",\n    \"keys\" : [\n      \"cmd+a\"\n    ],\n    \"count\" : 1,\n    \"totalPresses\" : 1\n  },\n  \"success\" : true,\n  \"effect\" : \"unverifiable\",\n  \"debug_logs\" : [\n    \"[2026-10-22T17:15:54.935Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:15:58.910505+00:00",
+    "args": [
+      "type",
+      "15",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"success\" : false,\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"evidence\" : \"completion_unknown\",\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"dispatched_unit_count\" : 4,\n    \"effect\" : \"unverifiable\",\n    \"retry_safety\" : \"unsafe\",\n    \"requires_fresh_observation\" : true,\n    \"route\" : \"bridge\",\n    \"delivery_mode\" : \"foreground\",\n    \"retry_safe\" : false,\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mechanism\" : \"composite\",\n    \"mutation_dispatched\" : true,\n    \"state\" : \"indeterminate\"\n  },\n  \"data\" : null,\n  \"debug_logs\" : [\n    \"[2026-10-22T17:15:58.293Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"error\" : {\n    \"message\" : \"Typing failed after foreground setup may have changed focus.\",\n    \"code\" : \"INTERACTION_FAILED\",\n    \"hint\" : \"Observe the target before deciding whether to retry typing.\",\n    \"details\" : \"Typing did not return an accepted outcome.\",\n    \"retry_safe\" : false,\n    \"mutation_dispatched\" : true\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:16:16.417637+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"success\" : true,\n  \"debug_logs\" : [\n    \"[2026-10-22T17:16:15.742Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"outcome\" : {\n    \"delivery_mechanism\" : \"composite\",\n    \"route\" : \"bridge\",\n    \"dispatch_state\" : \"dispatched\",\n    \"retry_safety\" : \"unsafe\",\n    \"dispatched_unit_count\" : 3,\n    \"evidence\" : \"delivery_accepted\",\n    \"mutation_dispatched\" : true,\n    \"retry_safe\" : false,\n    \"requires_fresh_observation\" : true,\n    \"effect\" : \"unverifiable\",\n    \"state\" : \"dispatched_unverified\",\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mode\" : \"foreground\"\n  },\n  \"data\" : {\n    \"count\" : 1,\n    \"executionTime\" : 0.6504909992218018,\n    \"totalPresses\" : 1,\n    \"keys\" : [\n      \"return\"\n    ],\n    \"deliveryMode\" : \"foreground\"\n  },\n  \"effect\" : \"unverifiable\"\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:16:35.006022+00:00",
+    "args": [
+      "click",
+      "--at",
+      "214,18",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"data\" : {\n    \"clickLocation\" : {\n      \"y\" : 48,\n      \"x\" : 214\n    },\n    \"targetApp\" : \"Zaplex\",\n    \"coordinateSpace\" : \"window_relative\",\n    \"screenCoordinates\" : {\n      \"x\" : 214,\n      \"y\" : 48\n    },\n    \"targetPoint\" : {\n      \"resolved\" : {\n        \"x\" : 214,\n        \"y\" : 48\n      },\n      \"source\" : \"coordinates\",\n      \"coordinate\" : {\n        \"targetApp\" : \"Zaplex\",\n        \"input\" : {\n          \"y\" : 18,\n          \"x\" : 214\n        },\n        \"targetPID\" : 1266,\n        \"resolved\" : {\n          \"y\" : 48,\n          \"x\" : 214\n        },\n        \"targetWindow\" : {\n          \"bounds\" : {\n            \"y\" : 30,\n            \"height\" : 678,\n            \"x\" : 0,\n            \"width\" : 1024\n          },\n          \"windowID\" : 38,\n          \"title\" : \"Settings\"\n        },\n        \"coordinateSpace\" : \"window_relative\"\n      },\n      \"original\" : {\n        \"x\" : 214,\n        \"y\" : 18\n      }\n    },\n    \"executionTime\" : 0.9020230770111084,\n    \"targetWindowTitle\" : \"Settings\",\n    \"inputCoordinates\" : {\n      \"x\" : 214,\n      \"y\" : 18\n    },\n    \"waitTime\" : 0,\n    \"deliveryMode\" : \"foreground\",\n    \"targetWindowId\" : 38,\n    \"clickType\" : \"single\"\n  },\n  \"success\" : true,\n  \"outcome\" : {\n    \"state\" : \"dispatched_unverified\",\n    \"retry_safety\" : \"unsafe\",\n    \"delivery_mode\" : \"foreground\",\n    \"evidence\" : \"delivery_accepted\",\n    \"retry_safe\" : false,\n    \"requires_fresh_observation\" : true,\n    \"mutation_dispatched\" : true,\n    \"delivery_mechanism\" : \"global_events\",\n    \"dispatch_state\" : \"dispatched\",\n    \"escalation\" : \"observe_before_retry\",\n    \"effect\" : \"unverifiable\",\n    \"route\" : \"bridge\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:16:34.073Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:16:49.950915+00:00",
+    "args": [
+      "type",
+      "printf \"AFTER:%s\\\\n\" \"$ZAPLEX_PROOF\"; pwd",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"error\" : {\n    \"retry_safe\" : false,\n    \"mutation_dispatched\" : true,\n    \"code\" : \"INTERACTION_FAILED\",\n    \"message\" : \"Typing failed after foreground setup may have changed focus.\",\n    \"hint\" : \"Observe the target before deciding whether to retry typing.\",\n    \"details\" : \"Typing did not return an accepted outcome.\"\n  },\n  \"data\" : null,\n  \"success\" : false,\n  \"outcome\" : {\n    \"state\" : \"indeterminate\",\n    \"escalation\" : \"observe_before_retry\",\n    \"requires_fresh_observation\" : true,\n    \"dispatched_unit_count\" : 42,\n    \"retry_safety\" : \"unsafe\",\n    \"mutation_dispatched\" : true,\n    \"evidence\" : \"completion_unknown\",\n    \"retry_safe\" : false,\n    \"delivery_mode\" : \"foreground\",\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"effect\" : \"unverifiable\",\n    \"delivery_mechanism\" : \"composite\",\n    \"route\" : \"bridge\"\n  },\n  \"effect\" : \"unverifiable\",\n  \"debug_logs\" : [\n    \"[2026-10-22T17:16:48.974Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:17:13.431172+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"data\" : {\n    \"executionTime\" : 0.7047809362411499,\n    \"keys\" : [\n      \"return\"\n    ],\n    \"count\" : 1,\n    \"deliveryMode\" : \"foreground\",\n    \"totalPresses\" : 1\n  },\n  \"success\" : true,\n  \"debug_logs\" : [\n    \"[2026-10-22T17:17:12.685Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"outcome\" : {\n    \"delivery_mode\" : \"foreground\",\n    \"delivery_mechanism\" : \"composite\",\n    \"retry_safety\" : \"unsafe\",\n    \"route\" : \"bridge\",\n    \"requires_fresh_observation\" : true,\n    \"dispatched_unit_count\" : 3,\n    \"state\" : \"dispatched_unverified\",\n    \"effect\" : \"unverifiable\",\n    \"evidence\" : \"delivery_accepted\",\n    \"mutation_dispatched\" : true,\n    \"retry_safe\" : false,\n    \"escalation\" : \"observe_before_retry\",\n    \"dispatch_state\" : \"dispatched\"\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:17:29.489582+00:00",
+    "args": [
+      "click",
+      "--at",
+      "982,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"requires_fresh_observation\" : true,\n    \"retry_safety\" : \"unsafe\",\n    \"dispatch_state\" : \"dispatched\",\n    \"route\" : \"bridge\",\n    \"evidence\" : \"delivery_accepted\",\n    \"retry_safe\" : false,\n    \"mutation_dispatched\" : true,\n    \"effect\" : \"unverifiable\",\n    \"delivery_mechanism\" : \"global_events\",\n    \"delivery_mode\" : \"foreground\",\n    \"state\" : \"dispatched_unverified\",\n    \"escalation\" : \"observe_before_retry\"\n  },\n  \"data\" : {\n    \"coordinateSpace\" : \"window_relative\",\n    \"targetPoint\" : {\n      \"original\" : {\n        \"x\" : 982,\n        \"y\" : 53\n      },\n      \"coordinate\" : {\n        \"targetWindow\" : {\n          \"windowID\" : 38,\n          \"title\" : \"Local · ~\",\n          \"bounds\" : {\n            \"width\" : 1024,\n            \"height\" : 678,\n            \"y\" : 30,\n            \"x\" : 0\n          }\n        },\n        \"resolved\" : {\n          \"y\" : 83,\n          \"x\" : 982\n        },\n        \"coordinateSpace\" : \"window_relative\",\n        \"targetApp\" : \"Zaplex\",\n        \"targetPID\" : 1266,\n        \"input\" : {\n          \"y\" : 53,\n          \"x\" : 982\n        }\n      },\n      \"source\" : \"coordinates\",\n      \"resolved\" : {\n        \"x\" : 982,\n        \"y\" : 83\n      }\n    },\n    \"targetWindowId\" : 38,\n    \"executionTime\" : 1.178948998451233,\n    \"targetWindowTitle\" : \"Local · ~\",\n    \"targetApp\" : \"Zaplex\",\n    \"clickLocation\" : {\n      \"x\" : 982,\n      \"y\" : 83\n    },\n    \"waitTime\" : 0,\n    \"inputCoordinates\" : {\n      \"y\" : 53,\n      \"x\" : 982\n    },\n    \"screenCoordinates\" : {\n      \"y\" : 83,\n      \"x\" : 982\n    },\n    \"deliveryMode\" : \"foreground\",\n    \"clickType\" : \"single\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:17:28.263Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"success\" : true\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:17:52.318058+00:00",
+    "args": [
+      "press",
+      "f10",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"debug_logs\" : [\n    \"[2026-10-22T17:17:51.110Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"data\" : {\n    \"keys\" : [\n      \"f10\"\n    ],\n    \"totalPresses\" : 1,\n    \"deliveryMode\" : \"foreground\",\n    \"count\" : 1,\n    \"executionTime\" : 1.138916015625\n  },\n  \"success\" : true,\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"mutation_dispatched\" : true,\n    \"retry_safety\" : \"unsafe\",\n    \"delivery_mechanism\" : \"composite\",\n    \"state\" : \"dispatched_unverified\",\n    \"effect\" : \"unverifiable\",\n    \"escalation\" : \"observe_before_retry\",\n    \"requires_fresh_observation\" : true,\n    \"delivery_mode\" : \"foreground\",\n    \"route\" : \"bridge\",\n    \"evidence\" : \"delivery_accepted\",\n    \"dispatched_unit_count\" : 3,\n    \"retry_safe\" : false,\n    \"dispatch_state\" : \"dispatched\"\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:18:19.474232+00:00",
+    "args": [
+      "click",
+      "--at",
+      "413,18",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"success\" : true,\n  \"outcome\" : {\n    \"retry_safety\" : \"unsafe\",\n    \"escalation\" : \"observe_before_retry\",\n    \"delivery_mode\" : \"foreground\",\n    \"effect\" : \"unverifiable\",\n    \"state\" : \"dispatched_unverified\",\n    \"evidence\" : \"delivery_accepted\",\n    \"mutation_dispatched\" : true,\n    \"delivery_mechanism\" : \"global_events\",\n    \"dispatch_state\" : \"dispatched\",\n    \"retry_safe\" : false,\n    \"route\" : \"bridge\",\n    \"requires_fresh_observation\" : true\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:18:18.457Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"data\" : {\n    \"executionTime\" : 0.968938946723938,\n    \"targetWindowId\" : 38,\n    \"clickLocation\" : {\n      \"y\" : 48,\n      \"x\" : 413\n    },\n    \"targetApp\" : \"Zaplex\",\n    \"targetWindowTitle\" : \"Local · ~\",\n    \"waitTime\" : 0,\n    \"targetPoint\" : {\n      \"source\" : \"coordinates\",\n      \"coordinate\" : {\n        \"targetApp\" : \"Zaplex\",\n        \"targetPID\" : 1266,\n        \"input\" : {\n          \"x\" : 413,\n          \"y\" : 18\n        },\n        \"coordinateSpace\" : \"window_relative\",\n        \"resolved\" : {\n          \"x\" : 413,\n          \"y\" : 48\n        },\n        \"targetWindow\" : {\n          \"windowID\" : 38,\n          \"title\" : \"Local · ~\",\n          \"bounds\" : {\n            \"height\" : 678,\n            \"y\" : 30,\n            \"x\" : 0,\n            \"width\" : 1024\n          }\n        }\n      },\n      \"original\" : {\n        \"y\" : 18,\n        \"x\" : 413\n      },\n      \"resolved\" : {\n        \"y\" : 48,\n        \"x\" : 413\n      }\n    },\n    \"deliveryMode\" : \"foreground\",\n    \"inputCoordinates\" : {\n      \"y\" : 18,\n      \"x\" : 413\n    },\n    \"screenCoordinates\" : {\n      \"y\" : 48,\n      \"x\" : 413\n    },\n    \"coordinateSpace\" : \"window_relative\",\n    \"clickType\" : \"single\"\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:18:38.146008+00:00",
+    "args": [
+      "press",
+      "cmd+w",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"success\" : true,\n  \"data\" : {\n    \"count\" : 1,\n    \"deliveryMode\" : \"foreground\",\n    \"keys\" : [\n      \"cmd+w\"\n    ],\n    \"executionTime\" : 0.7418980598449707,\n    \"totalPresses\" : 1\n  },\n  \"effect\" : \"unverifiable\",\n  \"outcome\" : {\n    \"escalation\" : \"observe_before_retry\",\n    \"effect\" : \"unverifiable\",\n    \"dispatched_unit_count\" : 3,\n    \"route\" : \"bridge\",\n    \"mutation_dispatched\" : true,\n    \"delivery_mode\" : \"foreground\",\n    \"state\" : \"dispatched_unverified\",\n    \"requires_fresh_observation\" : true,\n    \"retry_safe\" : false,\n    \"evidence\" : \"delivery_accepted\",\n    \"retry_safety\" : \"unsafe\",\n    \"dispatch_state\" : \"dispatched\",\n    \"delivery_mechanism\" : \"composite\"\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:18:37.361Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ]\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:18:59.566662+00:00",
+    "args": [
+      "type",
+      "test \"$ZAPLEX_PROOF\" = 2212 && printf \"SETTINGS-RETURN-PASS\\\\n\"; touch \"$(cat /tmp/zaplex-exploration-path)/finished\"",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "stdout": "{\n  \"effect\" : \"unverifiable\",\n  \"debug_logs\" : [\n    \"[2026-10-22T17:18:57.756Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"error\" : {\n    \"hint\" : \"Observe the target before deciding whether to retry typing.\",\n    \"details\" : \"Typing did not return an accepted outcome.\",\n    \"mutation_dispatched\" : true,\n    \"code\" : \"INTERACTION_FAILED\",\n    \"message\" : \"Typing failed after foreground setup may have changed focus.\",\n    \"retry_safe\" : false\n  },\n  \"outcome\" : {\n    \"effect\" : \"unverifiable\",\n    \"retry_safe\" : false,\n    \"delivery_mode\" : \"foreground\",\n    \"state\" : \"indeterminate\",\n    \"requires_fresh_observation\" : true,\n    \"dispatch_state\" : \"may_have_dispatched\",\n    \"retry_safety\" : \"unsafe\",\n    \"mutation_dispatched\" : true,\n    \"escalation\" : \"observe_before_retry\",\n    \"evidence\" : \"completion_unknown\",\n    \"route\" : \"bridge\",\n    \"delivery_mechanism\" : \"composite\",\n    \"dispatched_unit_count\" : 118\n  },\n  \"success\" : false,\n  \"data\" : null\n}\n",
+    "stderr": ""
+  },
+  {
+    "time": "2026-10-22T17:19:18.707032+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "stdout": "{\n  \"outcome\" : {\n    \"retry_safe\" : false,\n    \"effect\" : \"unverifiable\",\n    \"mutation_dispatched\" : true,\n    \"route\" : \"bridge\",\n    \"escalation\" : \"observe_before_retry\",\n    \"evidence\" : \"delivery_accepted\",\n    \"delivery_mode\" : \"foreground\",\n    \"retry_safety\" : \"unsafe\",\n    \"state\" : \"dispatched_unverified\",\n    \"delivery_mechanism\" : \"composite\",\n    \"dispatched_unit_count\" : 3,\n    \"dispatch_state\" : \"dispatched\",\n    \"requires_fresh_observation\" : true\n  },\n  \"data\" : {\n    \"deliveryMode\" : \"foreground\",\n    \"keys\" : [\n      \"return\"\n    ],\n    \"count\" : 1,\n    \"executionTime\" : 0.7176690101623535,\n    \"totalPresses\" : 1\n  },\n  \"debug_logs\" : [\n    \"[2026-10-22T17:19:17.956Z] DEBUG: Runtime host: remote onDemand via \\/Users\\/admin\\/Library\\/Application Support\\/Peekaboo\\/daemon-db70873581b26730.sock (build 4.9.5 (4.9.5))\"\n  ],\n  \"success\" : true,\n  \"effect\" : \"unverifiable\"\n}\n",
+    "stderr": ""
+  }
+]
