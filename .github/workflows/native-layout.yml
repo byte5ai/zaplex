@@ -46,7 +46,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/native-build"
+          mkdir -p "$RUNNER_TEMP/native-build" /tmp/macrunner-operator
+          printf 'repo=%s run=%s until=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$(( $(date +%s) + 3600 ))" > /tmp/macrunner-operator/open
+          python3 script/macos/native-build-metrics --seconds 3000 --interval 30 \
+            --output /tmp/macrunner-operator/resources.jsonl \
+            < /dev/null > "$RUNNER_TEMP/native-build/resource-sampler.log" 2>&1 &
+          metrics_pid=$!
+          finish_observation() {
+            kill "$metrics_pid" 2>/dev/null || true
+            wait "$metrics_pid" 2>/dev/null || true
+            if [[ -f /tmp/macrunner-operator/open ]]; then
+              mv /tmp/macrunner-operator/open /tmp/macrunner-operator/closed
+            fi
+          }
+          trap finish_observation EXIT
           /usr/bin/time -l cargo test --locked -p integration --test integration --no-run --message-format=json -vv \
             > "$RUNNER_TEMP/native-build/compiler.jsonl" \
             2> >(tee "$RUNNER_TEMP/native-build/build.log" >&2)
@@ -85,6 +98,14 @@ jobs:
             ${{ runner.temp }}/native-build/manifest.json
           if-no-files-found: error
           retention-days: 14
+      - name: Collect build resource diagnostics
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f /tmp/macrunner-operator/resources.jsonl ]]; then
+            mkdir -p "$RUNNER_TEMP/native-build"
+            cp /tmp/macrunner-operator/resources.jsonl "$RUNNER_TEMP/native-build/resources.jsonl"
+          fi
       - name: Preserve compiler diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -93,6 +114,8 @@ jobs:
           path: |
             ${{ runner.temp }}/native-build/build.log
             ${{ runner.temp }}/native-build/compiler.jsonl
+            ${{ runner.temp }}/native-build/resource-sampler.log
+            ${{ runner.temp }}/native-build/resources.jsonl
           if-no-files-found: warn
           retention-days: 14
 

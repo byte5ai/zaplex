@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.14] — 2026-10-22
+
+- Native Builds erfassen begrenzt CPU, Speicher und Swap und geben diese Diagnose während des eigenen Jobs lesbar frei.
+
 ## [1.2.13] — 2026-10-22
 
 - Native GUI-Builds sichern auch nach Fehlern fertig kompilierte Abhängigkeiten und Workspace-Crates im Rust-Cache.
