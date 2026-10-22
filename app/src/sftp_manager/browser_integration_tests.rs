@@ -1989,6 +1989,66 @@ fn test_refresh_dir_reloads_entries() {
     });
 }
 
+#[test]
+fn refresh_preserves_cursor_target_when_a_new_folder_sorts_before_it() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(
+            &mut app,
+            &[
+                ("nested/child.txt", b"child"),
+                ("original.txt", b"original"),
+            ],
+        );
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CursorDown, ctx);
+            assert_eq!(
+                view.entries[view.cursor_entry_index().unwrap()].name,
+                "original.txt"
+            );
+            view.mark_index_for_test(0);
+            view.mark_index_for_test(view.cursor_entry_index().unwrap());
+        });
+
+        std::fs::create_dir(temp.path().join("created")).unwrap();
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::Refresh, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(view.entries.len(), 3);
+            assert_eq!(
+                view.entries[view.cursor_entry_index().unwrap()].name,
+                "original.txt"
+            );
+            assert_eq!(marked_entry_names(view), vec!["nested", "original.txt"]);
+        });
+    });
+}
+
+#[test]
+fn refresh_preserves_cursor_object_after_content_change_but_drops_stale_marks() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, view, temp) = create_connected_view(&mut app, &[("original.txt", b"original")]);
+        view.update(&mut app, |view, _| view.mark_index_for_test(0));
+        std::fs::write(temp.path().join("original.txt"), b"changed content").unwrap();
+        std::fs::write(temp.path().join("before.txt"), b"before").unwrap();
+        view.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::Refresh, ctx);
+        });
+        view.read(&app, |view, _| {
+            assert_eq!(
+                view.entries[view.cursor_entry_index().unwrap()].name,
+                "original.txt"
+            );
+            assert!(
+                view.selected.is_empty(),
+                "a changed revision cannot retain an operation mark"
+            );
+        });
+    });
+}
+
 struct RefreshButtonTestView {
     mouse_handle: MouseStateHandle,
     refreshes: usize,
@@ -3073,6 +3133,93 @@ fn test_rename_editor_enter_confirms() {
             );
         });
     });
+}
+
+fn assert_dialog_restores_list_keyboard_navigation(completion: &'static str) {
+    for opening_key in ["f2", "f7"] {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            app.update(crate::editor::init);
+            let (window_id, view, temp) = create_connected_view(
+                &mut app,
+                &[("alpha/child.txt", b"a"), ("beta/child.txt", b"b")],
+            );
+            let pane_id = PaneId::dummy_pane_id();
+            let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, true));
+            view.update(&mut app, |view, ctx| {
+                view.set_focus_handle(PaneFocusHandle::new(pane_id, focus_state), ctx);
+                view.focus_contents(ctx);
+            });
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+            assert!(key_down(&mut app, window_id, presenter, opening_key));
+
+            // Register the dialog subtree before focusing its text field.
+            let (_, invalidation) = presenter_for_window(&app, window_id);
+            let presenter = app.presenter(window_id).unwrap();
+            rerender(&mut app, presenter, invalidation);
+            view.update(&mut app, |view, ctx| {
+                assert!(view.dialog.is_some());
+                let editor = if opening_key == "f2" {
+                    &view.rename_editor
+                } else {
+                    &view.new_folder_editor
+                };
+                editor.update(ctx, |editor, ctx| editor.set_buffer_text("a-created", ctx));
+                ctx.focus(editor);
+            });
+            assert_ne!(app.focused_view_id(window_id), Some(view.id()));
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+            match completion {
+                "escape" | "enter" => {
+                    assert!(key_down(&mut app, window_id, presenter, completion));
+                }
+                "cancel" | "confirm" => {
+                    let button =
+                        position(&presenter, &format!("sftp_btn:dialog_{completion}")).center();
+                    mouse_down(&mut app, window_id, presenter.clone(), button);
+                    mouse_up(&mut app, window_id, presenter, button);
+                }
+                _ => panic!("unknown dialog completion"),
+            }
+            view.read(&app, |view, _| assert!(view.dialog.is_none()));
+            let confirmed = matches!(completion, "enter" | "confirm");
+            assert_eq!(temp.path().join("a-created").exists(), confirmed);
+            assert_eq!(
+                temp.path().join("alpha/child.txt").exists(),
+                !confirmed || opening_key == "f7"
+            );
+            assert_eq!(app.focused_view_id(window_id), Some(view.id()));
+
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+            assert!(key_down(&mut app, window_id, presenter, "down"));
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
+            assert!(key_down(&mut app, window_id, presenter, "enter"));
+            view.read(&app, |view, _| {
+                assert_eq!(view.current_path, PathBuf::from("/beta"));
+                assert_eq!(view.entries[0].name, "child.txt");
+            });
+        });
+    }
+}
+
+#[test]
+fn dialog_escape_restores_list_keyboard_navigation() {
+    assert_dialog_restores_list_keyboard_navigation("escape");
+}
+
+#[test]
+fn dialog_cancel_button_restores_list_keyboard_navigation() {
+    assert_dialog_restores_list_keyboard_navigation("cancel");
+}
+
+#[test]
+fn dialog_enter_restores_list_keyboard_navigation() {
+    assert_dialog_restores_list_keyboard_navigation("enter");
+}
+
+#[test]
+fn dialog_confirm_button_restores_list_keyboard_navigation() {
+    assert_dialog_restores_list_keyboard_navigation("confirm");
 }
 
 /// Verifies that pressing Escape in the rename editor cancels the rename

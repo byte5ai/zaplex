@@ -1403,8 +1403,7 @@ impl SftpBrowserView {
                     me.handle_action(&SftpBrowserAction::ConfirmRename, ctx);
                 }
                 EditorEvent::Escape => {
-                    me.dialog = None;
-                    ctx.notify();
+                    me.handle_action(&SftpBrowserAction::CloseDialog, ctx);
                 }
                 _ => {}
             },
@@ -1447,8 +1446,7 @@ impl SftpBrowserView {
                     me.handle_action(&SftpBrowserAction::ConfirmNewFolder, ctx);
                 }
                 EditorEvent::Escape => {
-                    me.dialog = None;
-                    ctx.notify();
+                    me.handle_action(&SftpBrowserAction::CloseDialog, ctx);
                 }
                 _ => {}
             },
@@ -2080,6 +2078,15 @@ impl SftpBrowserView {
                 } else {
                     HashSet::new()
                 };
+                // Capture the current target when the response lands: the user
+                // may have moved the cursor while the refresh was in flight.
+                let cursor_entry = if navigation.is_none() {
+                    self.cursor_entry_index()
+                        .and_then(|index| self.entries.get(index))
+                        .map(FileEntry::entry_identity)
+                } else {
+                    None
+                };
                 if let Some(navigation) = navigation {
                     let departed_directory = navigation.departed_directory;
                     self.current_path = navigation.path;
@@ -2101,6 +2108,25 @@ impl SftpBrowserView {
                 // started — see `refresh_dir` — so a stale entry index can't be
                 // actioned against the new listing.)
                 self.sync_row_mouse_handles();
+                if let Some(previous) = cursor_entry {
+                    if let Some((position, index)) = self
+                        .visible_indices()
+                        .into_iter()
+                        .enumerate()
+                        .find(|(_, index)| {
+                            let entry = &self.entries[*index];
+                            entry.path == previous.path
+                                && entry.identity.object_id == previous.backend.object_id
+                                && entry.file_type == previous.backend.file_type
+                        })
+                    {
+                        self.cursor = position + usize::from(self.has_parent_row());
+                        self.scroll_state.scroll_to_position(ScrollTarget {
+                            position_id: format!("{}:{index}", self.layout_position_id("row")),
+                            mode: ScrollToPositionMode::FullyIntoView,
+                        });
+                    }
+                }
                 // A refresh may have shrunk the listing (files removed); keep the
                 // cursor in range rather than pointing past it.
                 self.restore_departed_directory_cursor();
@@ -2299,8 +2325,8 @@ impl SftpBrowserView {
     ///
     /// When a navigation is pending, the cursor also *lands* here: on the
     /// first real entry of the new listing, so the row under the cursor is one
-    /// the verbs can act on. A plain refresh never moves it — the user's
-    /// position in the list is theirs to keep.
+    /// the verbs can act on. A plain refresh restores the target before
+    /// clamping, so inserting rows does not select an unrelated object.
     fn clamp_cursor_to_visible(&mut self) {
         if self.cursor_reset_pending {
             self.cursor_reset_pending = false;
@@ -4675,6 +4701,16 @@ impl SftpBrowserView {
         }
     }
 
+    /// Return keyboard input from an editor that is leaving the rendered tree.
+    fn dismiss_dialog(&mut self, ctx: &mut ViewContext<Self>) {
+        let editor_focused =
+            self.rename_editor.is_focused(ctx) || self.new_folder_editor.is_focused(ctx);
+        self.dialog = None;
+        if editor_focused {
+            ctx.focus_self();
+        }
+    }
+
     /// Show the entry details dialog
     fn show_details(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
         if let Some(entry) = self.entries.get(index) {
@@ -6428,7 +6464,7 @@ impl TypedActionView for SftpBrowserView {
                 };
                 if let Some((entry, original_path)) = pending_rename {
                     if self.resolve_entry_reference(&entry).is_none() {
-                        self.dialog = None;
+                        self.dismiss_dialog(ctx);
                         self.show_error_toast(
                             crate::t!(
                                 "fm-toast-rename-failed",
@@ -6461,7 +6497,7 @@ impl TypedActionView for SftpBrowserView {
                     if let Some(sftp) = &self.sftp {
                         let sftp = sftp.clone();
                         let expected_identity = entry.identity.backend;
-                        self.dialog = None;
+                        self.dismiss_dialog(ctx);
                         ctx.notify();
                         self.run_blocking(
                             ctx,
@@ -6493,7 +6529,7 @@ impl TypedActionView for SftpBrowserView {
                         );
                     } else {
                         self.show_error_toast(crate::t!("fm-toast-not-connected-server"), ctx);
-                        self.dialog = None;
+                        self.dismiss_dialog(ctx);
                     }
                 }
             }
@@ -6522,7 +6558,7 @@ impl TypedActionView for SftpBrowserView {
 
                     if let Some(sftp) = &self.sftp {
                         let sftp = sftp.clone();
-                        self.dialog = None;
+                        self.dismiss_dialog(ctx);
                         ctx.notify();
                         self.run_blocking(
                             ctx,
@@ -6548,7 +6584,7 @@ impl TypedActionView for SftpBrowserView {
                         );
                     } else {
                         self.show_error_toast(crate::t!("fm-toast-not-connected-server"), ctx);
-                        self.dialog = None;
+                        self.dismiss_dialog(ctx);
                     }
                 }
             }
@@ -6682,7 +6718,7 @@ impl TypedActionView for SftpBrowserView {
                 // Cancelling the target picker discards the pending pick.
                 if matches!(self.dialog, Some(Dialog::CopyMoveTargetPicker { .. })) {
                     self.pending_target_pick = None;
-                    self.dialog = None;
+                    self.dismiss_dialog(ctx);
                     ctx.notify();
                     return;
                 }
@@ -6707,7 +6743,7 @@ impl TypedActionView for SftpBrowserView {
                         ..
                     })
                 );
-                self.dialog = None;
+                self.dismiss_dialog(ctx);
                 if was_upload_overwrite {
                     self.pending_uploads.clear();
                 }
