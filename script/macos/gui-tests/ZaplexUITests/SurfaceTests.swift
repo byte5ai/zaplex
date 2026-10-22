@@ -13,7 +13,7 @@ final class SurfaceTests: GUIFlowTestCase {
         XCTAssertEqual(XCTWaiter.wait(for: [resized], timeout: 5), .completed,
                        "Window did not become narrow")
         app.typeKey("e", modifierFlags: [.command, .shift])
-        for action in ["Rename", "View", "Edit", "Copy", "Move", "Folder", "Delete", "Terminal"] {
+        for action in ["Rename", "Details", "Edit", "Copy", "Move", "Folder", "Delete", "Terminal"] {
             let rect = try visible(action)
             XCTAssertTrue(CGRect(origin: .zero, size: window.frame.size).contains(rect),
                           "Action outside window: \(action)")

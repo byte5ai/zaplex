@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       artifact_run_id:
-        description: Successful Test DMG continuation with skipped GUI acceptance
+        description: Completed CI batch or Test DMG continuation with unfinished GUI acceptance
         type: string
         required: true
       source_sha:
@@ -18,6 +18,14 @@ on:
         default: ''
       current_tests:
         description: Use current main XCTest sources against the unchanged app
+        type: boolean
+        default: false
+      explore:
+        description: Open live exploration after the complete GUI suite passes
+        type: boolean
+        default: false
+      remote_target:
+        description: Prepare the isolated Linux target during exploration (private captures)
         type: boolean
         default: false
 
@@ -59,3 +67,14 @@ jobs:
       test_source_sha: ${{ inputs.current_tests && github.sha || inputs.source_sha }}
       suite: ${{ inputs.only_tests != '' && 'navigation' || 'full' }}
       only_tests: ${{ inputs.only_tests }}
+
+  explore:
+    needs: [verify, gui]
+    if: inputs.explore && inputs.only_tests == ''
+    uses: ./.github/workflows/gui-explore.yml
+    with:
+      artifact_run_id: ${{ inputs.artifact_run_id }}
+      source_sha: ${{ inputs.source_sha }}
+      remote_target: ${{ inputs.remote_target }}
+      after_full_suite: true
+    secrets: inherit

@@ -2,9 +2,11 @@
 """Reject stale or mismatched DMGs before starting a GUI runner."""
 
 import copy
+import os
 from pathlib import Path
 import runpy
 import unittest
+from unittest.mock import patch
 
 helpers = runpy.run_path(str(Path(__file__).with_name("gui-resume")))
 validate = helpers["validate"]
@@ -68,7 +70,8 @@ class BatchExplorationTests(unittest.TestCase):
         self.jobs = [{"name": "test_dmg / " + name, "conclusion": "success"} for name in (
             "Verify Phase A release readiness", "Build bundled remote-server (Linux musl x86_64)",
             "Prepare Test app (macOS Apple Silicon)",
-            "Sign and package Test DMG (macOS Apple Silicon)", "Verify installed DMG user flows",
+            "Sign and package Test DMG (macOS Apple Silicon)",
+            "Verify installed DMG user flows / Installed DMG user flows",
         )]
         self.artifacts = [{"name": "zap-test-dmg-aarch64", "expired": False}]
 
@@ -111,6 +114,80 @@ class BatchExplorationTests(unittest.TestCase):
         for artifacts in ([], self.artifacts * 2, [dict(self.artifacts[0], expired=True)]):
             with self.assertRaises(ValueError):
                 self.validate(artifacts=artifacts)
+
+
+class BatchResumeTests(BatchExplorationTests):
+    def setUp(self):
+        super().setUp()
+        self.run["conclusion"] = "failure"
+        self.jobs[-1]["conclusion"] = "failure"
+
+    def validate(self, *, run=None, jobs=None, artifacts=None, source=None):
+        helpers["validate_batch_resume"](
+            self.run if run is None else run, self.jobs if jobs is None else jobs,
+            self.artifacts if artifacts is None else artifacts,
+            self.run["head_sha"] if source is None else source,
+        )
+
+    def test_current_successful_batch_can_be_explored(self):
+        for result in ("failure", "cancelled", "skipped", None):
+            with self.subTest(result=result):
+                self.jobs[-1]["conclusion"] = result
+                self.validate()
+        self.validate(jobs=self.jobs[:-1])
+
+    def test_untrusted_or_unfinished_batch_is_rejected(self):
+        for key, value in [("status", "in_progress"), ("conclusion", "timed_out"),
+                           ("head_branch", "feature"), ("event", "pull_request"),
+                           ("path", ".github/workflows/other.yml"), ("head_sha", "main"),
+                           ("head_repository", {"full_name": "other/repo"})]:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.validate(run=dict(self.run, **{key: value}))
+
+    def test_each_artifact_and_gui_prerequisite_must_pass(self):
+        for index in range(len(self.jobs) - 1):
+            for result in ("failure", "skipped", "cancelled"):
+                jobs = copy.deepcopy(self.jobs)
+                jobs[index]["conclusion"] = result
+                with self.subTest(index=index, result=result), self.assertRaises(ValueError):
+                    self.validate(jobs=jobs)
+
+    def test_missing_or_duplicate_jobs_are_rejected(self):
+        for jobs in (self.jobs[1:], self.jobs + [self.jobs[0]]):
+            with self.assertRaises(ValueError):
+                self.validate(jobs=jobs)
+
+    def test_already_passed_gui_is_not_repeated(self):
+        self.jobs[-1]["conclusion"] = "success"
+        with self.assertRaises(ValueError):
+            self.validate()
+
+    def test_skipped_reusable_call_can_be_resumed(self):
+        self.jobs[-1] = {"name": "test_dmg / Verify installed DMG user flows", "conclusion": "skipped"}
+        self.validate()
+
+    def test_conflicting_gui_jobs_are_rejected(self):
+        self.jobs.append({"name": "test_dmg / Verify installed DMG user flows", "conclusion": "success"})
+        with self.assertRaises(ValueError):
+            self.validate()
+
+
+class CallerAcceptanceTests(unittest.TestCase):
+    def test_only_main_resume_workflow_can_attest_full_acceptance(self):
+        expected = {
+            "GUI_ACCEPTANCE_IN_CALLER": "true",
+            "GITHUB_WORKFLOW": "Resume installed DMG acceptance",
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_REF": "refs/heads/main",
+        }
+        with patch.dict(os.environ, expected, clear=True):
+            self.assertTrue(helpers["caller_proved_full_suite"]())
+        for key in expected:
+            for value in ("", "other"):
+                with self.subTest(key=key, value=value), patch.dict(
+                    os.environ, dict(expected, **{key: value}), clear=True
+                ):
+                    self.assertFalse(helpers["caller_proved_full_suite"]())
 
 
 if __name__ == "__main__":

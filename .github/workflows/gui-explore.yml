@@ -15,6 +15,21 @@ on:
         description: Prepare the isolated Linux acceptance target (private captures)
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      artifact_run_id:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      remote_target:
+        type: boolean
+        default: false
+      after_full_suite:
+        description: Caller has completed the full suite against this exact artifact
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -34,6 +49,7 @@ jobs:
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
           APP_SOURCE_SHA: ${{ inputs.source_sha }}
           GUI_EXPLORATION: 'true'
+          GUI_ACCEPTANCE_IN_CALLER: ${{ inputs.after_full_suite && github.workflow == 'Resume installed DMG acceptance' }}
         run: |
           python3 script/gui-resume-tests
           python3 script/gui-resume
