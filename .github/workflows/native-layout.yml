@@ -23,6 +23,10 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
+      # Rust 1.96 stripping can create unloadable proc-macro dylibs on macOS 27.
+      # https://github.com/rust-lang/rust/issues/157750
+      CARGO_PROFILE_DEV_STRIP: none
+      CARGO_PROFILE_TEST_STRIP: none
     steps:
       - name: Require main
         run: test "$GITHUB_REF" = refs/heads/main
@@ -41,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/native-build"
-          /usr/bin/time -l cargo test --locked -p integration --test integration --no-run --message-format=json \
+          /usr/bin/time -l cargo test --locked -p integration --test integration --no-run --message-format=json -vv \
             > "$RUNNER_TEMP/native-build/compiler.jsonl" \
             2> >(tee "$RUNNER_TEMP/native-build/build.log" >&2)
           python3 - <<'PYTHON'
