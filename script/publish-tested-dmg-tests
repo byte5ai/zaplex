@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Publication requires real full-suite evidence for the exact installer."""
+
+import copy
+import json
+from pathlib import Path
+import runpy
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+
+helpers = runpy.run_path(str(Path(__file__).with_name("publish-tested-dmg")))
+
+
+class ProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        self.source = "a" * 40
+        self.build = {
+            "status": "completed", "conclusion": "cancelled", "event": "workflow_dispatch",
+            "head_branch": "main", "path": ".github/workflows/ci-batch.yml",
+            "head_repository": {"full_name": "byte5ai/zaplex"}, "head_sha": self.source,
+        }
+        names = helpers["batch"]["PASSED"] | {
+            "test_dmg / Prepare Test app (macOS Apple Silicon)",
+            "test_dmg / Sign and package Test DMG (macOS Apple Silicon)",
+        }
+        self.jobs = [{"name": name, "conclusion": "success"} for name in sorted(names)]
+        self.jobs.append({"name": "test_dmg / Verify installed DMG user flows", "conclusion": "cancelled"})
+        self.artifacts = [{"name": "zap-test-dmg-aarch64", "expired": False}]
+        self.gui = dict(self.build, conclusion="success", path=".github/workflows/gui-resume.yml", head_sha="b" * 40)
+        self.gui_jobs = [{"name": name, "conclusion": "success"} for name in (
+            "Verify existing DMG provenance", "gui / Installed DMG user flows")]
+
+    def validate(self):
+        helpers["validate_runs"](self.build, self.jobs, self.artifacts, self.gui, self.gui_jobs, self.source)
+
+    def test_completed_build_with_separate_gui_success_is_accepted(self):
+        self.validate()
+
+    def test_each_compile_test_and_package_gate_is_required(self):
+        for index in range(len(self.jobs) - 1):
+            for result in ("failure", "cancelled", "skipped", None):
+                with self.subTest(index=index, result=result):
+                    self.jobs[index]["conclusion"] = result
+                    with self.assertRaises(ValueError):
+                        self.validate()
+                    self.jobs[index]["conclusion"] = "success"
+
+    def test_unrelated_failed_job_cannot_be_hidden(self):
+        self.jobs.append({"name": "additional release gate", "conclusion": "failure"})
+        with self.assertRaises(ValueError):
+            self.validate()
+
+    def test_failed_wrong_repository_branch_or_event_is_rejected(self):
+        for run in (self.build, self.gui):
+            for key, value in (("status", "in_progress"), ("event", "pull_request"),
+                               ("head_branch", "feature"), ("path", "other.yml"),
+                               ("head_repository", {"full_name": "other/repo"}), ("head_sha", "main")):
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    original = run[key]
+                    run[key] = value
+                    try:
+                        self.validate()
+                    finally:
+                        run[key] = original
+
+    def test_gui_failure_or_missing_job_is_rejected(self):
+        self.gui["conclusion"] = "failure"
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.gui["conclusion"] = "success"
+        self.gui_jobs.pop()
+        with self.assertRaises(ValueError):
+            self.validate()
+
+    def test_duplicate_jobs_and_expired_artifact_are_rejected(self):
+        self.jobs.append(self.jobs[0])
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.jobs.pop()
+        self.gui_jobs.append(self.gui_jobs[0])
+        with self.assertRaises(ValueError):
+            self.validate()
+        self.gui_jobs.pop()
+        self.artifacts[0]["expired"] = True
+        with self.assertRaises(ValueError):
+            self.validate()
+
+
+class ReceiptTests(unittest.TestCase):
+    def setUp(self):
+        cases = sorted(helpers["report"]["CASES"])
+        self.receipt = {
+            "suite": "full", "local_gui": "pass", "selected_tests": "pass", "test_process_exit": 0,
+            "executed_cases_match": True, "app_source_sha": "a" * 40, "test_source_sha": "b" * 40,
+            "dmg_sha256": "c" * 64, "required_cases": cases,
+        }
+        self.summary = {"passedTests": 15, "failedTests": 0, "skippedTests": 0}
+        self.tree = {"testNodes": [{"nodeType": "Test Case", "nodeIdentifier": case + "()", "result": "Passed"}
+                                   for case in cases]}
+        self.info = {"WarpVersion": "v1.2.23"}
+
+    def validate(self):
+        helpers["validate_receipt"](self.receipt, self.summary, self.tree, "a" * 40, "b" * 40,
+                                    "c" * 64, self.info, "v1.2.23")
+
+    def test_matching_installer_and_all_actual_cases_pass(self):
+        self.validate()
+
+    def test_other_source_installer_selection_or_process_result_is_rejected(self):
+        for key, value in (("app_source_sha", "d" * 40), ("test_source_sha", "d" * 40),
+                           ("dmg_sha256", "d" * 64), ("suite", "selected"), ("local_gui", "not-run"),
+                           ("selected_tests", "fail"), ("executed_cases_match", False),
+                           ("required_cases", []), ("test_process_exit", 1), ("test_process_exit", False)):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                original = self.receipt[key]
+                self.receipt[key] = value
+                try:
+                    self.validate()
+                finally:
+                    self.receipt[key] = original
+
+    def test_aggregate_failure_skip_or_empty_suite_is_rejected(self):
+        for key, value in (("passedTests", 0), ("passedTests", 14), ("failedTests", 1),
+                           ("skippedTests", 1), ("expectedFailures", 1)):
+            original = copy.deepcopy(self.summary)
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.summary[key] = value
+                self.validate()
+            self.summary = original
+
+    def test_forged_green_receipt_cannot_replace_executed_cases(self):
+        original = copy.deepcopy(self.tree)
+        for mutate in (lambda nodes: nodes.pop(), lambda nodes: nodes.append(nodes[0]),
+                       lambda nodes: nodes[0].update(result="Failed"),
+                       lambda nodes: nodes[0].update(nodeIdentifier="Other/testUnrelated()")):
+            mutate(self.tree["testNodes"])
+            with self.assertRaises(ValueError):
+                self.validate()
+            self.tree = copy.deepcopy(original)
+
+    def test_installed_version_must_match_published_tag(self):
+        self.info["WarpVersion"] = "v1.2.2"
+        with self.assertRaises(ValueError):
+            self.validate()
+
+
+class AssetTests(unittest.TestCase):
+    def setUp(self):
+        self.files = {"Zaplex-arm64.dmg": "c" * 64, "daemon.tar.gz": "d" * 64}
+        self.assets = [{"name": name, "digest": "sha256:" + value, "state": "uploaded"}
+                       for name, value in self.files.items()]
+
+    def test_exact_upload_set_is_required_for_publication(self):
+        self.assertEqual(helpers["validate_assets"](self.assets, self.files, complete=True), set())
+        with self.assertRaises(ValueError):
+            helpers["validate_assets"](self.assets[:-1], self.files, complete=True)
+
+    def test_partial_draft_resumes_only_missing_files(self):
+        self.assertEqual(helpers["validate_assets"](self.assets[:-1], self.files, complete=False), {"daemon.tar.gz"})
+
+    def test_unexpected_duplicate_corrupt_or_unfinished_asset_is_rejected(self):
+        original = copy.deepcopy(self.assets)
+        for mutate in (lambda assets: assets.append(assets[0]),
+                       lambda assets: assets[0].update(name="unreviewed.zip"),
+                       lambda assets: assets[0].update(digest="sha256:" + "e" * 64),
+                       lambda assets: assets[0].update(state="new")):
+            mutate(self.assets)
+            with self.assertRaises(ValueError):
+                helpers["validate_assets"](self.assets, self.files, complete=False)
+            self.assets = copy.deepcopy(original)
+
+    def test_resume_uploads_only_missing_asset_then_publishes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            body = root / "body.md"
+            body.write_text("Reviewed release\n")
+            release = {"id": 42, "tag_name": "v1.2.23", "draft": True,
+                       "target_commitish": "a" * 40, "body": body.read_text(), "assets": self.assets[:-1]}
+            command = Mock(return_value=json.dumps([[release]]))
+            api = Mock(return_value=dict(release, assets=self.assets))
+            with patch.dict(helpers["publish"].__globals__, {"command": command, "api": api}), \
+                    patch("subprocess.run") as upload:
+                helpers["publish"]("v1.2.23", "a" * 40, body, root, self.files)
+                self.assertEqual(upload.call_count, 1)
+                self.assertEqual(upload.call_args.args[0][4], str(root / "daemon.tar.gz"))
+                self.assertEqual(command.call_args.args,
+                                 ("gh", "release", "edit", "v1.2.23", "--repo", "byte5ai/zaplex", "--draft=false", "--latest"))
+
+    def test_uploaded_mismatch_never_publishes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            body = root / "body.md"
+            body.write_text("Reviewed release\n")
+            release = {"id": 42, "tag_name": "v1.2.23", "draft": True,
+                       "target_commitish": "a" * 40, "body": body.read_text(), "assets": self.assets[:-1]}
+            command = Mock(return_value=json.dumps([[release]]))
+            bad = copy.deepcopy(self.assets)
+            bad[-1]["digest"] = "sha256:" + "e" * 64
+            with patch.dict(helpers["publish"].__globals__, {
+                "command": command, "api": Mock(return_value=dict(release, assets=bad))
+            }), patch("subprocess.run"), self.assertRaises(ValueError):
+                helpers["publish"]("v1.2.23", "a" * 40, body, root, self.files)
+            self.assertEqual(command.call_count, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
