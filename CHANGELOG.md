@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.12] — 2026-10-22
+
+- Native macOS-Tests: nachträgliches Stripping abschalten, um nicht ladbare prozedurale Makros unter macOS 27 zu vermeiden.
+
 ## [1.2.11] — 2026-10-22
 
 - Native GUI-Prüfung: Kompilierung mit vier Jobs ohne Debug-Informationen, wiederverwendbare Testprogramme und gesicherte Compilerdiagnose.
