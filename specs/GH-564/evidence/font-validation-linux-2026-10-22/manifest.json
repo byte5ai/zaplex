@@ -1,0 +1,144 @@
+{
+  "source_sha": "6e4991baa64cd72a71d2b5aeba2fb1ae93009820",
+  "merged_as": "15d6cc582f77fdbabbc9f8488433c04980194f4b",
+  "package_version": "1.2.20",
+  "kind": "local-linux-integration-fixture",
+  "installed_dmg": false,
+  "image_processing": "None; unchanged originals, individually visually reviewed.",
+  "cases": [
+    {
+      "test": "test_native_font_validation_evidence",
+      "locale": "en",
+      "steps": 24,
+      "result": "pass",
+      "recording_directory": "2026-10-22T20-03-37",
+      "files": [
+        {
+          "file": "en/font-escape-restored.png",
+          "sha256": "d670ba9837ff13a79624d09b1ff54e0fc85be36446251cb4f74f4f65cd025db2",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-invalid-range.png",
+          "sha256": "5aa460c319a8a44591048dd0ed9930b713dddb650642f2b2ffb1ba21eeab4c42",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-invalid-text.png",
+          "sha256": "37f5d3c26842ca2eb02e1ab05cfdf0f33f743d5513829110c22d8637057d1463",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-same-value-corrected.png",
+          "sha256": "740d70577522ca66d4cf4cbc98e2c68ea2dcb3f6ef2b22e56da9ed53a7b23b64",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-shell-preserved.png",
+          "sha256": "7f766689b345fd491c652fd63042d15865dcdca9b2d4595d851361f82d55020e",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/font-valid-before.png",
+          "sha256": "740d70577522ca66d4cf4cbc98e2c68ea2dcb3f6ef2b22e56da9ed53a7b23b64",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/recording.log",
+          "sha256": "39b7fd0205ea6d4bff329c511928bebe9678e059b0a6b6f8ee040194c5dce083"
+        }
+      ]
+    },
+    {
+      "test": "test_native_font_validation_german_evidence",
+      "locale": "de",
+      "steps": 24,
+      "result": "pass",
+      "recording_directory": "2026-10-22T20-04-39",
+      "files": [
+        {
+          "file": "de/font-escape-restored.png",
+          "sha256": "65dc630bbc40264f173caa6afb88ea43b16e940f56049386c926e23f55e9a92e",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-invalid-range.png",
+          "sha256": "8dea1a3aedb981ffb192aa868d737823513826703073db3fc18948847c5be513",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-invalid-text.png",
+          "sha256": "2942a9992ac5f35f39ab24751f73084ab832e85246f28757c3701988662cbdd3",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-same-value-corrected.png",
+          "sha256": "2c0907eb3dadaf41cbe569fa0167e73891be76141a65a7eb2dde0225f7b93364",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-shell-preserved.png",
+          "sha256": "af2189867387e0ca34409511e6b7fa7de1212fa1da52f0c912691bed1e25d49c",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/font-valid-before.png",
+          "sha256": "2c0907eb3dadaf41cbe569fa0167e73891be76141a65a7eb2dde0225f7b93364",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/recording.log",
+          "sha256": "4db39991826179ab22418cf777252a0e56c5547c439ef191c53df917e1e317dc"
+        }
+      ]
+    }
+  ]
+}

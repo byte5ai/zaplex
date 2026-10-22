@@ -1,0 +1,154 @@
+[+00:00.000] Step started: Wait for bootstrapping
+[+00:00.779] Assertion started: no pending model events
+[+00:00.779] Assertion passed: no pending model events
+[+00:00.859] Assertion started: no block executing
+[+00:00.859] Assertion passed: no block executing
+[+00:00.922] Assertion started: waiting for bootstrapping
+[+00:22.343] Assertion passed: waiting for bootstrapping
+[+00:22.343] Step succeeded: Wait for bootstrapping
+[+00:22.343] Step started: Resize native workspace to 1024x640
+[+00:22.343] Action executed
+[+00:22.487] Assertion started: Native window reached requested geometry
+[+00:22.946] Assertion passed: Native window reached requested geometry
+[+00:22.947] Step succeeded: Resize native workspace to 1024x640
+[+00:22.947] Step started: Render the production Zaplex Dark theme
+[+00:23.076] Action executed
+[+00:23.076] Step succeeded: Render the production Zaplex Dark theme
+[+00:23.076] Step started: Run 'cd "$HOME" && ZAPLEX_PROOF=2231' and verify block exists
+[+00:23.076] Event: TypedCharacters 'cd "$HOME" && ZAPLEX_PROOF=2231'
+[+00:23.116] Event: KeyDown ''
+[+00:23.170] Action executed
+[+00:23.233] Assertion started: no pending model events
+[+00:23.450] Assertion passed: no pending model events
+[+00:23.752] Assertion started: no block executing
+[+00:23.753] Assertion passed: no block executing
+[+00:23.843] Assertion started: assert 'cd "$HOME" && ZAPLEX_PROOF=2231' ran
+[+00:23.843] Assertion passed: assert 'cd "$HOME" && ZAPLEX_PROOF=2231' ran
+[+00:23.918] Assertion started: assert command output
+[+00:23.918] Assertion passed: assert command output
+[+00:23.935] Assertion started: wait for precmd so we have metadata for the next block
+[+00:23.936] Assertion passed: wait for precmd so we have metadata for the next block
+[+00:23.953] Assertion started: assert exit code
+[+00:23.953] Assertion passed: assert exit code
+[+00:23.971] Assertion started: check that input is empty
+[+00:23.971] Assertion passed: check that input is empty
+[+00:23.971] Step succeeded: Run 'cd "$HOME" && ZAPLEX_PROOF=2231' and verify block exists
+[+00:23.971] Step started: Find terminal font settings through the Settings search
+[+00:24.052] Action executed
+[+00:24.273] Assertion started: Font size editor is visible
+[+00:24.273] Assertion passed: Font size editor is visible
+[+00:24.273] Step succeeded: Find terminal font settings through the Settings search
+[+00:24.273] Step started: Type terminal font size 15
+[+00:24.313] Event: KeyDown 'a'
+[+00:24.338] Event: KeyDown '1'
+[+00:24.358] Event: KeyDown '5'
+[+00:24.374] Step succeeded: Type terminal font size 15
+[+00:24.375] Step started: Submit the size and verify the effective setting and visible feedback
+[+00:24.375] Event: KeyDown ''
+[+00:24.477] Action executed
+[+00:24.593] Assertion started: Input, setting and validation agree
+[+00:24.594] Assertion passed: Input, setting and validation agree
+[+00:24.594] Step succeeded: Submit the size and verify the effective setting and visible feedback
+[+00:24.929] Step started: Type terminal font size 0
+[+00:24.959] Event: KeyDown 'a'
+[+00:24.975] Event: KeyDown '0'
+[+00:24.991] Step succeeded: Type terminal font size 0
+[+00:24.991] Step started: Leaving the field validates the draft without changing the effective size
+[+00:25.436] Assertion started: Blur validates the input
+[+00:25.436] Assertion passed: Blur validates the input
+[+00:25.436] Step succeeded: Leaving the field validates the draft without changing the effective size
+[+00:25.436] Step started: Type terminal font size 15
+[+00:25.485] Event: KeyDown 'a'
+[+00:25.511] Event: KeyDown '1'
+[+00:25.532] Event: KeyDown '5'
+[+00:25.552] Step succeeded: Type terminal font size 15
+[+00:25.552] Step started: Submit the size and verify the effective setting and visible feedback
+[+00:25.552] Event: KeyDown ''
+[+00:25.787] Assertion started: Input, setting and validation agree
+[+00:25.787] Assertion passed: Input, setting and validation agree
+[+00:25.787] Step succeeded: Submit the size and verify the effective setting and visible feedback
+[+00:25.787] Step started: Type terminal font size abc
+[+00:25.813] Event: KeyDown 'a'
+[+00:25.825] Event: KeyDown 'a'
+[+00:25.842] Event: KeyDown 'b'
+[+00:25.859] Event: KeyDown 'c'
+[+00:25.874] Step succeeded: Type terminal font size abc
+[+00:25.874] Step started: Submit the size and verify the effective setting and visible feedback
+[+00:25.874] Event: KeyDown ''
+[+00:25.889] Action executed
+[+00:25.959] Assertion started: Input, setting and validation agree
+[+00:25.959] Assertion passed: Input, setting and validation agree
+[+00:25.959] Step succeeded: Submit the size and verify the effective setting and visible feedback
+[+00:26.235] Step started: Type terminal font size 121
+[+00:26.270] Event: KeyDown 'a'
+[+00:26.283] Event: KeyDown '1'
+[+00:26.298] Event: KeyDown '2'
+[+00:26.315] Event: KeyDown '1'
+[+00:26.332] Step succeeded: Type terminal font size 121
+[+00:26.332] Step started: Submit the size and verify the effective setting and visible feedback
+[+00:26.332] Event: KeyDown ''
+[+00:26.348] Action executed
+[+00:26.403] Assertion started: Input, setting and validation agree
+[+00:26.404] Assertion passed: Input, setting and validation agree
+[+00:26.404] Step succeeded: Submit the size and verify the effective setting and visible feedback
+[+00:26.670] Step started: Escape restores the effective font size and removes the validation error
+[+00:26.670] Event: KeyDown ''
+[+00:26.691] Action executed
+[+00:26.731] Assertion started: The invalid draft was discarded
+[+00:26.732] Assertion passed: The invalid draft was discarded
+[+00:26.732] Step succeeded: Escape restores the effective font size and removes the validation error
+[+00:27.035] Step started: Type terminal font size abc
+[+00:27.062] Event: KeyDown 'a'
+[+00:27.076] Event: KeyDown 'a'
+[+00:27.093] Event: KeyDown 'b'
+[+00:27.109] Event: KeyDown 'c'
+[+00:27.125] Step succeeded: Type terminal font size abc
+[+00:27.125] Step started: Submit the size and verify the effective setting and visible feedback
+[+00:27.125] Event: KeyDown ''
+[+00:27.207] Assertion started: Input, setting and validation agree
+[+00:27.208] Assertion passed: Input, setting and validation agree
+[+00:27.216] Step succeeded: Submit the size and verify the effective setting and visible feedback
+[+00:27.216] Step started: Type terminal font size 15
+[+00:27.252] Event: KeyDown 'a'
+[+00:27.263] Event: KeyDown '1'
+[+00:27.281] Event: KeyDown '5'
+[+00:27.299] Step succeeded: Type terminal font size 15
+[+00:27.299] Step started: Submit the size and verify the effective setting and visible feedback
+[+00:27.299] Event: KeyDown ''
+[+00:27.316] Action executed
+[+00:27.365] Assertion started: Input, setting and validation agree
+[+00:27.365] Assertion passed: Input, setting and validation agree
+[+00:27.365] Step succeeded: Submit the size and verify the effective setting and visible feedback
+[+00:27.667] Step started: Type terminal font size 13
+[+00:27.700] Event: KeyDown 'a'
+[+00:27.714] Event: KeyDown '1'
+[+00:27.734] Event: KeyDown '3'
+[+00:27.752] Step succeeded: Type terminal font size 13
+[+00:27.752] Step started: Submit the size and verify the effective setting and visible feedback
+[+00:27.752] Event: KeyDown ''
+[+00:27.936] Assertion started: Input, setting and validation agree
+[+00:27.937] Assertion passed: Input, setting and validation agree
+[+00:27.937] Step succeeded: Submit the size and verify the effective setting and visible feedback
+[+00:27.937] Step started: Close only the Settings tab
+[+00:27.937] Event: KeyDown 'W'
+[+00:27.988] Step succeeded: Close only the Settings tab
+[+00:27.988] Step started: Run 'test "$ZAPLEX_PROOF" = 2231 && printf 'FONT-RETURN-PASS\n'' and verify block exists
+[+00:27.988] Event: TypedCharacters 'test "$ZAPLEX_PROOF" = 2231 && printf 'FONT-RETURN-PASS\n''
+[+00:28.009] Event: KeyDown ''
+[+00:28.032] Action executed
+[+00:28.032] Action executed
+[+00:28.223] Assertion started: no pending model events
+[+00:28.223] Assertion passed: no pending model events
+[+00:28.339] Assertion started: no block executing
+[+00:28.339] Assertion passed: no block executing
+[+00:28.533] Assertion started: assert 'test "$ZAPLEX_PROOF" = 2231 && printf 'FONT-RETURN-PASS\n'' ran
+[+00:28.533] Assertion passed: assert 'test "$ZAPLEX_PROOF" = 2231 && printf 'FONT-RETURN-PASS\n'' ran
+[+00:28.611] Assertion started: assert command output
+[+00:28.611] Assertion passed: assert command output
+[+00:28.628] Assertion started: wait for precmd so we have metadata for the next block
+[+00:28.628] Assertion passed: wait for precmd so we have metadata for the next block
+[+00:28.646] Assertion started: assert exit code
+[+00:28.646] Assertion passed: assert exit code
+[+00:28.663] Assertion started: check that input is empty
+[+00:28.663] Assertion passed: check that input is empty
+[+00:28.663] Step succeeded: Run 'test "$ZAPLEX_PROOF" = 2231 && printf 'FONT-RETURN-PASS\n'' and verify block exists
