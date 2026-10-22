@@ -37,6 +37,8 @@ jobs:
         with:
           target_os: macos
           cache_key: macos-aarch64-native-layout-nodebug
+          cache_on_failure: true
+          cache_workspace_crates: true
           is_self_hosted: false
           install_release_deps: false
       - name: Build native test executables once

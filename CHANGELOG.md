@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.13] — 2026-10-22
+
+- Native GUI-Builds sichern auch nach Fehlern fertig kompilierte Abhängigkeiten und Workspace-Crates im Rust-Cache.
+
 ## [1.2.12] — 2026-10-22
 
 - Native macOS-Tests: nachträgliches Stripping abschalten, um nicht ladbare prozedurale Makros unter macOS 27 zu vermeiden.
