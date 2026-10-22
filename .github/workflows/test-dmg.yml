@@ -32,7 +32,7 @@ on:
       dmg_tag:
         description: Must match the original source VERSION
         type: string
-        default: v1.2.21
+        default: v1.2.22
       fast:
         description: Resume requires the original release profile (false)
         type: boolean
@@ -45,7 +45,7 @@ on:
       dmg_tag:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
         type: string
-        default: v1.2.21
+        default: v1.2.22
       fast:
         description: "Debug-Profil für Mac-App und Linux-Daemon. Nur für schnelle Entwicklerprüfung; für Abnahme-DMGs ausgeschaltet lassen."
         type: boolean
@@ -53,7 +53,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: test-dmg-${{ github.ref }}
@@ -66,6 +65,9 @@ env:
 jobs:
   readiness:
     name: Verify Phase A release readiness
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -335,6 +337,9 @@ jobs:
     if: >
       !cancelled() && needs.readiness.result == 'success' && needs.build_dmg.result == 'success'
     name: Verify installed DMG user flows
+    permissions:
+      contents: read
+      actions: read
     needs: [readiness, build_dmg]
     uses: ./.github/workflows/gui-acceptance.yml
     with:
@@ -342,6 +347,9 @@ jobs:
       source_sha: ${{ needs.readiness.outputs.source_sha }}
 
   build_dmg:
+    permissions:
+      contents: read
+      actions: read
     if: >
       !cancelled() && needs.readiness.result == 'success' && needs.build_app.result == 'success' &&
       (needs.build_remote_server.result == 'success' || inputs.resume_run_id != '')

@@ -8,14 +8,14 @@ use crate::{
     ai::blocklist::BlocklistAIHistoryModel,
     auth::AuthStateProvider,
     cloud_object::model::persistence::ObjectStoreModel,
-    menu::MenuItemFields,
+    menu::{MenuAction, MenuItemFields},
     pane_group::{focus_state::PaneFocusHandle, BackingView, PaneConfiguration, PaneId, PaneView},
     settings_view::keybindings::KeybindingChangedNotifier,
     test_util::settings::initialize_settings_for_tests,
     NetworkStatus, UpdateManager, UserProfiles, UserWorkspaces,
 };
 
-use super::{Event, OpenOverlay};
+use super::{Event, OpenOverlay, PaneHeaderAction};
 
 /// A dummy view that is also a backing pane view for testing purposes.
 struct TestView {
@@ -151,6 +151,78 @@ fn test_overflow_menu_items() {
 
         pane_view.read(&app, |view, ctx| {
             assert_eq!(view.child(ctx).as_ref(ctx).counter, 1);
+        });
+    })
+}
+
+#[test]
+fn overflow_menu_escape_restores_pane_focus_without_selecting_an_action() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, pane) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let child = ctx.add_typed_action_view(|_| TestView::new());
+            let config = ctx.add_model(|_| PaneConfiguration::new("Test"));
+            PaneView::new(PaneId::dummy_pane_id(), child, (), config, ctx)
+        });
+        let header = pane.read(&app, |pane, _| pane.header().to_owned());
+        let child = pane.read(&app, |pane, ctx| pane.child(ctx).to_owned());
+        let menu = header.read(&app, |header, _| header.overflow_menu.to_owned());
+        child.update(&mut app, |child, ctx| child.focus_contents(ctx));
+        header.update(&mut app, |header, ctx| {
+            header.set_overflow_menu_items(
+                [MenuItemFields::new("Increment counter")
+                    .with_on_select_action(TestViewAction::IncrementCounter)
+                    .into_item()],
+                ctx,
+            );
+            header.handle_action(&PaneHeaderAction::OpenOverflowMenu, ctx);
+        });
+        assert!(
+            app.read(|ctx| menu.is_focused(ctx)),
+            "The visible menu must receive keyboard input"
+        );
+        menu.update(&mut app, |menu, ctx| {
+            menu.handle_action(&MenuAction::Escape, ctx)
+        });
+        header.read(&app, |header, _| {
+            assert!(matches!(header.open_overlay, OpenOverlay::None))
+        });
+        assert!(app.read(|ctx| child.is_focused(ctx)));
+        child.read(&app, |child, _| {
+            assert_eq!(child.counter, 0);
+            assert!(!child.close_invoked);
+        });
+    })
+}
+
+#[test]
+fn overflow_menu_close_preserves_focus_moved_by_the_selected_action() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (_, pane) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let child = ctx.add_typed_action_view(|_| TestView::new());
+            let config = ctx.add_model(|_| PaneConfiguration::new("Test"));
+            PaneView::new(PaneId::dummy_pane_id(), child, (), config, ctx)
+        });
+        let header = pane.read(&app, |pane, _| pane.header().to_owned());
+        let menu = header.read(&app, |header, _| header.overflow_menu.to_owned());
+        let destination = pane.update(&mut app, |_, ctx| {
+            ctx.add_typed_action_view(|_| TestView::new())
+        });
+        header.update(&mut app, |header, ctx| {
+            header.handle_action(&PaneHeaderAction::OpenOverflowMenu, ctx);
+        });
+        // Selecting Split opens a different menu before the old menu emits Close.
+        destination.update(&mut app, |destination, ctx| destination.focus_contents(ctx));
+        menu.update(&mut app, |menu, ctx| {
+            menu.handle_action(&MenuAction::Close(true), ctx)
+        });
+        assert!(
+            app.read(|ctx| destination.is_focused(ctx)),
+            "Closing the old menu must not steal the destination focus"
+        );
+        header.read(&app, |header, _| {
+            assert!(matches!(header.open_overlay, OpenOverlay::None))
         });
     })
 }

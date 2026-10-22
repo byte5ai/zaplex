@@ -302,6 +302,10 @@ integration_tests! {
     #[cfg(target_os="macos")]
     test_native_file_manager_header_entry,
     #[cfg(target_os="macos")]
+    test_native_pane_menu_evidence,
+    #[cfg(target_os="macos")]
+    test_native_pane_menu_german_evidence,
+    #[cfg(target_os="macos")]
     test_native_font_validation_evidence,
     #[cfg(target_os="macos")]
     test_native_font_validation_german_evidence,

@@ -22,6 +22,7 @@ pub mod launch_configs;
 pub mod navigation_palette;
 pub mod file_manager_acceptance;
 pub mod native_workspace;
+pub mod pane_menu_acceptance;
 pub mod terminal_introduction;
 pub mod notebook;
 pub mod pane_group;

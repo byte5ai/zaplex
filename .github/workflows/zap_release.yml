@@ -1,10 +1,8 @@
 # Zaplex release pipeline — triggered by pushing a supported release tag (v*)
 #
 # Differences from upstream create_release.yml:
-# - Supported release targets are macOS arm64 + Linux x86_64; Web/CLI/Universal,
-#   Intel macOS and Windows are not published. The dormant Windows job is opt-in.
-#   (macOS produces a native DMG and CLI tarball; Linux produces AppImage/deb/rpm
-#    plus a best-effort Arch package, without upstream Zap source or signing keys.)
+# - Ships macOS arm64 and its bundled Linux x86_64 daemon.
+#   Linux desktop and Windows packages are opt-in; Intel macOS is not published.
 # - Single stable OSS channel (configuration provided by release_configurations.json)
 # - macOS is signed with Developer ID and notarized through App Store Connect.
 #   The dormant Windows build remains unsigned until a Windows signing identity is available.
@@ -31,7 +29,7 @@ on:
       release_tag:
         description: "Release tag; must match VERSION"
         type: string
-        default: v1.2.21
+        default: v1.2.22
         required: true
 
 # Build and metadata jobs only need repository read access. The publisher job
@@ -328,8 +326,7 @@ jobs:
 
   build_remote_server:
     name: Build bundled remote-server (Linux musl x86_64)
-    # ci-lint: allow-CI001  Org-managed larger-runner label has no versioned equivalent.
-    runs-on: ubuntu-latest-xl
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     needs:
       - prepare_metadata
       - signing_preflight
@@ -415,6 +412,8 @@ jobs:
     # macOS is required to build, sign, notarize and staple the native DMG.
     # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
     runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_BUILD_JOBS: '4'
     needs:
       - prepare_metadata
       - signing_preflight
@@ -605,6 +604,7 @@ jobs:
 
   release_linux:
     name: Build Release (Linux x86_64)
+    if: vars.ENABLE_LINUX_RELEASE == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2204
     needs:
       - prepare_metadata
@@ -800,10 +800,14 @@ jobs:
     permissions:
       contents: write
       actions: write
-    # Gate the release on the supported platforms only (macOS arm64 + Linux); if either fails
-    # → this job is skipped → no half-published Release. Windows is unsupported for now and is
-    # deliberately NOT in `needs`, so a Windows failure can never block a macOS/Linux release.
-    # `files: dist/*` below attaches whatever artifacts exist, so a missing Windows asset is fine.
+    # The disabled desktop job may be skipped; every shipped component and GUI
+    # acceptance must succeed. An explicitly enabled Linux desktop must also pass.
+    if: >-
+      !cancelled() && needs.prepare_metadata.result == 'success' &&
+      needs.build_remote_server.result == 'success' && needs.release_macos.result == 'success' &&
+      needs.gui_acceptance.result == 'success' &&
+      (needs.release_linux.result == 'success' ||
+       (vars.ENABLE_LINUX_RELEASE != 'true' && needs.release_linux.result == 'skipped'))
     needs:
       - prepare_metadata
       - build_remote_server
