@@ -1,0 +1,766 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "installed-dmg-exploration",
+  "source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "test_source_sha": "6ffc29931566fe6d0b931a3dc417bcc2bde902db",
+  "run_id": 39812825592,
+  "artifact_id": 12443514505,
+  "artifact_name": "gui-exploration-39812825592",
+  "package_version": "1.2.2",
+  "dmg_sha256": "313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3",
+  "reference_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "image_processing": "None; all original PNG bytes compared against the downloaded Actions artifact.",
+  "early_finish": true,
+  "images": [
+    {
+      "file": "01-start.png",
+      "sha256": "349d6974ed0fc0bb70e50101ed6c2789e11641787147dce72ef287ee24fd0948",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "02-folder-first-click.png",
+      "sha256": "620fc59050132aa0aa733c72b536af32c7f1ed7ec303a2ce366b5b4e34c8bd10",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "window_id": 38,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "03-folder-repeat-click.png",
+      "sha256": "b7064925c85e2fd9e46f09317eebe8c19818e804ddc51a64b18a8ddbfaf3dd83",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "04-folder-keyboard.png",
+      "sha256": "b7064925c85e2fd9e46f09317eebe8c19818e804ddc51a64b18a8ddbfaf3dd83",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "index": 0,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "05-terminal-before-marker.png",
+      "sha256": "6f8e74544c6de61ab42bf3b6bcf6f332ecfbbef2480c5d74f46a365e14d9a4d7",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "06-marker-typed.png",
+      "sha256": "cb1472b98288c08e05647de9f92a9e6edc75bf931f8d87f25710317b940daae3",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "window_id": 38,
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "07-shell-marker.png",
+      "sha256": "5b449605cf249a2e13c6a3f862dffa7d5fd3e9989f874cd88ca0033674a6b543",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "window_id": 38,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "08-settings.png",
+      "sha256": "f232855d0efea0735ddcc5537c304c51cffc861f7edc41bab25da9384114be0c",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "title": "Settings",
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "09-settings-no-match.png",
+      "sha256": "b0c8f049956f37dd1fe6095d4c19084d4f67198bcf4dfef51ee7af7da7c3bb9e",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Settings",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "10-settings-font-search.png",
+      "sha256": "914554d5b479979c8a16b8c5917d6679f160207529f58914ceb262790d190843",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Settings",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "11-search-cleared.png",
+      "sha256": "0e64ce2a7e86f3d45b597e6a2909eb5a97e59e0e638fcf429d59c31e586d8cac",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Settings",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "12-appearance.png",
+      "sha256": "32d80fba45b650ec80def2de6578f0b5440b497c03671f7faaada93885fd41a0",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Settings",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "13-theme-picker.png",
+      "sha256": "869341478472b9a30aaaef4d8706872c8eb1987771a942a22c9454ef3f8c5c94",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "window_id": 38,
+        "title": "Settings"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "14-theme-light-results.png",
+      "sha256": "d16118db05160a3feb412b729d74f8ebb909981cddf194a1cebaf8cc20f2eae8",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Settings",
+        "window_id": 38,
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en"
+    },
+    {
+      "file": "15-light-applied.png",
+      "sha256": "d1cd4ce61925a68421e3d9318075f05f665ae82a9e273214faa9a771e056394c",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "index": 0,
+        "title": "Settings"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "16-light-settings.png",
+      "sha256": "56d2698f9f4a0b0d126be3801b4de51cb2982fe8fe582c983789d9e55f5aacd3",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Settings",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "17-font-light.png",
+      "sha256": "35c6dbd64b431875b0127ad4019ddf80005af83577fb902ca2fbdb2901dc9b81",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "index": 0,
+        "title": "Settings"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "18-invalid-font-typed.png",
+      "sha256": "ad12f82a238c8de89cce265849791ccad1104cba5f771b9f130668e84aeb21eb",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "index": 0,
+        "title": "Settings"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "19-invalid-font-submitted.png",
+      "sha256": "ad12f82a238c8de89cce265849791ccad1104cba5f771b9f130668e84aeb21eb",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "window_id": 38,
+        "title": "Settings"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "20-invalid-font-blurred.png",
+      "sha256": "f76e0df4a08cfafbb3d4b712beed6c16953278363d9ecbc65de8713147461375",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "title": "Settings",
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "21-valid-font-typed.png",
+      "sha256": "3532b516fef453b00e5bd423958a84bb80b5837d7286cf4394fd77c946944507",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "window_id": 38,
+        "title": "Settings"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "22-valid-font-applied.png",
+      "sha256": "92ac71e88e80f67a518ddc72610079c753b01edf6a4e6291703b36917ee467c4",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Settings",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "23-return-shell-light.png",
+      "sha256": "3a3cfbfa6dc2f862a5c0dbdb71936527e79faa09fd875da3d9a37b17157430e2",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "index": 0,
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "24-shell-check-typed.png",
+      "sha256": "cea24b9504f928e8706a786c1004dd3fcafb0a09fdf1c5a3ada1fc3fc13e0fce",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "25-shell-preserved.png",
+      "sha256": "aa8bde8323748435de409c2441301b2a086ec05a8fc5e5a769efb8da69e6bc58",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "index": 0,
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "26-folder-focused-light.png",
+      "sha256": "7fb57747aeee48e8192290c5a6e207551091de9063494db828758fabbcdbec52",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "index": 0,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "27-folder-return-light.png",
+      "sha256": "443dd84e2c0fe88692529c366aa21df81eb02c636b160bfe1a2740112eb10c5a",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "window_id": 38,
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "28-settings-return.png",
+      "sha256": "9535b209b8a47b0af179821a51c2621c13f18781ea2c0cd92efe26af6ff412d1",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Settings",
+        "index": 0,
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "29-settings-closed.png",
+      "sha256": "763005af4968da7217168f23b3300ad1d4d074e39137a087bff0cebb83c2a786",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "index": 0,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    },
+    {
+      "file": "30-finish-typed.png",
+      "sha256": "69527a2f51b36117c179881a252e19d5f3f4f09bf50fb79f9affb309706effb2",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "light",
+      "locale": "en"
+    }
+  ]
+}

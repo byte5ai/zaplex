@@ -1,0 +1,14 @@
+{
+  "scope": "E01/E02/E04/X05: installed-DMG settings and navigation exploration",
+  "app_source": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "artifact_run": 39295080993,
+  "criteria": [
+    "Settings opens visibly as a tab; returning preserves the original shell marker and directory.",
+    "Search distinguishes matches and no matches, and clearing it restores reachable sections.",
+    "Theme and reachable appearance choices produce a visible, readable result.",
+    "Reachable controls have understandable labels and return/cancel paths; report dead ends with before/after evidence.",
+    "F01/#604: compare the visible folder-button click against the keyboard entry on the same unchanged DMG, record window-relative coordinates and focus, and preserve original before/after images. Do not infer a code defect from an unverified click."
+  ],
+  "method": "Choose the next action from each fresh visible screen; record actual app version, window, locale and theme. No provider login or external connections in this run.",
+  "results": "not-run; criteria recorded before dispatch"
+}
