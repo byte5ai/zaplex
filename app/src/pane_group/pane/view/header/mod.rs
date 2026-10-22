@@ -254,7 +254,10 @@ impl<P: BackingView> PaneHeader<P> {
     /// Close the open overlay menu.
     fn close_overlay(&mut self, ctx: &mut ViewContext<Self>) {
         self.open_overlay = OpenOverlay::None;
-        ctx.emit(Event::OverlayClosed);
+        // A selected action may already have focused its destination menu or pane.
+        if self.overflow_menu.is_focused(ctx) {
+            ctx.emit(Event::OverlayClosed);
+        }
         ctx.notify();
     }
 
@@ -860,6 +863,7 @@ impl<P: BackingView> TypedActionView for PaneHeader<P> {
             }
             PaneHeaderAction::OpenOverflowMenu => {
                 self.open_overlay = OpenOverlay::OverflowMenu;
+                ctx.focus(&self.overflow_menu);
                 ctx.emit(Event::PaneHeaderOverflowMenuToggled(true));
                 ctx.notify();
             }

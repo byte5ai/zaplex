@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       artifact_run_id:
-        description: Successful Test DMG continuation containing the unchanged app
+        description: Successful CI batch or Test DMG continuation containing the unchanged app
         type: string
         required: true
       source_sha:
@@ -33,7 +33,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
           APP_SOURCE_SHA: ${{ inputs.source_sha }}
-        run: python3 script/gui-resume
+          GUI_EXPLORATION: 'true'
+        run: |
+          python3 script/gui-resume-tests
+          python3 script/gui-resume
 
   explore:
     needs: verify

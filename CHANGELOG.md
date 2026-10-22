@@ -2,6 +2,11 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.22] — 2026-10-23
+
+- Das Pane-Kopfzeilenmenü erhält Tastaturfokus: Escape schließt es und gibt den Fokus zurück; eine gewählte Folgeaktion behält ihren eigenen Fokus (#629).
+- Der Release-Build nutzt Blacksmith für den Linux-Daemon, begrenzt macOS auf vier Cargo-Prozesse und baut Linux-Desktop-Pakete nur bei ausdrücklicher Aktivierung (#630).
+
 ## [1.2.21] — 2026-10-22
 
 - Das Live-SFTP-Gate führt den identitätsgebundenen Löschtest ausdrücklich aus und weist eine leere Testauswahl zurück.

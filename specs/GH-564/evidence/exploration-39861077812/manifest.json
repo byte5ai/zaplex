@@ -1,0 +1,770 @@
+{
+  "schema_version": 1,
+  "evidence_kind": "installed-dmg-exploration",
+  "source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "test_source_sha": "fdda87face404af6e5cca349618562a7176d8776",
+  "run_id": 39861077812,
+  "artifact_id": 12462641329,
+  "artifact_name": "gui-exploration-39861077812",
+  "package_version": "1.2.2",
+  "dmg_sha256": "313303cc2dd14b820cd9c01bb931b555300864914b7fc746f4c6841e4889bae3",
+  "reference_source_sha": "6c956383ad560913dc31fa383104dc489104d561",
+  "image_processing": "None; originals individually viewed and byte-compared against downloaded artifact.",
+  "early_finish": true,
+  "images": [
+    {
+      "file": "01-initial.png",
+      "sha256": "349d6974ed0fc0bb70e50101ed6c2789e11641787147dce72ef287ee24fd0948",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "index": 0,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "02-marker-input.png",
+      "sha256": "e2bc2bb34e3b263951f85eba43c4e0086a33599a47b9617809773012694def79",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "index": 0,
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "03-source-state.png",
+      "sha256": "0747711eaa9abe3bc5b7aaf3e8338fec53909380c2cf41b4df2f8242b91853a2",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "index": 0,
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "04-tab-menu.png",
+      "sha256": "375c36201c44308b97641efc3f740a4ca87f8ef87812c1ebec9b756f198ecfd1",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "05-tab-cancel.png",
+      "sha256": "0747711eaa9abe3bc5b7aaf3e8338fec53909380c2cf41b4df2f8242b91853a2",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "06-pane-menu.png",
+      "sha256": "b8867b7ad0532aad2414bee94fe73dbd8a3981ffa05cf8640be3b13875e07d73",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "window_id": 38,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "07-pane-menu-focused.png",
+      "sha256": "9baca70d88da2a76c7562b538558917aa50546987d38f0358528ee2eaa11f6a0",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "08-pane-menu-cancel.png",
+      "sha256": "03eeecc4e66427ff7b854e9304304b00a8e885725a1f8a3ef01ae3aac7337946",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "window_id": 38,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "09-cancel-check-input.png",
+      "sha256": "739053f8825afba7ee076b2042f5c941408f0b496ee4cd0928fe35b54650ffc4",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "10-cancel-state.png",
+      "sha256": "9feb28c7c931769cfdee1a3244d90152a3c6f204e3265cc57f4436fff34715d2",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "11-split-right.png",
+      "sha256": "9aa96d386b3cd2cf68ce249307f5f4303beea1c4b3c3f5ef907c27c613d732eb",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "index": 0,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "12-split-launch-cancel.png",
+      "sha256": "9cd7ad3395624259167b0e5d483dfca4c97d75cd48cad696dbdbf3748e671858",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "13-reopen-split.png",
+      "sha256": "8632bc363144bcc345fed737136586d930a682f3b5440e2fffb284e2b1e96ff0",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "window_id": 38,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "14-right-launch-menu.png",
+      "sha256": "9aa96d386b3cd2cf68ce249307f5f4303beea1c4b3c3f5ef907c27c613d732eb",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "window_id": 38,
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "15-right-created.png",
+      "sha256": "3feb1c7ea99fa4f3ec4f3ed76870b6ed2749ed0f93621eaac123ae435b7846da",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~ · 6aeca002",
+        "window_id": 38,
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "16-right-input.png",
+      "sha256": "af849989b0755311e98e9fe6d8394e60de55ea9449fffb190c526235e6b1042d",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~ · 6aeca002",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "17-right-state.png",
+      "sha256": "1781a9ff9b8d9cd9bc689030398ea7ef357521510ecb2456372518acd9919c94",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · tmp",
+        "index": 0,
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "18-right-overflow.png",
+      "sha256": "fbef955185397c85fda0a3855d36694f639be3ee4d4d744d02e7b07e0f47dd2d",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · tmp",
+        "window_id": 38,
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "19-down-launch.png",
+      "sha256": "54cc0c2e8b65b1b971d38480bf6f94799c1e185aaa562105f3bbd717c9e9171c",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · tmp",
+        "index": 0,
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "20-down-created.png",
+      "sha256": "4b9b9ff4a4dc7f6454275da9352caf3d178349788a06a9819a654e07733ec26f",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "index": 0,
+        "title": "Local · /tmp · bf2fd2fa"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "21-down-input.png",
+      "sha256": "4794510011157ab5d74c2dfe5c2fcde0815c9dbc2c25cdf4ae6601d0b2281738",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "title": "Local · /tmp · bf2fd2fa",
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "22-down-state.png",
+      "sha256": "f51525db9f0ddbe39cec0cd36f530b4f5f91b5dec7a4545b26b5bb01903941f6",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · /tmp · bf2fd2fa",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "23-down-closed.png",
+      "sha256": "48ac715edc12b07a4ea1a3b93607c1f533303d8feeaafc49b7c5ac42ff838ccb",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · tmp",
+        "window_id": 38,
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "24-right-closed.png",
+      "sha256": "e77e5bdc5af0648603c69d93ab7c8f8d22aa3dd133c14abf9bb98ad86eb51aad",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "index": 0,
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "25-source-return-input.png",
+      "sha256": "711700b80385dadf47d1dfcfabb8cd0b98d83d7f048f85ecdfc03e5f41ddd073",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "window_id": 38,
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "26-source-return-pass.png",
+      "sha256": "9efa33bf3b13eb9a347aacfd45c214d07274baf72234fc828003c0b7b54b5d91",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "window_id": 38,
+        "title": "Local · ~",
+        "index": 0
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "27-focused-folder.png",
+      "sha256": "ac25897492d5542022a0c5e8ac213391ffdc0c71c246abb5fbcf442d249092db",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "window_id": 38,
+        "title": "Local · ~"
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "28-folder-return.png",
+      "sha256": "b2aaaac8dc4de07ce384466bac84353986d47329ec6d018fd5bdc474d349f3ae",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "title": "Local · ~",
+        "index": 0,
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    },
+    {
+      "file": "29-finish-input.png",
+      "sha256": "308d4d84f0a7fb463d12e679f9dfb7b33898e3688b9f0c663b0dac48661e7b46",
+      "screenshot_pixels": [
+        1024,
+        678
+      ],
+      "window": {
+        "index": 0,
+        "title": "Local · ~",
+        "window_id": 38
+      },
+      "logical_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "theme": "dark",
+      "locale": "en",
+      "visually_reviewed": true
+    }
+  ]
+}

@@ -9447,6 +9447,11 @@ impl Workspace {
         self.show_tab_bar_overflow_menu
     }
 
+    #[cfg(feature = "integration_tests")]
+    pub fn is_split_launch_menu_open(&self) -> bool {
+        self.show_split_launch_menu.is_some()
+    }
+
     pub fn is_resource_center_showing(&self) -> bool {
         self.current_workspace_state.is_resource_center_open
     }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run skipped GUI acceptance against an existing, source-matched Test DMG."""
+"""Verify existing DMGs for skipped GUI acceptance or independent exploration."""
 
 import os
 from pathlib import Path
@@ -36,6 +36,29 @@ def validate(run, jobs, artifacts, paths):
         raise ValueError("App, packaging or GUI test inputs differ from the artifact workflow")
 
 
+def validate_batch_exploration(run, jobs, artifacts, source):
+    if any(run.get(key) != value for key, value in {
+        "status": "completed", "conclusion": "success", "event": "workflow_dispatch",
+        "head_branch": "main", "path": ".github/workflows/ci-batch.yml",
+    }.items()) or run.get("head_repository", {}).get("full_name") != helpers["REPO"]:
+        raise ValueError("Exploration requires a successful main CI batch")
+    if not re.fullmatch(r"[0-9a-f]{40}", source) or source != run.get("head_sha"):
+        raise ValueError("Exploration app source must equal the batch commit")
+    by_name = {job["name"]: job for job in jobs}
+    if len(by_name) != len(jobs):
+        raise ValueError("Ambiguous job names")
+    for name in (
+        "Verify Phase A release readiness", "Build bundled remote-server (Linux musl x86_64)",
+        "Prepare Test app (macOS Apple Silicon)",
+        "Sign and package Test DMG (macOS Apple Silicon)", "Verify installed DMG user flows",
+    ):
+        if by_name.get(f"test_dmg / {name}", {}).get("conclusion") != "success":
+            raise ValueError(f"Missing successful exploration prerequisite: {name}")
+    matches = [a for a in artifacts if a["name"] == "zap-test-dmg-aarch64"]
+    if len(matches) != 1 or matches[0].get("expired") is not False:
+        raise ValueError("Missing, expired or ambiguous DMG artifact")
+
+
 def main():
     run_id, source = os.environ.get("ARTIFACT_RUN_ID", ""), os.environ.get("APP_SOURCE_SHA", "")
     if (not run_id.isdecimal() or not re.fullmatch(r"[0-9a-f]{40}", source)
@@ -45,13 +68,19 @@ def main():
         raise ValueError("Main dispatch, artifact run and immutable app source required")
     run = api(f"actions/runs/{run_id}")
     jobs, artifacts = (pages(f"actions/runs/{run_id}/{key}", key) for key in ("jobs", "artifacts"))
-    validate(run, jobs, artifacts, [])
+    batch_exploration = (os.environ.get("GUI_EXPLORATION") == "true"
+                         and run.get("path") == ".github/workflows/ci-batch.yml")
+    if batch_exploration:
+        validate_batch_exploration(run, jobs, artifacts, source)
+    else:
+        validate(run, jobs, artifacts, [])
     head = run["head_sha"]
     command("git", "fetch", "--no-tags", "origin", source, head)
     command("git", "merge-base", "--is-ancestor", source, head)
-    validate(run, jobs, artifacts, command("git", "diff", "--name-only", source, head).splitlines())
+    if not batch_exploration:
+        validate(run, jobs, artifacts, command("git", "diff", "--name-only", source, head).splitlines())
     with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
-        summary.write(f"GUI only: existing DMG from run {run_id}, app/test source `{source}`. "
+        summary.write(f"GUI only: existing DMG from run {run_id}, app source `{source}`. "
                       "App and packaging are not rebuilt.\n")
 
 

@@ -6,7 +6,7 @@ on:
       scenario:
         description: Native layout scenario to verify
         type: choice
-        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form, terminal-introduction, file-manager-header, terminal-entry, file-actions, font-validation]
+        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form, terminal-introduction, file-manager-header, terminal-entry, file-actions, font-validation, pane-menu]
         default: all
 
 permissions:
@@ -168,7 +168,8 @@ jobs:
           set -euo pipefail
           tests=()
           case "$SCENARIO" in
-            all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence test_native_ssh_form_evidence test_native_ssh_form_german_evidence test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence test_native_file_manager_header_entry test_native_file_actions_evidence test_native_file_actions_german_evidence test_native_font_validation_evidence test_native_font_validation_german_evidence) ;;
+            all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence test_native_ssh_form_evidence test_native_ssh_form_german_evidence test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence test_native_file_manager_header_entry test_native_file_actions_evidence test_native_file_actions_german_evidence test_native_font_validation_evidence test_native_font_validation_german_evidence test_native_pane_menu_evidence test_native_pane_menu_german_evidence) ;;
+            pane-menu) tests=(test_native_pane_menu_evidence test_native_pane_menu_german_evidence) ;;
             font-validation) tests=(test_native_font_validation_evidence test_native_font_validation_german_evidence) ;;
             file-actions) tests=(test_native_file_actions_evidence test_native_file_actions_german_evidence) ;;
             terminal-entry) tests=(test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence test_native_file_manager_header_entry) ;;
@@ -193,6 +194,8 @@ jobs:
             case "$test_name" in
               test_native_file_manager_header_entry)
                 captures=(file-manager-header-before file-manager-header-after) ;;
+              test_native_pane_menu*)
+                captures=(pane-menu-dark-1024 pane-menu-canceled-dark-1024 pane-split-menu-dark-1024 pane-menu-shell-dark-1024 pane-menu-dark-760 pane-menu-canceled-dark-760 pane-split-menu-dark-760 pane-menu-shell-dark-760 pane-menu-light-1024 pane-menu-canceled-light-1024 pane-split-menu-light-1024 pane-menu-shell-light-1024 pane-menu-light-760 pane-menu-canceled-light-760 pane-split-menu-light-760 pane-menu-shell-light-760) ;;
               test_native_font_validation*)
                 captures=(font-valid-before font-invalid-text font-invalid-range font-escape-restored font-same-value-corrected font-shell-preserved) ;;
               test_native_file_actions*)
