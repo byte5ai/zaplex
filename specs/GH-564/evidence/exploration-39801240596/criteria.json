@@ -1,0 +1,46 @@
+{
+  "run": 39801240596,
+  "app_version": "1.2.2",
+  "source": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "cases": [
+    {
+      "id": "F08-rename-confirm",
+      "expected": "Confirm rename of ORIGINAL.txt to RENAMED.txt; visible selection and file name update; ORIGINAL.txt absent and RENAMED.txt content remains ALPHA."
+    },
+    {
+      "id": "F08-rename-cancel",
+      "expected": "Open rename on RENAMED.txt, enter CANCELED.txt, cancel; RENAMED.txt remains selected and content unchanged; CANCELED.txt absent."
+    },
+    {
+      "id": "F04-parent-selection",
+      "expected": "Open nested, observe CHILD.txt, return through visible parent navigation; nested is selected and visible in parent listing."
+    },
+    {
+      "id": "F10-create-folder",
+      "expected": "F7 creates CREATED in the current fixture directory; it appears in listing and shell confirms it is a directory."
+    },
+    {
+      "id": "F10-cancel-folder",
+      "expected": "F7 proposes NOT-CREATED; cancel returns to listing and shell confirms NOT-CREATED is absent."
+    },
+    {
+      "id": "F08-view",
+      "expected": "F3 opens RENAMED.txt and shows ALPHA; close returns to same file selection without modifying content."
+    },
+    {
+      "id": "F08-edit",
+      "expected": "F4 opens editing of RENAMED.txt, permits ALPHA to GAMMA change and explicit save; file content is independently confirmed in shell."
+    }
+  ],
+  "status": "not-run",
+  "variant": {
+    "locale": "en",
+    "theme": "dark",
+    "window": "measure from live screenshot",
+    "reduced_motion": "not tested"
+  },
+  "priority": "F2 confirm/cancel first; only proceed to independent additional cases after their before/after observations.",
+  "harness_source": "7c4af4fb13476c85936ddc9cb0bfb16e47bb14c3",
+  "observed_adjustment": "Rename confirm failed visibly; independent cancel uses unchanged ORIGINAL.txt as its source. Rename-confirm remains fail, not relaxed.",
+  "diagnostic_hypothesis": "Local guarded rename rejects symlinked parent components (/tmp on macOS). On same file with same permissions, cd -P changes only path spelling; retry via canonical CWD should succeed if this is the relevant distinction. This diagnostic does not turn original rename failure into pass."
+}
