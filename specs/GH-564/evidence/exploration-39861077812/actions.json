@@ -1,0 +1,1910 @@
+[
+  {
+    "time": "2026-10-22T21:58:28.157925+00:00",
+    "args": [
+      "type",
+      "export ZAPLEX_PANE=SOURCE; printf \"PANE:%s PID:%s\\\\n\" \"$ZAPLEX_PANE\" \"$$\"; pwd",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "result": {
+      "error": {
+        "mutation_dispatched": true,
+        "hint": "Observe the target before deciding whether to retry typing.",
+        "code": "INTERACTION_FAILED",
+        "message": "Typing failed after foreground setup may have changed focus.",
+        "retry_safe": false,
+        "details": "Typing did not return an accepted outcome."
+      },
+      "success": false,
+      "outcome": {
+        "dispatched_unit_count": 79,
+        "effect": "unverifiable",
+        "evidence": "completion_unknown",
+        "delivery_mode": "foreground",
+        "state": "indeterminate",
+        "route": "bridge",
+        "requires_fresh_observation": true,
+        "escalation": "observe_before_retry",
+        "mutation_dispatched": true,
+        "delivery_mechanism": "composite",
+        "dispatch_state": "may_have_dispatched",
+        "retry_safety": "unsafe",
+        "retry_safe": false
+      },
+      "data": null,
+      "effect": "unverifiable"
+    }
+  },
+  {
+    "time": "2026-10-22T21:58:47.324147+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "evidence": "delivery_accepted",
+        "mutation_dispatched": true,
+        "requires_fresh_observation": true,
+        "route": "bridge",
+        "state": "dispatched_unverified",
+        "dispatch_state": "dispatched",
+        "dispatched_unit_count": 3,
+        "effect": "unverifiable",
+        "retry_safety": "unsafe",
+        "delivery_mechanism": "composite",
+        "retry_safe": false,
+        "escalation": "observe_before_retry",
+        "delivery_mode": "foreground"
+      },
+      "data": {
+        "keys": [
+          "return"
+        ],
+        "count": 1,
+        "executionTime": 0.6488150358200073,
+        "deliveryMode": "foreground",
+        "totalPresses": 1
+      },
+      "effect": "unverifiable",
+      "success": true
+    }
+  },
+  {
+    "time": "2026-10-22T21:59:03.345195+00:00",
+    "args": [
+      "click",
+      "--at",
+      "353,18",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "data": {
+        "waitTime": 0,
+        "targetWindowTitle": "Local · ~",
+        "coordinateSpace": "window_relative",
+        "deliveryMode": "foreground",
+        "targetApp": "Zaplex",
+        "clickLocation": {
+          "y": 48,
+          "x": 353
+        },
+        "executionTime": 0.8940670490264893,
+        "targetPoint": {
+          "source": "coordinates",
+          "resolved": {
+            "y": 48,
+            "x": 353
+          },
+          "coordinate": {
+            "resolved": {
+              "x": 353,
+              "y": 48
+            },
+            "targetApp": "Zaplex",
+            "targetPID": 1254,
+            "input": {
+              "x": 353,
+              "y": 18
+            },
+            "targetWindow": {
+              "title": "Local · ~",
+              "windowID": 38,
+              "bounds": {
+                "height": 678,
+                "x": 0,
+                "width": 1024,
+                "y": 30
+              }
+            },
+            "coordinateSpace": "window_relative"
+          },
+          "original": {
+            "y": 18,
+            "x": 353
+          }
+        },
+        "inputCoordinates": {
+          "x": 353,
+          "y": 18
+        },
+        "screenCoordinates": {
+          "x": 353,
+          "y": 48
+        },
+        "clickType": "single",
+        "targetWindowId": 38
+      },
+      "success": true,
+      "effect": "unverifiable",
+      "outcome": {
+        "retry_safety": "unsafe",
+        "dispatch_state": "dispatched",
+        "evidence": "delivery_accepted",
+        "mutation_dispatched": true,
+        "state": "dispatched_unverified",
+        "escalation": "observe_before_retry",
+        "route": "bridge",
+        "retry_safe": false,
+        "delivery_mechanism": "global_events",
+        "delivery_mode": "foreground",
+        "effect": "unverifiable",
+        "requires_fresh_observation": true
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T21:59:20.173846+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "retry_safe": false,
+        "escalation": "observe_before_retry",
+        "dispatch_state": "dispatched",
+        "retry_safety": "unsafe",
+        "mutation_dispatched": true,
+        "requires_fresh_observation": true,
+        "evidence": "delivery_accepted",
+        "dispatched_unit_count": 3,
+        "state": "dispatched_unverified",
+        "delivery_mechanism": "composite",
+        "route": "bridge",
+        "effect": "unverifiable",
+        "delivery_mode": "foreground"
+      },
+      "data": {
+        "count": 1,
+        "executionTime": 0.623371958732605,
+        "keys": [
+          "escape"
+        ],
+        "totalPresses": 1,
+        "deliveryMode": "foreground"
+      },
+      "success": true,
+      "effect": "unverifiable"
+    }
+  },
+  {
+    "time": "2026-10-22T21:59:32.090031+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1007,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "data": {
+        "targetWindowTitle": "Local · ~",
+        "coordinateSpace": "window_relative",
+        "inputCoordinates": {
+          "y": 53,
+          "x": 1007
+        },
+        "targetApp": "Zaplex",
+        "targetPoint": {
+          "resolved": {
+            "y": 83,
+            "x": 1007
+          },
+          "original": {
+            "y": 53,
+            "x": 1007
+          },
+          "coordinate": {
+            "targetApp": "Zaplex",
+            "targetPID": 1254,
+            "coordinateSpace": "window_relative",
+            "input": {
+              "y": 53,
+              "x": 1007
+            },
+            "resolved": {
+              "y": 83,
+              "x": 1007
+            },
+            "targetWindow": {
+              "windowID": 38,
+              "title": "Local · ~",
+              "bounds": {
+                "x": 0,
+                "y": 30,
+                "width": 1024,
+                "height": 678
+              }
+            }
+          },
+          "source": "coordinates"
+        },
+        "screenCoordinates": {
+          "y": 83,
+          "x": 1007
+        },
+        "deliveryMode": "foreground",
+        "clickType": "single",
+        "waitTime": 0,
+        "executionTime": 0.91982102394104,
+        "targetWindowId": 38,
+        "clickLocation": {
+          "y": 83,
+          "x": 1007
+        }
+      },
+      "success": true,
+      "effect": "unverifiable",
+      "outcome": {
+        "delivery_mode": "foreground",
+        "effect": "unverifiable",
+        "retry_safety": "unsafe",
+        "escalation": "observe_before_retry",
+        "retry_safe": false,
+        "evidence": "delivery_accepted",
+        "requires_fresh_observation": true,
+        "delivery_mechanism": "global_events",
+        "route": "bridge",
+        "state": "dispatched_unverified",
+        "dispatch_state": "dispatched",
+        "mutation_dispatched": true
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T21:59:48.127800+00:00",
+    "args": [
+      "list",
+      "windows",
+      "--app",
+      "Zaplex",
+      "--json"
+    ],
+    "exit": 1,
+    "result": {
+      "success": false,
+      "data": null,
+      "error": {
+        "hint": "Use 'peekaboo window list'.",
+        "message": "Command 'peekaboo list' was removed in v4.",
+        "code": "INVALID_ARGUMENT"
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T21:59:54.961071+00:00",
+    "args": [
+      "window",
+      "list",
+      "--app",
+      "Zaplex",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "data": {
+        "inventory_warnings": [
+          "Window list omitted 4 non-renderable or duplicate inventory rows."
+        ],
+        "windows": [
+          {
+            "window_index": 0,
+            "is_on_screen": false,
+            "layer": 0,
+            "window_id": 43,
+            "window_title": "",
+            "observation_capability": "pixels_only",
+            "bounds": {
+              "height": 500,
+              "x": 0,
+              "y": 268,
+              "width": 500
+            },
+            "observation_capability_reason": "no_matching_accessibility_window"
+          },
+          {
+            "is_frontmost": false,
+            "window_index": 5,
+            "is_on_screen": true,
+            "is_key": true,
+            "window_id": 38,
+            "window_title": "Local · ~",
+            "layer": 0,
+            "subrole": "AXStandardWindow",
+            "observation_capability": "combined_eligible",
+            "bounds": {
+              "height": 678,
+              "x": 0,
+              "y": 30,
+              "width": 1024
+            }
+          }
+        ],
+        "target_application_info": {
+          "bundle_id": "dev.zaplex.Zaplex",
+          "pid": 1254,
+          "app_name": "Zaplex"
+        },
+        "inventory_completeness": "partial"
+      },
+      "success": true
+    }
+  },
+  {
+    "time": "2026-10-22T22:00:03.444193+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1007,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "state": "dispatched_unverified",
+        "effect": "unverifiable",
+        "mutation_dispatched": true,
+        "requires_fresh_observation": true,
+        "route": "bridge",
+        "dispatch_state": "dispatched",
+        "evidence": "delivery_accepted",
+        "delivery_mode": "foreground",
+        "retry_safety": "unsafe",
+        "escalation": "observe_before_retry",
+        "retry_safe": false,
+        "delivery_mechanism": "global_events"
+      },
+      "success": true,
+      "data": {
+        "waitTime": 0,
+        "executionTime": 0.969385027885437,
+        "coordinateSpace": "window_relative",
+        "targetPoint": {
+          "coordinate": {
+            "targetPID": 1254,
+            "coordinateSpace": "window_relative",
+            "resolved": {
+              "x": 1007,
+              "y": 83
+            },
+            "targetApp": "Zaplex",
+            "targetWindow": {
+              "title": "Local · ~",
+              "windowID": 38,
+              "bounds": {
+                "y": 30,
+                "x": 0,
+                "height": 678,
+                "width": 1024
+              }
+            },
+            "input": {
+              "x": 1007,
+              "y": 53
+            }
+          },
+          "source": "coordinates",
+          "original": {
+            "y": 53,
+            "x": 1007
+          },
+          "resolved": {
+            "y": 83,
+            "x": 1007
+          }
+        },
+        "deliveryMode": "foreground",
+        "clickLocation": {
+          "y": 83,
+          "x": 1007
+        },
+        "targetWindowId": 38,
+        "targetApp": "Zaplex",
+        "targetWindowTitle": "Local · ~",
+        "inputCoordinates": {
+          "y": 53,
+          "x": 1007
+        },
+        "clickType": "single",
+        "screenCoordinates": {
+          "y": 83,
+          "x": 1007
+        }
+      },
+      "effect": "unverifiable"
+    }
+  },
+  {
+    "time": "2026-10-22T22:00:19.667339+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "success": true,
+      "effect": "unverifiable",
+      "outcome": {
+        "delivery_mechanism": "composite",
+        "evidence": "delivery_accepted",
+        "state": "dispatched_unverified",
+        "escalation": "observe_before_retry",
+        "requires_fresh_observation": true,
+        "retry_safe": false,
+        "retry_safety": "unsafe",
+        "mutation_dispatched": true,
+        "delivery_mode": "foreground",
+        "route": "bridge",
+        "effect": "unverifiable",
+        "dispatch_state": "dispatched",
+        "dispatched_unit_count": 3
+      },
+      "data": {
+        "keys": [
+          "escape"
+        ],
+        "deliveryMode": "foreground",
+        "totalPresses": 1,
+        "executionTime": 0.6282680034637451,
+        "count": 1
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:00:33.344564+00:00",
+    "args": [
+      "type",
+      "printf \"CANCEL:%s PID:%s\\\\n\" \"$ZAPLEX_PANE\" \"$$\"",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "result": {
+      "error": {
+        "code": "INTERACTION_FAILED",
+        "retry_safe": false,
+        "message": "Typing failed after foreground setup may have changed focus.",
+        "details": "Typing did not return an accepted outcome.",
+        "hint": "Observe the target before deciding whether to retry typing.",
+        "mutation_dispatched": true
+      },
+      "success": false,
+      "effect": "unverifiable",
+      "outcome": {
+        "escalation": "observe_before_retry",
+        "retry_safety": "unsafe",
+        "delivery_mechanism": "composite",
+        "requires_fresh_observation": true,
+        "state": "indeterminate",
+        "delivery_mode": "foreground",
+        "mutation_dispatched": true,
+        "retry_safe": false,
+        "dispatch_state": "may_have_dispatched",
+        "evidence": "completion_unknown",
+        "route": "bridge",
+        "dispatched_unit_count": 49,
+        "effect": "unverifiable"
+      },
+      "data": null
+    }
+  },
+  {
+    "time": "2026-10-22T22:00:54.367472+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "success": true,
+      "data": {
+        "count": 1,
+        "totalPresses": 1,
+        "deliveryMode": "foreground",
+        "executionTime": 0.6465989351272583,
+        "keys": [
+          "return"
+        ]
+      },
+      "effect": "unverifiable",
+      "outcome": {
+        "mutation_dispatched": true,
+        "retry_safe": false,
+        "delivery_mechanism": "composite",
+        "escalation": "observe_before_retry",
+        "state": "dispatched_unverified",
+        "route": "bridge",
+        "requires_fresh_observation": true,
+        "dispatch_state": "dispatched",
+        "effect": "unverifiable",
+        "evidence": "delivery_accepted",
+        "retry_safety": "unsafe",
+        "dispatched_unit_count": 3,
+        "delivery_mode": "foreground"
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:01:07.952021+00:00",
+    "args": [
+      "click",
+      "--at",
+      "880,86",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "effect": "unverifiable",
+      "data": {
+        "executionTime": 0.8261499404907227,
+        "waitTime": 0,
+        "screenCoordinates": {
+          "x": 880,
+          "y": 116
+        },
+        "deliveryMode": "foreground",
+        "clickType": "single",
+        "clickLocation": {
+          "x": 880,
+          "y": 116
+        },
+        "coordinateSpace": "window_relative",
+        "targetWindowId": 38,
+        "targetWindowTitle": "Local · ~",
+        "inputCoordinates": {
+          "x": 880,
+          "y": 86
+        },
+        "targetPoint": {
+          "source": "coordinates",
+          "original": {
+            "x": 880,
+            "y": 86
+          },
+          "coordinate": {
+            "targetApp": "Zaplex",
+            "resolved": {
+              "x": 880,
+              "y": 116
+            },
+            "targetWindow": {
+              "bounds": {
+                "y": 30,
+                "x": 0,
+                "width": 1024,
+                "height": 678
+              },
+              "title": "Local · ~",
+              "windowID": 38
+            },
+            "targetPID": 1254,
+            "coordinateSpace": "window_relative",
+            "input": {
+              "x": 880,
+              "y": 86
+            }
+          },
+          "resolved": {
+            "x": 880,
+            "y": 116
+          }
+        },
+        "targetApp": "Zaplex"
+      },
+      "success": true,
+      "outcome": {
+        "delivery_mode": "foreground",
+        "escalation": "observe_before_retry",
+        "mutation_dispatched": true,
+        "retry_safety": "unsafe",
+        "requires_fresh_observation": true,
+        "dispatch_state": "dispatched",
+        "delivery_mechanism": "global_events",
+        "evidence": "delivery_accepted",
+        "retry_safe": false,
+        "route": "bridge",
+        "effect": "unverifiable",
+        "state": "dispatched_unverified"
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:01:25.687857+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "success": true,
+      "effect": "unverifiable",
+      "outcome": {
+        "evidence": "delivery_accepted",
+        "state": "dispatched_unverified",
+        "retry_safe": false,
+        "dispatched_unit_count": 3,
+        "delivery_mode": "foreground",
+        "escalation": "observe_before_retry",
+        "delivery_mechanism": "composite",
+        "mutation_dispatched": true,
+        "retry_safety": "unsafe",
+        "route": "bridge",
+        "requires_fresh_observation": true,
+        "effect": "unverifiable",
+        "dispatch_state": "dispatched"
+      },
+      "data": {
+        "keys": [
+          "escape"
+        ],
+        "deliveryMode": "foreground",
+        "count": 1,
+        "totalPresses": 1,
+        "executionTime": 0.6505680084228516
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:01:39.895392+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1007,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "mutation_dispatched": true,
+        "evidence": "delivery_accepted",
+        "state": "dispatched_unverified",
+        "effect": "unverifiable",
+        "route": "bridge",
+        "delivery_mode": "foreground",
+        "dispatch_state": "dispatched",
+        "retry_safety": "unsafe",
+        "retry_safe": false,
+        "delivery_mechanism": "global_events",
+        "requires_fresh_observation": true,
+        "escalation": "observe_before_retry"
+      },
+      "data": {
+        "coordinateSpace": "window_relative",
+        "clickLocation": {
+          "y": 83,
+          "x": 1007
+        },
+        "targetApp": "Zaplex",
+        "waitTime": 0,
+        "deliveryMode": "foreground",
+        "clickType": "single",
+        "inputCoordinates": {
+          "y": 53,
+          "x": 1007
+        },
+        "executionTime": 0.995771050453186,
+        "targetPoint": {
+          "source": "coordinates",
+          "original": {
+            "y": 53,
+            "x": 1007
+          },
+          "coordinate": {
+            "input": {
+              "y": 53,
+              "x": 1007
+            },
+            "targetApp": "Zaplex",
+            "coordinateSpace": "window_relative",
+            "resolved": {
+              "y": 83,
+              "x": 1007
+            },
+            "targetWindow": {
+              "bounds": {
+                "x": 0,
+                "y": 30,
+                "width": 1024,
+                "height": 678
+              },
+              "title": "Local · ~",
+              "windowID": 38
+            },
+            "targetPID": 1254
+          },
+          "resolved": {
+            "y": 83,
+            "x": 1007
+          }
+        },
+        "screenCoordinates": {
+          "y": 83,
+          "x": 1007
+        },
+        "targetWindowTitle": "Local · ~",
+        "targetWindowId": 38
+      },
+      "success": true,
+      "effect": "unverifiable"
+    }
+  },
+  {
+    "time": "2026-10-22T22:02:01.130536+00:00",
+    "args": [
+      "click",
+      "--at",
+      "880,86",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "data": {
+        "targetWindowTitle": "Local · ~",
+        "inputCoordinates": {
+          "y": 86,
+          "x": 880
+        },
+        "coordinateSpace": "window_relative",
+        "screenCoordinates": {
+          "y": 116,
+          "x": 880
+        },
+        "executionTime": 1.1051809787750244,
+        "deliveryMode": "foreground",
+        "clickLocation": {
+          "y": 116,
+          "x": 880
+        },
+        "targetWindowId": 38,
+        "targetPoint": {
+          "coordinate": {
+            "targetPID": 1254,
+            "coordinateSpace": "window_relative",
+            "input": {
+              "x": 880,
+              "y": 86
+            },
+            "resolved": {
+              "x": 880,
+              "y": 116
+            },
+            "targetWindow": {
+              "title": "Local · ~",
+              "windowID": 38,
+              "bounds": {
+                "x": 0,
+                "y": 30,
+                "height": 678,
+                "width": 1024
+              }
+            },
+            "targetApp": "Zaplex"
+          },
+          "original": {
+            "x": 880,
+            "y": 86
+          },
+          "source": "coordinates",
+          "resolved": {
+            "x": 880,
+            "y": 116
+          }
+        },
+        "clickType": "single",
+        "waitTime": 0,
+        "targetApp": "Zaplex"
+      },
+      "success": true,
+      "effect": "unverifiable",
+      "outcome": {
+        "delivery_mode": "foreground",
+        "evidence": "delivery_accepted",
+        "escalation": "observe_before_retry",
+        "state": "dispatched_unverified",
+        "retry_safe": false,
+        "delivery_mechanism": "global_events",
+        "requires_fresh_observation": true,
+        "effect": "unverifiable",
+        "retry_safety": "unsafe",
+        "route": "bridge",
+        "dispatch_state": "dispatched",
+        "mutation_dispatched": true
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:02:18.475977+00:00",
+    "args": [
+      "click",
+      "--at",
+      "305,574",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "state": "dispatched_unverified",
+        "dispatch_state": "dispatched",
+        "retry_safe": false,
+        "retry_safety": "unsafe",
+        "evidence": "delivery_accepted",
+        "route": "bridge",
+        "effect": "unverifiable",
+        "delivery_mode": "foreground",
+        "requires_fresh_observation": true,
+        "delivery_mechanism": "global_events",
+        "escalation": "observe_before_retry",
+        "mutation_dispatched": true
+      },
+      "data": {
+        "executionTime": 0.8658889532089233,
+        "deliveryMode": "foreground",
+        "clickType": "single",
+        "clickLocation": {
+          "x": 305,
+          "y": 604
+        },
+        "targetApp": "Zaplex",
+        "waitTime": 0,
+        "screenCoordinates": {
+          "y": 604,
+          "x": 305
+        },
+        "targetWindowId": 38,
+        "targetWindowTitle": "Local · ~",
+        "targetPoint": {
+          "original": {
+            "x": 305,
+            "y": 574
+          },
+          "source": "coordinates",
+          "coordinate": {
+            "targetWindow": {
+              "title": "Local · ~",
+              "windowID": 38,
+              "bounds": {
+                "width": 1024,
+                "x": 0,
+                "height": 678,
+                "y": 30
+              }
+            },
+            "targetApp": "Zaplex",
+            "input": {
+              "y": 574,
+              "x": 305
+            },
+            "targetPID": 1254,
+            "resolved": {
+              "y": 604,
+              "x": 305
+            },
+            "coordinateSpace": "window_relative"
+          },
+          "resolved": {
+            "x": 305,
+            "y": 604
+          }
+        },
+        "coordinateSpace": "window_relative",
+        "inputCoordinates": {
+          "x": 305,
+          "y": 574
+        }
+      },
+      "effect": "unverifiable",
+      "success": true
+    }
+  },
+  {
+    "time": "2026-10-22T22:02:35.403904+00:00",
+    "args": [
+      "type",
+      "export ZAPLEX_PANE=RIGHT; cd /tmp; printf \"%s PID:%s\\\\n\" \"$ZAPLEX_PANE\" \"$$\"; pwd",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "result": {
+      "success": false,
+      "data": null,
+      "error": {
+        "message": "Typing failed after foreground setup may have changed focus.",
+        "retry_safe": false,
+        "code": "INTERACTION_FAILED",
+        "details": "Typing did not return an accepted outcome.",
+        "hint": "Observe the target before deciding whether to retry typing.",
+        "mutation_dispatched": true
+      },
+      "effect": "unverifiable",
+      "outcome": {
+        "mutation_dispatched": true,
+        "retry_safety": "unsafe",
+        "escalation": "observe_before_retry",
+        "dispatched_unit_count": 82,
+        "dispatch_state": "may_have_dispatched",
+        "effect": "unverifiable",
+        "delivery_mechanism": "composite",
+        "route": "bridge",
+        "retry_safe": false,
+        "delivery_mode": "foreground",
+        "requires_fresh_observation": true,
+        "state": "indeterminate",
+        "evidence": "completion_unknown"
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:02:48.733580+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "dispatched_unit_count": 3,
+        "retry_safe": false,
+        "dispatch_state": "dispatched",
+        "effect": "unverifiable",
+        "evidence": "delivery_accepted",
+        "delivery_mechanism": "composite",
+        "escalation": "observe_before_retry",
+        "state": "dispatched_unverified",
+        "mutation_dispatched": true,
+        "retry_safety": "unsafe",
+        "delivery_mode": "foreground",
+        "route": "bridge",
+        "requires_fresh_observation": true
+      },
+      "data": {
+        "keys": [
+          "return"
+        ],
+        "count": 1,
+        "totalPresses": 1,
+        "deliveryMode": "foreground",
+        "executionTime": 0.6574519872665405
+      },
+      "success": true,
+      "effect": "unverifiable"
+    }
+  },
+  {
+    "time": "2026-10-22T22:03:13.451552+00:00",
+    "args": [
+      "click",
+      "--at",
+      "982,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "requires_fresh_observation": true,
+        "state": "dispatched_unverified",
+        "route": "bridge",
+        "delivery_mode": "foreground",
+        "mutation_dispatched": true,
+        "evidence": "delivery_accepted",
+        "retry_safe": false,
+        "delivery_mechanism": "global_events",
+        "dispatch_state": "dispatched",
+        "retry_safety": "unsafe",
+        "escalation": "observe_before_retry",
+        "effect": "unverifiable"
+      },
+      "success": true,
+      "effect": "unverifiable",
+      "data": {
+        "coordinateSpace": "window_relative",
+        "waitTime": 0,
+        "executionTime": 0.8676960468292236,
+        "clickLocation": {
+          "x": 982,
+          "y": 83
+        },
+        "targetWindowId": 38,
+        "inputCoordinates": {
+          "y": 53,
+          "x": 982
+        },
+        "deliveryMode": "foreground",
+        "clickType": "single",
+        "targetPoint": {
+          "coordinate": {
+            "resolved": {
+              "x": 982,
+              "y": 83
+            },
+            "targetWindow": {
+              "title": "Local · tmp",
+              "bounds": {
+                "width": 1024,
+                "x": 0,
+                "y": 30,
+                "height": 678
+              },
+              "windowID": 38
+            },
+            "coordinateSpace": "window_relative",
+            "targetApp": "Zaplex",
+            "targetPID": 1254,
+            "input": {
+              "x": 982,
+              "y": 53
+            }
+          },
+          "source": "coordinates",
+          "resolved": {
+            "x": 982,
+            "y": 83
+          },
+          "original": {
+            "x": 982,
+            "y": 53
+          }
+        },
+        "screenCoordinates": {
+          "x": 982,
+          "y": 83
+        },
+        "targetWindowTitle": "Local · tmp",
+        "targetApp": "Zaplex"
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:03:32.048310+00:00",
+    "args": [
+      "click",
+      "--at",
+      "878,109",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "retry_safe": false,
+        "evidence": "delivery_accepted",
+        "state": "dispatched_unverified",
+        "escalation": "observe_before_retry",
+        "requires_fresh_observation": true,
+        "delivery_mechanism": "global_events",
+        "dispatch_state": "dispatched",
+        "effect": "unverifiable",
+        "route": "bridge",
+        "delivery_mode": "foreground",
+        "retry_safety": "unsafe",
+        "mutation_dispatched": true
+      },
+      "data": {
+        "inputCoordinates": {
+          "y": 109,
+          "x": 878
+        },
+        "deliveryMode": "foreground",
+        "screenCoordinates": {
+          "y": 139,
+          "x": 878
+        },
+        "targetWindowId": 38,
+        "executionTime": 0.8751460313796997,
+        "clickLocation": {
+          "x": 878,
+          "y": 139
+        },
+        "targetApp": "Zaplex",
+        "targetPoint": {
+          "resolved": {
+            "x": 878,
+            "y": 139
+          },
+          "coordinate": {
+            "targetWindow": {
+              "windowID": 38,
+              "title": "Local · tmp",
+              "bounds": {
+                "y": 30,
+                "x": 0,
+                "width": 1024,
+                "height": 678
+              }
+            },
+            "coordinateSpace": "window_relative",
+            "input": {
+              "y": 109,
+              "x": 878
+            },
+            "targetPID": 1254,
+            "targetApp": "Zaplex",
+            "resolved": {
+              "y": 139,
+              "x": 878
+            }
+          },
+          "original": {
+            "x": 878,
+            "y": 109
+          },
+          "source": "coordinates"
+        },
+        "clickType": "single",
+        "waitTime": 0,
+        "targetWindowTitle": "Local · tmp",
+        "coordinateSpace": "window_relative"
+      },
+      "effect": "unverifiable",
+      "success": true
+    }
+  },
+  {
+    "time": "2026-10-22T22:03:49.229854+00:00",
+    "args": [
+      "click",
+      "--at",
+      "687,574",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "effect": "unverifiable",
+      "success": true,
+      "outcome": {
+        "delivery_mechanism": "global_events",
+        "retry_safety": "unsafe",
+        "evidence": "delivery_accepted",
+        "dispatch_state": "dispatched",
+        "route": "bridge",
+        "delivery_mode": "foreground",
+        "retry_safe": false,
+        "state": "dispatched_unverified",
+        "escalation": "observe_before_retry",
+        "requires_fresh_observation": true,
+        "mutation_dispatched": true,
+        "effect": "unverifiable"
+      },
+      "data": {
+        "waitTime": 0,
+        "inputCoordinates": {
+          "x": 687,
+          "y": 574
+        },
+        "screenCoordinates": {
+          "x": 687,
+          "y": 604
+        },
+        "clickType": "single",
+        "targetWindowTitle": "Local · tmp",
+        "executionTime": 0.8686199188232422,
+        "targetApp": "Zaplex",
+        "coordinateSpace": "window_relative",
+        "deliveryMode": "foreground",
+        "clickLocation": {
+          "y": 604,
+          "x": 687
+        },
+        "targetWindowId": 38,
+        "targetPoint": {
+          "source": "coordinates",
+          "original": {
+            "y": 574,
+            "x": 687
+          },
+          "resolved": {
+            "y": 604,
+            "x": 687
+          },
+          "coordinate": {
+            "targetWindow": {
+              "bounds": {
+                "y": 30,
+                "width": 1024,
+                "height": 678,
+                "x": 0
+              },
+              "windowID": 38,
+              "title": "Local · tmp"
+            },
+            "targetPID": 1254,
+            "targetApp": "Zaplex",
+            "input": {
+              "y": 574,
+              "x": 687
+            },
+            "resolved": {
+              "y": 604,
+              "x": 687
+            },
+            "coordinateSpace": "window_relative"
+          }
+        }
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:04:07.278334+00:00",
+    "args": [
+      "type",
+      "export ZAPLEX_PANE=DOWN; printf \"%s PID:%s\\\\n\" \"$ZAPLEX_PANE\" \"$$\"; pwd",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "result": {
+      "outcome": {
+        "evidence": "completion_unknown",
+        "state": "indeterminate",
+        "route": "bridge",
+        "delivery_mechanism": "composite",
+        "effect": "unverifiable",
+        "delivery_mode": "foreground",
+        "escalation": "observe_before_retry",
+        "retry_safety": "unsafe",
+        "retry_safe": false,
+        "requires_fresh_observation": true,
+        "dispatched_unit_count": 72,
+        "dispatch_state": "may_have_dispatched",
+        "mutation_dispatched": true
+      },
+      "effect": "unverifiable",
+      "success": false,
+      "data": null,
+      "error": {
+        "details": "Typing did not return an accepted outcome.",
+        "retry_safe": false,
+        "mutation_dispatched": true,
+        "message": "Typing failed after foreground setup may have changed focus.",
+        "code": "INTERACTION_FAILED",
+        "hint": "Observe the target before deciding whether to retry typing."
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:04:20.972466+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "retry_safe": false,
+        "evidence": "delivery_accepted",
+        "mutation_dispatched": true,
+        "escalation": "observe_before_retry",
+        "requires_fresh_observation": true,
+        "dispatched_unit_count": 3,
+        "effect": "unverifiable",
+        "delivery_mechanism": "composite",
+        "retry_safety": "unsafe",
+        "dispatch_state": "dispatched",
+        "delivery_mode": "foreground",
+        "state": "dispatched_unverified",
+        "route": "bridge"
+      },
+      "effect": "unverifiable",
+      "success": true,
+      "data": {
+        "executionTime": 0.660925030708313,
+        "totalPresses": 1,
+        "keys": [
+          "return"
+        ],
+        "deliveryMode": "foreground",
+        "count": 1
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:04:35.602384+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1007,374",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "effect": "unverifiable",
+      "success": true,
+      "outcome": {
+        "retry_safety": "unsafe",
+        "requires_fresh_observation": true,
+        "dispatch_state": "dispatched",
+        "route": "bridge",
+        "effect": "unverifiable",
+        "escalation": "observe_before_retry",
+        "delivery_mechanism": "global_events",
+        "mutation_dispatched": true,
+        "retry_safe": false,
+        "delivery_mode": "foreground",
+        "evidence": "delivery_accepted",
+        "state": "dispatched_unverified"
+      },
+      "data": {
+        "targetWindowId": 38,
+        "targetWindowTitle": "Local · /tmp · bf2fd2fa",
+        "inputCoordinates": {
+          "x": 1007,
+          "y": 374
+        },
+        "screenCoordinates": {
+          "x": 1007,
+          "y": 404
+        },
+        "targetPoint": {
+          "source": "coordinates",
+          "original": {
+            "x": 1007,
+            "y": 374
+          },
+          "coordinate": {
+            "coordinateSpace": "window_relative",
+            "input": {
+              "x": 1007,
+              "y": 374
+            },
+            "targetWindow": {
+              "bounds": {
+                "height": 678,
+                "x": 0,
+                "width": 1024,
+                "y": 30
+              },
+              "windowID": 38,
+              "title": "Local · /tmp · bf2fd2fa"
+            },
+            "resolved": {
+              "x": 1007,
+              "y": 404
+            },
+            "targetApp": "Zaplex",
+            "targetPID": 1254
+          },
+          "resolved": {
+            "x": 1007,
+            "y": 404
+          }
+        },
+        "deliveryMode": "foreground",
+        "clickType": "single",
+        "clickLocation": {
+          "x": 1007,
+          "y": 404
+        },
+        "targetApp": "Zaplex",
+        "executionTime": 0.9698290824890137,
+        "waitTime": 0,
+        "coordinateSpace": "window_relative"
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:04:54.192807+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1007,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "retry_safe": false,
+        "evidence": "delivery_accepted",
+        "dispatch_state": "dispatched",
+        "requires_fresh_observation": true,
+        "delivery_mode": "foreground",
+        "escalation": "observe_before_retry",
+        "mutation_dispatched": true,
+        "state": "dispatched_unverified",
+        "effect": "unverifiable",
+        "route": "bridge",
+        "delivery_mechanism": "global_events",
+        "retry_safety": "unsafe"
+      },
+      "effect": "unverifiable",
+      "success": true,
+      "data": {
+        "waitTime": 0,
+        "targetWindowTitle": "Local · tmp",
+        "screenCoordinates": {
+          "y": 83,
+          "x": 1007
+        },
+        "deliveryMode": "foreground",
+        "inputCoordinates": {
+          "y": 53,
+          "x": 1007
+        },
+        "executionTime": 0.9810099601745605,
+        "targetPoint": {
+          "resolved": {
+            "y": 83,
+            "x": 1007
+          },
+          "source": "coordinates",
+          "coordinate": {
+            "coordinateSpace": "window_relative",
+            "targetWindow": {
+              "windowID": 38,
+              "title": "Local · tmp",
+              "bounds": {
+                "height": 678,
+                "y": 30,
+                "x": 0,
+                "width": 1024
+              }
+            },
+            "targetPID": 1254,
+            "resolved": {
+              "x": 1007,
+              "y": 83
+            },
+            "input": {
+              "x": 1007,
+              "y": 53
+            },
+            "targetApp": "Zaplex"
+          },
+          "original": {
+            "y": 53,
+            "x": 1007
+          }
+        },
+        "coordinateSpace": "window_relative",
+        "clickType": "single",
+        "targetWindowId": 38,
+        "clickLocation": {
+          "y": 83,
+          "x": 1007
+        },
+        "targetApp": "Zaplex"
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:05:08.088953+00:00",
+    "args": [
+      "type",
+      "test \"$ZAPLEX_PANE\" = SOURCE && printf \"SOURCE-RETURN-PASS PID:%s\\\\n\" \"$$\"; pwd",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "result": {
+      "effect": "unverifiable",
+      "data": null,
+      "error": {
+        "code": "INTERACTION_FAILED",
+        "message": "Typing failed after foreground setup may have changed focus.",
+        "details": "Typing did not return an accepted outcome.",
+        "retry_safe": false,
+        "mutation_dispatched": true,
+        "hint": "Observe the target before deciding whether to retry typing."
+      },
+      "outcome": {
+        "dispatch_state": "may_have_dispatched",
+        "delivery_mechanism": "composite",
+        "dispatched_unit_count": 80,
+        "mutation_dispatched": true,
+        "effect": "unverifiable",
+        "retry_safe": false,
+        "evidence": "completion_unknown",
+        "escalation": "observe_before_retry",
+        "delivery_mode": "foreground",
+        "retry_safety": "unsafe",
+        "route": "bridge",
+        "requires_fresh_observation": true,
+        "state": "indeterminate"
+      },
+      "success": false
+    }
+  },
+  {
+    "time": "2026-10-22T22:05:21.663475+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "outcome": {
+        "dispatch_state": "dispatched",
+        "retry_safe": false,
+        "dispatched_unit_count": 3,
+        "requires_fresh_observation": true,
+        "route": "bridge",
+        "mutation_dispatched": true,
+        "escalation": "observe_before_retry",
+        "delivery_mode": "foreground",
+        "state": "dispatched_unverified",
+        "effect": "unverifiable",
+        "evidence": "delivery_accepted",
+        "retry_safety": "unsafe",
+        "delivery_mechanism": "composite"
+      },
+      "success": true,
+      "effect": "unverifiable",
+      "data": {
+        "deliveryMode": "foreground",
+        "executionTime": 0.6663340330123901,
+        "totalPresses": 1,
+        "keys": [
+          "return"
+        ],
+        "count": 1
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:05:34.477711+00:00",
+    "args": [
+      "click",
+      "--at",
+      "982,53",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "success": true,
+      "data": {
+        "clickType": "single",
+        "waitTime": 0,
+        "clickLocation": {
+          "x": 982,
+          "y": 83
+        },
+        "targetWindowId": 38,
+        "screenCoordinates": {
+          "y": 83,
+          "x": 982
+        },
+        "targetWindowTitle": "Local · ~",
+        "executionTime": 0.8956550359725952,
+        "targetApp": "Zaplex",
+        "coordinateSpace": "window_relative",
+        "targetPoint": {
+          "original": {
+            "x": 982,
+            "y": 53
+          },
+          "source": "coordinates",
+          "resolved": {
+            "x": 982,
+            "y": 83
+          },
+          "coordinate": {
+            "input": {
+              "y": 53,
+              "x": 982
+            },
+            "targetApp": "Zaplex",
+            "targetPID": 1254,
+            "resolved": {
+              "y": 83,
+              "x": 982
+            },
+            "coordinateSpace": "window_relative",
+            "targetWindow": {
+              "windowID": 38,
+              "bounds": {
+                "y": 30,
+                "height": 678,
+                "width": 1024,
+                "x": 0
+              },
+              "title": "Local · ~"
+            }
+          }
+        },
+        "inputCoordinates": {
+          "y": 53,
+          "x": 982
+        },
+        "deliveryMode": "foreground"
+      },
+      "effect": "unverifiable",
+      "outcome": {
+        "evidence": "delivery_accepted",
+        "retry_safe": false,
+        "delivery_mechanism": "global_events",
+        "route": "bridge",
+        "retry_safety": "unsafe",
+        "delivery_mode": "foreground",
+        "state": "dispatched_unverified",
+        "effect": "unverifiable",
+        "dispatch_state": "dispatched",
+        "escalation": "observe_before_retry",
+        "requires_fresh_observation": true,
+        "mutation_dispatched": true
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:05:56.728251+00:00",
+    "args": [
+      "press",
+      "f10",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "data": {
+        "keys": [
+          "f10"
+        ],
+        "executionTime": 0.6408109664916992,
+        "count": 1,
+        "totalPresses": 1,
+        "deliveryMode": "foreground"
+      },
+      "effect": "unverifiable",
+      "success": true,
+      "outcome": {
+        "dispatched_unit_count": 3,
+        "dispatch_state": "dispatched",
+        "delivery_mode": "foreground",
+        "escalation": "observe_before_retry",
+        "mutation_dispatched": true,
+        "retry_safe": false,
+        "effect": "unverifiable",
+        "evidence": "delivery_accepted",
+        "route": "bridge",
+        "retry_safety": "unsafe",
+        "state": "dispatched_unverified",
+        "delivery_mechanism": "composite",
+        "requires_fresh_observation": true
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:06:13.359537+00:00",
+    "args": [
+      "type",
+      "test \"$ZAPLEX_PANE\" = SOURCE && printf \"PANES-RETURN-PASS PID:%s\\\\n\" \"$$\"; touch \"$(cat /tmp/zaplex-exploration-path)/finished\"",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "result": {
+      "data": null,
+      "effect": "unverifiable",
+      "success": false,
+      "outcome": {
+        "retry_safe": false,
+        "delivery_mode": "foreground",
+        "effect": "unverifiable",
+        "mutation_dispatched": true,
+        "state": "indeterminate",
+        "delivery_mechanism": "composite",
+        "dispatched_unit_count": 128,
+        "dispatch_state": "may_have_dispatched",
+        "retry_safety": "unsafe",
+        "evidence": "completion_unknown",
+        "route": "bridge",
+        "requires_fresh_observation": true,
+        "escalation": "observe_before_retry"
+      },
+      "error": {
+        "retry_safe": false,
+        "message": "Typing failed after foreground setup may have changed focus.",
+        "code": "INTERACTION_FAILED",
+        "mutation_dispatched": true,
+        "hint": "Observe the target before deciding whether to retry typing.",
+        "details": "Typing did not return an accepted outcome."
+      }
+    }
+  },
+  {
+    "time": "2026-10-22T22:06:25.797049+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "38",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "result": {
+      "success": true,
+      "outcome": {
+        "dispatched_unit_count": 3,
+        "dispatch_state": "dispatched",
+        "retry_safety": "unsafe",
+        "escalation": "observe_before_retry",
+        "evidence": "delivery_accepted",
+        "state": "dispatched_unverified",
+        "effect": "unverifiable",
+        "mutation_dispatched": true,
+        "delivery_mechanism": "composite",
+        "requires_fresh_observation": true,
+        "route": "bridge",
+        "retry_safe": false,
+        "delivery_mode": "foreground"
+      },
+      "data": {
+        "totalPresses": 1,
+        "deliveryMode": "foreground",
+        "keys": [
+          "return"
+        ],
+        "executionTime": 0.6430399417877197,
+        "count": 1
+      },
+      "effect": "unverifiable"
+    }
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "task": "X02 local project across panes, plus L01/L05 and focused header #604",
+  "source_sha": "cadcb19130bbe0630f39bdd61b4e183ff154981a",
+  "artifact_run": "39295080993",
+  "expectations": [
+    "Using only visible UI, discover tab and directional split menus.",
+    "Menu opening and cancellation create no unwanted pane and preserve original shell marker.",
+    "Created panes execute independent commands and retain source shell state.",
+    "Pane headers, cwd and tab titles identify the active context.",
+    "File-manager header behavior is observed with explicit foreground and pane focus.",
+    "Record actual geometry, theme, locale and every visible before/after state."
+  ],
+  "status": "not-run",
+  "safety": "Only synthetic local files, no account login or remote credentials."
+}
