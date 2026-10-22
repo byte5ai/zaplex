@@ -1,0 +1,117 @@
+{
+  "source_commit": "79efc54d74d7be4925fb660ec599aa86c1e9188a",
+  "version": "1.2.15",
+  "platform": "Ubuntu 24.04 / x86_64",
+  "display": "Xvfb, Vulkan llvmpipe",
+  "shell": "Bash 5.2.21",
+  "source_kind": "local integration binary, not a DMG",
+  "result": "Both named tests exited 0; no auxiliary dismiss click",
+  "visually_reviewed_png_count": 10,
+  "files": [
+    {
+      "path": "en/recording.log",
+      "sha256": "7db42641592ec690f0088611e518d5cd2f384e63a62537e77368b8c3eb270519",
+      "locale": "en",
+      "test": "test_native_terminal_introduction_evidence",
+      "test_started_local": "2026-10-22T16-25-33"
+    },
+    {
+      "path": "en/terminal-introduction-dark-1024.png",
+      "sha256": "619bbd13ccd9f1ea62750bb5edde9040762a5ffbb1f5a6be2aa2a5739770ef55",
+      "locale": "en",
+      "test": "test_native_terminal_introduction_evidence",
+      "test_started_local": "2026-10-22T16-25-33",
+      "width": 1024,
+      "height": 640
+    },
+    {
+      "path": "en/terminal-introduction-dark-760.png",
+      "sha256": "586f25a898849fa1eeb280b425b31d0a439c5772d1aef3953238027dfa79ccd6",
+      "locale": "en",
+      "test": "test_native_terminal_introduction_evidence",
+      "test_started_local": "2026-10-22T16-25-33",
+      "width": 760,
+      "height": 640
+    },
+    {
+      "path": "en/terminal-introduction-dismissed.png",
+      "sha256": "e96776a4e9e28d0c66bb84a5b7168c9c3a7ea1a6a2b98dc40182d90fc7e3ac9e",
+      "locale": "en",
+      "test": "test_native_terminal_introduction_evidence",
+      "test_started_local": "2026-10-22T16-25-33",
+      "width": 760,
+      "height": 640
+    },
+    {
+      "path": "en/terminal-introduction-light-1024.png",
+      "sha256": "1dc02d8485b26251472cbd5314cf6aff3bc58624b509514cce22a27dacd1f7d9",
+      "locale": "en",
+      "test": "test_native_terminal_introduction_evidence",
+      "test_started_local": "2026-10-22T16-25-33",
+      "width": 1024,
+      "height": 640
+    },
+    {
+      "path": "en/terminal-introduction-light-760.png",
+      "sha256": "c7d211639853b822085ab29bac92a647639e47c48a62edc74cafa22e9d69b863",
+      "locale": "en",
+      "test": "test_native_terminal_introduction_evidence",
+      "test_started_local": "2026-10-22T16-25-33",
+      "width": 760,
+      "height": 640
+    },
+    {
+      "path": "de/recording.log",
+      "sha256": "49aa28ac12a670b21886171b9900b71a15eb9e0bea779e482e9de0caab8c417f",
+      "locale": "de",
+      "test": "test_native_terminal_introduction_german_evidence",
+      "test_started_local": "2026-10-22T16-26-42"
+    },
+    {
+      "path": "de/terminal-introduction-dark-1024.png",
+      "sha256": "7fbd0c5bade6f50e6230499c21f1411dfa41680dfb1ecf03d00cc1e2fecc6fe0",
+      "locale": "de",
+      "test": "test_native_terminal_introduction_german_evidence",
+      "test_started_local": "2026-10-22T16-26-42",
+      "width": 1024,
+      "height": 640
+    },
+    {
+      "path": "de/terminal-introduction-dark-760.png",
+      "sha256": "2776689e30c6d78640de82a2a052da1138e0e04999f1b737ce02dbb014726e02",
+      "locale": "de",
+      "test": "test_native_terminal_introduction_german_evidence",
+      "test_started_local": "2026-10-22T16-26-42",
+      "width": 760,
+      "height": 640
+    },
+    {
+      "path": "de/terminal-introduction-dismissed.png",
+      "sha256": "7044f513068a7a8951558500a44c1423f80522fb380cc1623496649c19363423",
+      "locale": "de",
+      "test": "test_native_terminal_introduction_german_evidence",
+      "test_started_local": "2026-10-22T16-26-42",
+      "width": 760,
+      "height": 640
+    },
+    {
+      "path": "de/terminal-introduction-light-1024.png",
+      "sha256": "0af8f9e13750ebf9c6ddef31a83be6ca4c94774174c435159ffff459889172c7",
+      "locale": "de",
+      "test": "test_native_terminal_introduction_german_evidence",
+      "test_started_local": "2026-10-22T16-26-42",
+      "width": 1024,
+      "height": 640
+    },
+    {
+      "path": "de/terminal-introduction-light-760.png",
+      "sha256": "394a6cdb8bf983bc8ca5f1f9cecbccffdea00fad2df814eaf39a5b8ec48a894c",
+      "locale": "de",
+      "test": "test_native_terminal_introduction_german_evidence",
+      "test_started_local": "2026-10-22T16-26-42",
+      "width": 760,
+      "height": 640
+    }
+  ],
+  "timezone": "Europe/Berlin"
+}

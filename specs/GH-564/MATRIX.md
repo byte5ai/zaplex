@@ -24,7 +24,7 @@ bestätigt die Korrekturen #593/#594/#595 in zwei nativen Fällen (DE/EN), mit
 22 visuell geprüften Originalaufnahmen. Die benachbarte schmale Terminal-Pane
 zeigte abgeschnittene Einführungstexte (#601). Die Korrektur ist mit PR #603
 gemergt; der Nachprüfungslauf 39753074448 erreichte wegen des 30-Minuten-Buildlimits
-keine Tests. Der native Nachweis bleibt ausstehend.
+keine Tests. Der native Nachweis bleibt ausstehend. Die [lokale Linux-Diagnose](LINUX-DIAGNOSIS-2026-10-22.md) bestätigt inzwischen DE/EN in Hell/Dunkel bei 1024/760 Punkten samt Ausblenden nach explizitem Terminal-Fokus; sie ersetzt den macOS-Nachweis nicht.
 Die [Dateimanager-Exploration vom 22.10.](EXPLORATION-2026-10-22.md) am
 unveränderten 1.2.2-DMG ergänzt Tastatureinstieg, Unterordner-Navigation und
 Umbenennen-Dialog; der wirkungslose Ordner-Klick wird in #604 untersucht.

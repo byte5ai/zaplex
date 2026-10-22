@@ -1,0 +1,77 @@
+[+00:00.000] Step started: Wait for bootstrapping
+[+00:00.745] Assertion started: no pending model events
+[+00:00.745] Assertion passed: no pending model events
+[+00:00.807] Assertion started: no block executing
+[+00:00.807] Assertion passed: no block executing
+[+00:00.869] Assertion started: waiting for bootstrapping
+[+00:19.170] Assertion passed: waiting for bootstrapping
+[+00:19.170] Step succeeded: Wait for bootstrapping
+[+00:19.170] Step started: Verify the actual UI locale before capturing evidence
+[+00:19.289] Assertion started: The requested language is active
+[+00:19.289] Assertion passed: The requested language is active
+[+00:19.289] Step succeeded: Verify the actual UI locale before capturing evidence
+[+00:19.289] Step started: Resize native workspace to 1024x640
+[+00:19.290] Action executed
+[+00:19.369] Assertion started: Native window reached requested geometry
+[+00:19.749] Assertion passed: Native window reached requested geometry
+[+00:19.749] Step succeeded: Resize native workspace to 1024x640
+[+00:19.749] Step started: Open a saved host with a long name beside the local shell
+[+00:19.830] Action executed
+[+00:19.930] Assertion started: The actual server form finished loading
+[+00:19.930] Assertion passed: The actual server form finished loading
+[+00:19.930] Step succeeded: Open a saved host with a long name beside the local shell
+[+00:19.930] Step started: Render the production Zaplex Dark theme
+[+00:20.047] Action executed
+[+00:20.047] Step succeeded: Render the production Zaplex Dark theme
+[+00:20.047] Step started: Resize native workspace to 1024x640
+[+00:20.047] Action executed
+[+00:20.460] Assertion started: Native window reached requested geometry
+[+00:20.460] Assertion passed: Native window reached requested geometry
+[+00:20.460] Step succeeded: Resize native workspace to 1024x640
+[+00:20.460] Step started: Keep every introduction hint and dismiss action inside the terminal
+[+00:20.460] Action executed
+[+00:20.531] Assertion started: Complete labels fit their actual pane
+[+00:20.532] Assertion passed: Complete labels fit their actual pane
+[+00:20.532] Step succeeded: Keep every introduction hint and dismiss action inside the terminal
+[+00:20.934] Step started: Resize native workspace to 760x640
+[+00:20.934] Action executed
+[+00:20.978] Assertion started: Native window reached requested geometry
+[+00:20.978] Assertion passed: Native window reached requested geometry
+[+00:20.978] Step succeeded: Resize native workspace to 760x640
+[+00:20.978] Step started: Keep every introduction hint and dismiss action inside the terminal
+[+00:20.978] Action executed
+[+00:21.026] Assertion started: Complete labels fit their actual pane
+[+00:21.026] Assertion passed: Complete labels fit their actual pane
+[+00:21.026] Step succeeded: Keep every introduction hint and dismiss action inside the terminal
+[+00:21.280] Step started: Render the production Light theme
+[+00:21.398] Action executed
+[+00:21.398] Step succeeded: Render the production Light theme
+[+00:21.398] Step started: Resize native workspace to 1024x640
+[+00:21.398] Action executed
+[+00:21.489] Assertion started: Native window reached requested geometry
+[+00:21.597] Assertion passed: Native window reached requested geometry
+[+00:21.597] Step succeeded: Resize native workspace to 1024x640
+[+00:21.597] Step started: Keep every introduction hint and dismiss action inside the terminal
+[+00:21.597] Action executed
+[+00:21.645] Assertion started: Complete labels fit their actual pane
+[+00:21.645] Assertion passed: Complete labels fit their actual pane
+[+00:21.645] Step succeeded: Keep every introduction hint and dismiss action inside the terminal
+[+00:21.939] Step started: Resize native workspace to 760x640
+[+00:21.939] Action executed
+[+00:21.982] Assertion started: Native window reached requested geometry
+[+00:21.982] Assertion passed: Native window reached requested geometry
+[+00:21.982] Step succeeded: Resize native workspace to 760x640
+[+00:21.982] Step started: Keep every introduction hint and dismiss action inside the terminal
+[+00:21.982] Action executed
+[+00:22.027] Assertion started: Complete labels fit their actual pane
+[+00:22.028] Assertion passed: Complete labels fit their actual pane
+[+00:22.028] Step succeeded: Keep every introduction hint and dismiss action inside the terminal
+[+00:22.252] Step started: Focus the terminal pane before using its dismiss action
+[+00:22.300] Assertion started: Terminal pane has focus
+[+00:22.300] Assertion passed: Terminal pane has focus
+[+00:22.300] Step succeeded: Focus the terminal pane before using its dismiss action
+[+00:22.300] Step started: Dismiss the introduction using its visible action
+[+00:22.381] Action executed
+[+00:22.430] Assertion started: Dismissal persists and removes the introduction
+[+00:22.430] Assertion passed: Dismissal persists and removes the introduction
+[+00:22.430] Step succeeded: Dismiss the introduction using its visible action
