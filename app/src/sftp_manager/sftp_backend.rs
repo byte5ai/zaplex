@@ -9035,7 +9035,7 @@ impl InMemorySftpBackend {
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
 
-        let mut parent = visible.parent().unwrap_or(visible);
+        let mut parent = visible.parent().unwrap_or(visible).to_path_buf();
         let registry = self
             .directory_reservation_registry
             .as_ref()
@@ -9045,8 +9045,13 @@ impl InMemorySftpBackend {
                 )
             })?;
         let parent_metadata = loop {
-            match registry.probe_namespace_parent(parent)? {
+            match registry.probe_namespace_parent(&parent)? {
                 Some(metadata) if metadata.is_dir() => break metadata,
+                Some(metadata) if metadata.file_type().is_symlink() => {
+                    // Resolve the user-visible parent alias, never the private
+                    // namespace itself; its ownership checks remain unchanged.
+                    parent = dunce::canonicalize(&parent)?;
+                }
                 Some(_) => {
                     return Err(SftpOpsError::Operation(format!(
                         "Directory reservation parent is not a directory: {}",
@@ -9054,12 +9059,15 @@ impl InMemorySftpBackend {
                     )));
                 }
                 None => {
-                    parent = parent.parent().ok_or_else(|| {
-                        SftpOpsError::Operation(format!(
-                            "No existing directory for reservation at {}",
-                            visible.display()
-                        ))
-                    })?;
+                    parent = parent
+                        .parent()
+                        .ok_or_else(|| {
+                            SftpOpsError::Operation(format!(
+                                "No existing directory for reservation at {}",
+                                visible.display()
+                            ))
+                        })?
+                        .to_path_buf();
                 }
             }
         };
