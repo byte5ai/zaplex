@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.10] — 2026-10-22
+
+- Native Dateimanager-Abnahme: Den echten Ordner-Klick im Terminalheader separat prüfen und Vorher-/Nachher-Aufnahmen sichern (#604).
+
 ## [1.2.9] — 2026-10-22
 
 - Terminal-Einführung: Lange Hinweise und Titel umbrechen in schmalen Panes; die Ausblendaktion erhält eine eigene Zeile statt über dem Inhalt zu liegen (#601).

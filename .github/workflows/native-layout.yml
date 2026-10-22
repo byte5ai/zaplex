@@ -6,7 +6,7 @@ on:
       scenario:
         description: Native layout scenario to verify
         type: choice
-        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form, terminal-introduction]
+        options: [all, agent, connections-en, connections-de, files-en, files-de, ssh-form, terminal-introduction, file-manager-header]
         default: all
 
 permissions:
@@ -43,7 +43,8 @@ jobs:
           set -euo pipefail
           tests=()
           case "$SCENARIO" in
-            all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence test_native_ssh_form_evidence test_native_ssh_form_german_evidence test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence) ;;
+            all) tests=(test_subscription_agent_conversation_layout_evidence test_native_workspace_empty_states_evidence test_native_workspace_empty_states_german_evidence test_native_workspace_file_managers_evidence test_native_workspace_file_managers_german_evidence test_native_ssh_form_evidence test_native_ssh_form_german_evidence test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence test_native_file_manager_header_entry) ;;
+            file-manager-header) tests=(test_native_file_manager_header_entry) ;;
             terminal-introduction) tests=(test_native_terminal_introduction_evidence test_native_terminal_introduction_german_evidence) ;;
             ssh-form) tests=(test_native_ssh_form_evidence test_native_ssh_form_german_evidence) ;;
             agent) tests=(test_subscription_agent_conversation_layout_evidence) ;;
@@ -62,6 +63,8 @@ jobs:
               continue
             fi
             case "$test_name" in
+              test_native_file_manager_header_entry)
+                captures=(file-manager-header-before file-manager-header-after) ;;
               test_native_terminal_introduction*)
                 captures=(terminal-introduction-dark-1024 terminal-introduction-dark-760 terminal-introduction-light-1024 terminal-introduction-light-760 terminal-introduction-dismissed) ;;
               test_native_ssh_form*)
