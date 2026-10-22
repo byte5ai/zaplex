@@ -1,0 +1,196 @@
+{
+  "run_id": "39822990130",
+  "source_sha": "3a770404cb2e5e8fbd0b3e10d541b26acb753ef6",
+  "package_version": "1.2.19",
+  "kind": "native-integration-fixture",
+  "installed_dmg": false,
+  "image_processing": "None; unchanged originals, individually visually reviewed.",
+  "cases": [
+    {
+      "test": "test_native_file_actions_evidence",
+      "locale": "en",
+      "recording_directory": "2026-10-22T18-53-28",
+      "result": "pass",
+      "files": [
+        {
+          "file": "en/recording.log",
+          "sha256": "d6ed876c85667ef865257fc3031828aafaa33ea583a9d7daba9f99421b100c25"
+        },
+        {
+          "file": "en/file-actions-selected.png",
+          "sha256": "e6c4193c3bb78638185f07312284a2ac2909d46eaf890501b56481560a46ab01",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/file-actions-created-cursor.png",
+          "sha256": "d53a94279be5dc3640c232a7c95efadb64b104bb19a64dc805a8e65807ee381f",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/file-actions-cancel-before.png",
+          "sha256": "624de503c07526ee8dee1499ea2c69ce8da1383f52285c23ca75b61489db3680",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/file-actions-keyboard-after-cancel.png",
+          "sha256": "b270967e46ace85a676aba189dbc03a7ecb4b70af87ea7ce0c82fc0546aa70b8",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/file-actions-rename-before.png",
+          "sha256": "63bbab21e1803248973989f1a4597d9ecc6f5183b29e1c249e2bec9dc2862219",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/file-actions-rename-after.png",
+          "sha256": "a935c857febd00e4a9dc19ad31304f592a564c136c8030343dac8d29323745da",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/file-actions-details-tooltip.png",
+          "sha256": "f0e138a2d304a0c29d22c8d730cc99b9e101032f5d8474e2b6bc8b36acad1b52",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/file-actions-details-dialog.png",
+          "sha256": "6469a309b2ace830f9edf32996f36f51c5b6fee9e0d1a9f5387da017f5c1c795",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "en/file-actions-shell-preserved.png",
+          "sha256": "81787aad379b85408afc5e53499b0860d6019997eafe40ecf853250352624425",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        }
+      ]
+    },
+    {
+      "test": "test_native_file_actions_german_evidence",
+      "locale": "de",
+      "recording_directory": "2026-10-22T18-53-35",
+      "result": "pass",
+      "files": [
+        {
+          "file": "de/recording.log",
+          "sha256": "ae1db4e212b840905c80c32f53264a135b8d1b1f920cbc81772db52c28312d22"
+        },
+        {
+          "file": "de/file-actions-selected.png",
+          "sha256": "81a4d52dcdc9bbd68cca8b57c4407afa9d45aa9ad3ee426b05e82bc0604a4309",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/file-actions-created-cursor.png",
+          "sha256": "953a33e2af4060efc433164e0de16732f88e17b4da9906e3c8483cb2e0759d8d",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/file-actions-cancel-before.png",
+          "sha256": "de234ee3d6d2474df6fa8c4860b48e08ec001dde55910c51cc166f5f5824b1f8",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/file-actions-keyboard-after-cancel.png",
+          "sha256": "b61040bc43f1276127b7297275e9c1adb6ce486da40555c95f4b9cd9ede13e1c",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/file-actions-rename-before.png",
+          "sha256": "0aa5c6b0fbb6643df6ce1ce26f6e6f243358ca09866b2513cabbe0fb9955ca40",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/file-actions-rename-after.png",
+          "sha256": "c0721b2f93797d4cb5c7154fce6330e4e532607ff32206ac4f51e544831eb72b",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/file-actions-details-tooltip.png",
+          "sha256": "b1f2036fc3399521cfc0e820ca7dad2fddc7ee305e5240305f265d71b271cb2e",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/file-actions-details-dialog.png",
+          "sha256": "7435280cdab4ccce81b0e677e551fd9a9485353fe811322bb2e63783d2a18a47",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        },
+        {
+          "file": "de/file-actions-shell-preserved.png",
+          "sha256": "4bde0b84e546e8f37858fc2baaf984233af26bd0f2b0fd53a7e361310e3d43ef",
+          "screenshot_pixels": [
+            1024,
+            640
+          ],
+          "visually_reviewed": true
+        }
+      ]
+    }
+  ]
+}

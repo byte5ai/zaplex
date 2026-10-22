@@ -28,6 +28,6 @@ Vorbereitungsschritt hat nun eine 60-Sekunden-Grenze. Die fachlichen Erwartungen
 wurden nicht abgeschwächt.
 
 Die gezielte [macOS-Nachprüfung 39828670969](https://github.com/byte5ai/zaplex/actions/runs/39828670969)
-ist angefordert. Andere Settings, Themen, Breiten, die Tab-Navigation und die
+ist in DE/EN bestanden; alle zwölf Originalbilder wurden einzeln geprüft ([nativer Nachweis](NATIVE-ACTIONS-FONT-2026-10-22.md)). Andere Settings, Themen, Breiten, die Tab-Navigation und die
 aktuell installierte DMG-Version sind durch diese beiden Fälle nicht geprüft.
 Die Teilbelege ergänzen E01/E02/X05; #564/#562 erhalten dadurch keine Gesamtfreigabe.
