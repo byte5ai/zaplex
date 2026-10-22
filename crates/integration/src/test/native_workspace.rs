@@ -9,6 +9,7 @@ use warp::integration_testing::{
         wait_until_bootstrapped_single_pane_for_tab,
     },
     terminal_introduction,
+    view_getters::pane_group_view,
 };
 use warpui::integration::{AssertionOutcome, TestStep};
 
@@ -66,10 +67,34 @@ fn terminal_introduction_evidence(locale: &'static str) -> Builder {
                 );
         }
     }
-    builder.with_step(
-        terminal_introduction::dismiss()
-            .with_take_screenshot("terminal-introduction-dismissed.png"),
-    )
+    builder
+        .with_step(
+            TestStep::new("Focus the terminal pane before using its dismiss action")
+                .with_click_on_saved_position_fn(|app, window_id| {
+                    pane_group_view(app, window_id, 0).read(app, |group, _| {
+                        group
+                            .visible_pane_ids()
+                            .into_iter()
+                            .find(|pane| pane.is_terminal_pane())
+                            .expect("terminal pane beside the SSH form")
+                            .position_id()
+                    })
+                })
+                .add_named_assertion("Terminal pane has focus", |app, window_id| {
+                    let focused = pane_group_view(app, window_id, 0).read(app, |group, ctx| {
+                        group.focused_pane_id(ctx).is_terminal_pane()
+                    });
+                    if focused {
+                        AssertionOutcome::Success
+                    } else {
+                        AssertionOutcome::failure("Terminal pane did not receive focus".into())
+                    }
+                }),
+        )
+        .with_step(
+            terminal_introduction::dismiss()
+                .with_take_screenshot("terminal-introduction-dismissed.png"),
+        )
 }
 
 pub fn test_native_ssh_form_evidence() -> Builder {
