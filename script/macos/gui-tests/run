@@ -56,7 +56,8 @@ bundles=("$work"/build/Build/Products/*.xctestrun)
 [[ ${#bundles[@]} -eq 1 ]] || { echo "Expected exactly one xctestrun file" >&2; exit 1; }
 
 set +e
-macrunner-gui-run --timeout 540 --artifacts "$art/gui" -- \
+# Keep hang protection above the measured full-suite runtime, including result finalization.
+macrunner-gui-run --timeout 900 --artifacts "$art/gui" -- \
   xcodebuild test-without-building -xctestrun "${bundles[0]}" \
   -destination 'platform=macOS' -parallel-testing-enabled NO \
   -resultBundlePath "$art/tests.xcresult" "$@" > "$art/tests.log" 2>&1
