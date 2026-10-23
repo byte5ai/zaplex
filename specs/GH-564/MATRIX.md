@@ -36,6 +36,13 @@ Die [aktuelle Sichtprüfung auf 1.2.23](CANDIDATE-1.2.23-NATIVE.md) umfasst 42 e
 betrachtete Originalaufnahmen desselben Quellstands: Agentenzustände, gefüllte und
 leere Verbindungen, Favoriten, Dateimanager DE/EN in Hell/Dunkel und Pane-Drag.
 Die [installierte DMG-Abnahme und reale Exploration von 1.2.23](CANDIDATE-1.2.23-EXPLORATION.md) ergänzen 15 gemeinsam bestandene Pflichtfälle, Remote-Wiederverbindung, beide CLI-Testprofile und eine inhaltlich bestätigte Remote→Lokal-Kopie. Sie finden zusätzlich die Alias-Störung #639 und die veraltete Zielansicht #640; vollständige Fallkombinationen werden daraus nicht abgeleitet.
+Die [native Sichtprüfung des Kandidaten 1.2.25](CANDIDATE-1.2.25-NATIVE.md)
+ordnet 42 einzeln betrachtete Originalaufnahmen demselben Quellstand zu. Sie
+ergänzt den Themewechsel-Befund #644. Derselbe Kandidat besteht anschließend
+alle 15 installierten GUI-Pflichtfälle. Die reale Exploration bestätigt die
+Alias-Verbindung und eine unmittelbar aktualisierte Transferzielansicht, findet
+aber zusätzlich #645 (falsche Pane-/Host-Zuordnung) und #646 (Download über einen
+lokalen Verzeichnisalias). Details und Aussagegrenzen stehen im Kandidatenbericht.
 
 ## Referenzen und Bewertung
 

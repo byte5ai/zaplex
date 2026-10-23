@@ -30,6 +30,7 @@ use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
 use std::collections::HashMap;
 use std::sync::Arc;
+use warpui::r#async::FutureExt;
 use watcher::HomeDirectoryWatcher;
 
 use crate::cloud_object::update_manager::UpdateManager;
@@ -596,12 +597,23 @@ fn initialize_app_with_transfer_queue(
         &mut warpui::ModelContext<crate::sftp_manager::transfer_queue::TransferQueue>,
     ) -> crate::sftp_manager::transfer_queue::TransferQueue,
 ) {
+    initialize_app_with_setup(app, transfer_queue, |_| {});
+}
+
+fn initialize_app_with_setup(
+    app: &mut App,
+    transfer_queue: impl FnOnce(
+        &mut warpui::ModelContext<crate::sftp_manager::transfer_queue::TransferQueue>,
+    ) -> crate::sftp_manager::transfer_queue::TransferQueue,
+    setup: impl FnOnce(&mut App),
+) {
     // Load the bundled localization so `t!` returns real strings (not keys) —
     // mirrors prod (`lib.rs` `i18n::init`). Force English so the label-based menu
     // tests are locale-deterministic. Without it `t!` returns raw fluent keys and
     // the UI logs "called before init()".
     crate::i18n::init(Some("en"));
     initialize_settings_for_tests(app);
+    setup(app);
 
     // Add the necessary singleton models to the App
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -6717,6 +6729,109 @@ fn moving_another_pane_invalidates_pending_split_targets_and_results() {
                 assert!(!group.split_result_is_current(guard, result));
                 drop(moved);
             });
+        });
+    });
+}
+
+#[test]
+fn file_manager_action_keeps_the_invoking_pane_across_focus_changes() {
+    App::test((), |mut app| async move {
+        initialize_app_with_setup(
+            &mut app,
+            |_| crate::sftp_manager::transfer_queue::TransferQueue::new(),
+            |app| {
+                // Keep real account-history scans off the single test worker.
+                crate::cockpit::settings::CockpitSettings::handle(app).update(
+                    app,
+                    |settings, ctx| {
+                        settings.enabled.set_value(false, ctx).unwrap();
+                    },
+                );
+            },
+        );
+        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
+        let workspace = mock_workspace(&mut app);
+        let source_directory = tempfile::tempdir().unwrap();
+        let sibling_directory = tempfile::tempdir().unwrap();
+        let group = workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            workspace.active_tab_pane_group().clone()
+        });
+        let (source, sibling) = group.update(&mut app, |group, ctx| {
+            let source = group.focused_pane_id(ctx);
+            assert!(group
+                .downcast_pane_by_id::<crate::pane_group::TerminalPane>(source)
+                .is_some());
+            let target = group
+                .recapture_split_target(source, Direction::Right)
+                .unwrap();
+            let (sibling, _, _) = group
+                .insert_local_terminal_for_split(target, None, ctx)
+                .unwrap();
+            group.open_file_manager_in_place(
+                sibling,
+                crate::pane_group::FileManagerTarget::Local {
+                    start_path: sibling_directory.path().to_path_buf(),
+                },
+                ctx,
+            );
+            (source, group.focused_pane_id(ctx))
+        });
+        assert_ne!(source, sibling);
+        let (tx, rx) = async_channel::bounded(1);
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&group, move |group, _, ctx| {
+                if !group.as_ref(ctx).visible_pane_ids().contains(&source) {
+                    let _ = tx.try_send(());
+                }
+            });
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert_eq!(workspace.active_tab_pane_group().id(), group.id());
+            assert!(group
+                .as_ref(ctx)
+                .downcast_pane_by_id::<crate::pane_group::TerminalPane>(source)
+                .is_some());
+            workspace.handle_action(
+                &WorkspaceAction::OpenLocalFileManager {
+                    pane_id: source,
+                    start_path: source_directory.path().to_path_buf(),
+                },
+                ctx,
+            );
+            group.update(ctx, |group, ctx| group.focus_pane_by_id(source, ctx));
+            group.update(ctx, |group, ctx| group.focus_pane_by_id(sibling, ctx));
+        });
+        let completed = rx.recv().with_timeout(Duration::from_secs(5)).await;
+        let state = workspace.read(&app, |workspace, ctx| {
+            (
+                workspace.active_tab_pane_group().id(),
+                group.id(),
+                group.as_ref(ctx).visible_pane_ids(),
+                source,
+                sibling,
+                group
+                    .as_ref(ctx)
+                    .downcast_pane_by_id::<crate::pane_group::TerminalPane>(source)
+                    .is_some(),
+            )
+        });
+        assert!(
+            matches!(completed, Ok(Ok(()))),
+            "Deferred file manager did not replace its terminal: {state:?}"
+        );
+        group.read(&app, |group, _| {
+            assert_eq!(group.visible_pane_count(), 2);
+            assert!(group.visible_pane_ids().contains(&sibling));
+            assert!(!group.visible_pane_ids().contains(&source));
         });
     });
 }

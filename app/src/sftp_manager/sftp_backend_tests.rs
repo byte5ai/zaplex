@@ -20,6 +20,84 @@ fn directory_alias_backend() -> (tempfile::TempDir, InMemorySftpBackend) {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
+fn alias_preflight_rejects_protected_namespaces_even_with_cached_capabilities() {
+    let root = tempdir().unwrap();
+    let backend = InMemorySftpBackend::new(root.path().to_path_buf())
+        .with_in_tree_directory_reservation_namespace();
+    let anchor = backend
+        .create_dir_with_ownership_anchor(Path::new("/stage"))
+        .unwrap()
+        .expect("local directory ownership anchor");
+    backend
+        .preflight_safe_mutation(Path::new("/regular-file"), false)
+        .unwrap();
+    let namespace = backend
+        .directory_reservation_namespace_path_for_test()
+        .unwrap();
+    symlink(namespace, root.path().join("alias-private")).unwrap();
+    assert!(backend
+        .preflight_safe_mutation(Path::new("/alias-private/new-file"), false)
+        .is_err());
+    assert!(anchor.matches_path(Path::new("/stage")).unwrap());
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn alias_writer_creates_the_same_file_without_replacing_existing_leaves() {
+    let (root, backend) = directory_alias_backend();
+    let mut writer = backend
+        .create_file_writer(Path::new("/alias/stage.bin"))
+        .unwrap();
+    writer.write_chunk(b"alias payload").unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+    assert_eq!(
+        fs::read(root.path().join("real/stage.bin")).unwrap(),
+        b"alias payload"
+    );
+    assert!(backend
+        .create_file_writer(Path::new("/real/stage.bin"))
+        .is_err());
+    assert!(backend
+        .create_file_writer(Path::new("/alias/stage.bin"))
+        .is_err());
+    symlink("source.txt", root.path().join("real/link.bin")).unwrap();
+    assert!(backend
+        .create_file_writer(Path::new("/alias/link.bin"))
+        .is_err());
+    assert_eq!(
+        fs::read(root.path().join("real/source.txt")).unwrap(),
+        b"ALPHA"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn alias_writer_rejects_an_outside_parent_and_a_swapped_resolved_parent() {
+    let (root, backend) = directory_alias_backend();
+    let outside = tempdir().unwrap();
+    symlink(outside.path(), root.path().join("outside")).unwrap();
+    assert!(backend
+        .create_file_writer(Path::new("/outside/stage.bin"))
+        .is_err());
+    let backend = backend.with_after_writer_validation_before_open({
+        let parent = root.path().join("real");
+        let retained = root.path().join("retained");
+        let outside = outside.path().to_path_buf();
+        move |_| {
+            fs::rename(&parent, &retained).unwrap();
+            symlink(&outside, &parent).unwrap();
+        }
+    });
+    assert!(backend
+        .create_file_writer(Path::new("/alias/stage.bin"))
+        .is_err());
+    assert!(!outside.path().join("stage.bin").exists());
+    assert!(!root.path().join("retained/stage.bin").exists());
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
 fn alias_rename_preserves_the_listed_file_and_its_contents() {
     let (root, backend) = directory_alias_backend();
     let entry = backend

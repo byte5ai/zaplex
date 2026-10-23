@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.26] — 2026-10-23
+
+- Dateimanager öffnen sich in der angeklickten Pane, übernehmen Themefarben bestehender Eingaben und übertragen Dateien auch über lokale Verzeichnisaliasse; Zuordnung und Dateisicherheitsprüfungen bleiben erhalten (#644, #645, #646).
+
 ## [1.2.25] — 2026-10-23
 
 - Nach Kopieren oder Verschieben aktualisieren sich betroffene Dateimanager automatisch, ohne Host, Verzeichnis oder Auswahl zu wechseln (#640).

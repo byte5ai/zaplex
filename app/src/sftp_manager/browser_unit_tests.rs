@@ -1,5 +1,66 @@
 use super::*;
 use std::path::PathBuf;
+use warp_core::ui::theme::{mock_terminal_colors, Details, WarpTheme};
+use warpui::color::ColorU;
+use warpui::platform::WindowStyle;
+use warpui::App;
+
+#[test]
+fn file_manager_editors_follow_theme_without_losing_text_selection_or_focus() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        super::super::browser_integration_tests::initialize_app(&mut app);
+        let (window, browser) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            SftpBrowserView::new("theme-fixture".to_string(), None, ctx)
+        });
+        let editors = browser.read(&app, |browser, _| {
+            [
+                browser.search_editor.clone(),
+                browser.rename_editor.clone(),
+                browser.new_folder_editor.clone(),
+            ]
+        });
+        let appearance = Appearance::handle(&app);
+        let dark = appearance.read(&app, |appearance, _| appearance.theme().clone());
+        let light = WarpTheme::new(
+            ColorU::white().into(),
+            ColorU::black(),
+            ColorU::new(18, 123, 156, 255).into(),
+            None,
+            Some(Details::Lighter),
+            mock_terminal_colors(),
+            None,
+            Some("Light".to_string()),
+            None,
+        );
+        assert_ne!(dark.active_ui_text_color(), light.active_ui_text_color());
+        for draft in ["", "retained draft"] {
+            for editor in &editors {
+                editor.update(&mut app, |editor, ctx| {
+                    editor.set_buffer_text(draft, ctx);
+                    editor.select_all(ctx);
+                });
+            }
+            editors[0].update(&mut app, |_, ctx| ctx.focus_self());
+            for theme in [light.clone(), dark.clone()] {
+                let expected_text = theme.active_ui_text_color();
+                let expected_hint = theme.disabled_ui_text_color();
+                appearance.update(&mut app, |appearance, ctx| appearance.set_theme(theme, ctx));
+                for editor in &editors {
+                    editor.read(&app, |editor, ctx| {
+                        let colors = editor.text_colors(Appearance::as_ref(ctx));
+                        assert_eq!(colors.default_color, expected_text);
+                        assert_eq!(colors.hint_color, expected_hint);
+                        assert_eq!(colors.disabled_color, expected_hint);
+                        assert_eq!(editor.buffer_text(ctx), draft);
+                        assert_eq!(editor.selected_text(ctx), draft);
+                    });
+                }
+                assert_eq!(app.focused_view_id(window), Some(editors[0].id()));
+            }
+        }
+    });
+}
 
 #[test]
 fn only_failed_connections_offer_a_connection_retry() {

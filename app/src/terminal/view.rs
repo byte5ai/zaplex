@@ -25229,9 +25229,16 @@ impl TypedActionView for TerminalView {
                 // Root the FM at the active session's cwd — the validated local
                 // path for a local session, or the remote shell's reported cwd for
                 // a remote session — falling back to $HOME then `/`.
+                let Some(focus_handle) = &self.focus_handle else {
+                    return;
+                };
+                let pane_id = focus_handle.pane_id();
                 let start_path = file_manager_start_path(self.active_session_cwd(ctx));
                 ctx.dispatch_typed_action(
-                    &crate::workspace::WorkspaceAction::OpenLocalFileManager { start_path },
+                    &crate::workspace::WorkspaceAction::OpenLocalFileManager {
+                        pane_id,
+                        start_path,
+                    },
                 );
             }
             RetryRemoteRestore => ctx.emit(Event::RetryRemoteRestore),

@@ -45,8 +45,18 @@ insbesondere `cockpit-sessions-tree.html`, `premium-workspace.html` und
 Ist-Beleg, keine automatisch genehmigte Sollreferenz. Normalbreite, schmale
 Fenster, leere Zustände und Fehlerzustände gehören zum Vergleich.
 
-Isolierte Remote-Testzugänge und abonnierte Test-CLIs sind noch nicht nachgewiesen.
-Bis diese Voraussetzungen und die zusätzlichen Prüfungen implementiert und
-ausgeführt sind, bleibt #562 offen und die Gesamtbewertung `not-run` oder `fail`.
+Isolierte Remote-Testzugänge und beide CLI-Provider mit begrenzten API-Testprofilen
+sind inzwischen [am installierten 1.2.23-DMG nachgewiesen](../GH-564/CANDIDATE-1.2.23-EXPLORATION.md).
+Dieser Nachweis umfasst keine Abonnements, Kontingente oder Verteilung auf das
+freieste Abo. Die CLI-Aufträge waren vor der geprüften Transporttrennung bereits
+beendet; ein dabei noch laufender Agent ist zusätzlich zu prüfen. Die dort
+gefundenen Dateiübertragungsfehler #639/#640 sind im Kandidaten 1.2.25 korrigiert.
+Die installierte Nachprüfung bestätigt die Alias-Verbindung und die unmittelbare
+Zielaktualisierung bei einer Kopie in ein kanonisches lokales Verzeichnis.
+Sie findet zusätzlich die falsche Pane-/Host-Zuordnung #645 und den fehlgeschlagenen
+Download über einen lokalen Verzeichnisalias #646; der Theme-Befund #644 bleibt
+offen. Die 15 lokalen GUI-Pflichtfälle bestehen auch auf diesem Kandidaten.
+Bis die zusätzlichen Prüfungen ausgeführt und bewertet sind, bleibt #562 offen;
+ein lokaler Erfolg allein ergibt keine vollständige Produktabnahme.
 Die hier implementierte Liefersperre erzwingt die lokale GUI-Suite; sie behauptet
 keine vollständige Remote-, Design- oder explorative Abnahme.

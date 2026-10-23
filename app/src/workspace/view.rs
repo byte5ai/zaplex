@@ -29998,8 +29998,11 @@ impl TypedActionView for Workspace {
                 ctx.focus(&self.spawn_card);
                 ctx.notify();
             }
-            OpenLocalFileManager { start_path } => {
-                // FM pane-mode: swap the invoking (focused) pane in place for a
+            OpenLocalFileManager {
+                pane_id,
+                start_path,
+            } => {
+                // FM pane-mode: swap the explicitly invoking pane in place for a
                 // file manager. Pane-scoped context: on a tab that belongs to an
                 // SSH host it browses that HOST; on a local tab it browses the
                 // local filesystem rooted at the session cwd. Closing the FM
@@ -30011,13 +30014,9 @@ impl TypedActionView for Workspace {
                 // Owned handle (not the `&ViewHandle` borrow of `self`) so it can be
                 // moved into the deferred 'static closure below.
                 let active_pg = self.active_tab_pane_group().clone();
-                // Capture the targeted pane NOW (at dispatch time) — the pane focused
-                // when the action fired. Re-reading `focused_pane_id` inside the
-                // deferred closure would toggle whatever happens to be focused at the
-                // later tick, which can differ if focus moved in between. (This reads
-                // the pane-group's focus state, not the invoking view, so it's safe to
-                // call synchronously.)
-                let target_pane_id = active_pg.as_ref(ctx).focused_pane_id(ctx);
+                // A header click need not focus its pane. Preserve the caller's
+                // identity through deferred host resolution and replacement.
+                let target_pane_id = *pane_id;
                 let start_path = start_path.clone();
                 // Defer EVERYTHING that touches the invoking pane's view — BOTH the
                 // host-context resolution AND the in-place swap. This action fires
@@ -30033,7 +30032,7 @@ impl TypedActionView for Workspace {
                 // the context synchronously, and still crashed on the FM-on-SSH-pane
                 // click — that's this fix.)
                 ctx.spawn(async move {}, move |workspace, _, ctx| {
-                    // Resolve the FM host context from the INVOKING (focused) pane's own
+                    // Resolve the FM host context from the INVOKING pane's own
                     // session — NOT the tab (Codex #1). A local split inside an SSH tab
                     // opens the LOCAL file manager; a remote pane opens its host's FM.
                     // Fall back to the tab's recorded node. For a pane known to be
@@ -30050,6 +30049,10 @@ impl TypedActionView for Workspace {
                         .as_ref(ctx)
                         .downcast_pane_by_id::<crate::pane_group::TerminalPane>(target_pane_id)
                         .map(|tp| tp.terminal_view(ctx));
+                    if active_view.is_none() {
+                        log::debug!("file manager: invoking pane {target_pane_id:?} is unavailable");
+                        return;
+                    }
                     let pane_is_local = active_view
                         .as_ref()
                         .and_then(|v| v.as_ref(ctx).active_session_is_local(ctx));
