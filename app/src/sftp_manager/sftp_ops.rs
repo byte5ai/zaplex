@@ -13,6 +13,8 @@ use std::time::Duration;
 use warp_ssh_manager::secrets::SshSecretStore;
 use warp_ssh_manager::types::{AuthType, ResolvedSshAuth, SshServerInfo};
 use warp_ssh_manager::SshRepository;
+use warp_ssh_manager::{build_ssh_args, validate_ssh_endpoint, EndpointUse};
+use warpui::r#async::FutureExt as _;
 use zap_sftp::session::{AuthMethod, HostKeyConfirmation, SftpSession};
 use zap_sftp::types::{FileType, OpenOptions};
 use zap_sftp::Sftp;
@@ -339,6 +341,12 @@ fn connect_from_server_with_confirmation(
 ) -> Result<AuthenticatedSftpSession, SftpOpsError> {
     let resolved_auth = resolve_sftp_auth(server)?;
     let auth = build_auth_method(server, &resolved_auth, secret_store)?;
+    let endpoint = resolve_sftp_endpoint_with_command(
+        server,
+        &resolved_auth.username,
+        command::r#async::Command::new("ssh"),
+        CONNECT_TIMEOUT,
+    )?;
     // A daemon connection keeps its confirmed host key in its own managed file,
     // not in ~/.ssh/known_hosts. Trust it here too; otherwise the file manager
     // of a daemon pane asks again for a host the user already accepted.
@@ -350,15 +358,15 @@ fn connect_from_server_with_confirmation(
     #[cfg(not(unix))]
     let additional_known_hosts: Vec<PathBuf> = Vec::new();
     let result = SftpSession::connect_trusting(
-        &server.host,
-        server.port,
-        &resolved_auth.username,
+        &endpoint.host,
+        endpoint.port,
+        &endpoint.username,
         auth,
         Some(CONNECT_TIMEOUT),
         confirmation,
         &additional_known_hosts,
     );
-    let username = resolved_auth.username;
+    let username = endpoint.username;
     result
         .map(|session| AuthenticatedSftpSession { session, username })
         .map_err(|error| match error {
@@ -366,8 +374,8 @@ fn connect_from_server_with_confirmation(
                 fingerprint_sha256,
                 key_type,
             } => SftpOpsError::UnknownHostKey {
-                host: server.host.clone(),
-                port: server.port,
+                host: endpoint.host.clone(),
+                port: endpoint.port,
                 fingerprint_sha256,
                 key_type,
             },
@@ -375,8 +383,8 @@ fn connect_from_server_with_confirmation(
                 fingerprint_sha256,
                 key_type,
             } => SftpOpsError::ChangedHostKey {
-                host: server.host.clone(),
-                port: server.port,
+                host: endpoint.host.clone(),
+                port: endpoint.port,
                 fingerprint_sha256,
                 key_type,
             },
@@ -386,6 +394,87 @@ fn connect_from_server_with_confirmation(
             | zap_sftp::SftpError::Ssh2(_) => SftpOpsError::Transport(error.to_string()),
             error => error.into(),
         })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ResolvedSftpEndpoint {
+    host: String,
+    port: u16,
+    username: String,
+}
+
+fn resolve_sftp_endpoint_with_command(
+    server: &SshServerInfo,
+    username: &str,
+    mut command: command::r#async::Command,
+    timeout: Duration,
+) -> Result<ResolvedSftpEndpoint, SftpOpsError> {
+    validate_ssh_endpoint(EndpointUse::Connect, &server.host, &server.port.to_string())
+        .map_err(|error| SftpOpsError::Connection(error.to_string()))?;
+    let mut server = server.clone();
+    server.username = username.to_owned();
+    // Use the same arguments and config evaluation as the terminal. The import
+    // parser intentionally stores aliases and is not an OpenSSH config evaluator.
+    let args = build_ssh_args(&server);
+    command
+        .arg("-G")
+        .args(&args[1..])
+        .stdin(command::Stdio::null())
+        .stdout(command::Stdio::piped())
+        .stderr(command::Stdio::null())
+        .kill_on_drop(true);
+    let output = futures_lite::future::block_on(command.output().with_timeout(timeout))
+        .map_err(|_| SftpOpsError::Connection("SSH configuration lookup timed out".into()))?
+        .map_err(|error| {
+            SftpOpsError::Connection(format!("SSH configuration lookup failed: {error}"))
+        })?;
+    if !output.status.success() {
+        return Err(SftpOpsError::Connection(
+            "OpenSSH could not evaluate the server configuration".into(),
+        ));
+    }
+    let config = std::str::from_utf8(&output.stdout)
+        .map_err(|_| SftpOpsError::Connection("Invalid OpenSSH configuration output".into()))?;
+    parse_sftp_endpoint(config)
+}
+
+fn parse_sftp_endpoint(config: &str) -> Result<ResolvedSftpEndpoint, SftpOpsError> {
+    let mut host = None;
+    let mut port = None;
+    let mut username = None;
+    for line in config.lines() {
+        let Some((name, value)) = line.split_once(char::is_whitespace) else {
+            continue;
+        };
+        let value = value.trim();
+        match name {
+            "hostname" => host = Some(value),
+            "port" => port = Some(value),
+            "user" => username = Some(value),
+            // The libssh2 transport cannot implement these OpenSSH routes or
+            // alternate trust identities. Never bypass them with a direct dial.
+            "proxycommand" | "proxyjump" | "hostkeyalias" if value != "none" => {
+                return Err(SftpOpsError::Connection(format!(
+                    "The direct SFTP transport does not support SSH option {name}"
+                )));
+            }
+            _ => {}
+        }
+    }
+    let endpoint = validate_ssh_endpoint(
+        EndpointUse::Connect,
+        host.unwrap_or_default(),
+        port.unwrap_or_default(),
+    )
+    .map_err(|error| SftpOpsError::Connection(error.to_string()))?;
+    let username = username.filter(|value| !value.is_empty()).ok_or_else(|| {
+        SftpOpsError::Connection("OpenSSH configuration contains no remote user".into())
+    })?;
+    Ok(ResolvedSftpEndpoint {
+        host: endpoint.host,
+        port: endpoint.port,
+        username: username.to_owned(),
+    })
 }
 
 fn resolve_sftp_auth(server: &SshServerInfo) -> Result<ResolvedSshAuth, SftpOpsError> {

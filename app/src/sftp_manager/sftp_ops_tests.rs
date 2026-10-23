@@ -1,6 +1,129 @@
 use super::*;
 
 #[cfg(unix)]
+fn resolve_fixture_alias(
+    config: &Path,
+    server: &SshServerInfo,
+    username: &str,
+) -> Result<ResolvedSftpEndpoint, SftpOpsError> {
+    let mut command = command::r#async::Command::new("ssh");
+    command.arg("-F").arg(config);
+    resolve_sftp_endpoint_with_command(server, username, command, Duration::from_secs(5))
+}
+
+#[cfg(unix)]
+#[test]
+fn sftp_alias_uses_openssh_include_and_match_without_changing_saved_host() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config");
+    let included = directory.path().join("included");
+    fs::write(&config, format!("Include {}\n", included.display())).unwrap();
+    fs::write(
+        included,
+        "Host zaplex-sftp-alias.invalid\n  HostName 127.0.0.1\n  Port 2207\n\
+         Match originalhost zaplex-sftp-alias.invalid\n  User fixture-user\n",
+    )
+    .unwrap();
+    let mut server = SshServerInfo::new_default("fixture".into());
+    server.host = "zaplex-sftp-alias.invalid".into();
+
+    // No network is used: this is OpenSSH's actual configuration evaluation,
+    // including constructs the one-time import parser intentionally omits.
+    let endpoint = resolve_fixture_alias(&config, &server, "").unwrap();
+    assert_eq!(endpoint.host, "127.0.0.1");
+    assert_eq!(endpoint.port, 2207);
+    assert_eq!(endpoint.username, "fixture-user");
+    assert_eq!(server.host, "zaplex-sftp-alias.invalid");
+}
+
+#[cfg(unix)]
+#[test]
+fn sftp_alias_keeps_credential_user_and_explicit_port_precedence() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config");
+    fs::write(
+        &config,
+        "Host fixture.invalid\n  HostName 127.0.0.1\n  Port 2207\n  User config-user\n",
+    )
+    .unwrap();
+    let mut server = SshServerInfo::new_default("fixture".into());
+    server.host = "fixture.invalid".into();
+    server.port = 2208;
+    server.username = "saved-user".into();
+    let endpoint = resolve_fixture_alias(&config, &server, "credential-user").unwrap();
+    assert_eq!(endpoint.username, "credential-user");
+    assert_eq!(endpoint.port, 2208);
+    assert_eq!(server.username, "saved-user");
+}
+
+#[cfg(unix)]
+#[test]
+fn sftp_alias_invalid_config_does_not_fall_back_to_direct_dns() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("config");
+    fs::write(&config, "Host fixture.invalid\n  UnknownZaplexOption yes\n").unwrap();
+    let mut server = SshServerInfo::new_default("fixture".into());
+    server.host = "fixture.invalid".into();
+    assert!(matches!(
+        resolve_fixture_alias(&config, &server, "fixture-user"),
+        Err(SftpOpsError::Connection(_))
+    ));
+}
+
+#[test]
+fn sftp_alias_never_bypasses_proxy_routes_or_alternate_trust_names() {
+    let direct = "hostname destination.example\nport 22\nuser alice\n";
+    for option in [
+        "proxyjump jump.example",
+        "proxycommand ssh -W %h:%p jump",
+        "hostkeyalias pinned-name",
+    ] {
+        assert!(matches!(
+            parse_sftp_endpoint(&format!("{direct}{option}\n")),
+            Err(SftpOpsError::Connection(_))
+        ));
+    }
+    assert_eq!(
+        parse_sftp_endpoint(&format!("{direct}proxycommand none\n")).unwrap(),
+        ResolvedSftpEndpoint {
+            host: "destination.example".into(),
+            port: 22,
+            username: "alice".into(),
+        }
+    );
+}
+
+#[test]
+fn sftp_alias_rejects_incomplete_or_invalid_config_output() {
+    for output in [
+        "",
+        "hostname destination.example\nport 22\n",
+        "hostname destination.example\nport 0\nuser alice\n",
+        "hostname -oProxyCommand=bad\nport 22\nuser alice\n",
+    ] {
+        assert!(matches!(
+            parse_sftp_endpoint(output),
+            Err(SftpOpsError::Connection(_))
+        ));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sftp_alias_lookup_has_a_bounded_timeout() {
+    let mut server = SshServerInfo::new_default("fixture".into());
+    server.host = "fixture.invalid".into();
+    let mut command = command::r#async::Command::new("sh");
+    command.args(["-c", "exec sleep 30"]);
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        resolve_sftp_endpoint_with_command(&server, "alice", command, Duration::from_millis(20)),
+        Err(SftpOpsError::Connection(message)) if message.contains("timed out")
+    ));
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[cfg(unix)]
 fn live_sftp_configuration() -> (String, u16, String, PathBuf, PathBuf) {
     let host = std::env::var("ZAPLEX_LIVE_SFTP_HOST")
         .expect("ZAPLEX_LIVE_SFTP_HOST is required for the ignored live SFTP tests");
