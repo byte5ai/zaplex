@@ -347,15 +347,23 @@ fn overflow_id(app: &App, window_id: warpui::WindowId, index: usize) -> String {
 }
 
 pub fn open_file_manager_by_header() -> TestStep {
+    open_file_manager_by_header_in_panes(0, 1, 1)
+}
+
+pub fn open_file_manager_by_header_in_panes(
+    index: usize,
+    expected_managers: usize,
+    expected_panes: usize,
+) -> TestStep {
     TestStep::new("Click the actual terminal header folder button")
-        .with_click_on_saved_position_fn(|app, window_id| {
-            terminal_at(app, window_id, 0).read(app, |view, _| {
+        .with_click_on_saved_position_fn(move |app, window_id| {
+            terminal_at(app, window_id, index).read(app, |view, _| {
                 format!("terminal-open-files:{}", view.pane_configuration().id())
             })
         })
         .add_named_assertion(
             "Header click replaces the invoking pane with a file manager",
-            |app, window_id| {
+            move |app, window_id| {
                 let count = app.read(|ctx| {
                     crate::sftp_manager::fm_registry::FileManagerRegistry::as_ref(ctx)
                         .panes()
@@ -363,14 +371,36 @@ pub fn open_file_manager_by_header() -> TestStep {
                 });
                 let visible = pane_group_view(app, window_id, 0)
                     .read(app, |group, _| group.visible_pane_count());
-                if count != 1 || visible != 1 {
+                if count != expected_managers || visible != expected_panes {
                     return AssertionOutcome::failure(format!(
-                        "Expected one file manager and one pane, got {count}/{visible}"
+                        "Expected {expected_managers} file managers and {expected_panes} panes, got {count}/{visible}"
                     ));
                 }
                 AssertionOutcome::Success
             },
         )
+}
+
+pub fn assert_file_manager_directories(expected: &'static [&'static str]) -> TestStep {
+    TestStep::new("Both file managers retain their own shell directories").add_named_assertion(
+        "Invoking and sibling directories remain distinct",
+        move |app, _| {
+            app.read(|ctx| {
+                let panes =
+                    crate::sftp_manager::fm_registry::FileManagerRegistry::as_ref(ctx).panes();
+                if panes.len() != expected.len()
+                    || !expected
+                        .iter()
+                        .all(|path| panes.iter().any(|pane| pane.current_path.ends_with(path)))
+                {
+                    return AssertionOutcome::failure(
+                        "Header click lost a pane's directory".into(),
+                    );
+                }
+                AssertionOutcome::Success
+            })
+        },
+    )
 }
 
 pub fn split_local_right() -> TestStep {
@@ -557,6 +587,7 @@ pub fn open_local_file_manager(index: usize) -> TestStep {
             window_id,
             &[workspace.id()],
             &WorkspaceAction::OpenLocalFileManager {
+                pane_id: group.read(app, |group, ctx| group.focused_pane_id(ctx)),
                 start_path: directory.path().to_path_buf(),
             },
         );

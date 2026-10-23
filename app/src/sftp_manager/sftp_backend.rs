@@ -8407,7 +8407,7 @@ impl InMemorySftpBackend {
 
     /// Resolve directory aliases before the no-symlink, exclusive file creation.
     /// The leaf stays unresolved so an existing file or symlink is never replaced.
-    fn open_isolation_placeholder(&self, path: &Path) -> Result<fs::File, SftpOpsError> {
+    fn confined_creation_path(&self, path: &Path) -> Result<PathBuf, SftpOpsError> {
         #[cfg(unix)]
         {
             let local = self.to_local(path)?;
@@ -8426,12 +8426,16 @@ impl InMemorySftpBackend {
             let resolved = PathBuf::from("/").join(relative).join(name);
             // Apply protected-namespace checks to the resolved spelling as well.
             self.to_local(&resolved)?;
-            open_confined_new_file(&self.root, &resolved)
+            Ok(resolved)
         }
         #[cfg(not(unix))]
         {
-            open_confined_new_file(&self.root, path)
+            Ok(path.to_path_buf())
         }
+    }
+
+    fn open_isolation_placeholder(&self, path: &Path) -> Result<fs::File, SftpOpsError> {
+        open_confined_new_file(&self.root, &self.confined_creation_path(path)?)
     }
 
     fn validate_resolved_local_path(
@@ -9652,10 +9656,23 @@ impl InMemorySftpBackend {
             use std::os::unix::fs::MetadataExt;
 
             let local = self.to_local(path)?;
-            let mut parent = local.parent().unwrap_or(&self.root);
+            let mut parent = local.parent().unwrap_or(&self.root).to_path_buf();
             let parent_metadata = loop {
-                match DirectoryReservationRegistry::probe_path(parent)? {
+                match DirectoryReservationRegistry::probe_path(&parent)? {
                     Some(metadata) if metadata.is_dir() => break metadata,
+                    Some(metadata) if metadata.file_type().is_symlink() => {
+                        let resolved = dunce::canonicalize(&parent)?;
+                        let root = dunce::canonicalize(&self.root)?;
+                        let relative = resolved.strip_prefix(&root).map_err(|_| {
+                            SftpOpsError::Operation(format!(
+                                "Filesystem ancestor escapes the backend root: {}",
+                                path.display()
+                            ))
+                        })?;
+                        // Validate protected namespaces before probing the alias target.
+                        self.to_local(&PathBuf::from("/").join(relative))?;
+                        parent = resolved;
+                    }
                     Some(_) => {
                         return Err(SftpOpsError::Operation(format!(
                             "Filesystem ancestor is not a directory: {}",
@@ -9663,12 +9680,15 @@ impl InMemorySftpBackend {
                         )));
                     }
                     None => {
-                        parent = parent.parent().ok_or_else(|| {
-                            SftpOpsError::Operation(format!(
-                                "No existing filesystem ancestor for {}",
-                                path.display()
-                            ))
-                        })?;
+                        parent = parent
+                            .parent()
+                            .ok_or_else(|| {
+                                SftpOpsError::Operation(format!(
+                                    "No existing filesystem ancestor for {}",
+                                    path.display()
+                                ))
+                            })?
+                            .to_path_buf();
                     }
                 }
             };
@@ -11922,12 +11942,13 @@ impl SftpBackend for InMemorySftpBackend {
 
     fn create_file_writer(&self, path: &Path) -> Result<Box<dyn BackendFileWriter>, SftpOpsError> {
         self.persist_artifact_intent(path)?;
+        let resolved = self.confined_creation_path(path)?;
         #[cfg(test)]
         if let Some(hook) = &self.after_writer_validation_before_open {
             let local = self.to_local(path)?;
             hook(&local);
         }
-        let file = open_confined_new_file(&self.root, path)?;
+        let file = open_confined_new_file(&self.root, &resolved)?;
         let anchor = local_ownership_anchor(&file, &self.root)?;
         self.persist_artifact_identity(path, anchor)?;
         #[cfg(test)]

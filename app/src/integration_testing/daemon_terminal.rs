@@ -636,12 +636,14 @@ pub fn open_remote_file_manager(state: SharedState) -> TestStep {
         .with_action(|app, window_id, data| {
             let identity = remote_terminal_identity(app, window_id);
             assert_eq!(identity.draft, REMOTE_FM_DRAFT);
+            let pane_id = identity.pane;
             data.insert("daemon_fm_terminal", identity);
             let workspace = workspace_view(app, window_id);
             app.dispatch_typed_action(
                 window_id,
                 &[workspace.id()],
                 &WorkspaceAction::OpenLocalFileManager {
+                    pane_id,
                     start_path: PathBuf::from(projects_path()),
                 },
             );

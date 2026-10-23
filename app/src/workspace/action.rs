@@ -13,6 +13,7 @@ use crate::auth::LoginGatedFeature;
 use crate::drive::items::WarpDriveItemId;
 use crate::drive::ObjectTypeAndId;
 use crate::palette::PaletteMode;
+use crate::pane_group::PaneId;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search;
 use crate::server::ids::SyncId;
@@ -222,6 +223,7 @@ pub enum WorkspaceAction {
     },
     /// Open the local file-manager pane (FM pane-mode P1) rooted at `start_path`.
     OpenLocalFileManager {
+        pane_id: PaneId,
         start_path: std::path::PathBuf,
     },
     /// Open/close the SSH Manager view on the left panel (openWarp-specific).

@@ -23,7 +23,7 @@ use crate::workspace::ToastStack;
 use diesel::sqlite::SqliteConnection;
 use instant::Instant;
 use pathfinder_geometry::vector::Vector2F;
-use warp_core::ui::appearance::Appearance;
+use warp_core::ui::appearance::{Appearance, AppearanceEvent};
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_ssh_manager::{KeychainSecretStore, SshRepository, SshServerInfo};
@@ -7596,6 +7596,15 @@ impl BackingView for SftpBrowserView {
     }
 }
 
+fn file_manager_editor_text_colors(appearance: &Appearance) -> TextColors {
+    let theme = appearance.theme();
+    TextColors {
+        default_color: theme.active_ui_text_color(),
+        disabled_color: theme.disabled_ui_text_color(),
+        hint_color: theme.disabled_ui_text_color(),
+    }
+}
+
 /// Create a single-line editor
 fn make_editor(
     placeholder: &str,
@@ -7603,18 +7612,24 @@ fn make_editor(
 ) -> ViewHandle<EditorView> {
     let placeholder = placeholder.to_string();
     ctx.add_typed_action_view(move |ctx| {
+        ctx.subscribe_to_model(
+            &Appearance::handle(ctx),
+            |editor: &mut EditorView, _, event, ctx| {
+                if let AppearanceEvent::ThemeChanged = event {
+                    editor.set_text_colors(
+                        file_manager_editor_text_colors(Appearance::as_ref(ctx)),
+                        ctx,
+                    );
+                }
+            },
+        );
         let options = {
             let appearance = Appearance::as_ref(ctx);
-            let theme = appearance.theme();
             SingleLineEditorOptions {
                 text: TextOptions {
                     font_size_override: Some(appearance.ui_font_size()),
                     font_family_override: Some(appearance.monospace_font_family()),
-                    text_colors_override: Some(TextColors {
-                        default_color: theme.active_ui_text_color(),
-                        disabled_color: theme.disabled_ui_text_color(),
-                        hint_color: theme.disabled_ui_text_color(),
-                    }),
+                    text_colors_override: Some(file_manager_editor_text_colors(appearance)),
                     ..Default::default()
                 },
                 ..Default::default()

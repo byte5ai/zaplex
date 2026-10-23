@@ -220,9 +220,11 @@ jobs:
           WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: "1"
           ZAPLEX_INTEGRATION_TEST_ARTIFACTS_DIR: ${{ runner.temp }}/native-workspace
           ZAPLEX_SHELL_PATH: /bin/zsh
-        run: >
-          cargo test --locked -p integration --test integration
-          ui_tests::test_native_workspace_ -- --nocapture --test-threads=1
+        run: |
+          cargo test --locked -p integration --test integration \
+            ui_tests::test_native_workspace_ -- --nocapture --test-threads=1
+          cargo test --locked -p integration --test integration \
+            ui_tests::test_native_file_manager_header_entry -- --exact --nocapture --test-threads=1
         shell: bash
 
       - name: Require every native workspace capture
@@ -233,7 +235,8 @@ jobs:
             native-connections-light-250 native-connections-light-320 native-connections-light-480 \
             native-favorite-flyout native-panes-side-by-side native-panes-after-drag \
             native-file-managers-normal native-file-managers-narrow \
-            native-file-manager-focused-action native-file-managers-restored-terminals; do
+            native-file-manager-focused-action native-file-managers-restored-terminals \
+            file-manager-header-before file-manager-header-after; do
             test "$(find "${{ runner.temp }}/native-workspace" -type f -name "$screenshot.png" -size +0c | wc -l | tr -d ' ')" -ge 1
           done
         shell: bash

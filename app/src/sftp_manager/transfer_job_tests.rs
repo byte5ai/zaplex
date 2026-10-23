@@ -984,6 +984,80 @@ fn job(
 
 #[cfg(unix)]
 #[test]
+fn directory_alias_transfers_preserve_file_and_tree_contents_in_both_directions() {
+    use std::os::unix::fs::symlink;
+
+    for directory in [false, true] {
+        let source = tempdir().unwrap();
+        let target = tempdir().unwrap();
+        fs::create_dir(source.path().join("real")).unwrap();
+        fs::create_dir(target.path().join("real")).unwrap();
+        symlink("real", source.path().join("alias")).unwrap();
+        symlink("real", target.path().join("alias")).unwrap();
+        let payload_path = if directory {
+            "item/nested/payload.bin"
+        } else {
+            "item"
+        };
+        let input = source.path().join("real").join(payload_path);
+        fs::create_dir_all(input.parent().unwrap()).unwrap();
+        fs::write(&input, b"independent expected bytes\0\xff").unwrap();
+        let source_backend = backend(source.path());
+        let target_backend = backend(target.path());
+        for (from, to, destination) in [
+            (
+                source_backend.clone(),
+                target_backend.clone(),
+                target.path(),
+            ),
+            (
+                target_backend.clone(),
+                source_backend.clone(),
+                source.path(),
+            ),
+        ] {
+            let returning = destination == source.path();
+            let target_path = if returning {
+                "/alias/returned"
+            } else {
+                "/alias/item"
+            };
+            let transfer = TransferJob {
+                source_backend: from,
+                target_backend: to,
+                source_path: PathBuf::from("/alias/item"),
+                target_path: PathBuf::from(target_path),
+                operation: TransferOperation::Copy,
+                conflict: ConflictDecision::Skip,
+            };
+            let outcome = if directory {
+                run_directory_transfer(&transfer, &TransferControl::default(), None)
+            } else {
+                run_transfer(&transfer, &TransferControl::default(), None)
+            }
+            .unwrap_or_else(|error| {
+                panic!("directory={directory}, returning={returning}: {error}")
+            });
+            assert_eq!(outcome, TransferOutcome::Completed);
+            let leaf = if returning {
+                payload_path.replacen("item", "returned", 1)
+            } else {
+                payload_path.to_string()
+            };
+            assert_eq!(
+                fs::read(destination.join("real").join(leaf)).unwrap(),
+                b"independent expected bytes\0\xff"
+            );
+            assert_eq!(
+                fs::read(&input).unwrap(),
+                b"independent expected bytes\0\xff"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn copy_preserves_executable_mode() {
     use std::os::unix::fs::PermissionsExt;
 

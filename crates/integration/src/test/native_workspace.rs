@@ -30,14 +30,40 @@ pub fn test_native_file_manager_header_entry() -> Builder {
             ExpectedExitStatus::Success,
             (),
         ))
+        .with_step(native::split_local_right())
+        .with_step(wait_until_bootstrapped_pane(0, 1))
+        .with_step(execute_command(
+            0,
+            1,
+            "mkdir -p sibling-fixture && cd sibling-fixture && printf SIBLING > NEIGHBOR.txt"
+                .into(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(native::open_file_manager_by_header_in_panes(1, 1, 2))
         .with_step(
-            TestStep::new("Capture the terminal before its header click")
+            TestStep::new("The sibling file manager is active before the other header click")
+                .add_named_assertion("The invoking terminal is inactive", |app, window_id| {
+                    pane_group_view(app, window_id, 0).read(app, |group, ctx| {
+                        let invoking = group.pane_id_from_index(0).expect("invoking terminal");
+                        if group.focused_pane_id(ctx) == invoking {
+                            return AssertionOutcome::failure(
+                                "The terminal must not own focus before its header click".into(),
+                            );
+                        }
+                        AssertionOutcome::Success
+                    })
+                })
                 .with_take_screenshot("file-manager-header-before.png"),
         )
         .with_step(
-            native::open_file_manager_by_header()
+            native::open_file_manager_by_header_in_panes(0, 2, 2)
                 .with_take_screenshot("file-manager-header-after.png"),
         )
+        .with_step(native::assert_file_manager_directories(&[
+            "entry-fixture",
+            "sibling-fixture",
+        ]))
 }
 
 pub fn test_native_terminal_introduction_evidence() -> Builder {
