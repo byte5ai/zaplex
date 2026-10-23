@@ -20,7 +20,19 @@ class ProvenanceTests(unittest.TestCase):
             "head_branch": "main", "path": ".github/workflows/ci-batch.yml",
             "head_repository": {"full_name": "byte5ai/zaplex"}, "head_sha": self.source,
         }
-        names = helpers["batch"]["PASSED"] | {
+        # Independent expectations: deleting a production gate must make this test fail.
+        names = {
+            "Validate main batch",
+            "dependency_security / cargo deny check advisories",
+            "compile_checks / detect build-relevant changes",
+            "compile_checks / cargo check (Linux x86_64)",
+            "compile_checks / cargo check (macOS Apple Silicon)",
+            "compile_checks / keymap validation (Linux x86_64)",
+            "tests / cargo test (Linux)",
+            "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+            "test_dmg / Verify Phase A release readiness",
+            "test_dmg / Validate macOS signing identity",
+            "test_dmg / Build bundled remote-server (Linux musl x86_64)",
             "test_dmg / Prepare Test app (macOS Apple Silicon)",
             "test_dmg / Sign and package Test DMG (macOS Apple Silicon)",
         }
@@ -202,6 +214,21 @@ class AssetTests(unittest.TestCase):
             }), patch("subprocess.run"), self.assertRaises(ValueError):
                 helpers["publish"]("v1.2.23", "a" * 40, body, root, self.files)
             self.assertEqual(command.call_count, 1)
+
+    def test_existing_publication_or_other_draft_is_never_modified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            body = root / "body.md"
+            body.write_text("Reviewed release\n")
+            original = {"id": 42, "tag_name": "v1.2.23", "draft": True,
+                        "target_commitish": "a" * 40, "body": body.read_text(), "assets": self.assets}
+            for key, value in (("draft", False), ("target_commitish", "b" * 40), ("body", "Another release")):
+                command = Mock(return_value=json.dumps([[dict(original, **{key: value})]]))
+                with self.subTest(key=key), patch.dict(helpers["publish"].__globals__, {"command": command}), \
+                        patch("subprocess.run") as upload, self.assertRaises(ValueError):
+                    helpers["publish"]("v1.2.23", "a" * 40, body, root, self.files)
+                self.assertEqual(command.call_count, 1)
+                upload.assert_not_called()
 
 
 if __name__ == "__main__":
