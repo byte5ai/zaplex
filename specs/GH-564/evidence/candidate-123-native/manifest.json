@@ -1,0 +1,302 @@
+{
+  "source_sha": "bf52cf4b75033f48c4d3d945da26bdcaa803f323",
+  "version": "1.2.23",
+  "run_id": "39871910859",
+  "kind": "native integration build; not installed DMG",
+  "images": [
+    {
+      "path": "native-agent/test_subscription_agent_conversation_layout_evidence/2026-10-22T23-51-00/subscription-agent-narrow-540x670.png",
+      "sha256": "c8f3841b905fcfee87378f72fb52db2bb818550cc8587b1f265041a3316ef488",
+      "width": 540,
+      "height": 670,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-agent/test_subscription_agent_conversation_layout_evidence/2026-10-22T23-51-00/subscription-agent-normal-1180x640.png",
+      "sha256": "7180c924673424e7a126f1cf9d478ab1f9bd489acf71efc849f0899ba4fc53be",
+      "width": 1180,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-agent/test_subscription_agent_conversation_layout_evidence/2026-10-22T23-51-00/subscription-agent-recoverable-error-540x670.png",
+      "sha256": "69f1d7bfbfbf91d0708a8f80b7367ddf6edc9157c2d58fc8117f8078236290d8",
+      "width": 540,
+      "height": 670,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-22T23-51-35/native-connections-dark-250.png",
+      "sha256": "14654ceb0e6eafbee1550eb4bd892638a1c921466dc510c888897ce54755cd3f",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-22T23-51-35/native-connections-dark-320.png",
+      "sha256": "6ffd5ee376df0cf485fd9da78d39770d04f1c361b46a8482b3cb30184d902798",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-22T23-51-35/native-connections-dark-480.png",
+      "sha256": "5d6a5a97b1154dc74f62688e21fd644a46a084df94685da1529ad8958f2baccc",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-22T23-51-35/native-connections-light-250.png",
+      "sha256": "527b3606c27487bbdd2538a7e681ac3645f591e49b59b597dc92ecb038033203",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-22T23-51-35/native-connections-light-320.png",
+      "sha256": "0977e1e9bfb8a7a5361db6df4a697af3df90b168e5f4aab30b13e9d556a47dc7",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-22T23-51-35/native-connections-light-480.png",
+      "sha256": "4e52b1b2a74bab3bf3935768e43c9b8bc35c4ff564774a47e2ff753829b6b109",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-22T23-51-35/native-favorite-flyout.png",
+      "sha256": "0f926db6fd1ece66ab13536fd7d9938ff9755c03a5b5fa56f492008b8706c2b3",
+      "width": 900,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-22T23-51-38/native-empty-connections-dark-250.png",
+      "sha256": "f68f5d58ab0893b872a8378121dd04f8901d19fee90b33e2ec099cdd51860e78",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-22T23-51-38/native-empty-connections-dark-320.png",
+      "sha256": "5f28e26a2d9f376ece4977ac609211e025fcaf2181894314bb12ec0b0847af64",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-22T23-51-38/native-empty-connections-dark-480.png",
+      "sha256": "b05b9bd5459911270d18cd11a6f224c9b4d8e89f2861b470a1b781341c2f85bb",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-22T23-51-38/native-empty-connections-light-250.png",
+      "sha256": "0ef9a69a74424b8e727380aeb09167c293dec6e205ca7f177e0b9018e69855b3",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-22T23-51-38/native-empty-connections-light-320.png",
+      "sha256": "7b7dd32a5831c4d61fc8d8878a4f1a342d4c5b54e8a5b3e544e9f7df5bfec74b",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-22T23-51-38/native-empty-connections-light-480.png",
+      "sha256": "2e444b99d2503dc9d1fc5a30bd63dde1b84ee9575cbf1f4960d675ed8c82d182",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-22T23-51-38/native-empty-favorites-dark.png",
+      "sha256": "c463882a34a1af1428dac2babdb6ff76675363f5e9680b6044ab3e56c6dc5bac",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-22T23-51-38/native-empty-favorites-light.png",
+      "sha256": "148c209bfe77f0287bcb6a46fc64221305a2e97aa82bc1e88c1b9b8ced00e697",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-22T23-51-41/native-empty-connections-dark-250.png",
+      "sha256": "db99ea96af84c37e3ab45629401d803cdc2292b3929f5d494326c73266df07ba",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-22T23-51-41/native-empty-connections-dark-320.png",
+      "sha256": "c768bcbeb7263053475b52613dac00c6246644f233bbc70a7a86e25036e71803",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-22T23-51-41/native-empty-connections-dark-480.png",
+      "sha256": "0381bf1ad0af855f6decf59b4139bff9571d22419a7c4d5958802b236d747e2e",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-22T23-51-41/native-empty-connections-light-250.png",
+      "sha256": "49e688c8b19cb3b943e9d5cd724ad01152815c7fd10c0715c8361a8f819e1fa2",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-22T23-51-41/native-empty-connections-light-320.png",
+      "sha256": "759396bd8808b766bef67c96c3887769c135ad0819a352786f49f556fb822119",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-22T23-51-41/native-empty-connections-light-480.png",
+      "sha256": "c4ecce0cdd99fcfcc5449010e60285aaa07e3df35a11e11e8f5ceb490d2ac902",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-22T23-51-41/native-empty-favorites-dark.png",
+      "sha256": "874e6874eafed82a5e0227fbf3152468c8cdafa702deade4ce820593664ce8ac",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-22T23-51-41/native-empty-favorites-light.png",
+      "sha256": "d958f232298f452ca9ba1e12aac6472361f231cdaeca51d2fe0ee3e1e74ae65e",
+      "width": 1440,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-22T23-51-45/native-file-manager-focused-action.png",
+      "sha256": "2132e86a0cdb5f507c333a87d7b5e39fabe54e780fc10981046a30305b972202",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-22T23-51-45/native-file-manager-full-name.png",
+      "sha256": "c9b514c27ab20f4f7f679d8b3399ba200c44f598235ab6750854cebe781cc8c3",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-22T23-51-45/native-file-managers-narrow-light.png",
+      "sha256": "5053f52af66f27f92adf6427714a4ad3168362caf24f129bc88c7977c025bffc",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-22T23-51-45/native-file-managers-narrow.png",
+      "sha256": "3a311d038a3bd1007173b417d4bc4fb5dc941b31c069b1635c39a97523138e33",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-22T23-51-45/native-file-managers-normal-light.png",
+      "sha256": "c11976b34937d1d5f43de9618acf635c224bd14a298e64007981d9d7a12a8769",
+      "width": 1180,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-22T23-51-45/native-file-managers-normal.png",
+      "sha256": "34bc2d992a4275e2a40f37215c69693e18bdcedd0f4aefe3940fddfab99a231a",
+      "width": 1180,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-22T23-51-45/native-file-managers-restored-terminals.png",
+      "sha256": "7862888c20ec3d77ed1a69ce104eaeea2c7ebd07df7c624fc1f5c91fffd8c7bd",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-22T23-51-50/native-file-manager-focused-action.png",
+      "sha256": "f6bfd736b79e5450f558b62e5db1d706c30f62e135eb9b3fcf4f22deb4ecf1fe",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-22T23-51-50/native-file-manager-full-name.png",
+      "sha256": "714530c54c679d1266273c023ff6e8446d4b1387122d268850923dd191e9bd62",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-22T23-51-50/native-file-managers-narrow-light.png",
+      "sha256": "d9cddb7e79297679e5d026507282cea2b1cebcc9791220b4269f05282c08da3d",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-22T23-51-50/native-file-managers-narrow.png",
+      "sha256": "c491760f4808e78b4f8b9617be50a8110027d991806df09273d074c3f9b5f364",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-22T23-51-50/native-file-managers-normal-light.png",
+      "sha256": "abdd6bdcccbcaf8a976804a247d41b801766a610f8dc8b5c1da3906133346878",
+      "width": 1180,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-22T23-51-50/native-file-managers-normal.png",
+      "sha256": "5a2b2493ea867130131940e4f530890b6b9600a8f4a37b5addf5c09ab164b1b0",
+      "width": 1180,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-22T23-51-50/native-file-managers-restored-terminals.png",
+      "sha256": "b1835975076933c3f474ed6286d18895954e5d41fb49491ca9f1731abc5f1fd4",
+      "width": 760,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_panes_evidence/2026-10-22T23-51-56/native-panes-after-drag.png",
+      "sha256": "94c3af4200c82e599a5ae8bf4d98682c2575ceefb44abd80918c0d9fc204c936",
+      "width": 1180,
+      "height": 640,
+      "visual_review": "completed"
+    },
+    {
+      "path": "native-workspace/test_native_workspace_panes_evidence/2026-10-22T23-51-56/native-panes-side-by-side.png",
+      "sha256": "26cc6a94b752e4c4fc04e658b4904518ac1d595f9eb53624de8384dfdcb84782",
+      "width": 1180,
+      "height": 640,
+      "visual_review": "completed"
+    }
+  ]
+}

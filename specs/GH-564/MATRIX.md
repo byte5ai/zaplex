@@ -32,6 +32,10 @@ Die [abgeschlossene Dateiaktionsprüfung](FILE-ACTIONS-2026-10-22.md) ergänzt F
 Die [Settings-Exploration](SETTINGS-2026-10-22.md) ergänzt Suchtreffer/Leerzustand, Dark→Light, gültige Schriftgrößenänderung und erhaltenen Shellmarker; ungültige Schriftgröße ohne Rückmeldung ist #622. Die Korrektur aus PR #625 besteht lokal in DE/EN mit zwölf kontrollierten Originalbildern ([Nachweis](FONT-VALIDATION-2026-10-22.md)); macOS besteht ebenfalls in DE/EN ([30 native Bildnachweise für Dateiaktionen und Schriftgröße](NATIVE-ACTIONS-FONT-2026-10-22.md)).
 Die [Pane-Exploration vom 23.10.](PANES-2026-10-23.md) ergänzt rechte/untere lokale Splits, unabhängige Shells, CWD-/Titelwechsel und erhaltene Quellshell; Escape im Kopfzeilenmenü ist #629.
 Weder Altbuild noch Fixtures ersetzen die vollständigen Fallkombinationen.
+Die [aktuelle Sichtprüfung auf 1.2.23](CANDIDATE-1.2.23-NATIVE.md) umfasst 42 einzeln
+betrachtete Originalaufnahmen desselben Quellstands: Agentenzustände, gefüllte und
+leere Verbindungen, Favoriten, Dateimanager DE/EN in Hell/Dunkel und Pane-Drag.
+Die installierte DMG-Abnahme und reale Transfers bleiben davon getrennt.
 
 ## Referenzen und Bewertung
 
