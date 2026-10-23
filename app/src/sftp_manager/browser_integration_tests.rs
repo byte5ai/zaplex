@@ -5853,6 +5853,181 @@ fn test_f5_local_to_remote_starts_an_upload_transfer() {
     });
 }
 
+fn publish_transfer_changes(app: &mut App) {
+    app.update(|ctx| {
+        TransferQueue::handle(ctx).update(ctx, |queue, ctx| queue.publish_pending_changes(ctx));
+    });
+}
+
+#[test]
+fn transfer_completion_refreshes_peer_listing_and_preserves_its_selection() {
+    for (source_node, target_node) in [("", ""), ("", "remote"), ("remote", ""), ("a", "b")] {
+        for directory in [false, true] {
+            for moving in [false, true] {
+                App::test((), |mut app| async move {
+                    initialize_app(&mut app);
+                    let name = if directory {
+                        "copied/child.txt"
+                    } else {
+                        "copied"
+                    };
+                    let temp = create_temp_dir_with_files(&[
+                        (&format!("left/{name}"), b"transferred bytes"),
+                        ("right/keep.txt", b"keep"),
+                    ]);
+                    // Backend injection bypasses navigation's realpath lookup.
+                    // Use a resolved local directory, including on hosts whose
+                    // temporary directory itself contains a symlink.
+                    let root = temp.path().canonicalize().unwrap();
+                    let (_, source) = create_view_with_node(&mut app, source_node);
+                    let (_, target) = create_view_with_node(&mut app, target_node);
+                    let setup = |node: &str, folder: &str| -> (Arc<dyn SftpBackend>, PathBuf) {
+                        if node.is_empty() {
+                            (
+                                Arc::new(InMemorySftpBackend::for_local_filesystem()),
+                                root.join(folder),
+                            )
+                        } else {
+                            (
+                                Arc::new(InMemorySftpBackend::new(root.clone())),
+                                PathBuf::from(format!("/{folder}")),
+                            )
+                        }
+                    };
+                    source.update(&mut app, |view, ctx| {
+                        let (backend, path) = setup(source_node, "left");
+                        view.set_backend_for_test(backend, path, ctx);
+                        assert_eq!(view.entries.len(), 1);
+                        view.mark_index_for_test(0);
+                    });
+                    let (_, target_path) = setup(target_node, "right");
+                    target.update(&mut app, |view, ctx| {
+                        let (backend, path) = setup(target_node, "right");
+                        view.set_backend_for_test(backend, path, ctx);
+                        assert_eq!(view.entries.len(), 1);
+                        view.handle_action(&SftpBrowserAction::CursorFirst, ctx);
+                        view.handle_action(&SftpBrowserAction::CursorDown, ctx);
+                        view.mark_index_for_test(0);
+                    });
+                    source.update(&mut app, |view, ctx| {
+                        view.handle_action(
+                            &if moving {
+                                SftpBrowserAction::MoveToOtherPane
+                            } else {
+                                SftpBrowserAction::CopyToOtherPane
+                            },
+                            ctx,
+                        );
+                    });
+                    assert_eq!(
+                        std::fs::read(root.join("right").join(name)).unwrap_or_else(|error| {
+                            let activities = app.read(|ctx| TransferQueue::as_ref(ctx).activities().collect::<Vec<_>>());
+                            panic!("{source_node:?} -> {target_node:?}, directory={directory}, moving={moving}: {error}; {activities:?}");
+                        }),
+                        b"transferred bytes"
+                    );
+                    assert_eq!(root.join("left").join(name).exists(), !moving);
+                    // Exercise the production notification pump, with no focus
+                    // change, navigation, or explicit refresh in the target.
+                    publish_transfer_changes(&mut app);
+                    target.read(&app, |view, _| {
+                        assert_eq!(view.current_path, target_path);
+                        assert!(view.entries.iter().any(|entry| entry.name == "copied"));
+                        assert_eq!(
+                            view.entries[view.cursor_entry_index().unwrap()].name,
+                            "keep.txt"
+                        );
+                        assert_eq!(marked_entry_names(view), vec!["keep.txt"]);
+                    });
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn transfer_completion_does_not_restore_a_target_that_has_navigated_away() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp = create_temp_dir_with_files(&[
+            ("left/copied", b"bytes"),
+            ("right/keep", b"keep"),
+            ("elsewhere/other", b"other"),
+        ]);
+        let root = temp.path().to_path_buf();
+        let (_, source) = create_view_with_node(&mut app, "remote");
+        let (_, target) = create_view_with_node(&mut app, "remote");
+        for (view, path) in [(&source, "/left"), (&target, "/right")] {
+            view.update(&mut app, |view, ctx| {
+                view.set_backend_for_test(
+                    Arc::new(InMemorySftpBackend::new(root.clone())),
+                    PathBuf::from(path),
+                    ctx,
+                )
+            });
+        }
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx)
+        });
+        target.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &SftpBrowserAction::NavigateTo(PathBuf::from("/elsewhere")),
+                ctx,
+            )
+        });
+        publish_transfer_changes(&mut app);
+        target.read(&app, |view, _| {
+            assert_eq!(view.current_path, PathBuf::from("/elsewhere"));
+            assert_eq!(view.entries.len(), 1);
+            assert_eq!(view.entries[0].name, "other");
+        });
+    });
+}
+
+#[test]
+fn transfer_completion_does_not_refresh_the_same_path_on_another_host() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let temp =
+            create_temp_dir_with_files(&[("left/copied", b"bytes"), ("right/keep", b"keep")]);
+        let other_temp = create_temp_dir_with_files(&[("right/unchanged", b"old")]);
+        let root = temp.path().to_path_buf();
+        let (_, source) = create_view_with_node(&mut app, "remote");
+        let (_, target) = create_view_with_node(&mut app, "remote");
+        for (view, path) in [(&source, "/left"), (&target, "/right")] {
+            view.update(&mut app, |view, ctx| {
+                view.set_backend_for_test(
+                    Arc::new(InMemorySftpBackend::new(root.clone())),
+                    PathBuf::from(path),
+                    ctx,
+                )
+            });
+        }
+        source.update(&mut app, |view, ctx| {
+            view.handle_action(&SftpBrowserAction::CopyToOtherPane, ctx)
+        });
+        // Another host has the same path but must not receive this event.
+        let (_, other_view) = create_view_with_node(&mut app, "different-host");
+        other_view.update(&mut app, |view, ctx| {
+            view.set_backend_for_test(
+                Arc::new(InMemorySftpBackend::new(other_temp.path().to_path_buf())),
+                PathBuf::from("/right"),
+                ctx,
+            );
+        });
+        std::fs::write(other_temp.path().join("right/not-yet-listed"), b"new").unwrap();
+        publish_transfer_changes(&mut app);
+        other_view.read(&app, |view, _| {
+            assert_eq!(
+                view.entries.len(),
+                1,
+                "an event for another host must not trigger a listing"
+            );
+            assert_eq!(view.entries[0].name, "unchanged");
+        });
+    });
+}
+
 #[test]
 fn global_transfer_ui_updates_and_controls_jobs_from_another_pane() {
     warpui::App::test((), |mut app| async move {
