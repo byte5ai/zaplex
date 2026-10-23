@@ -24,12 +24,16 @@ scheitert vor den schweren Jobs.
 
 ### Geprüftes DMG unverändert veröffentlichen
 
-`publish-tested-dmg.yml` übernimmt einen abgeschlossenen Main-Batch und dessen
-erfolgreiche vollständige `gui-resume.yml`-Fortsetzung. Alle Compile-, Regression-,
-SFTP-, Signatur- und Paketprüfungen müssen erfolgreich sein. Ausschließlich die
-ursprüngliche GUI-Stufe darf im Batch fehlen oder abgebrochen sein; die Fortsetzung
-muss alle 15 tatsächlichen XCTest-Fälle ohne Fehler oder Auslassung nachweisen.
-App-Commit, Test-Commit, installierte Version und DMG-Prüfsumme werden verglichen.
+`publish-tested-dmg.yml` übernimmt einen abgeschlossenen Main-Batch. Hat dessen
+vollständige GUI-Suite bereits bestanden, ist `gui_run_id` dieselbe Run-ID wie
+`artifact_run_id`; eine erneute GUI-Ausführung ist nicht erforderlich. Alternativ
+kann eine erfolgreiche vollständige `gui-resume.yml`-Fortsetzung den GUI-Nachweis
+liefern. Alle Compile-, Regression-, SFTP-, Signatur- und Paketprüfungen müssen
+erfolgreich sein. Nur bei einer solchen Fortsetzung darf die ursprüngliche
+GUI-Stufe im Batch fehlen oder abgebrochen sein. Der Nachweis muss alle 15
+tatsächlichen XCTest-Fälle ohne Fehler oder Auslassung enthalten. App-Commit,
+Test-Commit, installierte Version und DMG-Prüfsumme werden verglichen; direkte
+Batch-Nachweise müssen außerdem exakt aus demselben Run und Versuch stammen.
 
 Die Veröffentlichung enthält das unveränderte `Zaplex-arm64.dmg`, den passenden
 Linux-x86_64-Daemon und dessen Prüfsummen. Sie erzeugt zunächst einen privaten

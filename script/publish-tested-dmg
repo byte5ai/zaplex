@@ -32,17 +32,28 @@ def validate_runs(build, build_jobs, artifacts, gui, gui_jobs, source):
             raise ValueError(f"Unsuccessful batch job: {job['name']}")
     if any(gui.get(key) != value for key, value in {
         "status": "completed", "conclusion": "success", "event": "workflow_dispatch",
-        "head_branch": "main", "path": ".github/workflows/gui-resume.yml",
+        "head_branch": "main",
     }.items()) or gui.get("head_repository", {}).get("full_name") != REPO:
-        raise ValueError("A successful main GUI continuation is required")
+        raise ValueError("A successful main GUI run is required")
     if not re.fullmatch(r"[a-f0-9]{40}", gui.get("head_sha", "")):
         raise ValueError("Invalid GUI source commit")
     by_name = {job["name"]: job for job in gui_jobs}
     if len(by_name) != len(gui_jobs):
         raise ValueError("Ambiguous GUI jobs")
-    for name in ("Verify existing DMG provenance", "gui / Installed DMG user flows"):
-        if by_name.get(name, {}).get("conclusion") != "success":
-            raise ValueError(f"Missing successful GUI gate: {name}")
+    if gui.get("path") == ".github/workflows/ci-batch.yml":
+        if (type(build.get("id")) is not int or build["id"] <= 0
+                or gui.get("id") != build["id"] or gui.get("head_sha") != source
+                or build.get("conclusion") != "success"
+                or gui.get("run_attempt") != build.get("run_attempt")):
+            raise ValueError("Batch GUI evidence must come from this successful artifact run")
+        if resume["batch_gui_result"](by_name) != "success":
+            raise ValueError("Missing successful installed-DMG batch gate")
+    elif gui.get("path") == ".github/workflows/gui-resume.yml":
+        for name in ("Verify existing DMG provenance", "gui / Installed DMG user flows"):
+            if by_name.get(name, {}).get("conclusion") != "success":
+                raise ValueError(f"Missing successful GUI gate: {name}")
+    else:
+        raise ValueError("Unsupported GUI workflow")
 
 
 def validate_receipt(receipt, summary, tree, source, test_source, digest, info, tag):

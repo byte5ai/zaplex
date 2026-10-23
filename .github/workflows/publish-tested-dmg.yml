@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       gui_run_id:
-        description: Successful full GUI continuation against the exact DMG
+        description: Successful full GUI run (same batch ID or GUI continuation)
         required: true
         type: string
       source_sha:
