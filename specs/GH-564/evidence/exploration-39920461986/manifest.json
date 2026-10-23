@@ -1,0 +1,275 @@
+{
+  "app_source_sha": "bf52cf4b75033f48c4d3d945da26bdcaa803f323",
+  "test_source_sha": "ba7c781e19f97e8d162fa669bad6ef4163888a5d",
+  "artifact_run_id": "39871910859",
+  "gui_run_id": "39920461986",
+  "dmg_sha256": "13d427912bd1754b2283c75c1d40fc4722f056454d000f1aaa3963813ab5cf7b",
+  "version": "1.2.23",
+  "locale": "en",
+  "theme": "dark",
+  "window_points": [
+    1024,
+    678
+  ],
+  "originals": "Privately retained; originals contain private connection coordinates.",
+  "images": [
+    {
+      "name": "01-start.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573"
+    },
+    {
+      "name": "02-local-input.png",
+      "sha256": "6c3524b376d226a0f215d9dd3af67ba8971fe14173cca209ee3e43dc4ed42168"
+    },
+    {
+      "name": "03-local-ready.png",
+      "sha256": "a7b58c2256e970b2ddc7fddc4a5b5ed014a98f67e920fe47e507fcdef4d97e53"
+    },
+    {
+      "name": "04-header-menu.png",
+      "sha256": "cf1031c3951393a83dc267fc3d39f1b5e23ed814db46ba5cc70dc87874199986"
+    },
+    {
+      "name": "05-menu-screen.png",
+      "sha256": "99074875e2ace83799f337458d90b38cf3dba1d580e503e5273e423b0eaf2b24"
+    },
+    {
+      "name": "06-clear-screen.png",
+      "sha256": "f16528b02d37ca8ccae782fe36d844ccd4bd140be946ff34f1b5352c3beb7f5f"
+    },
+    {
+      "name": "07-header-menu-clear.png",
+      "sha256": "63acdf96efa5093db6e56a16d34ed5af96e41a2d3008725d5dc2ce658f21dd11"
+    },
+    {
+      "name": "08-menu-escape.png",
+      "sha256": "403e61c5ac409e7b6b1c5cf9ef1ad9dc56f2426ebde5066745cec4345a3e8441"
+    },
+    {
+      "name": "09-escape-input.png",
+      "sha256": "4829b50c2f2e53774ba04f5cb25b1b4bed6a81098a373909d3ccd06f37bfa809"
+    },
+    {
+      "name": "10-current-screen.png",
+      "sha256": "e64fe55a26959081e0e09fe39c0323b849d28a37f1480b4de6eefb1bc3f2182b"
+    },
+    {
+      "name": "11-escape-result.png",
+      "sha256": "66233afebc04c1265f7808c58b9966f1a9832ec39035023b4ad920bcef87aee4"
+    },
+    {
+      "name": "12-connections.png",
+      "sha256": "6d87ec0aeec9a9ced661148af2227ecd37a6cd2963e54d84585ad1c49f242e0a"
+    },
+    {
+      "name": "13-add-connection.png",
+      "sha256": "9646cbc934342a69e645fc51dddaba1dd54f51e13b291e0eaed912aefd124cab"
+    },
+    {
+      "name": "14-imported-host.png",
+      "sha256": "d9c5b65960a70d3e504bbf3fb728bc75566184cd6ad2ab5a50ecaffea5f0f110"
+    },
+    {
+      "name": "15-connect.png",
+      "sha256": "7226ea60ffa84ec9ae90cf934c4844f16e660637081673eabdbe72094db1ad33"
+    },
+    {
+      "name": "16-remote-input.png",
+      "sha256": "3618fc97b5a4dc6ba569d45e9e6bd2d0e99ecc70e0a43a9b4fbafd11dea23f2c"
+    },
+    {
+      "name": "17-remote-before.png",
+      "sha256": "7a4ba1ff8c6aa390ac58c3232ae030a3213ab9b1d175e304ac6197f25c538cd0"
+    },
+    {
+      "name": "18-help-input.png",
+      "sha256": "ddda92dc78707058d59cd55dcf797360140e692c182133adeec4c9bed864ef8d"
+    },
+    {
+      "name": "19-cli-help.png",
+      "sha256": "f506016a00adb1aa659b9a28cf049cf5046f5df6e7528979ada074f4655fe073"
+    },
+    {
+      "name": "20-provider-input.png",
+      "sha256": "68495ec6a145f2d2485f5ca688a18d6ea380018d7195b5f63874d8799d029b20"
+    },
+    {
+      "name": "21-local-return.png",
+      "sha256": "f64f317981c0471b65d5c4d2f51933852241f1d23c749692d73b0cf3dec60fb1"
+    },
+    {
+      "name": "22-disconnect-input.png",
+      "sha256": "59f0312a36220493e41c9c1e0cb2bf430f73e96ca58646a0adc0d7467a955831"
+    },
+    {
+      "name": "23-disconnect-result.png",
+      "sha256": "c14a62e61193cecd90f8affe4c393ea839f79d88e72cf01e9a626458e8155875"
+    },
+    {
+      "name": "24-remote-after-drop.png",
+      "sha256": "0fda7b3ee5727da5ec914c5ffebe78f2cc60f39fecb581d491ec721b4ac4db40"
+    },
+    {
+      "name": "25-remote-proof-input.png",
+      "sha256": "4bf59c6d2985b0dac12824c92b43323da16987dc44e4ad43775052050f1596e7"
+    },
+    {
+      "name": "26-persistence-proof.png",
+      "sha256": "b3bff8b2442dc6f355582c5c8b7953076261b72acdfe5440d4bec37c204121b7"
+    },
+    {
+      "name": "27-remote-filemanager.png",
+      "sha256": "647986d26e9dcf0cf00e203733818015b8e9a4dee31bdb49a882af7aef625f2f"
+    },
+    {
+      "name": "28-sftp-retry.png",
+      "sha256": "658f440a3369722aee1407e337708141979d049c16dd91fec1844e8da9908292"
+    },
+    {
+      "name": "29-return-remote-shell.png",
+      "sha256": "d6787d4c0796a11951958aee1d975f5003d342e7faf321e3f881e2130305a0a8"
+    },
+    {
+      "name": "30-return-terminal.png",
+      "sha256": "d6787d4c0796a11951958aee1d975f5003d342e7faf321e3f881e2130305a0a8"
+    },
+    {
+      "name": "31-local-log-target.png",
+      "sha256": "fc699a95bdf9b5676375f760d7c0e59fcef2ab9d5293f5a97e09ee921159ebb3"
+    },
+    {
+      "name": "32-log-input.png",
+      "sha256": "4b8bc3f5466bf395d1e929545c2c2d5578072e8cf23be4f0c35bd02b787bf4ab"
+    },
+    {
+      "name": "33-sftp-error-cause.png",
+      "sha256": "9e2cc331e92c7c6ca0b1b98ebe5df80a0675f7f7e724305a428e7e2ee0900ac2"
+    },
+    {
+      "name": "34-secure-proof-input.png",
+      "sha256": "8c1be16dd66921b45424908e6691f480189cee47de9598812dbc5cffb09757f3"
+    },
+    {
+      "name": "35-proof-secured.png",
+      "sha256": "c6e9982458014ff41de3462eaa52f9e3455c76365548f02fc53547a0a11ea676"
+    },
+    {
+      "name": "36-diagnostics-input.png",
+      "sha256": "494e102cddeefbba02b2d3cf1a45690be5d86c074a093431035c95f8db67bec3"
+    },
+    {
+      "name": "37-diagnostics.png",
+      "sha256": "89af95ad893e3774f3036e6929c87306a66deb60fcb90da33fcca2a5f8c1235e"
+    },
+    {
+      "name": "38-resolved-host-input.png",
+      "sha256": "c7b3cd95fad0755a9bbee1af84e76b26399f4d1dc63030c6accb54b070708805"
+    },
+    {
+      "name": "39-diagnostic-retry-target.png",
+      "sha256": "54bb5bc97a4672eb321c681ea21eae6131d3161759188de28e8515ca6a9f8ac1"
+    },
+    {
+      "name": "40-resolved-host-result.png",
+      "sha256": "857fe7f31bae0abbf1ae5ba0279d9800759108f1e08b1c2f36bcb1aa3f9b3578"
+    },
+    {
+      "name": "41-fingerprint-input.png",
+      "sha256": "60ed71210c2f74cd3d1b0ce0c73d2533bcf7bc03a6fb21663fb6e6726b29ce9d"
+    },
+    {
+      "name": "42-local-fingerprint-target.png",
+      "sha256": "f41f08fcaec7525bf664a25f3979e9e53b7451a394315755a5cdafcbcb7251d3"
+    },
+    {
+      "name": "43-fingerprint-input.png",
+      "sha256": "a3e020cd7563ffee5c29597823c9854f31f2d20f1e450af892eef042151f8026"
+    },
+    {
+      "name": "44-trusted-fingerprint.png",
+      "sha256": "e72b3bbf96005661c86c8c8ab7eaaf02229ee88919414aeb35ea158b5c7400a6"
+    },
+    {
+      "name": "45-confirm-same-fingerprint.png",
+      "sha256": "857fe7f31bae0abbf1ae5ba0279d9800759108f1e08b1c2f36bcb1aa3f9b3578"
+    },
+    {
+      "name": "46-remote-files.png",
+      "sha256": "221466205611dc6a0ea34de955bd2639e832fa2225f2828fa1a539229b1a5883"
+    },
+    {
+      "name": "47-destination-options.png",
+      "sha256": "5b6cd432c04024210c477babe90d25033f2b63fe1aea4c38aa9e88e3a83ee011"
+    },
+    {
+      "name": "48-local-destination-target.png",
+      "sha256": "75075ecf0a2cfad8d9b1752fd74a7d61079a8a48c365662cc9e0c51a2d7d46e8"
+    },
+    {
+      "name": "49-local-files.png",
+      "sha256": "85d7d028635d33c6c637b2696be231038822f1fb23a84f4106cb7f5f2c7cfc2b"
+    },
+    {
+      "name": "50-copy-destination-choice.png",
+      "sha256": "4a3fc28fabd92c01f8981306f816e029db5a9baee6d6f9669d5f053002734944"
+    },
+    {
+      "name": "51-destination-selected.png",
+      "sha256": "d4e22a1ccb0ed9f99f188f54e7f2e3b15a23b9e361bea1f6245fe8f9836844ec"
+    },
+    {
+      "name": "52-copy-result.png",
+      "sha256": "1b97d36cacfd412bacc58c21a35e88e60d5a820d130d4c6da87322fd379faa5c"
+    },
+    {
+      "name": "53-copy-conflict.png",
+      "sha256": "7b6b9e067f50ea3531de1e5fb07f48951f2fb285bbfadfdc52e92a56a27e874f"
+    },
+    {
+      "name": "54-conflict-cancelled.png",
+      "sha256": "a4aa438fbcdbc774778e792389bd45903974a6cb05ceea26cf7637f0fd586752"
+    },
+    {
+      "name": "55-local-copy-visible.png",
+      "sha256": "276bd8ac221384a0732c7d6a19cc364dfc0ad782267fdd98f287d633065b05a3"
+    },
+    {
+      "name": "56-return-local-shell.png",
+      "sha256": "ee4dbe68b56a9e41e53efc01d4651a5098c8eb77a08f437b689d7e2ceb89a59c"
+    },
+    {
+      "name": "57-gui-copy-verify-input.png",
+      "sha256": "d620c836a7b41f0c4f735a2734816b4ff01f1742b41aa2ed048735e7b8ff4b89"
+    },
+    {
+      "name": "58-gui-copy-proof.png",
+      "sha256": "ffe6cd6708b3448ee5f0479f2810ee558ebc109da0f9b8a1515ab81fa571ccb2"
+    },
+    {
+      "name": "59-finish-input.png",
+      "sha256": "8a7b305be85cbaeab078c79deb1941f9beff676955e2761d200aef2f1557e8a5"
+    }
+  ],
+  "separate_automated_split_geometry_review": [
+    {
+      "direction": "down",
+      "name": "95154BDB-D03E-4D72-A07B-1F18F9C8EDAE.png",
+      "sha256": "0d9a0a4ea03301f936207bd47f0a539e596567ecda1da60322b04dc43ef6a662"
+    },
+    {
+      "direction": "left",
+      "name": "7CF06967-4EA1-45BC-899D-D0A5429EF421.png",
+      "sha256": "864a8880d775d1ff42112bec9f5bc8d4e13c7b55cae0667dd080ac83b3237d1b"
+    },
+    {
+      "direction": "right",
+      "name": "8C5A41D0-F3A5-49D5-B4BB-29D8BBA5524A.png",
+      "sha256": "533e039b35afef882dcbc9d83d3234165879dc2073bfe7d3c5149a105b5606f7"
+    },
+    {
+      "direction": "up",
+      "name": "5E78DFA3-017B-4E44-9948-2B10730E825C.png",
+      "sha256": "a96be5f41eba9a9b9d6cc8209d2f0a8784384666da5141627d246c7b59dd1e34"
+    }
+  ]
+}

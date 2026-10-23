@@ -58,6 +58,7 @@ use super::keynav::{apply_cursor_move, clamp_cursor, CursorMove};
 use super::sftp_backend::{LiveSftpBackend, SafeFileClientSlot, SftpBackend};
 use super::sftp_ops;
 use super::sftp_ops::normalize_remote_path;
+use super::transfer_queue::ChangedTransferPath;
 use super::types::{
     ConnectionState, Dialog, EntryIdentity, EntryReference, FileEntry, FileEntryType,
     TargetPickerRow, TransferDirection, TransferState, TransferTask,
@@ -1419,6 +1420,20 @@ impl SftpBrowserView {
             },
         );
         me.schedule_transfer_progress_poll(ctx);
+        ctx.subscribe_to_model(
+            &super::transfer_queue::TransferQueue::handle(ctx),
+            |me, _, paths, ctx| {
+                if me.sftp.is_some()
+                    && paths.iter().any(|changed| {
+                        changed.fs == me.fs_namespace()
+                            && (changed.path.parent() == Some(me.current_path.as_path())
+                                || me.current_path.starts_with(&changed.path))
+                    })
+                {
+                    me.refresh_dir(ctx);
+                }
+            },
+        );
 
         // The transfer-target footer shows another pane's live location.
         ctx.observe(&FileManagerRegistry::handle(ctx), |_, _, ctx| ctx.notify());
@@ -3061,6 +3076,45 @@ impl SftpBrowserView {
         self.selected.clear();
     }
 
+    /// Capture filesystem identities before the worker starts. Refresh events
+    /// carry no view handles and never redirect a pane that has since navigated.
+    fn transfer_changed_paths(
+        &self,
+        job: &super::transfer_job::TransferJob,
+        direction: TransferDirection,
+        ctx: &ViewContext<Self>,
+    ) -> Vec<ChangedTransferPath> {
+        let namespace = |backend: &Arc<dyn SftpBackend>| {
+            FileManagerRegistry::as_ref(ctx)
+                .namespace_for_backend(backend)
+                .or_else(|| {
+                    self.sftp
+                        .as_ref()
+                        .and_then(|own| Arc::ptr_eq(own, backend).then(|| self.fs_namespace()))
+                })
+        };
+        let source = if direction == TransferDirection::Upload {
+            Some(FsNamespace::Local)
+        } else {
+            namespace(&job.source_backend)
+        };
+        let target = if direction == TransferDirection::Download {
+            Some(FsNamespace::Local)
+        } else {
+            namespace(&job.target_backend)
+        };
+        // Even failures can publish part of a directory or leave recovery files.
+        [(source, &job.source_path), (target, &job.target_path)]
+            .into_iter()
+            .filter_map(|(fs, path)| {
+                fs.map(|fs| ChangedTransferPath {
+                    fs,
+                    path: path.clone(),
+                })
+            })
+            .collect()
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn spawn_backend_queue_job(
         &mut self,
@@ -3155,6 +3209,7 @@ impl SftpBrowserView {
             },
             conflict,
         };
+        let changed_paths = self.transfer_changed_paths(&job, TransferDirection::Copy, ctx);
         let worker_activity = activity.clone();
         if let Some(handle) = self.run_blocking(
             ctx,
@@ -3169,6 +3224,7 @@ impl SftpBrowserView {
                 } else {
                     super::transfer_job::run_transfer(&job, &control, Some(&mut on_progress))
                 };
+                worker_activity.record_changed_paths(changed_paths);
                 match &result {
                     Ok(outcome) => worker_activity.set_state(queue_state_for_outcome(outcome)),
                     Err(super::sftp_ops::SftpOpsError::Cancelled) => worker_activity
@@ -4011,6 +4067,7 @@ impl SftpBrowserView {
             },
             conflict: super::transfer_job::ConflictDecision::MergeSkip,
         };
+        let changed_paths = self.transfer_changed_paths(&job, direction, ctx);
         let worker_activity = activity.clone();
         if let Some(handle) = self.run_blocking(
             ctx,
@@ -4025,6 +4082,7 @@ impl SftpBrowserView {
                 if let Err(error) = &result {
                     eprintln!("Directory transfer test diagnostic: {error:?}");
                 }
+                worker_activity.record_changed_paths(changed_paths);
                 match &result {
                     Ok(outcome) => worker_activity.set_state(queue_state_for_outcome(outcome)),
                     Err(super::sftp_ops::SftpOpsError::Cancelled) => worker_activity
@@ -4310,6 +4368,7 @@ impl SftpBrowserView {
             },
             conflict,
         };
+        let changed_paths = self.transfer_changed_paths(&job, direction, ctx);
         let worker_activity = activity.clone();
         ctx.notify();
         if let Some(handle) = self.run_blocking(
@@ -4318,6 +4377,7 @@ impl SftpBrowserView {
                 let mut on_progress = |progress| worker_activity.update_progress(progress);
                 let result =
                     super::transfer_job::run_transfer(&job, &control, Some(&mut on_progress));
+                worker_activity.record_changed_paths(changed_paths);
                 match &result {
                     Ok(outcome) => worker_activity.set_state(queue_state_for_outcome(outcome)),
                     Err(super::sftp_ops::SftpOpsError::Cancelled) => worker_activity

@@ -202,6 +202,14 @@ impl FileManagerRegistry {
         self.backends.get(&id).cloned()
     }
 
+    pub fn namespace_for_backend(&self, backend: &Arc<dyn SftpBackend>) -> Option<FsNamespace> {
+        self.panes.iter().find_map(|pane| {
+            self.backends
+                .get(&pane.id)
+                .and_then(|registered| Arc::ptr_eq(registered, backend).then(|| pane.fs.clone()))
+        })
+    }
+
     /// Resolve a previously captured pane coordinate only while every routing
     /// component still matches. This is intentionally stricter than looking up
     /// by pane id: moving panes, changing directory/mode, reconnecting, or

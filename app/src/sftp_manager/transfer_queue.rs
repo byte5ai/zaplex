@@ -9,6 +9,7 @@ use warpui::elements::{ClippedScrollStateHandle, MouseStateHandle};
 use warpui::r#async::Timer;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+use super::fm_registry::FsNamespace;
 use super::sftp_backend::{InMemorySftpBackend, SftpBackend};
 use super::sftp_ops::SftpOpsError;
 use super::transfer_job::{
@@ -18,6 +19,12 @@ use super::transfer_job::{
 use super::types::{TransferDirection, TransferPhase};
 
 pub type TransferId = u64;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangedTransferPath {
+    pub fs: FsNamespace,
+    pub path: PathBuf,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransferActionTarget {
@@ -122,6 +129,7 @@ struct TransferQueueData {
     workspace_scroll_handle: ClippedScrollStateHandle,
     recovery_worker_spawner: Arc<dyn RecoveryWorkerSpawner>,
     revision: u64,
+    changed_paths: Vec<ChangedTransferPath>,
 }
 
 impl Default for TransferQueueData {
@@ -142,6 +150,7 @@ impl Default for TransferQueueData {
             workspace_scroll_handle: ClippedScrollStateHandle::default(),
             recovery_worker_spawner: Arc::new(ThreadRecoveryWorkerSpawner),
             revision: 0,
+            changed_paths: Vec::new(),
         }
     }
 }
@@ -174,6 +183,16 @@ pub struct TransferActivityHandle {
 }
 
 impl TransferActivityHandle {
+    /// Called by the worker, so closing its source view cannot lose the update.
+    pub fn record_changed_paths(&self, paths: Vec<ChangedTransferPath>) {
+        let mut data = self.data.lock().expect("transfer queue lock poisoned");
+        for path in paths {
+            if !data.changed_paths.contains(&path) {
+                data.changed_paths.push(path);
+            }
+        }
+    }
+
     pub fn control(&self) -> Arc<TransferControl> {
         self.control.clone()
     }
@@ -331,18 +350,24 @@ impl TransferQueue {
                 Timer::after(ACTIVITY_NOTIFICATION_INTERVAL).await;
             },
             |queue, _, ctx| {
-                let revision = queue
-                    .data
-                    .lock()
-                    .expect("transfer queue lock poisoned")
-                    .revision;
-                if revision != queue.notified_revision {
-                    queue.notified_revision = revision;
-                    ctx.notify();
-                }
+                queue.publish_pending_changes(ctx);
                 queue.schedule_activity_notifications(ctx);
             },
         );
+    }
+
+    pub(crate) fn publish_pending_changes(&mut self, ctx: &mut ModelContext<Self>) {
+        let (revision, paths) = {
+            let mut data = self.data.lock().expect("transfer queue lock poisoned");
+            (data.revision, std::mem::take(&mut data.changed_paths))
+        };
+        if revision != self.notified_revision {
+            self.notified_revision = revision;
+            ctx.notify();
+        }
+        if !paths.is_empty() {
+            ctx.emit(paths);
+        }
     }
 
     pub fn enqueue(
@@ -948,7 +973,7 @@ fn summarize(activities: impl Iterator<Item = TransferActivity>) -> ActivitySumm
 }
 
 impl Entity for TransferQueue {
-    type Event = ();
+    type Event = Vec<ChangedTransferPath>;
 }
 
 impl SingletonEntity for TransferQueue {}
