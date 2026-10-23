@@ -16,6 +16,7 @@ class ProvenanceTests(unittest.TestCase):
     def setUp(self):
         self.source = "a" * 40
         self.build = {
+            "id": 101, "run_attempt": 1,
             "status": "completed", "conclusion": "cancelled", "event": "workflow_dispatch",
             "head_branch": "main", "path": ".github/workflows/ci-batch.yml",
             "head_repository": {"full_name": "byte5ai/zaplex"}, "head_sha": self.source,
@@ -48,6 +49,46 @@ class ProvenanceTests(unittest.TestCase):
 
     def test_completed_build_with_separate_gui_success_is_accepted(self):
         self.validate()
+
+    def use_successful_batch(self):
+        self.build["conclusion"] = "success"
+        self.jobs[-1] = {
+            "name": "test_dmg / Verify installed DMG user flows / Installed DMG user flows",
+            "conclusion": "success",
+        }
+        self.gui = copy.deepcopy(self.build)
+        self.gui_jobs = copy.deepcopy(self.jobs)
+
+    def test_original_successful_batch_needs_no_gui_rerun(self):
+        self.use_successful_batch()
+        self.validate()
+
+    def test_other_batch_source_or_attempt_cannot_supply_gui_evidence(self):
+        self.use_successful_batch()
+        for key, value in (("id", 102), ("head_sha", "c" * 40), ("run_attempt", 2)):
+            original = self.gui[key]
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.gui[key] = value
+                try:
+                    self.validate()
+                finally:
+                    self.gui[key] = original
+
+    def test_batch_gui_job_must_actually_pass(self):
+        self.use_successful_batch()
+        for conclusion in ("skipped", "failure", "cancelled", None):
+            with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
+                self.gui_jobs[-1]["conclusion"] = conclusion
+                self.validate()
+        self.gui_jobs.pop()
+        with self.assertRaises(ValueError):
+            self.validate()
+
+    def test_failed_build_cannot_claim_its_own_green_gui_run(self):
+        self.use_successful_batch()
+        self.build["conclusion"] = "failure"
+        with self.assertRaises(ValueError):
+            self.validate()
 
     def test_each_compile_test_and_package_gate_is_required(self):
         for index in range(len(self.jobs) - 1):
