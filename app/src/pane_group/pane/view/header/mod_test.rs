@@ -1,7 +1,10 @@
+use std::{cell::RefCell, rc::Rc};
+
+use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    elements::Empty, platform::WindowStyle, App, AppContext, Element, Entity, TypedActionView,
-    View, ViewContext,
+    elements::Empty, event::Event as WindowEvent, platform::WindowStyle, App, AppContext,
+    Element, Entity, Presenter, TypedActionView, View, ViewContext, WindowInvalidation,
 };
 
 use crate::{
@@ -9,13 +12,120 @@ use crate::{
     auth::AuthStateProvider,
     cloud_object::model::persistence::ObjectStoreModel,
     menu::{MenuAction, MenuItemFields},
-    pane_group::{focus_state::PaneFocusHandle, BackingView, PaneConfiguration, PaneId, PaneView},
+    pane_group::{
+        focus_state::PaneFocusHandle, BackingView, PaneConfiguration, PaneId, PaneView,
+        TerminalViewResources,
+    },
     settings_view::keybindings::KeybindingChangedNotifier,
     test_util::settings::initialize_settings_for_tests,
+    terminal::{shell::ShellName, MockTerminalManager, ShellLaunchState},
     NetworkStatus, UpdateManager, UserProfiles, UserWorkspaces,
 };
 
 use super::{Event, OpenOverlay, PaneHeaderAction};
+
+#[test]
+fn terminal_header_mouse_click_and_drag_reach_pane_events() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        let tips_completed = app.add_model(|_| Default::default());
+        let (window_id, pane) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let manager = MockTerminalManager::create_model(
+                ShellLaunchState::DeterminingShell {
+                    available_shell: None,
+                    display_name: ShellName::blank(),
+                },
+                TerminalViewResources {
+                    tips_completed,
+                    model_event_sender: None,
+                    control_tab_id: "header-mouse-test".to_string(),
+                },
+                None,
+                None,
+                vec2f(800., 600.),
+                ctx.window_id(),
+                ctx,
+            );
+            let terminal = manager.as_ref(ctx).view();
+            let config = terminal.as_ref(ctx).pane_configuration().clone();
+            PaneView::new(PaneId::dummy_pane_id(), terminal, manager, config, ctx)
+        });
+        let header = pane.read(&app, |pane, _| pane.header().clone());
+        let received = Rc::new(RefCell::new(Vec::new()));
+        let observed = received.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&header, move |_, event, _| match event {
+                Event::PaneHeaderClicked => observed.borrow_mut().push("click"),
+                Event::PaneDragStarted => observed.borrow_mut().push("drag"),
+                _ => {}
+            });
+        });
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let dispatch = |app: &mut App, event| {
+            app.update(|ctx| {
+                presenter.borrow_mut().invalidate(
+                    WindowInvalidation {
+                        updated: ctx.view_ids_for_window(window_id).into_iter().collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(800., 600.), 1., None, ctx);
+                ctx.simulate_window_event(event, window_id, presenter.clone());
+            });
+        };
+        let position = vec2f(250., 17.);
+        dispatch(
+            &mut app,
+            WindowEvent::MouseMoved {
+                position,
+                cmd: false,
+                shift: false,
+                is_synthetic: false,
+            },
+        );
+        dispatch(
+            &mut app,
+            WindowEvent::LeftMouseDown {
+                position,
+                modifiers: Default::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+        );
+        dispatch(
+            &mut app,
+            WindowEvent::LeftMouseUp {
+                position,
+                modifiers: Default::default(),
+            },
+        );
+        assert_eq!(&*received.borrow(), &["click"]);
+        dispatch(
+            &mut app,
+            WindowEvent::LeftMouseDown {
+                position,
+                modifiers: Default::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+        );
+        dispatch(
+            &mut app,
+            WindowEvent::LeftMouseDragged {
+                position: vec2f(300., 70.),
+                modifiers: Default::default(),
+            },
+        );
+        assert_eq!(&*received.borrow(), &["click", "drag"]);
+        header.read(&app, |header, _| {
+            assert!(header.mouse_state_handles.draggable_state.is_dragging());
+        });
+    });
+}
 
 /// A dummy view that is also a backing pane view for testing purposes.
 struct TestView {

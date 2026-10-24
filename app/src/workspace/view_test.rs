@@ -31,6 +31,7 @@ use repo_metadata::RepoMetadataModel;
 use std::collections::HashMap;
 use std::sync::Arc;
 use warpui::r#async::FutureExt;
+use warpui::event::Event as MouseEvent;
 use watcher::HomeDirectoryWatcher;
 
 use crate::cloud_object::update_manager::UpdateManager;
@@ -3857,6 +3858,149 @@ fn dragging_a_tab_onto_a_pane_joins_its_panes_as_a_split() {
         workspace.read(&app, |workspace, _| {
             assert_eq!(workspace.tabs.len(), 1);
             assert_eq!(workspace.active_tab_pane_group().id(), target_group_id);
+        });
+    });
+}
+
+#[test]
+fn mouse_drag_of_terminal_header_detaches_existing_pane_in_workspace() {
+    assert_mouse_header_detach(false);
+}
+
+#[test]
+fn mouse_drag_of_joined_terminal_header_detaches_existing_pane() {
+    assert_mouse_header_detach(true);
+}
+
+fn assert_mouse_header_detach(from_joined_tab: bool) {
+    App::test((), move |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let (group, window_id) = workspace.read(&app, |workspace, _| {
+            (
+                workspace.active_tab_pane_group().clone(),
+                workspace.window_id,
+            )
+        });
+        let (first, dragged) = if from_joined_tab {
+            workspace.update(&mut app, |workspace, ctx| {
+                let first = group.as_ref(ctx).focused_pane_id(ctx);
+                workspace.add_terminal_tab(false, ctx);
+                let source = workspace.active_tab_pane_group().clone();
+                let dragged = source.as_ref(ctx).focused_pane_id(ctx);
+                workspace.set_active_tab_index(0, ctx);
+                workspace.join_tab_as_pane(
+                    TabJoinDropTarget {
+                        source_group_id: source.id(),
+                        target_group_id: group.id(),
+                        pane_id: first,
+                        direction: Direction::Right,
+                        zone: RectF::new(Vector2F::zero(), Vector2F::zero()),
+                    },
+                    ctx,
+                );
+                (first, dragged)
+            })
+        } else {
+            group.update(&mut app, |group, ctx| {
+                let first = group.focused_pane_id(ctx);
+                let dragged = group.add_terminal_pane(Direction::Right, None, ctx).into();
+                (first, dragged)
+            })
+        };
+        group.update(&mut app, |group, ctx| group.focus_pane_by_id(first, ctx));
+        workspace.read(&app, |workspace, _| assert_eq!(workspace.tab_count(), 1));
+        let presenter = app.presenter(window_id).unwrap();
+        let (header_point, drop_point) = {
+            let presenter = presenter.borrow();
+            let pane = presenter
+                .position_cache()
+                .get_position(dragged.position_id())
+                .unwrap();
+            let bar = presenter
+                .position_cache()
+                .get_position(TAB_BAR_POSITION_ID)
+                .unwrap();
+            (
+                vec2f(pane.min_x() + 40., pane.min_y() + 17.),
+                vec2f(bar.max_x() - 160., bar.center().y()),
+            )
+        };
+        let dispatch = |app: &mut App, event| {
+            app.update(|ctx| {
+                ctx.simulate_window_event(event, window_id, presenter.clone());
+            });
+        };
+        dispatch(
+            &mut app,
+            MouseEvent::MouseMoved {
+                position: header_point,
+                cmd: false,
+                shift: false,
+                is_synthetic: false,
+            },
+        );
+        dispatch(
+            &mut app,
+            MouseEvent::LeftMouseDown {
+                position: header_point,
+                modifiers: Default::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+        );
+        dispatch(
+            &mut app,
+            MouseEvent::LeftMouseUp {
+                position: header_point,
+                modifiers: Default::default(),
+            },
+        );
+        assert_eq!(
+            group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
+            dragged,
+            "clicking the rendered header must focus its pane"
+        );
+        dispatch(
+            &mut app,
+            MouseEvent::LeftMouseDown {
+                position: header_point,
+                modifiers: Default::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+        );
+        for position in [
+            header_point + vec2f(0., 12.),
+            drop_point - vec2f(10., 0.),
+            drop_point,
+        ] {
+            dispatch(
+                &mut app,
+                MouseEvent::LeftMouseDragged {
+                    position,
+                    modifiers: Default::default(),
+                },
+            );
+        }
+        dispatch(
+            &mut app,
+            MouseEvent::LeftMouseUp {
+                position: drop_point,
+                modifiers: Default::default(),
+            },
+        );
+        workspace.read(&app, |workspace, ctx| {
+            assert_eq!(workspace.tab_count(), 2, "header drop must create a tab");
+            assert_eq!(group.as_ref(ctx).visible_pane_ids(), vec![first]);
+            assert_eq!(
+                workspace
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .visible_pane_ids(),
+                vec![dragged],
+                "the existing pane must move, not a replacement shell"
+            );
         });
     });
 }
