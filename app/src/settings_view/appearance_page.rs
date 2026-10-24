@@ -1667,13 +1667,12 @@ impl AppearanceSettingsPageView {
     }
 
     fn get_context_chip_renderers(app: &AppContext) -> Vec<ContextChipRenderer> {
-        let appearance = Appearance::as_ref(app);
         let prompt = Prompt::as_ref(app);
         prompt
             .chip_kinds()
             .into_iter()
             .filter_map(|kind| {
-                ContextChipRenderer::default_from_kind(kind, ChipAvailability::Enabled, appearance)
+                ContextChipRenderer::default_from_kind(kind, ChipAvailability::Enabled)
             })
             .collect()
     }
@@ -1755,10 +1754,10 @@ impl AppearanceSettingsPageView {
         }
     }
 
-    fn app_icon_dropdown_item_label(val: AppIcon) -> &'static str {
+    fn app_icon_dropdown_item_label(val: AppIcon) -> String {
         match val {
             AppIcon::Aurora => "Aurora",
-            AppIcon::Default => "Default",
+            AppIcon::Default => return crate::t!("common-default"),
             AppIcon::Classic1 => "Classic 1",
             AppIcon::Classic2 => "Classic 2",
             AppIcon::Classic3 => "Classic 3",
@@ -1775,6 +1774,7 @@ impl AppearanceSettingsPageView {
             AppIcon::Sticker => "Sticker",
             AppIcon::WarpOne => "Zaplex 1",
         }
+        .to_string()
     }
 
     fn thin_strokes_dropdown_item_label(val: ThinStrokes) -> String {

@@ -26,6 +26,76 @@ fn thinking_display_labels_preserve_their_behavior() {
     }
 }
 
+#[test]
+fn voice_key_labels_preserve_physical_key_bindings() {
+    crate::i18n::init(Some("en"));
+    let (super_name, alt_name) = match OperatingSystem::get() {
+        OperatingSystem::Mac => ("Command", "Option"),
+        OperatingSystem::Windows => ("Windows", "Alt"),
+        OperatingSystem::Linux | OperatingSystem::Other(_) => ("Super", "Alt"),
+    };
+    for (setting, name, side, code) in [
+        (
+            VoiceInputToggleKey::AltLeft,
+            alt_name,
+            "Left",
+            KeyCode::AltLeft,
+        ),
+        (
+            VoiceInputToggleKey::AltRight,
+            alt_name,
+            "Right",
+            KeyCode::AltRight,
+        ),
+        (
+            VoiceInputToggleKey::ControlLeft,
+            "Control",
+            "Left",
+            KeyCode::ControlLeft,
+        ),
+        (
+            VoiceInputToggleKey::ControlRight,
+            "Control",
+            "Right",
+            KeyCode::ControlRight,
+        ),
+        (
+            VoiceInputToggleKey::SuperLeft,
+            super_name,
+            "Left",
+            KeyCode::SuperLeft,
+        ),
+        (
+            VoiceInputToggleKey::SuperRight,
+            super_name,
+            "Right",
+            KeyCode::SuperRight,
+        ),
+        (
+            VoiceInputToggleKey::ShiftLeft,
+            "Shift",
+            "Left",
+            KeyCode::ShiftLeft,
+        ),
+        (
+            VoiceInputToggleKey::ShiftRight,
+            "Shift",
+            "Right",
+            KeyCode::ShiftRight,
+        ),
+    ] {
+        assert_eq!(
+            setting.display_name(),
+            format!("\u{2068}{name}\u{2069} ({side})")
+        );
+        assert_eq!(setting.to_key_code(), Some(code));
+    }
+    assert_eq!(VoiceInputToggleKey::None.display_name(), "None");
+    assert_eq!(VoiceInputToggleKey::None.to_key_code(), None);
+    assert_eq!(VoiceInputToggleKey::Fn.display_name(), "Fn");
+    assert_eq!(VoiceInputToggleKey::Fn.to_key_code(), Some(KeyCode::Fn));
+}
+
 fn create_test_request_limit_info(
     limit: usize,
     used: usize,

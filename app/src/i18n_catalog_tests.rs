@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[test]
 fn agent_settings_copy_is_available_in_both_locales() {
@@ -27,6 +27,9 @@ fn agent_settings_copy_is_available_in_both_locales() {
         ),
         ("chip-editor-left-side", "Left side", "Linke Seite"),
         ("chip-editor-right-side", "Right side", "Rechte Seite"),
+        ("common-none", "None", "Keine"),
+        ("common-default", "Default", "Standard"),
+        ("settings-ai-agents-header", "Agents", "Agenten"),
     ];
     for locale in ["en", "de"] {
         // A private loader avoids changing the process-wide locale of other tests.
@@ -38,6 +41,16 @@ fn agent_settings_copy_is_available_in_both_locales() {
             assert_eq!(
                 loader.get(key),
                 if locale == "en" { english } else { german }
+            );
+        }
+        for (key, english, german) in [
+            ("settings-ai-voice-key-left", "Left", "Links"),
+            ("settings-ai-voice-key-right", "Right", "Rechts"),
+        ] {
+            let side = if locale == "en" { english } else { german };
+            assert_eq!(
+                loader.get_args(key, HashMap::from([("key", "Option")])),
+                format!("\u{2068}Option\u{2069} ({side})")
             );
         }
         let description = format!(

@@ -81,6 +81,11 @@ Navigation und alle drei Escape-Varianten in DE/Hell/Dunkel sowie EN/Dark
 mit unabhängig unveränderten Dateihashes. Verbliebene englische Einstellungswerte
 sind #701; schwacher Kontext-Chip-Kontrast nach Dark→Light ist #702. Der Bericht
 trennt diese Belege von der weiterhin offenen vollständigen Produktabnahme.
+Eine dritte Sitzung ergänzt 42 geprüfte Originale: lange Favoritenhinweise
+in EN/Dark in beiden Öffnungsrichtungen, Tab-Join mit frischen Nachweisen
+beider Shells und vollständige englische Light-Texte aus #688. Sie findet
+zusätzlich #704: fast weiße Eingaben/Platzhalter in der Befehls-Ausschlussliste
+nach Dark→Light. Die übrigen Varianten bleiben getrennt offen.
 
 ## Referenzen und Bewertung
 

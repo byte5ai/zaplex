@@ -2,6 +2,12 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.37] — 2026-10-25
+
+- Die Befehls-Ausschlussliste behält bei Themewechseln lesbare Eingaben und Platzhalter, ohne Entwurf, Auswahl oder Fokus zurückzusetzen (#704).
+- Kontext-Chips in den Einstellungen übernehmen beim Themewechsel die aktuellen Farben und bleiben im hellen Theme lesbar (#702).
+- Die Einstellungswerte „Keine“ und „Standard“, die Gruppe „Agenten“ und die Seiten der Spracheingabetasten sind auf Deutsch lokalisiert (#701).
+
 ## [1.2.36] — 2026-10-24
 
 - Agent-Einstellungen übersetzen Spracheingabe-Hilfe, Werkzeugleistenbereiche und Denkanzeige vollständig auf Deutsch (#688).

@@ -70,7 +70,6 @@ fn open_toolbar_items_from_settings<V: View>(
     mode: AgentToolbarEditorMode,
     ctx: &mut ViewContext<V>,
 ) {
-    let appearance = Appearance::as_ref(ctx);
     let session_settings = SessionSettings::as_ref(ctx);
     let (current_left, current_right, available) = match mode {
         AgentToolbarEditorMode::AgentView => {
@@ -90,22 +89,15 @@ fn open_toolbar_items_from_settings<V: View>(
             )
         }
     };
-    chip_configurator.open_left_right_zones_with_items(
-        current_left,
-        current_right,
-        available,
-        appearance,
-    );
+    chip_configurator.open_left_right_zones_with_items(current_left, current_right, available);
 }
 
-fn open_default_toolbar_items<V: View>(
+fn open_default_toolbar_items(
     chip_configurator: &mut ChipConfigurator,
     mode: AgentToolbarEditorMode,
-    ctx: &mut ViewContext<V>,
 ) {
-    let appearance = Appearance::as_ref(ctx);
     let (left, right, available) = AgentToolbarItemKind::defaults_for_mode(mode);
-    chip_configurator.open_left_right_zones_with_items(left, right, available, appearance);
+    chip_configurator.open_left_right_zones_with_items(left, right, available);
 }
 
 fn is_toolbar_editor_at_defaults(
@@ -188,7 +180,7 @@ impl TypedActionView for AgentToolbarInlineEditor {
                 ctx.notify();
             }
             Self::Action::ResetDefault => {
-                open_default_toolbar_items(&mut self.chip_configurator, self.mode, ctx);
+                open_default_toolbar_items(&mut self.chip_configurator, self.mode);
                 self.save_current_selection(ctx);
                 ctx.notify();
             }
@@ -332,7 +324,7 @@ impl TypedActionView for AgentToolbarEditorModal {
             }
             Self::Action::ResetDefault => {
                 self.is_dirty = true;
-                open_default_toolbar_items(&mut self.chip_configurator, self.mode, ctx);
+                open_default_toolbar_items(&mut self.chip_configurator, self.mode);
                 ctx.notify();
             }
             Self::Action::Activate => {
