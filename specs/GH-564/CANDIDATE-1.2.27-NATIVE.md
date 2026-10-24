@@ -53,11 +53,13 @@ ergänzt einen verpflichtenden Abschlusscheck. Die
 [Fortsetzung 40049854378](https://github.com/byte5ai/zaplex/actions/runs/40049854378)
 auf `b270ee372f8548b83363916dc8fbddc1ee7b5884` führt nur die fehlenden Stufen aus;
 die Live-Vorprüfung hat beide Ursprungsläufe und die unveränderten Prüfeingaben
-bestätigt. Zum Stand dieser Sichtprüfung läuft diese Fortsetzung noch.
+bestätigt. Diese Fortsetzung ist inzwischen vollständig bestanden; die
+[installierte Abnahme](CANDIDATE-1.2.27-REMOTE.md) dokumentiert DMG, Pflichtsuite
+und die anschließenden echten Remote-Transfers.
 
 Die Integrationsfälle verwenden konstruierte Host-/Agentenzustände und echte
 isolierte lokale PTYs/Dateien. Sie belegen keine echte Provider-Anmeldung,
 Abonnement-/Kontingent-Routen, Remote-Persistenz, vollständige Tooltips, OS Reduced
-Motion oder Restart-Restore. Eine signierte installierte DMG, alle Pflichtfälle
-der GUI-Suite und die echte Remote-Exploration sind hier noch nicht nachgewiesen.
+Motion oder Restart-Restore. Die signierte installierte DMG, alle Pflichtfälle der GUI-Suite und konkrete
+Remote-Transfers sind im oben verlinkten Folgebericht nachgewiesen.
 Ein Release oder Tag wurde nicht erstellt.

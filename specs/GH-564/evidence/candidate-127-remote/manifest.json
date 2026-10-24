@@ -1,0 +1,322 @@
+{
+  "app_source_sha": "b270ee372f8548b83363916dc8fbddc1ee7b5884",
+  "harness_source_sha": "45935546251bbaa7ebc01d9b9ead22c5333941e9",
+  "artifact_run_id": "40049854378",
+  "exploration_run_id": "40054191997",
+  "dmg_sha256": "fcb082266c6b4f61fb8bb0c3d871e9ccafb8c229225e528f288bafb36f800644",
+  "locale": "en",
+  "theme": "dark",
+  "screen": [
+    1024,
+    768
+  ],
+  "private_archive_sha256": "c0b64ee17ccf16a90f5f2673685b3cf9bfeb5b6f39d43d8e140a9563db6e8d4d",
+  "captures": [
+    {
+      "name": "001-initial-desktop.png",
+      "sha256": "f8d36eff4c85f68b114456dfeeaa9045c7e3abbbf05e4ef440f2328c00c0d178",
+      "bytes": 261464
+    },
+    {
+      "name": "002-initial-app.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "bytes": 76051
+    },
+    {
+      "name": "003-setup-input.png",
+      "sha256": "f14134db0616858ef677f2dc6c2ebd3d05506f3c3b664e5804a40c73ad885df9",
+      "bytes": 222626
+    },
+    {
+      "name": "004-short-setup-input.png",
+      "sha256": "ae3aff416d49d70ecaba050ff52fc4a55c89173332ea662f84d9521a0223bff3",
+      "bytes": 100077
+    },
+    {
+      "name": "005-local-shell.png",
+      "sha256": "ae3aff416d49d70ecaba050ff52fc4a55c89173332ea662f84d9521a0223bff3",
+      "bytes": 100077
+    },
+    {
+      "name": "006-local-shell-result.png",
+      "sha256": "9ec9648091d1a160c388745108cb50287728329b7c96ae9bed3a6b4c86fa89ab",
+      "bytes": 80565
+    },
+    {
+      "name": "007-remote-setup-input.png",
+      "sha256": "62148e856a4b53474a3aca3a3f992626b1851242ef1e54b80ff6c9e090ffd224",
+      "bytes": 122953
+    },
+    {
+      "name": "008-remote-setup-result.png",
+      "sha256": "d7e075f4c03d7b1cdc9834e926270f20a1228c4b740402132c0fd909e6370b53",
+      "bytes": 109174
+    },
+    {
+      "name": "009-split-launch.png",
+      "sha256": "dbe94f974090e4abcde0976c552d8034095e9b9f85df4677eb69731a2a2e0bbc",
+      "bytes": 111291
+    },
+    {
+      "name": "010-split-created.png",
+      "sha256": "dbe94f974090e4abcde0976c552d8034095e9b9f85df4677eb69731a2a2e0bbc",
+      "bytes": 111291
+    },
+    {
+      "name": "011-split-foreground.png",
+      "sha256": "da461cefd643df4a97d96bb63ad0365981078854cad4eb4485b9db509a28c427",
+      "bytes": 173840
+    },
+    {
+      "name": "012-connections.png",
+      "sha256": "d95738a442c99cb6efb44373dccd21d273dacafdf72332aaaa63750606558fce",
+      "bytes": 171620
+    },
+    {
+      "name": "013-connections-menu.png",
+      "sha256": "d95738a442c99cb6efb44373dccd21d273dacafdf72332aaaa63750606558fce",
+      "bytes": 171620
+    },
+    {
+      "name": "014-add-connection.png",
+      "sha256": "6b60db5302987b9dac2f24e79584199473c8d696907b288ee294e821e5faf2a7",
+      "bytes": 181077
+    },
+    {
+      "name": "015-imported-alias.png",
+      "sha256": "64a3f907335eeffa3e1702f886162ad5b68cedb890923ad0bd03f2bb1d8ea4ac",
+      "bytes": 140613
+    },
+    {
+      "name": "016-connect-result.png",
+      "sha256": "6fb53d5c6e3161eaec6da194be9c87d956d980c3d897335bb779bcb7d4a89ee5",
+      "bytes": 87628
+    },
+    {
+      "name": "017-remote-cwd-input.png",
+      "sha256": "eb75560c2c6fd96ba42320fa70c858e76f6a2bd2209bef9589270ebbfe51d628",
+      "bytes": 89217
+    },
+    {
+      "name": "018-remote-baseline.png",
+      "sha256": "d172ad5a956eabd40f136500cba7657fefd09279f72b74b239111fd7eef360e3",
+      "bytes": 108895
+    },
+    {
+      "name": "019-remote-split-menu.png",
+      "sha256": "2374ea13c152bf63c4edca612eae75f21b09ce49316925c8c510613ff8efd3a9",
+      "bytes": 112694
+    },
+    {
+      "name": "020-remote-local-split.png",
+      "sha256": "417a3e55e8a3e104d96f67433e0d92c9ab89a7b19644cf481d2f5804c9113c7c",
+      "bytes": 148031
+    },
+    {
+      "name": "021-neighbor-input.png",
+      "sha256": "01f9a52ae40f904b373d89044cb93d86c52b2f6e9dd1b954db8314443da6f198",
+      "bytes": 162560
+    },
+    {
+      "name": "022-neighbor-baseline.png",
+      "sha256": "af71e574565e802c550bd22c413c2fb94e513c89fc4c63861628c68459330d60",
+      "bytes": 157607
+    },
+    {
+      "name": "023-local-file-manager.png",
+      "sha256": "90a7726c1704a9ba3847b8fa18a12af369242c829fc5007ef5805cf04aa8715b",
+      "bytes": 342862
+    },
+    {
+      "name": "024-inactive-remote-header-result.png",
+      "sha256": "98dbc93a545f745d9fd7c6cd7c6fe05a26eb57eddc7bf77f055a80010d2443a7",
+      "bytes": 97486
+    },
+    {
+      "name": "025-hostkey-cancelled.png",
+      "sha256": "9a0ae4ebdc17ceb3b4169759de91d1790f4946516c1f1872394d305b107d29bd",
+      "bytes": 71584
+    },
+    {
+      "name": "026-local-return.png",
+      "sha256": "eb3aece3e12207cc5f1cfb292f4d86d0d9707d505c2658c4ce7323614696a80f",
+      "bytes": 72165
+    },
+    {
+      "name": "027-local-terminal.png",
+      "sha256": "3edef0e070426beec78b9a855c0ba9777409d9dc6bbdcb2b528868fc232e13d6",
+      "bytes": 89868
+    },
+    {
+      "name": "028-fingerprint-input.png",
+      "sha256": "ac8fa50d647f3ca135bc3fd651edf4438240e0e66bd83a447fa976161343b7fa",
+      "bytes": 101206
+    },
+    {
+      "name": "029-fingerprint-verified.png",
+      "sha256": "4919f1bc88a218101ca203cc1b9b0535e30d36c136366ae62ea541276f46aee6",
+      "bytes": 123502
+    },
+    {
+      "name": "030-local-restored.png",
+      "sha256": "eb3aece3e12207cc5f1cfb292f4d86d0d9707d505c2658c4ce7323614696a80f",
+      "bytes": 72165
+    },
+    {
+      "name": "031-retry-hostkey.png",
+      "sha256": "918047a12d4e67c34cfc86aca75cc6ee28d65de283ed2f938857ba104f692280",
+      "bytes": 98055
+    },
+    {
+      "name": "032-alias-sftp-connected.png",
+      "sha256": "89a18392548e84e9a8544ef1509aab786056236f71f96b836b8bcaa04034d9fe",
+      "bytes": 96590
+    },
+    {
+      "name": "033-remote-file-selected.png",
+      "sha256": "3fd553c1f77d055aa1c183fdc18ca2c101bde315c4f096ba593b450a458a4a11",
+      "bytes": 97483
+    },
+    {
+      "name": "034-copy-action.png",
+      "sha256": "84dd9df10c2013dc9c1ee9d223c4abaff3ce58352b8ef3d75e96a685bedc6186",
+      "bytes": 96709
+    },
+    {
+      "name": "035-copy-dialog.png",
+      "sha256": "edaa6e00a8c4de54fead3c754580aab69a33cdc509cc4869aa53c5477408c820",
+      "bytes": 103449
+    },
+    {
+      "name": "036-tree-selected.png",
+      "sha256": "f6bd080dc39f179468b29f0ae14dbc1530d9c0e4273bc7de017258e297e4dd71",
+      "bytes": 96464
+    },
+    {
+      "name": "037-tree-copy-completed.png",
+      "sha256": "817635f275fb674f3ac65cacee682f61f7122c1b933435ae098bb75af370b105",
+      "bytes": 103851
+    },
+    {
+      "name": "038-tree-conflict.png",
+      "sha256": "6cb8b3b3ef117857c1610d3a10c433a104e59ae5a094b56b05207b73dafef3bd",
+      "bytes": 99310
+    },
+    {
+      "name": "039-local-focused.png",
+      "sha256": "2eddaca0a8e50404611afab6f0e66ab7e032df6852d6b194d50b91a235e11c13",
+      "bytes": 86357
+    },
+    {
+      "name": "040-local-hash-shell.png",
+      "sha256": "96d89f7d3c4e5f39e924f17639112da9a1c160881556e870d56c5da45a36105d",
+      "bytes": 135697
+    },
+    {
+      "name": "041-transfer-panel-closed.png",
+      "sha256": "38a5c0ded69fba776b4a742c3a405a4e14b6c7e1daf6a460b47fc1942a9f5fba",
+      "bytes": 147779
+    },
+    {
+      "name": "042-hash-input.png",
+      "sha256": "e45fde75c3c7fa3b0a2b76af69d29a7b1cdd71a32844c7d34e63343e5803d27c",
+      "bytes": 160510
+    },
+    {
+      "name": "043-copied-bytes-verified.png",
+      "sha256": "7e3c8a0e970d552dc288332576e0476b5827592adcaad3b52157de8527017132",
+      "bytes": 184614
+    },
+    {
+      "name": "044-reverse-source.png",
+      "sha256": "832ace6a4cc46af48a56337577dbbc24634bdadb1baf2bea12c2c6be5f0ae393",
+      "bytes": 101463
+    },
+    {
+      "name": "045-local-file-selected.png",
+      "sha256": "0c470df39a816a0ab80c3bd0a347c7dcef278dda1be07ec5fc646542e735e094",
+      "bytes": 101459
+    },
+    {
+      "name": "046-reverse-move-result.png",
+      "sha256": "881faa2dd6b5cb0a21f170e5ec158fc83fe7f58981ffc7a4034c7dc9386853ef",
+      "bytes": 105994
+    },
+    {
+      "name": "047-move-verification-shell.png",
+      "sha256": "b8661a4d38602e1f111e67e8cf7dc11281cf8baa6d9f21dfaa3b8b0c58303637",
+      "bytes": 184334
+    },
+    {
+      "name": "048-move-panel-closed.png",
+      "sha256": "aa84249199a2d7599b4a5b8eee1196c06d6d621c334c99cde87a2460b7cf9570",
+      "bytes": 191045
+    },
+    {
+      "name": "049-move-check-input.png",
+      "sha256": "dff18e6f35c2498e10d0839fe727032904a7fdb6564fcd2d2e5a7f0d23ef817b",
+      "bytes": 205502
+    },
+    {
+      "name": "050-move-check-result.png",
+      "sha256": "ab94c920340bb9d9283609eab8c0d24737006712f618768166a4a614b1a55b44",
+      "bytes": 190904
+    },
+    {
+      "name": "051-remote-focused.png",
+      "sha256": "5e2e85be36010bbd388e409028d678d1fac378bee32d59588d39ca1f25954b34",
+      "bytes": 198192
+    },
+    {
+      "name": "052-remote-return.png",
+      "sha256": "f65de30e47d54f826dd3ebc500d51b03c7c3b86713559d0e7597ede5d2f476d8",
+      "bytes": 242121
+    },
+    {
+      "name": "053-cli-help-input.png",
+      "sha256": "bb20338c1da62eaf4fb6ac180edc53016772d499234d3464e82b5a9991990bc4",
+      "bytes": 256052
+    },
+    {
+      "name": "054-cli-help-result.png",
+      "sha256": "1f585fb6dc30d51a3a30f392183d8f925734a40cf9a66e550b5189ffb53ce284",
+      "bytes": 242993
+    },
+    {
+      "name": "055-remote-final-input.png",
+      "sha256": "14c31f6b6a0016658a6d54ca71540c8ee7fe496044f71cb7b252dc774a280a9b",
+      "bytes": 256531
+    },
+    {
+      "name": "056-cli-options.png",
+      "sha256": "b6f49c92e3f23849babf32ba234842c719d0fdb6d1e97a377527bb555f2a8d33",
+      "bytes": 241449
+    },
+    {
+      "name": "057-remote-state-input.png",
+      "sha256": "2ac57dbfb4db91b08b7817d8d9c4f9b1e8b14c11b5ae041833a25a142dee880b",
+      "bytes": 255871
+    },
+    {
+      "name": "058-remote-state-preserved.png",
+      "sha256": "667ce09f506e6d6c095b186d78b071e04b227f167480778c3963db16a45ae4dd",
+      "bytes": 245526
+    },
+    {
+      "name": "059-local-finish-target.png",
+      "sha256": "be49bec23c1bdc58f92d6fba5a11ef783b45257b577bcd25219251a79c7c4656",
+      "bytes": 247809
+    },
+    {
+      "name": "060-finish-input.png",
+      "sha256": "fe0a141412852b39b1a6abba45260066d256caca77eedc67cad1352dd19650f2",
+      "bytes": 251735
+    }
+  ],
+  "fixture_sha256": {
+    "remote.txt": "52f91f6100c09d17e97544ee3b5ce40dc5d99dbb97abf35ab47d8dcf359c80c7",
+    "nested/child.txt": "62f7f7338377bae09c003237ee36f83d6367470e9fa991f141fe19b23785786f",
+    "local.txt": "db349b4098334021a1e0d983ca35a50deaed3ada9432dd27d3a3cfd76c903c56"
+  },
+  "raw_captures": "Private; contain remote runtime details."
+}
