@@ -51,17 +51,26 @@ Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
   genau dessen DMG-Artefakt. Fehler lassen den Test-DMG-Workflow scheitern.
   Im Batch wird immer die vollständige Suite ausgeführt.
 - Interaktive Exploration: `gui-explore.yml` verwendet ebenfalls das vorhandene
-  DMG. Nach einer gezielten Fortsetzung kann `gui_completion_run_id` deren Lauf
-  benennen. Die Vorprüfung lädt beide Originalbelege und verlangt dieselbe App,
-  Version und denselben DMG-Hash. Die Fortsetzung muss genau alle ursprünglich
+  DMG. Nach gezielten Fortsetzungen kann `gui_completion_run_id` deren Läufe
+  benennen. Die Vorprüfung lädt alle Originalbelege und verlangt dieselbe App,
+  Version und denselben DMG-Hash. Die Fortsetzungen müssen zusammen alle ursprünglich
   fehlgeschlagenen Pflichtfälle bestehen. Fehlende, doppelte, übersprungene oder
-  zusätzliche Fälle sperren den Einstieg. `gui-completion.json` hält die Herkunft
+  zusätzliche Fälle sperren den Einstieg. Mehrere Lauf-IDs werden in Ausführungsfolge
+  durch Kommas getrennt: Jeder Lauf prüft genau die verbliebenen Fehler; bereits
+  bestandene Fälle werden nicht wiederholt. Der letzte Lauf muss alle Restfälle
+  bestehen. `gui-completion.json` hält die Herkunft
   jedes Falls fest, ohne die ursprünglichen XCTest-Berichte umzuschreiben.
   Das bestätigt die lokale Fallabdeckung; die Release-Prüfung bleibt eigenständig. Das Bedienfenster ist auf 30 Minuten begrenzt, weil verzögerte Bild- und
   Eingabeabrufe wiederholt das frühere Zehn-Minuten-Fenster überschritten haben.
   Die Datei `finished` im Verzeichnis aus `/tmp/zaplex-exploration-path` beendet
   das Fenster vorzeitig; anschließend folgen Aufräumen und Belegsicherung.
   Ein erfolgreicher Bereitstellungslauf ist keine Produktabnahme.
+- Native Fehlerdiagnose: `gui-explore.yml` mit `diagnostic=true` öffnet dasselbe
+  verifizierte DMG auch bei unvollständiger GUI-Abnahme für die Ursachenklärung.
+  Die Bau-/Signier-/Paketgates bleiben erforderlich. Dieser Modus lässt sich nicht
+  mit Completion-Behauptungen kombinieren und erzeugt ausschließlich
+  `gui-diagnosis.json` mit `local_gui` und `product_acceptance` auf `not-run`.
+  Der normale Abnahmepfad und die erforderlichen Nutzerabläufe bleiben unverändert.
 - Vor Veröffentlichung: `zap_release.yml` prüft sein `zap-macos-arm64`-Artefakt
   mit Tests von der unveränderlichen Build-Revision. Ein Fehler sperrt die
   Veröffentlichung. Belege werden separat aufbewahrt und nicht als Release-Assets

@@ -64,30 +64,46 @@ def validate_evidence(evidence, source, test_source, suite):
 
 
 def combine(original, continuation, source, original_run, resumed_run):
-    for run in (original_run, resumed_run):
+    return combine_sequence(original, [(continuation, resumed_run)], source, original_run)
+
+
+def combine_sequence(original, continuations, source, original_run):
+    runs = [original_run] + [run for _, run in continuations]
+    if not continuations:
+        raise ValueError("At least one GUI continuation is required")
+    for run in runs:
         if (type(run.get("id")) is not int or run["id"] <= 0
                 or type(run.get("run_attempt")) is not int or run["run_attempt"] <= 0
                 or not re.fullmatch(r"[a-f0-9]{40}", run.get("head_sha", ""))):
             raise ValueError("Invalid evidence run identity")
-    if original_run["id"] == resumed_run["id"] or original_run["head_sha"] != source:
+    if len({run["id"] for run in runs}) != len(runs) or original_run["head_sha"] != source:
         raise ValueError("Different original build and continuation are required")
     before, digest, version = validate_evidence(original, source, source, "full")
-    after, resumed_digest, resumed_version = validate_evidence(
-        continuation, source, resumed_run["head_sha"], "selected")
     failed = {name for name, result in before.items() if result == "Failed"}
-    if (set(before) != CASES or not failed or set(after) != failed
-            or any(result != "Passed" for result in after.values())):
-        raise ValueError("Continuation must pass exactly all failed required cases")
-    if digest != resumed_digest or version != resumed_version:
-        raise ValueError("Installed DMG hash or version differs between runs")
+    if set(before) != CASES or not failed:
+        raise ValueError("The original run must cover all required cases and contain failures")
+    passed_in = {name: original_run["id"] for name in CASES - failed}
+    for continuation, resumed_run in continuations:
+        after, resumed_digest, resumed_version = validate_evidence(
+            continuation, source, resumed_run["head_sha"], "selected")
+        if not failed or set(after) != failed:
+            raise ValueError("Each continuation must execute exactly the remaining failed cases")
+        if digest != resumed_digest or version != resumed_version:
+            raise ValueError("Installed DMG hash or version differs between runs")
+        failed = {name for name, result in after.items() if result == "Failed"}
+        if resumed_run.get("conclusion") != ("failure" if failed else "success"):
+            raise ValueError("Continuation run verdict disagrees with its test results")
+        passed_in.update({name: resumed_run["id"] for name in set(after) - failed})
+    if failed:
+        raise ValueError("The final continuation must pass every remaining case")
     return {
         "schema_version": 1, "kind": "completed_gui_cases", "local_gui": "pass",
         "product_acceptance": "not-run", "remote_and_providers": "not-run",
         "visual_reference_comparison": "not-run", "exploratory_agent": "not-run",
         "app_source_sha": source, "dmg_sha256": digest, "version": version,
         "runs": [{key: run[key] for key in ("id", "run_attempt", "head_sha")}
-                 for run in (original_run, resumed_run)],
+                 for run in runs],
         "cases": [{"name": name, "result": "Passed",
-                   "run_id": resumed_run["id"] if name in failed else original_run["id"]}
+                   "run_id": passed_in[name]}
                   for name in sorted(CASES)],
     }
