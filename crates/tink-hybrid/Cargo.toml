@@ -1,0 +1,39 @@
+[package]
+name = "tink-hybrid"
+version = "0.3.0"
+publish = false
+authors = ["David Drysdale <drysdale@google.com>"]
+edition = "2018"
+license = "Apache-2.0"
+description = "Hybrid encryption functionality for Rust port of Google's Tink cryptography library"
+repository = "https://github.com/project-oak/tink-rust"
+documentation = "https://docs.rs/tink-hybrid"
+readme = "README.md"
+keywords = ["cryptography", "tink", "hybrid"]
+categories = ["cryptography"]
+rust-version = "1.87"
+
+[features]
+# Need at least one of aead/daead for this crate to be functional
+default = ["aead", "daead"]
+aead = ["tink-aead"]
+daead = ["tink-daead"]
+
+[dependencies]
+p256 = { version = "0.14", features = ["ecdh"] }
+tink-aead = { version = "^0.3", optional = true }
+tink-core = "^0.3"
+tink-daead = { version = "^0.3", optional = true }
+tink-proto = "^0.3"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[dev-dependencies]
+hex = "0.4"
+serde_json = "1"
+tink-core = { version = "0.3", features = ["insecure"] }

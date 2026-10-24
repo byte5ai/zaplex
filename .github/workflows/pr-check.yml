@@ -332,6 +332,10 @@ jobs:
           ssh_workspace_has_no_direct_std_process_command
         shell: bash
 
+      - name: cargo test (ECIES compatibility and managed-secret HPKE)
+        run: cargo test --locked -p tink-hybrid -p warp_managed_secrets --lib
+        shell: bash
+
       - name: cargo test (HTTP client construction smoke)
         run: >
           cargo test --locked -p http_client --lib --
