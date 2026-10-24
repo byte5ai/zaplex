@@ -130,3 +130,11 @@ ließ die ausgewählte Dateizeile aus. `fixtures/ocr/provenance-136.json` dokume
 Originalhashes und verlustfreie Ausschnitte anhand der AX-Fenstergrenzen.
 `ocr-regression.log` archiviert Ergebnis und TSV. Diese
 Gegenproben ergänzen die Nutzerabläufe; seit der Mindestgrößenprüfung sind es sechzehn.
+
+`gui-ocr-diagnosis.yml` vergleicht bei abweichenden macOS-Ergebnissen ausschließlich
+die gespeicherten Bilder mit der tatsächlichen nativen Implementierung. Der
+manuelle Lauf auf `main` startet weder App noch XCTest und gibt keinen
+Abnahmenachweis ab. Er archiviert alle TSV-Ergebnisse für feste Kombinationen
+aus Maßstab, Interpolation und Segmentierung sowie Engine- und Sprachdatenstand.
+Die regulären GUI-Tests verwenden weiterhin genau eine feste Konfiguration;
+ein Diagnoseergebnis ersetzt keine bestandene native Gegenprobe.

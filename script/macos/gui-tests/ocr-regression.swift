@@ -5,7 +5,7 @@ let fixtures = URL(fileURLWithPath: CommandLine.arguments[1])
 let size = CGSize(width: 1024, height: 768)
 let rendered = try RenderedText.read(Data(contentsOf: fixtures.appendingPathComponent("rendered-output.png")),
                                      displaySize: size)
-print(rendered.tsv)
+FileHandle.standardOutput.write(Data(rendered.tsv.utf8))
 guard let output = rendered.rect(for: "ZQA 149060 963") else {
     fatalError("The saved rendered nonce must be recognized exactly")
 }
@@ -27,7 +27,7 @@ precondition(abs(retinaOutput.midX - 36.25) < 2 && abs(retinaOutput.midY - 291) 
 let narrowSize = CGSize(width: 513, height: 680)
 let narrow = try RenderedText.read(Data(contentsOf: fixtures.appendingPathComponent("narrow-rendered-output.png")),
                                   displaySize: narrowSize)
-print(narrow.tsv)
+FileHandle.standardOutput.write(Data(narrow.tsv.utf8))
 guard let narrowOutput = narrow.rect(for: "ZQA 967960 963") else {
     fatalError("The narrow window's rendered nonce must be recognized exactly")
 }
@@ -43,7 +43,7 @@ precondition(narrowBefore.rect(for: "ZQA 967960 963") == nil, "Narrow unsubmitte
 let wideSize = CGSize(width: 1024, height: 678)
 let files = try RenderedText.read(Data(contentsOf: fixtures.appendingPathComponent("selected-file-row.png")),
                                  displaySize: wideSize)
-print(files.tsv)
+FileHandle.standardOutput.write(Data(files.tsv.utf8))
 guard let sample = files.rect(for: "SAMPLE") else {
     fatalError("The selected filename must not disappear during segmentation")
 }
@@ -52,7 +52,7 @@ precondition(sample.minX >= 30 && sample.maxX <= 90 && sample.minY >= 212 && sam
 
 let split = try RenderedText.read(Data(contentsOf: fixtures.appendingPathComponent("split-right-output.png")),
                                  displaySize: wideSize)
-print(split.tsv)
+FileHandle.standardOutput.write(Data(split.tsv.utf8))
 guard let left = split.rect(for: "ZQA 285052 741"), let right = split.rect(for: "ZQA 221710 963") else {
     fatalError("Both panes must retain their independent output")
 }
