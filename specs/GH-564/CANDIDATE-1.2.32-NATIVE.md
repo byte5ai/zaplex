@@ -115,3 +115,37 @@ und weitere Matrixkombinationen bleiben separat auszuführen.
 Die anschließende [Remote-Nachprüfung](CANDIDATE-1.2.32-REMOTE.md) bestätigt
 native SSH-Steuerbefehle (#657), dieselbe persistente Shell nach Transportabbruch
 und die einzelne Transferanzeige (#658) samt Pause/Abbruch für EN/dunkel.
+
+## Ergänzte Mausauswahl
+
+Die kurze [Exploration 40087983824](https://github.com/byte5ai/zaplex/actions/runs/40087983824)
+nutzt dasselbe unveränderte 1.2.32-DMG mit Harness
+`3fe2d03d7fe503f2ad1b7c97e512703f22374550`, EN/Zaplex Dark, 1024×678 bei (0,30).
+Alle 15 Originalaufnahmen wurden einzeln betrachtet und mit Artefakt 12557259505
+bytegenau abgeglichen; das [Manifest](evidence/candidate-132-selection/manifest.json)
+bindet die Hashes und Operatorgrenzen. Eigener Abschluss und Workflow-Bereinigung
+sind erfolgreich. Die Prüfung dauerte im interaktiven Zeitfenster rund sechs Minuten.
+
+| Fall | Beobachtung | Originale |
+|---|---|---|
+| Cmd-Klick | Markiert den tatsächlich getroffenen Ordner `child`; fetter Akzenttext, Tönung und „1 folder marked · folder size not computed“ sichtbar. | 008 |
+| Einfacher Klick | Verschiebt den Cursor zu `beta.txt`, erhält die Ordner-Markierung; Cursor und Auswahl sind unterscheidbar. | 009 |
+| Shift-Klick | Ergänzt von `beta.txt` bis `gamma.txt` beide Dateien; Ordner bleibt markiert. Zählung: ein Ordner, zwei Dateien, 9 B ohne Ordnergrößen. | 010–011 |
+| Escape | Hebt alle Markierungen auf, Cursor bleibt auf `gamma.txt`. | 012 |
+| Unveränderter Zustand | F10 zurück zur Shell; frische Ausgabe bestätigt PID2042, nicht exportierten Marker `SEL_40087983824`, dasselbe CWD und dieselben drei Dateihashes. | 003, 014 |
+
+Die Dateien enthalten unabhängig vorgegebene Bytes `alpha`, `beta`, `gamma`.
+Ihre SHA256 lauten `8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8`,
+`f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753`
+und `be9d587defa1f0c09ef49eb17e206983a5f8f8289e4281860bd0ee5a19592c67`.
+Es wurde keine Dateiaktion bestätigt.
+
+005 ist ein vor Ausführung abgewiesener Operatoraufruf. Bei 008 traf der
+korrigierte Cmd-Klick wegen globaler statt fensterbezogener Koordinaten den
+Ordner `child`, nicht die zunächst beabsichtigte Datei. Die Bildnamen 006/009
+nehmen irrtümlich eine Alpha-Markierung vorweg; bewertet wird der tatsächliche
+Bildinhalt. Der anschließende Shift-Klick nutzt explizite globale Koordinaten.
+Die Maus-Rücksetzung wurde beim ersten ausgeführten Modifikatorklick nicht
+bestätigt; vor dem nächsten Schritt wurde der Desktop erneut beobachtet.
+Cmd+A/Elternzeile, Entmarkieren per Cmd-Klick, Shift-Pfeiltasten und Einfg wurden
+hier nicht erneut bzw. nicht ausgeführt. Weitere Varianten bleiben offen.

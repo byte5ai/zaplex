@@ -1,0 +1,98 @@
+{
+  "run_id": 40087983824,
+  "artifact_id": 12557259505,
+  "source_sha": "c513867d323ad393a8cdfe951eff37a4a35ddcfc",
+  "harness_sha": "3fe2d03d7fe503f2ad1b7c97e512703f22374550",
+  "dmg_sha256": "d950c9db3cf0d17bdbc2505ed9b8b78d77e3d707dad72f0cdf5609d3ccf412f8",
+  "locale": "en",
+  "theme": "Zaplex Dark",
+  "window": {
+    "x": 0,
+    "y": 30,
+    "width": 1024,
+    "height": 678
+  },
+  "images": [
+    {
+      "name": "001-selection-start.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "visually_reviewed": true
+    },
+    {
+      "name": "002-selection-setup-input.png",
+      "sha256": "9fd20b89604ec39c475f5da9d99dcc774f803ebb669e24f926d93e8f68b672a5",
+      "visually_reviewed": true
+    },
+    {
+      "name": "003-selection-shell.png",
+      "sha256": "3f77fc66849536a8df429aa023e16bbc4d5b4b6c722c08b41a89424c398211fa",
+      "visually_reviewed": true
+    },
+    {
+      "name": "004-selection-files.png",
+      "sha256": "ef61d0a34d8bfb9a504295907630150d4c1a3fe600d383141b3d22326b50f4d9",
+      "visually_reviewed": true
+    },
+    {
+      "name": "005-cmd-select-alpha.png",
+      "sha256": "dbc74501e19094463e99a6234f3b6eb172e068012ea899fdb318f7f746e67369",
+      "visually_reviewed": true
+    },
+    {
+      "name": "006-cursor-beta-selection-retained.png",
+      "sha256": "6899b5e4dfb6cb316634cbdb2e0086e6b7710a5389fa0d09a001bbcba8a4109c",
+      "visually_reviewed": true
+    },
+    {
+      "name": "007-before-cmd-alpha.png",
+      "sha256": "5453c9a3314c2e8b9874adb417bc5875604e54b828bda80404ae6eac1d0148f6",
+      "visually_reviewed": true
+    },
+    {
+      "name": "008-cmd-alpha-result.png",
+      "sha256": "33eb132f03d532036f6380420a17069ea3ebbdf3a4011345be5e9a4c9518c59f",
+      "visually_reviewed": true
+    },
+    {
+      "name": "009-simple-click-retains-alpha.png",
+      "sha256": "3b4c82b8d343533ca4ca56861a6e04927b970c0d9cdb21374aaaec2ae53f6776",
+      "visually_reviewed": true
+    },
+    {
+      "name": "010-before-shift-gamma.png",
+      "sha256": "4c4125a47f5b30188a99ec2fa582d873530eb2cb3a58cb551ae91a737af2010a",
+      "visually_reviewed": true
+    },
+    {
+      "name": "011-shift-range-result.png",
+      "sha256": "54cf8165dd48a376a92de7ee92b02bdadefdc0c167fa9b5e9f2e1b5a7f8ac524",
+      "visually_reviewed": true
+    },
+    {
+      "name": "012-escape-clears.png",
+      "sha256": "a64a63ceccf2f5a88c8528d6e5f83d01a441bc32bb833146d329943110b21072",
+      "visually_reviewed": true
+    },
+    {
+      "name": "013-selection-verification-input.png",
+      "sha256": "4a29c4a23e4007dce5c546c157d54823f0576dd44b305a9af7483ce2e594e4fb",
+      "visually_reviewed": true
+    },
+    {
+      "name": "014-selection-verified.png",
+      "sha256": "d455a0ed738b5d7e5dcab1b659a475392f903bb258358daf68fc495fdc136101",
+      "visually_reviewed": true
+    },
+    {
+      "name": "015-selection-finish-input.png",
+      "sha256": "9e6bd0dbf45c0903fd4f7046a28d935e9e6f96e857a60a7405379cfa3b69c74f",
+      "visually_reviewed": true
+    }
+  ],
+  "limits": [
+    "005 is a rejected modifier-click before dispatch; no product failure.",
+    "008 intended alpha but modifier click without explicit global coordinates reached child; evaluation uses actual visible selected child, not filename.",
+    "006/009 filenames anticipated alpha selection; actual 006 has no selection and 009 retains child.",
+    "No Cmd+A, modifier-toggle-off, Shift+arrow, Insert or other-locale/theme verdict."
+  ]
+}
