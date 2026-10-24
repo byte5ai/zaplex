@@ -1,0 +1,68 @@
+{
+  "source_run": 40125406009,
+  "artifact_id": 12574886767,
+  "artifact_sha256": "53b937309e0614cd647f4e197cfdbd66a7f94579177f63b93e1101a35e060727",
+  "app_source_sha": "5a35b11e2445f20b9e47b167252a63238ed6a20d",
+  "transformation": "Lossless crop to main window bounds from the paired AX attachment; no resampling or color changes.",
+  "images": [
+    {
+      "name": "selected-file-row.png",
+      "sha256": "784b61f8caf88f4a386fdeba939f3389361bdd93f53ac4a769899bf7d0fdc838",
+      "original": "3E246D34-1356-474E-B622-3A9FC549AB35.png",
+      "original_sha256": "5a7c9eb85cb35529bdbc8d51cb292690fccb00765c8a85b132c5b0b6531410ce",
+      "crop_xyxy": [
+        0,
+        30,
+        1024,
+        708
+      ],
+      "visible_output": [
+        "SAMPLE"
+      ]
+    },
+    {
+      "name": "narrow-rendered-output.png",
+      "sha256": "0db3ab2dead180b3ec9bfc5e730d0eb8e954997364fbc8e49595a10c678977e2",
+      "original": "B4634CE4-3A05-471A-B380-F1E8418F39F0.png",
+      "original_sha256": "0a6b1dcbafd133323783f54b09195eb65f81ebecbf3ecd416c8890413245b01f",
+      "crop_xyxy": [
+        29,
+        30,
+        542,
+        710
+      ],
+      "visible_output": [
+        "ZQA 967960 963"
+      ]
+    },
+    {
+      "name": "narrow-before-return.png",
+      "sha256": "954f059c71b53075540ea336308e51e45d9b73ec488fdc10eb3acd22d877842c",
+      "original": "F8FE90AC-742C-42EA-A965-F9F0E35FAF9B.png",
+      "original_sha256": "7048845b2d6022a2a8daf1c2c74aacacb7a33f93b6fb413f704282f08d07b38c",
+      "crop_xyxy": [
+        29,
+        30,
+        542,
+        710
+      ],
+      "visible_output": []
+    },
+    {
+      "name": "split-right-output.png",
+      "sha256": "6e471c2f97c062985fe7c90903ff56202795b5ebf20536e3f13035352199f350",
+      "original": "C1FD318F-1DE2-4705-A4E2-4F7B6A2B3C7E.png",
+      "original_sha256": "29a35e75915de77ad09093ff49bd06ffe8ad606f400bc92aab699c78754173f0",
+      "crop_xyxy": [
+        0,
+        30,
+        1024,
+        708
+      ],
+      "visible_output": [
+        "ZQA 285052 741",
+        "ZQA 221710 963"
+      ]
+    }
+  ]
+}

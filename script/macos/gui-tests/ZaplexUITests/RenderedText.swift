@@ -34,8 +34,8 @@ enum RenderedText {
             throw NSError(domain: "ZaplexOCR", code: 1)
         }
         // Small terminal glyphs are only about ten pixels high on the runner.
-        // Resampling gives Tesseract enough pixels without altering the app or
-        // substituting plausible characters after recognition.
+        // Replicate pixels at an integer scale so interpolation cannot blur the
+        // distinctions between digits. Keep recognition and comparison exact.
         let width = bitmap.pixelsWide * 3
         let height = bitmap.pixelsHigh * 3
         guard let context = CGContext(data: nil, width: width, height: height,
@@ -44,7 +44,7 @@ enum RenderedText {
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw NSError(domain: "ZaplexOCR", code: 2)
         }
-        context.interpolationQuality = .high
+        context.interpolationQuality = .none
         context.draw(original, in: CGRect(x: 0, y: 0, width: width, height: height))
         guard let image = context.makeImage(),
               let enlarged = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
@@ -52,7 +52,9 @@ enum RenderedText {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/tesseract")
-        process.arguments = ["stdin", "stdout", "-l", "eng", "--psm", "11", "tsv"]
+        // Sparse-text segmentation drops selected file rows. Preserve complete
+        // lines, including adjacent panes, with uniform-block segmentation.
+        process.arguments = ["stdin", "stdout", "-l", "eng", "--psm", "6", "tsv"]
         let input = Pipe()
         let output = Pipe()
         process.standardInput = input

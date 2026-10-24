@@ -111,7 +111,8 @@ verlorener Eingabe zu unterscheiden. Der alte Lauf belegt diese Ursache noch nic
 ## OCR-Auflösung und gespeicherte Gegenproben
 
 Die Navigationserkennung vergrößert den Fenster-Screenshot im Testprozess auf
-jeweils die dreifache Pixelzahl pro Achse. Die App-Schriftgröße bleibt unverändert;
+jeweils die dreifache Pixelzahl pro Achse durch reine Pixelwiederholung. So verwischt
+keine Interpolation die kleinen Ziffern. Die App-Schriftgröße bleibt unverändert;
 die TSV-Positionen werden auf die tatsächliche Fenstergröße zurückgerechnet.
 Der Vergleich von Nonce, Shellzustand und Menütext bleibt exakt. Das folgt der
 [Tesseract-Empfehlung zur Bildauflösung](https://tesseract-ocr.github.io/tessdoc/ImproveQuality.html#rescaling).
@@ -121,5 +122,11 @@ fehlgeschlagenen Lauf 40087073327: korrekte Ausgabe `ZQA 149060 963`, Ablehnung
 einer falschen Nonce und eines falschen Zustands sowie Ablehnung des noch nicht
 abgeschickten Befehls. Unabhängig gemessene Bildkoordinaten prüfen die Abbildung
 bei normaler und halber Punktauflösung. `fixtures/ocr/provenance.json` enthält
-Herkunft und Hashes; `ocr-regression.log` archiviert Ergebnis und TSV. Diese
+Herkunft und Hashes. Weitere Fensterbilder aus Lauf 40125406009 prüfen die zuvor
+ausgelassene ausgewählte Dateizeile, die Ziffernverwechslung im schmalen Fenster
+und unabhängige Ausgaben in zwei nebeneinanderliegenden Panes. Tesseract erkennt
+dazu vollständige Zeilen (`--psm 6`); die bisherige Sparse-Text-Segmentierung
+ließ die ausgewählte Dateizeile aus. `fixtures/ocr/provenance-136.json` dokumentiert
+Originalhashes und verlustfreie Ausschnitte anhand der AX-Fenstergrenzen.
+`ocr-regression.log` archiviert Ergebnis und TSV. Diese
 Gegenproben ergänzen die Nutzerabläufe; seit der Mindestgrößenprüfung sind es sechzehn.
