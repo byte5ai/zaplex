@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Verify existing DMGs for skipped GUI acceptance or independent exploration."""
 
+import json
 import os
 from pathlib import Path
 import re
 import runpy
 import subprocess
 import sys
+import tempfile
 
 helpers = runpy.run_path(str(Path(__file__).with_name("test-dmg-resume")))
 command, api, pages = (helpers[name] for name in ("command", "api", "pages"))
@@ -93,6 +95,48 @@ def caller_proved_full_suite():
     }.items())
 
 
+def validate_completion_run(run, jobs):
+    if any(run.get(key) != value for key, value in {
+        "status": "completed", "conclusion": "success", "event": "workflow_dispatch",
+        "head_branch": "main", "path": ".github/workflows/gui-resume.yml",
+    }.items()) or run.get("head_repository", {}).get("full_name") != helpers["REPO"]:
+        raise ValueError("A successful main GUI continuation is required")
+    by_name = {job["name"]: job for job in jobs}
+    if len(by_name) != len(jobs):
+        raise ValueError("Ambiguous GUI continuation jobs")
+    for name in ("Verify existing DMG provenance", "gui / Installed DMG user flows"):
+        if by_name.get(name, {}).get("conclusion") != "success":
+            raise ValueError(f"Missing successful continuation gate: {name}")
+
+
+def completed_cases(original_run, original_jobs, artifacts, source, continuation_id):
+    if not continuation_id.isdecimal():
+        raise ValueError("Numeric GUI continuation run required")
+    validate_batch_resume(original_run, original_jobs, artifacts, source)
+    continuation_run = api(f"actions/runs/{continuation_id}")
+    validate_completion_run(continuation_run, pages(f"actions/runs/{continuation_id}/jobs", "jobs"))
+    completion = runpy.run_path(str(Path(__file__).parent / "macos/gui-tests/completion.py"))
+    evidence = []
+    evidence_artifacts = []
+    with tempfile.TemporaryDirectory(prefix="zaplex-gui-completion-") as directory:
+        for run in (original_run, continuation_run):
+            run_id, attempt = run["id"], run["run_attempt"]
+            if type(run_id) is not int or type(attempt) is not int or run_id <= 0 or attempt <= 0:
+                raise ValueError("Invalid GUI run identity")
+            name = f"macos-gui-evidence-{run_id}-{attempt}"
+            matches = [a for a in pages(f"actions/runs/{run_id}/artifacts", "artifacts") if a["name"] == name]
+            if len(matches) != 1 or matches[0].get("expired") is not False:
+                raise ValueError("Missing, expired or ambiguous GUI evidence")
+            evidence_artifacts.append({"run_id": run_id, "id": matches[0]["id"], "name": name})
+            destination = Path(directory) / str(run_id)
+            subprocess.run(["gh", "run", "download", str(run_id), "--repo", helpers["REPO"],
+                            "--name", name, "--dir", str(destination)], check=True, timeout=300)
+            evidence.append(completion["read_evidence"](destination))
+    receipt = completion["combine"](*evidence, source, original_run, continuation_run)
+    receipt["evidence_artifacts"] = evidence_artifacts
+    return receipt
+
+
 def main():
     run_id, source = os.environ.get("ARTIFACT_RUN_ID", ""), os.environ.get("APP_SOURCE_SHA", "")
     if (not run_id.isdecimal() or not re.fullmatch(r"[0-9a-f]{40}", source)
@@ -103,6 +147,17 @@ def main():
     run = api(f"actions/runs/{run_id}")
     jobs, artifacts = (pages(f"actions/runs/{run_id}/{key}", key) for key in ("jobs", "artifacts"))
     batch = run.get("path") == ".github/workflows/ci-batch.yml"
+    completion_id = os.environ.get("GUI_COMPLETION_RUN_ID", "")
+    if completion_id:
+        if not batch or os.environ.get("GUI_EXPLORATION") != "true":
+            raise ValueError("GUI completion is only supported for batch exploration")
+        receipt = completed_cases(run, jobs, artifacts, source, completion_id)
+        destination = Path(os.environ["GITHUB_WORKSPACE"]) / "gui-completion.json"
+        destination.write_text(json.dumps(receipt, indent=2) + "\n")
+        with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+            summary.write(f"All {len(receipt['cases'])} installed GUI cases proved by batch {run_id} "
+                          f"and continuation {completion_id}; same DMG `{receipt['dmg_sha256']}`.\n")
+        return
     if batch:
         if os.environ.get("GUI_EXPLORATION") == "true":
             validator = validate_batch_artifact if caller_proved_full_suite() else validate_batch_exploration

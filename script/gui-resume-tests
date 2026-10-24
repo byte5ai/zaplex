@@ -190,5 +190,32 @@ class CallerAcceptanceTests(unittest.TestCase):
                     self.assertFalse(helpers["caller_proved_full_suite"]())
 
 
+class CompletionRunTests(unittest.TestCase):
+    def setUp(self):
+        self.run = {"status": "completed", "conclusion": "success", "event": "workflow_dispatch",
+                    "head_branch": "main", "path": ".github/workflows/gui-resume.yml",
+                    "head_repository": {"full_name": "byte5ai/zaplex"}}
+        self.jobs = [{"name": name, "conclusion": "success"} for name in
+                     ("Verify existing DMG provenance", "gui / Installed DMG user flows")]
+
+    def test_completed_main_continuation_is_trusted(self):
+        helpers["validate_completion_run"](self.run, self.jobs)
+
+    def test_untrusted_or_incomplete_run_is_rejected(self):
+        for key, value in (("status", "in_progress"), ("conclusion", "failure"),
+                           ("event", "pull_request"), ("head_branch", "feature"),
+                           ("path", ".github/workflows/other.yml"),
+                           ("head_repository", {"full_name": "other/repo"})):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                helpers["validate_completion_run"](dict(self.run, **{key: value}), self.jobs)
+
+    def test_missing_duplicate_or_unsuccessful_jobs_are_rejected(self):
+        for jobs in ([], self.jobs[:1], self.jobs * 2,
+                     [dict(job, conclusion="skipped") for job in self.jobs],
+                     [dict(job, conclusion="failure") for job in self.jobs]):
+            with self.assertRaises(ValueError):
+                helpers["validate_completion_run"](self.run, jobs)
+
+
 if __name__ == "__main__":
     unittest.main()
