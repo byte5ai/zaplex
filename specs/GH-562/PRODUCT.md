@@ -48,14 +48,15 @@ Fenster, leere Zustände und Fehlerzustände gehören zum Vergleich.
 Isolierte Remote-Testzugänge und beide CLI-Provider mit begrenzten API-Testprofilen
 sind inzwischen [am installierten 1.2.23-DMG nachgewiesen](../GH-564/CANDIDATE-1.2.23-EXPLORATION.md).
 Dieser Nachweis umfasst keine Abonnements, Kontingente oder Verteilung auf das
-freieste Abo. Die CLI-Aufträge waren vor der geprüften Transporttrennung bereits
-beendet; ein dabei noch laufender Agent ist zusätzlich zu prüfen. Die dort
-gefundenen Dateiübertragungsfehler #639/#640 sind im Kandidaten 1.2.25 korrigiert.
-Die installierte Nachprüfung bestätigt die Alias-Verbindung und die unmittelbare
-Zielaktualisierung bei einer Kopie in ein kanonisches lokales Verzeichnis.
-Sie findet zusätzlich die falsche Pane-/Host-Zuordnung #645 und den fehlgeschlagenen
-Download über einen lokalen Verzeichnisalias #646; der Theme-Befund #644 bleibt
-offen. Die 15 lokalen GUI-Pflichtfälle bestehen auch auf diesem Kandidaten.
+freieste Abo. Ein noch laufender Claude-Prozess überlebt inzwischen die reale
+Transporttrennung im [1.2.27-Teilnachweis](../GH-564/CANDIDATE-1.2.27-AGENT-THEME.md);
+das API-Testprofil beweist weiterhin kein Abonnement. Die späteren Befunde
+#644/#645/#646 sind korrigiert und in ihren jeweiligen Kandidatenberichten
+nachgeprüft. Der [Kandidat 1.2.32](../GH-564/CANDIDATE-1.2.32-NATIVE.md) besteht
+den vollständigen CI-Batch und 15 lokale GUI-Pflichtfälle. Die Exploration
+bestätigt DE/EN-Theme-Fokusrückgabe und sichere CWD-Übernahme bei einer belegten
+lokalen Shell, findet aber den initialen Dialogfokusfehler #673. Weitere
+Sprach-, Remote-, Verbindungs- und Providerkombinationen sind noch ungeprüft.
 Bis die zusätzlichen Prüfungen ausgeführt und bewertet sind, bleibt #562 offen;
 ein lokaler Erfolg allein ergibt keine vollständige Produktabnahme.
 Die hier implementierte Liefersperre erzwingt die lokale GUI-Suite; sie behauptet

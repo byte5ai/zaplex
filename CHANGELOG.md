@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.33] — 2026-10-24
+
+- Dateimanager fokussieren Umbenennen und Neuer Ordner sofort beim Öffnen; Eingaben bleiben nach Abbruch und erneutem Öffnen im richtigen Feld (#673).
+
 ## [1.2.32] — 2026-10-24
 
 - Kryptographie: P-256 auf das gegen RUSTSEC-2026-0387 korrigierte Backend aktualisiert; bestehende ECIES- und HPKE-Formate bleiben kompatibel (#668).

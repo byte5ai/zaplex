@@ -4802,8 +4802,11 @@ impl SftpBrowserView {
                 original_name: entry.name.clone(),
             });
             // Write the current name into the editor
-            self.rename_editor
-                .update(ctx, |e, ctx| e.set_buffer_text(&entry.name, ctx));
+            self.rename_editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text(&entry.name, ctx);
+                editor.select_all(ctx);
+                ctx.focus_self();
+            });
             ctx.notify();
         }
     }
@@ -6574,6 +6577,7 @@ impl TypedActionView for SftpBrowserView {
                 });
                 self.new_folder_editor
                     .update(ctx, |e, ctx| e.set_buffer_text("", ctx));
+                ctx.focus(&self.new_folder_editor);
                 ctx.notify();
             }
             SftpBrowserAction::ConfirmDelete => {
