@@ -1,0 +1,592 @@
+{
+  "source_sha": "5a35b11e2445f20b9e47b167252a63238ed6a20d",
+  "run_id": 40125406009,
+  "job_id": 120966248327,
+  "scope": "Native render fixtures; image dimensions are not installed window geometry. All 44 original images individually viewed.",
+  "artifacts": [
+    {
+      "id": 12573236479,
+      "name": "native-workspace-evidence-5a35b11e2445f20b9e47b167252a63238ed6a20d",
+      "zip_sha256": "a0d32fd313ff1681cf30032344532b8d590bcbd47a51fc0a90869bd5f3c6d688"
+    },
+    {
+      "id": 12573171569,
+      "name": "subscription-agent-layout-evidence",
+      "zip_sha256": "8e51c6e62ac3526896083e43dea3f3c873e82a3f4c1b26e1afe2a3c984473a2e"
+    }
+  ],
+  "images": [
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_file_manager_header_entry/2026-10-24T19-36-03/file-manager-header-after.png",
+      "sha256": "1f30e90d10f4de1cd10ebc871a06af17bf87945db13a069b93b31b754cc16812",
+      "image_pixels": [
+        1024,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Local header entry opens its own directory beside the unchanged neighboring file manager."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_file_manager_header_entry/2026-10-24T19-36-03/file-manager-header-before.png",
+      "sha256": "8defc8bccf88730bd59801ad44f9b89af222502817a39350b996c95025ff3a65",
+      "image_pixels": [
+        1024,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Local header entry opens its own directory beside the unchanged neighboring file manager."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_connections_evidence/2026-10-24T19-35-35/native-connections-dark-250.png",
+      "sha256": "fb6e9eb9ff5b8b3689ede26d2444e2ad87d15a7b53deb6f7c81d06cb0898b52c",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Connection action slots remain separate; long identities are truncated and full host tooltip visible."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_connections_evidence/2026-10-24T19-35-35/native-connections-dark-320.png",
+      "sha256": "8ff111a5a7e5adaf7a9652e4e0b6eedb645dcca31ad561fa02c44d2eebe9028b",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Connection action slots remain separate; long identities are truncated and full host tooltip visible."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_connections_evidence/2026-10-24T19-35-35/native-connections-dark-480.png",
+      "sha256": "63b9ee916a2b08b0ee4f7552796c3a01e589eaa5421ada0596cb3f15b1fb5419",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Connection action slots remain separate; long identities are truncated and full host tooltip visible."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_connections_evidence/2026-10-24T19-35-35/native-connections-light-250.png",
+      "sha256": "4f0f178191c3c427eb0f0ca06c93624f14514a1dcd8fe9af99ec3816bb1c1654",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Connection action slots remain separate; long identities are truncated and full host tooltip visible."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_connections_evidence/2026-10-24T19-35-35/native-connections-light-320.png",
+      "sha256": "f83de9b718bc5b664c5c7a8ba5345d46574f6cb4533c32c3695440b4d6ba1c7f",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Connection action slots remain separate; long identities are truncated and full host tooltip visible."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_connections_evidence/2026-10-24T19-35-35/native-connections-light-480.png",
+      "sha256": "05fdbdfb89747193f54f4639d5cc6df2c3a25e50a59ff22230fced1d921266ad",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Connection action slots remain separate; long identities are truncated and full host tooltip visible."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_connections_evidence/2026-10-24T19-35-35/native-favorite-flyout.png",
+      "sha256": "e74bc312548fdc16f566cf7ccc93cf8a31a6eb823b0d04ad30d0323452aa72f9",
+      "image_pixels": [
+        900,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Full host tooltip remains above the left-opening menu and inside the image; single sample does not prove stable hover or pointer behavior."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_evidence/2026-10-24T19-35-39/native-empty-connections-dark-250.png",
+      "sha256": "7bf4ef2f3e71e644935fd0d860cfc5b6ddeac48891f6a531e4fc57f345e346c1",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_evidence/2026-10-24T19-35-39/native-empty-connections-dark-320.png",
+      "sha256": "2740ea2e1368f3d4acb39e56cb84acd6b9bca1bc9ccfa9e2f8d6c7bd78f03041",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_evidence/2026-10-24T19-35-39/native-empty-connections-dark-480.png",
+      "sha256": "c9214b9d22a387a0b4d513115992351a55ce92c1635a8792e8c3bd42c14c0501",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_evidence/2026-10-24T19-35-39/native-empty-connections-light-250.png",
+      "sha256": "242902ff41d4c8f5624a63deddc8f05a21369037e608550f7866288614814de3",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_evidence/2026-10-24T19-35-39/native-empty-connections-light-320.png",
+      "sha256": "e8e61efb491c97a27855276c0cba39e2e2f3f520d39129ff7c68d6f734d06ee8",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_evidence/2026-10-24T19-35-39/native-empty-connections-light-480.png",
+      "sha256": "b774175f4e59a5f757bc8c7828cf644ba175843deaf1c2c91fb7c2c40fd2eedf",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_evidence/2026-10-24T19-35-39/native-empty-favorites-dark.png",
+      "sha256": "0f2addb8781ff6970a4005a5f5d60ac3c8a789969c72e441c5dccae49cfb77a8",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_evidence/2026-10-24T19-35-39/native-empty-favorites-light.png",
+      "sha256": "83a2c2f1f66975d5c2343fb3b9b3b02b064a95e2d445decebc9d29c2e7fc8290",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-24T19-35-44/native-empty-connections-dark-250.png",
+      "sha256": "44fbbc4ef2927b7a6e2ae10d580a793a96f91fe3fc90ff90a2bb86d088548251",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-24T19-35-44/native-empty-connections-dark-320.png",
+      "sha256": "81dcd934928c836909611efb290127722d155340d8e806a0719556f89c6e5c6c",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-24T19-35-44/native-empty-connections-dark-480.png",
+      "sha256": "9971b27408cc238c50a8061abe4eb05e0c8ff2b0a615ed0da51c216bef0c98ea",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-24T19-35-44/native-empty-connections-light-250.png",
+      "sha256": "7a628252670e239f16c2de53f962dcb58f1d337d13f50ef8cacf01992083a510",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-24T19-35-44/native-empty-connections-light-320.png",
+      "sha256": "627d431ffe8e428a20e787e7048792e4d77ffda28cb4739a8f98593ac1554263",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-24T19-35-44/native-empty-connections-light-480.png",
+      "sha256": "6a3387deba642fa4af161917de6015b423e44934ab3ad9dc08ef98471ddaf6f1",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-24T19-35-44/native-empty-favorites-dark.png",
+      "sha256": "c5d40e68dba6de7066e5414202fd2565045c51b6ff0d0595dea4213e60e4ee9d",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-24T19-35-44/native-empty-favorites-light.png",
+      "sha256": "06a75ad0bca0f879de7976f0bafbca3f141178114d86a2f02cbfc48e58cd9e3d",
+      "image_pixels": [
+        1440,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "Empty-state instruction wraps inside its surface in the displayed locale/theme."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_evidence/2026-10-24T19-35-48/native-file-manager-focused-action.png",
+      "sha256": "5f6d52ef4391f7d7b9b059c7239f197b1aa5f4b5543ecbbba3238ef2da948e8c",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_evidence/2026-10-24T19-35-48/native-file-manager-full-name.png",
+      "sha256": "f1c9fd3d65bc3877ac8db30d832e947f76280835c256a0e1d4ab2f3fbba4fb45",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_evidence/2026-10-24T19-35-48/native-file-managers-narrow-light.png",
+      "sha256": "7bb5190b8051c6fd28cbcd7a8fe3933ef2cf97849d74de8fc91162c232df89d7",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_evidence/2026-10-24T19-35-48/native-file-managers-narrow.png",
+      "sha256": "58fd166c2be8b54e171fe8a52c4e58c17b6b632420062bbfdad801d304511742",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_evidence/2026-10-24T19-35-48/native-file-managers-normal-light.png",
+      "sha256": "b195b051b4b992b3f4b0f9e5980da1a01ef1fe800e90dec71cefcfa26edbf40a",
+      "image_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_evidence/2026-10-24T19-35-48/native-file-managers-normal.png",
+      "sha256": "a414d1e30614c7381b0f267779a704af25c94678c0a8e8c96f1cb13b09c83723",
+      "image_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_evidence/2026-10-24T19-35-48/native-file-managers-restored-terminals.png",
+      "sha256": "db4df7cf76dbc4070656ae8da0281a993baebb88006aadbd2490429d2a7c0785",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "en",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-24T19-35-53/native-file-manager-focused-action.png",
+      "sha256": "eb2c0aa269368829aeb074f3ce45b83e9a0c8934d699d3a192ec5bf8a2c9f47d",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-24T19-35-53/native-file-manager-full-name.png",
+      "sha256": "37a94d57cb600e629e495947dc1c6b928654e8d1ef9687527e1e626f7200b4b1",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-24T19-35-53/native-file-managers-narrow-light.png",
+      "sha256": "3f8138a3b55c3572d930ad6fe13c386bd31d280308e89d68a35f4811d397a69b",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-24T19-35-53/native-file-managers-narrow.png",
+      "sha256": "2d6522eebe3c35307dda1ab59756900359738ced565325de3a151b735169cea6",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-24T19-35-53/native-file-managers-normal-light.png",
+      "sha256": "bc352b5e6e49824e5573ff7dd7c7f6ac7bb995a822bf8eed5cd1c4429006bd81",
+      "image_pixels": [
+        1180,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-24T19-35-53/native-file-managers-normal.png",
+      "sha256": "256c26ff687f6ab7a2dafa4a130a416420217cec3fadf99b557f5be2cad90e29",
+      "image_pixels": [
+        1180,
+        640
+      ],
+      "locale": "de",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-24T19-35-53/native-file-managers-restored-terminals.png",
+      "sha256": "06837818fd158b8d1582b9a269a1a43403493957d20b18a47b27189df9101765",
+      "image_pixels": [
+        760,
+        640
+      ],
+      "locale": "de",
+      "theme": "light",
+      "visually_reviewed": true,
+      "observation": "File actions, focus distinction and destination remain visible at represented width. Dialog/tooltip/restored draft visible where named; no live transfer evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_panes_evidence/2026-10-24T19-35-58/native-panes-after-drag.png",
+      "sha256": "2aee8f2ad53492fe5f2397d752e80679f0ccf6435f13b8f03e6aaafb563e3e80",
+      "image_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Separate terminal sessions and retained draft visible; endpoint geometry only, no continuous drag evidence."
+    },
+    {
+      "artifact_id": 12573236479,
+      "path": "test_native_workspace_panes_evidence/2026-10-24T19-35-58/native-panes-side-by-side.png",
+      "sha256": "55f51fa505f5dfa62aea86dd7f24927026966bac64bfb60e9441841788ef5a41",
+      "image_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Separate terminal sessions and retained draft visible; endpoint geometry only, no continuous drag evidence."
+    },
+    {
+      "artifact_id": 12573171569,
+      "path": "test_subscription_agent_conversation_layout_evidence/2026-10-24T19-35-19/subscription-agent-narrow-540x670.png",
+      "sha256": "c8f3841b905fcfee87378f72fb52db2bb818550cc8587b1f265041a3316ef488",
+      "image_pixels": [
+        540,
+        670
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Visible action groups do not overlap; long metadata truncated; full-identity tooltips not exercised."
+    },
+    {
+      "artifact_id": 12573171569,
+      "path": "test_subscription_agent_conversation_layout_evidence/2026-10-24T19-35-19/subscription-agent-normal-1180x640.png",
+      "sha256": "7180c924673424e7a126f1cf9d478ab1f9bd489acf71efc849f0899ba4fc53be",
+      "image_pixels": [
+        1180,
+        640
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Visible action groups do not overlap; long metadata truncated; full-identity tooltips not exercised."
+    },
+    {
+      "artifact_id": 12573171569,
+      "path": "test_subscription_agent_conversation_layout_evidence/2026-10-24T19-35-19/subscription-agent-recoverable-error-540x670.png",
+      "sha256": "d715f328fe1d61e62eb397848f55b94df005c9b004fe02d79af4e79c8344f126",
+      "image_pixels": [
+        540,
+        670
+      ],
+      "locale": "en",
+      "theme": "dark",
+      "visually_reviewed": true,
+      "observation": "Visible action groups do not overlap; long metadata truncated; full-identity tooltips not exercised."
+    }
+  ]
+}

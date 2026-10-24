@@ -66,6 +66,13 @@ nach erfolgreichem horizontalem Scrollen bei 350/500 Punkten auf die praktisch
 unbedienbare erreichbare Größe 100×100 eingegrenzt. Weitere englische Texte
 in deutschen Agent-Einstellungen sind #688. Die Gesamtmatrix bleibt offen.
 
+Die [Nachprüfung von 1.2.36](CANDIDATE-1.2.36-NATIVE.md) erfasst 44 einzeln
+betrachtete Originalbilder der nativen Fixtures ohne neue sichtbare Regression
+in den dargestellten Zuständen. Der neue Plattformtest zur Mindestgeometrie
+besteht; die installierte Nachprüfung der Korrekturen #684/#685/#688 steht in
+diesem Zwischenstand noch aus. Der Bericht trennt diese Belege von der
+vollständigen Produktabnahme.
+
 ## Referenzen und Bewertung
 
 - **C**: [Cockpit-Spezifikation](../../docs/ui/cockpit-sidebar-connections.html#spec),
