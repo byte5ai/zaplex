@@ -1,0 +1,55 @@
+{
+  "run_id": 40073495704,
+  "source_sha": "c513867d323ad393a8cdfe951eff37a4a35ddcfc",
+  "scope": "Selected generated native fixture screenshots, not installed DMG acceptance",
+  "reviewed_images": [
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-24T07-23-56/native-file-managers-narrow-light.png",
+      "sha256": "77b895cc4410665219d881a0c278444f523c3024a50ad22d37b030ba420e8f2b",
+      "locale": "en",
+      "observation": "Filter hint readable after theme change; all eight function actions and target selector visible at normal/narrow width, active pane distinguished. No live transfer or editor-focus proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-24T07-23-56/native-file-managers-narrow.png",
+      "sha256": "34b59050693d829679b00ad100c200807c7284af4f1a9b3e49206ab590ec1029",
+      "locale": "en",
+      "observation": "Filter hint readable after theme change; all eight function actions and target selector visible at normal/narrow width, active pane distinguished. No live transfer or editor-focus proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-24T07-23-56/native-file-managers-normal-light.png",
+      "sha256": "7aa06844bc6cbfa3324655c2da44558a251b06673f8c8b0b8a040503dd086a15",
+      "locale": "en",
+      "observation": "Filter hint readable after theme change; all eight function actions and target selector visible at normal/narrow width, active pane distinguished. No live transfer or editor-focus proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-24T07-23-56/native-file-managers-normal.png",
+      "sha256": "06544f1730fe8ce82a37078980c18baf5962e7fbaa2184c364e8a24bf83e863a",
+      "locale": "en",
+      "observation": "Filter hint readable after theme change; all eight function actions and target selector visible at normal/narrow width, active pane distinguished. No live transfer or editor-focus proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-24T07-24-01/native-file-managers-narrow-light.png",
+      "sha256": "56ce7422da74bb5d5b8fa986bc73d57579644ce8326f4a6a48ad2c27d8384ecd",
+      "locale": "de",
+      "observation": "Filter hint readable after theme change; all eight function actions and target selector visible at normal/narrow width, active pane distinguished. No live transfer or editor-focus proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-24T07-24-01/native-file-managers-narrow.png",
+      "sha256": "073f2f120386486443fb3dd36b1007a4e9f6c55e4ffaea08b3ed48e6c98f1f60",
+      "locale": "de",
+      "observation": "Filter hint readable after theme change; all eight function actions and target selector visible at normal/narrow width, active pane distinguished. No live transfer or editor-focus proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-24T07-24-01/native-file-managers-normal-light.png",
+      "sha256": "0e0473a38658225862c38868026dddb665e55c574c6f8efa4e9590cf405e541f",
+      "locale": "de",
+      "observation": "Filter hint readable after theme change; all eight function actions and target selector visible at normal/narrow width, active pane distinguished. No live transfer or editor-focus proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-24T07-24-01/native-file-managers-normal.png",
+      "sha256": "76de1fbee30bc5d8f129c1968a43636914a0942568b1d13855e57d40e429ecd8",
+      "locale": "de",
+      "observation": "Filter hint readable after theme change; all eight function actions and target selector visible at normal/narrow width, active pane distinguished. No live transfer or editor-focus proof."
+    }
+  ]
+}

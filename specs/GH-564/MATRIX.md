@@ -49,6 +49,12 @@ Alias-Verbindung und eine unmittelbar aktualisierte Transferzielansicht, findet
 aber zusätzlich #645 (falsche Pane-/Host-Zuordnung) und #646 (Download über einen
 lokalen Verzeichnisalias). Details und Aussagegrenzen stehen im Kandidatenbericht.
 
+Die [Abnahme auf 1.2.32](CANDIDATE-1.2.32-NATIVE.md) ergänzt einen vollständig
+erfolgreichen CI-Batch mit 15/15 installierten Pflichtfällen, DE/EN-Teilnachweise
+für Theme-Fokusrückgabe und die sichere Verzeichnisübernahme bei einer lokal
+belegten Shell. Sie findet den initialen F2/F7-Dialogfokusfehler #673; die
+Gesamtmatrix bleibt ohne vollständige Fallkombinationen offen.
+
 ## Referenzen und Bewertung
 
 - **C**: [Cockpit-Spezifikation](../../docs/ui/cockpit-sidebar-connections.html#spec),

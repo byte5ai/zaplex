@@ -1,0 +1,290 @@
+{
+  "run": 40077852543,
+  "artifact": 12554771586,
+  "source": "c513867d323ad393a8cdfe951eff37a4a35ddcfc",
+  "dmg_sha256": "d950c9db3cf0d17bdbc2505ed9b8b78d77e3d707dad72f0cdf5609d3ccf412f8",
+  "captures": [
+    {
+      "file": "001-initial.png",
+      "sha256": "bb17c5b7bb51b90ac64d60d99b9c1f5cc94c6fd6bdc26c22369364bd116aab38",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "002-setup-input.png",
+      "sha256": "986a55eef4bb11aeb20a6493a358fc85249a036255df357ce27e1cd4cc97f4c4",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "003-setup-result.png",
+      "sha256": "8641a98a25d0b980c109eb1d5a54c44a2f0d7ae2a0b8d9eac6d5e7e84633fb50",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "004-file-manager.png",
+      "sha256": "6ea606caeeee7a8d1b79d474cafab0a7a6270bb252f8649fb7952300601228a8",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "005-file-manager-open.png",
+      "sha256": "27482c95ae6d1cc9d639390a833e45439a7b61b3e57907c948ae13b16ac50504",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "006-file-manager-shortcut.png",
+      "sha256": "8f971a37f24068568225dfeb9879b9ee93f421ba60a1abb3abe0bfb606b8e91c",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "007-filter-selected.png",
+      "sha256": "4fb21cdf5308b3b825b3b285d92bc79666bfd55520941b9e6ad68e47a130cab3",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "008-settings-open.png",
+      "sha256": "edb2bb3188e231e3fea85e08a3b00ae1c910fa9489339cb28f7d8127ecc08f73",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "009-appearance.png",
+      "sha256": "2ca778e170833c73e8ffcbd7dcd85d2590b41edbe8f6d3ec9f9fb98b310875f3",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "010-theme-picker.png",
+      "sha256": "095e268c8fb3183923288eb5e6602b8a08167c2181c16c7ca64c3757fb1a0074",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "011-light-result.png",
+      "sha256": "392b68556bb61420f65771dafa664f67ae2650c0f4fe7cf6e5bfa2f2cc8dbbb0",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "012-light-selected.png",
+      "sha256": "9ae0e04d1486a3be34a982155e4607a95eeec45b796d0bae329e8ee5e3550899",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "013-theme-panel-closed.png",
+      "sha256": "cf426727ab337731eac42300ebce4cb6ccd598f41816d065b576bce22aa1ff53",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "014-filter-return.png",
+      "sha256": "75e85f24e89104c15512e8ba42af1e15c0c737c8014aa037655cd7fd1ad18a20",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "015-filter-direct-input.png",
+      "sha256": "ce6618169fe3f4d2473b0abff8b648dc4eedd8fccb5cc1f84ed0869c297a61bb",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "016-filter-cleared.png",
+      "sha256": "411f9152122d2270eb4c171efb80e979c16090d2ea3f44710e705aacb1687d1b",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "017-rename-open.png",
+      "sha256": "76714c5fefc8c8b7b157354eb923eda58132c06149d64482a54e5f58e40d41f1",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "018-rename-draft-selected.png",
+      "sha256": "8fa9560dfd19f4cb4785683afe0bc0aacab3b3bce35d0507a7fd375ac42bf44e",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "019-rename-explicit-focus.png",
+      "sha256": "7c6ede11ac3906762276d80a06a42f6449a1d8a89b634442f861d80bf4f17f90",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "020-rename-settings.png",
+      "sha256": "9ae7bb46a8aca9cc58429dfe231dff3f308f01215f008a5ed3cf29235489961e",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "021-rename-appearance.png",
+      "sha256": "9735376e91a535f75efc6379403cef7b82b3a2b6380934dfa9b44e03aa1e1058",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "022-dark-result.png",
+      "sha256": "5e8699669902b148d4fb4c805e3ed20a87daa5c0bc4e0fd1bf7cad9c95fc8c01",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "023-dark-selected.png",
+      "sha256": "ed830f288b112d4178969ae988b3e6f531305a145220a1917f9468c2cac188e2",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "024-rename-return.png",
+      "sha256": "11c6df3e73a02bccb70f14501c8f5d17533eab4bb9c9c211df5ee76845369228",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "025-rename-direct-input.png",
+      "sha256": "38f54832f193198110cdbb0a56e196d51d5689e6089bfedaf2c83e5ded351b8b",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "026-folder-open.png",
+      "sha256": "328beacc6e99d2e122347647e4f79da052efa00552a828bc4233bbeec48a2a72",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "027-folder-draft.png",
+      "sha256": "328beacc6e99d2e122347647e4f79da052efa00552a828bc4233bbeec48a2a72",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "028-folder-explicit-focus.png",
+      "sha256": "52f51690ff203ab2d961e664f76fbec25bde7da412f6bf78309f89ddb7644462",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "029-folder-appearance.png",
+      "sha256": "0df6b1f53b44a9a5285591149dbed698051e4f4ea9887517b786365213ce39c9",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "030-folder-light-result.png",
+      "sha256": "392b68556bb61420f65771dafa664f67ae2650c0f4fe7cf6e5bfa2f2cc8dbbb0",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "031-folder-light-selected.png",
+      "sha256": "cf426727ab337731eac42300ebce4cb6ccd598f41816d065b576bce22aa1ff53",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "032-folder-return.png",
+      "sha256": "1e2f37ed16963b4627885be713b8ad7fd57601907b9640928a1d9bdb4947384e",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "033-folder-direct-input.png",
+      "sha256": "fc7f006a90bf1e560648f1d7d6afc41b8bbaa016156b087b8b2ec28088533833",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "034-folder-initial-raw-key.png",
+      "sha256": "c256d8bf616b29f0f0b9112b3b6b28e9dad7280125fada1c2280eb8fec47d9fb",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "035-shell-return.png",
+      "sha256": "c75b3415861fabb2f45d151301a3c59aa988137c32b9de816201ea1eef293ff4",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "036-shell-check-input.png",
+      "sha256": "fa91fbaf50baaf5d0a23bed485cb833f5f87223617e92f8da8eed6411d5f40ad",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "037-shell-check-result.png",
+      "sha256": "196acd74200fed99c3379919d22134696c8745d24a40f9a2da87be4e1312ef51",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "038-busy-read-input.png",
+      "sha256": "62af84af19f832d0c12afff33a4786c50b7754c524ec5d3c828033f828045655",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "039-busy-read-waiting.png",
+      "sha256": "3984e12bd95eadaf43cea3d97d4e67fb3c11db358ab1d79b9eb97d06a6aed480",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "040-busy-file-manager.png",
+      "sha256": "18ead3f49ac345ee9968c652ef00ea0a2150d23c481922b0044e7b076f221f11",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "041-busy-child.png",
+      "sha256": "aed2667e9f75db7563d9c8e5543c9a5ce0a93580d1cffc8a0c09430c669125e4",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "042-busy-shell-return.png",
+      "sha256": "c350f9c02651e17798551580e759101bb76442335bf6bc9993f5a582264d76df",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "043-busy-shell-manual-input.png",
+      "sha256": "b88f8d54a2d8d5af3e9892e91db5cca6da1070998c17614b4d40fc62f6427327",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "044-busy-shell-released.png",
+      "sha256": "171cc47e9f7fdfd40e64ab3aecdd4808b905500b656960b37f1da7868f04d21f",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "045-busy-shell-verification-input.png",
+      "sha256": "3c106e1939fc2cb31a367ca6b0830c1f2b6aa07a486c7f0a82b416418c641fa8",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "046-busy-shell-verified.png",
+      "sha256": "2a4b885a36659e5a76cd40c3c788b8d89a34b5bc8255bc1b5e71d48e581a8c68",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "047-finish-input.png",
+      "sha256": "6e7da443dbfb7642d9ad7caa7b0bcf094b45bf960051d378cf3221162f96ff21",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    }
+  ]
+}

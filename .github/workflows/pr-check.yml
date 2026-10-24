@@ -510,6 +510,7 @@ jobs:
       - name: cargo test (workspace session, pane and file-manager regressions)
         run: >
           cargo test --locked -p warp --lib --
+          file_dialog_opening_routes_first_typed_character_without_field_click
           transfer_completion_
           sftp_manager::sftp_ops::tests::sftp_alias_
           parent_navigation

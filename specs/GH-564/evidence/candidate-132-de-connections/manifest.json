@@ -1,0 +1,404 @@
+{
+  "run": 40080220445,
+  "artifact": 12555353703,
+  "source": "c513867d323ad393a8cdfe951eff37a4a35ddcfc",
+  "dmg_sha256": "d950c9db3cf0d17bdbc2505ed9b8b78d77e3d707dad72f0cdf5609d3ccf412f8",
+  "captures": [
+    {
+      "file": "001-initial.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "002-settings.png",
+      "sha256": "87fc0c086428abe1099702a4d85c4613612f8b185939596cf8c14923ae6d1485",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "003-appearance.png",
+      "sha256": "c5657a75c732e14e97f1d2cea6efc5737d5919aa1de5479930231edd1bf9c700",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "004-language-menu.png",
+      "sha256": "650230c9d052a557f6a607d92e710ee9da7670586ba871dfe1303dc671829f9f",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "005-language-notice.png",
+      "sha256": "8a6708aa333d8c323a993e672cef748054e49fdb31b69c893ffcfe3639cc7bc2",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "006-quit-state.png",
+      "sha256": "bb56d4795f3f577efe9c37a2655ad1f938a43c406bfb84f31f49fdd1b60e2052",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "007-german-restarted.png",
+      "sha256": "83f4d26cc88df7659261a23acbc6d9b3f2cd246c26dbfff0e0fa49c49f826b87",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "008-german-setup-input.png",
+      "sha256": "08cd014818c01a2a825cff4a0bf6062ac5f8dd98daca35603a2289c3f366e315",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "009-german-base.png",
+      "sha256": "072b102d9dea61b0fd0b28abea5dcfe60a408c8494ce22921f354287496ed886",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "010-german-files.png",
+      "sha256": "ad18b31d981ee17d72811052685260d4bdbf226c9ecbbc957b2b1a916725b2da",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "011-de-filter-selected.png",
+      "sha256": "195de4c9ef0f4df03156b30c72e5d44f1344eb6cd96fef99fe57ca3bea4ade49",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "012-de-settings.png",
+      "sha256": "322009207603289d7d4cd9b298cd1e7fc3d0fce996ffde21d02403ed779a78de",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "013-de-appearance.png",
+      "sha256": "4fa3d37c8d497807046d90757edf57c300ce1fe261373bccd48aa5a9f04ce960",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "014-de-theme-chooser.png",
+      "sha256": "d81e60d60fddae52f14024ca355db4b4fde0b36a08b1a1daea3886d4f9b412ba",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "015-de-light-result.png",
+      "sha256": "36bf38414ca850cc22c0cc3c5f538448f5b8f43ff08c116076382d436536397f",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "016-de-light-selected.png",
+      "sha256": "a9fa1a8ab59c1f8361a295cd308de8331d9ba9439c22f05f5d54ce67d5d2ca36",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "017-de-filter-returned.png",
+      "sha256": "72f47169f2a6b966bfc0e5de0aa5a2e16cb0997fada3be0da8f06b712eefa35e",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "018-de-filter-first-key.png",
+      "sha256": "c16136475c1088abdaf3e7d1166dabe34d6aa0c6fa3a03eb27e473e2db801960",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "019-de-rename-open.png",
+      "sha256": "4e05bbb7e7f5baa9f5ef73d78605bed9bc18472057310ec175b192ade7ec9174",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "020-de-rename-draft.png",
+      "sha256": "8575872bf565c43c1a1994e716286cafb73d5e18eddbfd5e3963f715004d46dd",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "021-de-rename-settings.png",
+      "sha256": "613ef3ce9bae67961ef292ebb33b083138bca18c22af926cb33c3173ea8dd5db",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "022-de-dark-result.png",
+      "sha256": "a6991e2cf6841bce865285243dd7e59b74a4f0e29b870ce30762e7d27ba7f2d6",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "023-de-dark-selected.png",
+      "sha256": "69374891faeeb1c2383938012d8d93a49774150d0488f8f4c6b0f5603f421cf0",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "024-de-rename-returned.png",
+      "sha256": "cf45bf03277b6410e9e5ef837fbb82ccdf2b7357613d02f8fd67fc3eea2b1e5e",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "025-de-rename-first-key.png",
+      "sha256": "d9259cc2e8079655ad21dd25fc5c888448271c558eb70efb3609adc8e5edf3e4",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "026-de-folder-open.png",
+      "sha256": "031f6407c5fbe7142d7f8338dd80741c5dc0ae48801652ce8ab7f0d122c27fcc",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "027-de-folder-draft.png",
+      "sha256": "61f28e4d3640af04e26767d749f0064ccea86c4e56d7641d3788437a994123e7",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "028-de-folder-settings.png",
+      "sha256": "4fa3d37c8d497807046d90757edf57c300ce1fe261373bccd48aa5a9f04ce960",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "029-de-folder-light-result.png",
+      "sha256": "36bf38414ca850cc22c0cc3c5f538448f5b8f43ff08c116076382d436536397f",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "030-de-folder-light-selected.png",
+      "sha256": "a9fa1a8ab59c1f8361a295cd308de8331d9ba9439c22f05f5d54ce67d5d2ca36",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "031-de-folder-returned.png",
+      "sha256": "e83897aae4086a066ce75343c684d352ea4d5db4bdd0f33c94155e23e6db34c0",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "032-de-folder-first-key.png",
+      "sha256": "bacd1097cf1127dfa88c449047d155e33a50c4a1fee56c26dc959eb0024d7e18",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "033-de-verify-input.png",
+      "sha256": "3eeb056f3448096e69abeae0b45584377978690561213ff8186ad1d90ae77b70",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "034-de-verified.png",
+      "sha256": "eeeb8b97ad0dffc446561f154c5289137c96574285c9ff2dbdab32eda4361c27",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "035-connections-empty.png",
+      "sha256": "974e001932c03475059e9488b8a68ce6051dea67184f1853b2635cb02ea9d2f0",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "036-connections-toolbar.png",
+      "sha256": "5b86936e470100e51c9524e5057ba5716317a47a0cf7829b64392b57b023be80",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "037-de-folder-tooltip.png",
+      "sha256": "54172f445addc9e023309d011bd5ef47baead84869589316a6742f3dc790ec9e",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "038-de-server-tooltip.png",
+      "sha256": "26568761642e96e34aa69414c9f5a7bd4ed75867f3518c95c14dab5999aa9f59",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "039-de-collapse-tooltip.png",
+      "sha256": "3a463987e7749c8eded3f3ef0a29556f95a97c34167e04cd9f487e5e41a55871",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "040-new-server.png",
+      "sha256": "662c55f00c37fc4194ce6d64dd7e986f8d1b263989cf1c98f46995f1021c5024",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "041-server-created.png",
+      "sha256": "c3e8352646c9df0a06b2aaf7793fb65209f111a0b9c2bc467adf222536ba3574",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "042-server-draft-name.png",
+      "sha256": "ceffe195d9a29894bdadb3a8244fe1a0a6659bb42815dc93ccddba5a66363293",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "043-server-draft-complete.png",
+      "sha256": "45205068354f54418f4289873ba28e1de4a3e0bd5173e655544f4a90583c6154",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "044-server-saved.png",
+      "sha256": "1f0d1134240ed9d8df846e2bcbe321d5e05e778db05ec96fa41744f0eb60e918",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "045-registry-full-name.png",
+      "sha256": "12c60fde443e52e36c9e818f3d5d5841b666c14acb7ec91f0d25e0a483d55a7c",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "046-server-rename-draft.png",
+      "sha256": "1cd10b0b88d130dc24ce21f8da2a508d5eb57746ea96f4b50058aceea972f6c6",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "047-server-renamed.png",
+      "sha256": "91206b2b076345222c0f054fc1a28444fc07718c05c4a13a1b1bab5880423081",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "048-favorite-saved.png",
+      "sha256": "3410eadb98ce161389a6c111406c99464fa914bdcace0ab185b0a7bdf2635592",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "049-start-favorite.png",
+      "sha256": "5034b313f718c21869a5850a5426a00be34b6fca56e953abde4378ab7f842ce0",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "050-favorite-hover.png",
+      "sha256": "f78fc644d4e0755721e6fc8441db2ed78374b480e75e687c19476b5bf1c09379",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "051-favorite-actions.png",
+      "sha256": "f78fc644d4e0755721e6fc8441db2ed78374b480e75e687c19476b5bf1c09379",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "052-favorite-escape.png",
+      "sha256": "4e34e7ce2e3d57307084ddbd297dcf21fdda220efd0bcb457b47d9d434fffb7a",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "053-favorite-direct-connect.png",
+      "sha256": "ca32b5732c813580b131e81d676aa795b2c1e9ad2294c07e77ee228a8e52deea",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "054-favorite-menu-reopened.png",
+      "sha256": "5034b313f718c21869a5850a5426a00be34b6fca56e953abde4378ab7f842ce0",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "055-favorite-refused.png",
+      "sha256": "ae0fc0da9bad6ca989a9f68b61d8280e4f4d6f81b8e00ed651d51d642bc7b69b",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "056-original-shell-listener-setup.png",
+      "sha256": "9c9c3d889d5639cf8076be23d805eec7531a2bbceadf04f165deb52f12e99ea2",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "057-listener-command.png",
+      "sha256": "901c98087a27ba75e78f750ae7a2a0378487a561db45c683ff801ea977dee9ef",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "058-listener-started.png",
+      "sha256": "64b3b201529ec0ae82d6c719af49d5d4bfb6d86e4a0bd0f1c6d4eb4e3e9e5a00",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "059-listener-log-input.png",
+      "sha256": "fd209ce2affd0262f7b72495426dbc7e882c0b83e6d3e304e197e11e532785fd",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "060-listener-ready.png",
+      "sha256": "04840bd6ead4d5bee7b3d37db3e27f2cf63b3b44e84abc3cbacdf478b8d4f076",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "061-refusal-before-enter.png",
+      "sha256": "5fe09d460f8803d1c37e924e49697f99ed790f72c27473c2caae632134f25dd7",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "062-retry-after-enter.png",
+      "sha256": "6a9c58666c447ab52967e409db51ab6cf2dc661f64c21f36c07bccc4e3b7cdfc",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "063-retry-canceled.png",
+      "sha256": "16437afbb960edc3fcc4ab92925cc10cca13899c25ec4a2b987a5905a3b7cd34",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "064-retry-log-check-input.png",
+      "sha256": "9ace7a91d5a67244b994da80eb2563146846d352f4f73830d0c60ea666878299",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "065-retry-independent-proof.png",
+      "sha256": "7be78de9f423794503680fd205d2d2453a734de6c70170889c9fc0936e2a61b9",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    },
+    {
+      "file": "066-finish-input.png",
+      "sha256": "7b563b56c0e6a3e30300331fbb9b30d6240dff6076735f5e8a49cfb0058ca3f9",
+      "visually_reviewed": true,
+      "workflow_original_matches": true
+    }
+  ]
+}

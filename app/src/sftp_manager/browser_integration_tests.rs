@@ -3135,6 +3135,88 @@ fn test_rename_editor_enter_confirms() {
     });
 }
 
+#[test]
+fn file_dialog_opening_routes_first_typed_character_without_field_click() {
+    for opening in ["f2", "f7", "toolbar"] {
+        App::test((), |mut app| async move {
+            crate::i18n::init(Some("en"));
+            initialize_app(&mut app);
+            app.update(crate::editor::init);
+            let (window, view, files) =
+                create_connected_view(&mut app, &[("file.txt", b"original")]);
+            let pane_id = PaneId::dummy_pane_id();
+            let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, true));
+            let outside = view.update(&mut app, |view, ctx| {
+                view.set_focus_handle(PaneFocusHandle::new(pane_id, focus_state), ctx);
+                ctx.add_view(|ctx| SftpBrowserView::new("settings-tab".to_string(), None, ctx))
+            });
+            render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+            view.update(&mut app, |view, ctx| view.focus_search_editor_for_test(ctx));
+            let (presenter, _) = render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+            assert!(app.update(|ctx| ctx.simulate_window_event(
+                Event::TypedCharacters {
+                    chars: "file".to_string()
+                },
+                window,
+                presenter,
+            )));
+
+            // First open from the filter, then reopen after Escape, then after a tab round trip.
+            for attempt in 0..3 {
+                if attempt == 2 {
+                    outside.update(&mut app, |_, ctx| ctx.focus_self());
+                    view.update(&mut app, |view, ctx| view.focus_contents(ctx));
+                }
+                let (presenter, _) = render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+                if opening == "toolbar" {
+                    let button = position(&presenter, "sftp_btn:new_folder").center();
+                    mouse_down(&mut app, window, presenter.clone(), button);
+                    mouse_up(&mut app, window, presenter, button);
+                } else {
+                    assert!(key_down(&mut app, window, presenter, opening));
+                }
+                let (presenter, _) = render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+                let editor = view.read(&app, |view, _| {
+                    if opening == "f2" {
+                        assert!(matches!(view.dialog, Some(Dialog::Rename { .. })));
+                        view.rename_editor.clone()
+                    } else {
+                        assert!(matches!(view.dialog, Some(Dialog::CreateFolder { .. })));
+                        view.new_folder_editor.clone()
+                    }
+                });
+                assert_eq!(
+                    app.focused_view_id(window),
+                    Some(editor.id()),
+                    "{opening}, {attempt}"
+                );
+                if !key_down(&mut app, window, presenter.clone(), "x") {
+                    assert!(app.update(|ctx| ctx.simulate_window_event(
+                        Event::TypedCharacters {
+                            chars: "x".to_string()
+                        },
+                        window,
+                        presenter,
+                    )));
+                }
+                editor.read(&app, |editor, ctx| assert_eq!(editor.buffer_text(ctx), "x"));
+                view.read(&app, |view, _| {
+                    assert_eq!(view.search_filter.as_deref(), Some("file"));
+                });
+                let (presenter, _) = render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+                assert!(key_down(&mut app, window, presenter, "escape"));
+                view.read(&app, |view, _| assert!(view.dialog.is_none()));
+                assert_eq!(app.focused_view_id(window), Some(view.id()));
+                assert_eq!(
+                    std::fs::read(files.path().join("file.txt")).unwrap(),
+                    b"original"
+                );
+                assert!(!files.path().join("x").exists());
+            }
+        });
+    }
+}
+
 fn assert_dialog_restores_list_keyboard_navigation(completion: &'static str) {
     for opening_key in ["f2", "f7"] {
         App::test((), |mut app| async move {
@@ -3153,7 +3235,7 @@ fn assert_dialog_restores_list_keyboard_navigation(completion: &'static str) {
             let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
             assert!(key_down(&mut app, window_id, presenter, opening_key));
 
-            // Register the dialog subtree before focusing its text field.
+            // The opening action must already have focused the dialog editor.
             let (_, invalidation) = presenter_for_window(&app, window_id);
             let presenter = app.presenter(window_id).unwrap();
             rerender(&mut app, presenter, invalidation);
@@ -3165,7 +3247,7 @@ fn assert_dialog_restores_list_keyboard_navigation(completion: &'static str) {
                     &view.new_folder_editor
                 };
                 editor.update(ctx, |editor, ctx| editor.set_buffer_text("a-created", ctx));
-                ctx.focus(editor);
+                assert!(editor.is_focused(ctx));
             });
             assert_ne!(app.focused_view_id(window_id), Some(view.id()));
             let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(800.0, 600.0));
