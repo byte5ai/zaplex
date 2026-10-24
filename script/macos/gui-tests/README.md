@@ -50,7 +50,13 @@ Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
   genau dessen DMG-Artefakt. Fehler lassen den Test-DMG-Workflow scheitern.
   Im Batch wird immer die vollständige Suite ausgeführt.
 - Interaktive Exploration: `gui-explore.yml` verwendet ebenfalls das vorhandene
-  DMG. Das Bedienfenster ist auf 30 Minuten begrenzt, weil verzögerte Bild- und
+  DMG. Nach einer gezielten Fortsetzung kann `gui_completion_run_id` deren Lauf
+  benennen. Die Vorprüfung lädt beide Originalbelege und verlangt dieselbe App,
+  Version und denselben DMG-Hash. Die Fortsetzung muss genau alle ursprünglich
+  fehlgeschlagenen Pflichtfälle bestehen. Fehlende, doppelte, übersprungene oder
+  zusätzliche Fälle sperren den Einstieg. `gui-completion.json` hält die Herkunft
+  jedes Falls fest, ohne die ursprünglichen XCTest-Berichte umzuschreiben.
+  Das bestätigt die lokale Fallabdeckung; die Release-Prüfung bleibt eigenständig. Das Bedienfenster ist auf 30 Minuten begrenzt, weil verzögerte Bild- und
   Eingabeabrufe wiederholt das frühere Zehn-Minuten-Fenster überschritten haben.
   Die Datei `finished` im Verzeichnis aus `/tmp/zaplex-exploration-path` beendet
   das Fenster vorzeitig; anschließend folgen Aufräumen und Belegsicherung.

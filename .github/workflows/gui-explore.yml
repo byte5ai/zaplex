@@ -4,13 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       artifact_run_id:
-        description: Successful CI batch or Test DMG continuation containing the unchanged app
+        description: CI batch containing the unchanged app (failed GUI needs a completion run)
         type: string
         required: true
       source_sha:
         description: Original immutable app source commit
         type: string
         required: true
+      gui_completion_run_id:
+        description: Optional successful GUI continuation passing exactly the failed batch cases
+        type: string
+        default: ''
       remote_target:
         description: Prepare the isolated Linux acceptance target (private captures)
         type: boolean
@@ -23,6 +27,9 @@ on:
       source_sha:
         required: true
         type: string
+      gui_completion_run_id:
+        type: string
+        default: ''
       remote_target:
         type: boolean
         default: false
@@ -49,10 +56,20 @@ jobs:
           ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
           APP_SOURCE_SHA: ${{ inputs.source_sha }}
           GUI_EXPLORATION: 'true'
+          GUI_COMPLETION_RUN_ID: ${{ inputs.gui_completion_run_id }}
           GUI_ACCEPTANCE_IN_CALLER: ${{ inputs.after_full_suite && github.workflow == 'Resume installed DMG acceptance' }}
         run: |
           python3 script/gui-resume-tests
+          python3 script/macos/gui-tests/completion_tests.py
           python3 script/gui-resume
+
+      - name: Preserve combined GUI case provenance
+        if: inputs.gui_completion_run_id != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gui-completion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: gui-completion.json
+          if-no-files-found: error
 
   explore:
     needs: verify
