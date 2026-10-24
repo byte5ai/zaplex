@@ -70,6 +70,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 sudo apt-get update
 sudo apt-get install --yes --no-install-recommends openssh-server netcat-openbsd zsh fish busybox-static tmux
+python3 "$(dirname "${BASH_SOURCE[0]}")/ssh-control-command-tests"
 # Package installation may start the runner's default daemon. The password
 # fixture accounts must only be reachable through our loopback-only instance.
 sudo systemctl stop ssh.socket ssh.service 2>/dev/null || true

@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Exercise the bundled SSH wrappers against a fake native client, without a network."""
+
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parent.parent
+ASSETS = ROOT / "app/assets/bundled/bootstrap"
+
+
+def shell_function(source, name, shell):
+    signature = re.escape(f"function {name}" + ("() {" if shell != "fish" else ""))
+    match = re.search(rf"(?m)^( +){signature}\n", source)
+    if match is None:
+        raise AssertionError(f"missing {shell} function {name}")
+    closing = match.group(1) + ("}" if shell != "fish" else "end")
+    end = source.index("\n" + closing + "\n", match.end()) + len(closing) + 1
+    return source[match.start():end]
+
+
+class SshControlCommandTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.shells = {}
+        for name in ("bash", "zsh", "fish"):
+            executable = os.environ.get(f"ZAPLEX_TEST_{name.upper()}") or shutil.which(name)
+            if not executable:
+                raise RuntimeError(f"{name} is required; set ZAPLEX_TEST_{name.upper()} if needed")
+            cls.shells[name] = str(Path(executable).resolve())
+
+    def invoke(self, shell, args):
+        source = (ASSETS / ("fish.sh" if shell == "fish" else f"{shell}_body.sh")).read_text()
+        functions = "\n".join(
+            shell_function(source, name, shell)
+            for name in ("is_interactive_ssh_session", "ssh")
+        )
+        if shell == "fish":
+            stubs = "function warp_send_json_message; echo HOOK; end\nfunction warp_ssh_helper; echo WRAPPED; end"
+            options, invocation = ["--no-config"], "ssh $argv"
+        else:
+            stubs = "warp_send_json_message() { echo HOOK; }\nwarp_ssh_helper() { echo WRAPPED; }"
+            options = ["--noprofile", "--norc"] if shell == "bash" else ["-f"]
+            invocation = 'ssh "$@"'
+        with tempfile.TemporaryDirectory(prefix="zaplex-ssh-control-") as directory:
+            client = Path(directory) / "ssh"
+            client.write_text('#!/usr/bin/env python3\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n')
+            client.chmod(0o700)
+            result = subprocess.run(
+                [self.shells[shell], *options, "-c", f"{stubs}\n{functions}\n{invocation}", "--", *args],
+                env={**os.environ, "PATH": directory + os.pathsep + os.defpath,
+                     "ZAPLEX_USE_SSH_WRAPPER": "1", "ZAPLEX_SHELL_DEBUG_MODE": "0"},
+                text=True, capture_output=True, timeout=5,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        return result.stdout.strip()
+
+    def test_control_commands_pass_unchanged_without_bootstrap_or_hook(self):
+        cases = [
+            ["-S", "/tmp/test socket", "-O", "exit", "example.invalid"],
+            ["-Ocheck", "example.invalid"],
+            ["-vOcheck", "example.invalid"],
+            ["example.invalid", "-O", "stop"],
+            ["example.invalid", "-Oexit"],
+            ["-O", "forward", "-L", "1234:localhost:5678", "example.invalid"],
+            ["-O", "unknown-control-command", "example.invalid"],
+        ]
+        for shell in self.shells:
+            for args in cases:
+                with self.subTest(shell=shell, args=args):
+                    self.assertEqual(self.invoke(shell, args), json.dumps(args))
+
+    def test_interactive_sessions_and_option_values_stay_integrated(self):
+        cases = [
+            ["example.invalid"],
+            ["-v", "-p", "2222", "example.invalid"],
+            ["-i", "-Oidentity", "example.invalid"],
+            ["-vi", "-Oidentity", "example.invalid"],
+            ["-i-Oidentity", "example.invalid"],
+            ["-o", "ProxyCommand=printf -Ocheck", "example.invalid"],
+            ["server-O.example.invalid"],
+        ]
+        for shell in self.shells:
+            for args in cases:
+                with self.subTest(shell=shell, args=args):
+                    self.assertEqual(self.invoke(shell, args), "HOOK\nWRAPPED")
+
+    def test_existing_native_invocations_stay_native(self):
+        for shell in self.shells:
+            for args in ([], ["-T", "example.invalid"], ["example.invalid", "echo", "hello"]):
+                with self.subTest(shell=shell, args=args):
+                    self.assertEqual(self.invoke(shell, args), json.dumps(args))
+
+
+if __name__ == "__main__":
+    unittest.main()

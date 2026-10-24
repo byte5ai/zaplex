@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.29] — 2026-10-24
+
+- SSH-Kontrollbefehle für bestehende Verbindungen passieren die Shellintegration unverändert; Bash, Zsh, Fish und die interaktive Befehlserkennung starten dafür keine neue Sitzung (#657).
+
 ## [1.2.28] — 2026-10-24
 
 - Dateimanager stellen nach dem Wechsel aus Einstellungen oder anderen Tabs den Fokus im weiterhin sichtbaren Eingabefeld wieder her; geschlossene Dialoge und bewusst fokussierte Dateilisten behalten ihre Zuordnung (#656).
