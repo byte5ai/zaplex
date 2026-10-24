@@ -1,0 +1,13 @@
+{
+  "run_id": 40087073327,
+  "source_sha": "b0eff3ee326b7a4884de3681123cd84fad5ef45f",
+  "artifact_id": 12557931513,
+  "scope": "Selected generated native fixture, not installed DMG acceptance",
+  "reviewed_images": [
+    {
+      "path": "test_native_workspace_connections_evidence/2026-10-24T10-51-01/native-favorite-flyout.png",
+      "sha256": "e74bc312548fdc16f566cf7ccc93cf8a31a6eb823b0d04ad30d0323452aa72f9",
+      "observation": "EN/Light at 900x640: complete More actions for production-europe-west-development-0123456789 tooltip is visible above left-opening action flyout, inside window bounds. First child label is temporarily covered by the hint; screenshot does not establish pointer pass-through, hover stability or keyboard behavior."
+    }
+  ]
+}
