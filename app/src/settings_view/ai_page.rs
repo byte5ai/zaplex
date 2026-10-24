@@ -4617,16 +4617,16 @@ impl AIInputWidget {
         let mut section = Flex::column();
 
         if FeatureFlag::AgentView.is_enabled() {
-            static AUTODETECTION_DESCRIPTION_FRAGMENTS: LazyLock<Vec<FormattedTextFragment>> =
-                LazyLock::new(|| {
-                    vec![
-                        FormattedTextFragment::plain_text("Encountered an incorrect detection? "),
-                        FormattedTextFragment::hyperlink(
-                            "Let us know",
-                            "https://github.com/byte5ai/zaplex/issues/new",
-                        ),
-                    ]
-                });
+            let autodetection_description_fragments = vec![
+                FormattedTextFragment::plain_text(format!(
+                    "{} ",
+                    crate::t!("settings-ai-incorrect-detection-question")
+                )),
+                FormattedTextFragment::hyperlink(
+                    crate::t!("settings-ai-incorrect-detection-report"),
+                    "https://github.com/byte5ai/zaplex/issues/new",
+                ),
+            ];
 
             section.add_children([
                 render_ai_setting_toggle::<NLDInTerminalEnabled>(
@@ -4650,7 +4650,7 @@ impl AIInputWidget {
                 Container::new(
                     FormattedTextElement::new(
                         FormattedText::new([FormattedTextLine::Line(
-                            (*AUTODETECTION_DESCRIPTION_FRAGMENTS).clone(),
+                            autodetection_description_fragments,
                         )]),
                         appearance.ui_font_body(),
                         appearance.ui_font_family(),

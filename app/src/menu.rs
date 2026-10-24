@@ -34,6 +34,10 @@ use warpui::{
     Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
+mod tooltip;
+
+use tooltip::MenuTooltip;
+
 pub const CHEVRON_RIGHT_ALIGN_SVG_PATH: &str = "bundled/svg/chevron-right-align.svg";
 
 pub const SUBMENU_OVERLAP: f32 = 8.;
@@ -178,6 +182,7 @@ pub struct Menu<A: Action + Clone = ()> {
 struct RenderedSubMenu {
     element: Box<dyn Element>,
     anchor_position_id: Option<String>,
+    tooltip: Option<(String, String)>,
 }
 
 #[derive(Clone, Default)]
@@ -932,9 +937,8 @@ impl<A: Action + Clone> MenuItemFields<A> {
                 .with_height((font_size * DEFAULT_UI_LINE_HEIGHT_RATIO).max(icon_size))
                 .finish()
             }),
-            Some(trigger_label.clone()),
+            Some(trigger_label),
         )
-        .with_tooltip(trigger_label)
         .with_padding_override(MENU_ITEM_VERTICAL_PADDING, 0.);
         fields.has_submenu = true;
         fields.disabled = self.disabled;
@@ -2380,6 +2384,23 @@ impl<A: Action + Clone> SubMenu<A> {
     ) -> Vec<RenderedSubMenu> {
         let height = self.height;
         let depth = self.depth;
+        let tooltip = self.items.iter().enumerate().find_map(|(index, item)| {
+            if safe_zone_anchor_row.is_some_and(|anchor| anchor != index)
+                || selected_row.is_some_and(|selected| selected != index)
+            {
+                return None;
+            }
+            let MenuItem::Submenu { fields, .. } = item else {
+                return None;
+            };
+            let trigger = fields.split_submenu_trigger.as_ref()?;
+            trigger.mouse_state.lock().unwrap().is_hovered().then(|| {
+                (
+                    trigger.tooltip.clone(),
+                    Self::save_position_id(position_namespace, depth, index),
+                )
+            })
+        });
         match &self.menu_variant {
             MenuVariant::Fixed => {
                 let mut menus = vec![RenderedSubMenu {
@@ -2419,6 +2440,7 @@ impl<A: Action + Clone> SubMenu<A> {
                         ))
                         .finish(),
                     anchor_position_id,
+                    tooltip,
                 }];
                 let Some(selected_item_row) = self.selected_item() else {
                     return menus;
@@ -2500,6 +2522,7 @@ impl<A: Action + Clone> SubMenu<A> {
                     .with_max_height(height)
                     .finish(),
                     anchor_position_id,
+                    tooltip,
                 }]
             }
         }
@@ -3141,6 +3164,7 @@ impl<A: Action + Clone> SubMenu<A> {
 
         let mut row = Flex::row();
         let mut stack = Stack::new();
+        let mut tooltips = Vec::new();
         submenus
             .into_iter()
             .enumerate()
@@ -3156,7 +3180,9 @@ impl<A: Action + Clone> SubMenu<A> {
                 let RenderedSubMenu {
                     element: submenu_element,
                     anchor_position_id,
+                    tooltip,
                 } = submenu;
+                tooltips.extend(tooltip);
                 let (content, top_padding, bottom_padding) = if depth == 0 {
                     let has_header = pinned_header_builder.is_some();
                     let has_footer = pinned_footer_builder.is_some();
@@ -3261,6 +3287,20 @@ impl<A: Action + Clone> SubMenu<A> {
                 }
             });
 
+        // Paint identity hints after every flyout. They must not cover the mouse
+        // targets underneath, even when window bounds move them over a menu.
+        for (label, anchor) in tooltips {
+            stack.add_positioned_overlay_child(
+                MenuTooltip::new(appearance.ui_builder().tool_tip(label).build().finish()).finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    anchor,
+                    vec2f(4., 0.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::MiddleRight,
+                    ChildAnchor::MiddleLeft,
+                ),
+            );
+        }
         row.add_child(stack.finish());
 
         // The footer (if any) was already placed inside the styled container above.
@@ -3377,3 +3417,7 @@ impl<A: Action + Clone> Menu<A> {
 #[cfg(test)]
 #[path = "menu_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "menu/tooltip_tests.rs"]
+mod tooltip_tests;

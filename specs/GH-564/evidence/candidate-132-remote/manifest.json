@@ -1,0 +1,340 @@
+{
+  "app_version": "1.2.32",
+  "source_sha": "c513867d323ad393a8cdfe951eff37a4a35ddcfc",
+  "harness_sha": "17b339b0c15a2619d7c4f0181bf82be1bc5ac745",
+  "run_id": 40083814872,
+  "dmg_sha256": "d950c9db3cf0d17bdbc2505ed9b8b78d77e3d707dad72f0cdf5609d3ccf412f8",
+  "locale": "en",
+  "theme": "Zaplex Dark",
+  "window_points": [
+    1024,
+    678
+  ],
+  "origin_points": [
+    0,
+    30
+  ],
+  "visually_reviewed": 53,
+  "archive_matched": 51,
+  "vm_archive_sha256": "c8a318d6462b727670c91536cfe2cc241237cea36aaf6eb309d54baecf54aa88",
+  "captures": [
+    {
+      "file": "001-remote-initial.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "002-local-setup-input.png",
+      "sha256": "1b532089d02f6d37a39d2337e69ebeffac59fe5495fe4c7310e7db7b5f344c22",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "003-local-marker-input.png",
+      "sha256": "504e1f458b8b56ad8f3bcb8401a6a7745d48a923190a95c1c11205c51b0af077",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "004-local-base.png",
+      "sha256": "f9e4f4b7d06744f1e5b4703493421ce5eff0f1d1d6dea088abf3e4d37928752d",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "005-split.png",
+      "sha256": "d7ee5be45cd760cb74acd72015dc9afc46ea2082a8ed97266777e9d96a36d151",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "006-split-terminal.png",
+      "sha256": "4f28d5f3d00c61ee6d660f61572f3d27068be527e641c7cd89a5920e8b69fcf2",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "007-ssh-input.png",
+      "sha256": "11a6e3ed098ac7de113c6b7f985bc3fe96bca1f4dbf0c85c1061d5ee2c50d857",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "008-ssh-connected.png",
+      "sha256": "cdd932abf9a8d49684f34e7504b1ceb309ac4a992d319cdd5424c27767dc1448",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "009-remote-fixture-input.png",
+      "sha256": "ae80c7253e04bd322789a987414aa2b1ce94223cbd794676407783f53062ea50",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "010-remote-fixture-ready.png",
+      "sha256": "757cdd7bc23806c749a4e5af51a2bec94d732a839d3e4faf37e769b9b124a953",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "011-control-check-input.png",
+      "sha256": "9b644f3c8ad88709a28d26f70568f63e61c7b47cad22ed87dd598d540e38a69b",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "012-control-check-result.png",
+      "sha256": "b8c9c557575c746e3ef87834eda79e339097c081589c832968d96c985cbde8dc",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "013-control-exit-input.png",
+      "sha256": "78cf67ed25ef6134bc16b28dbdb7bda2fb2749b482867b0cf19e855b2914ba55",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "014-control-exit-result.png",
+      "sha256": "ae37271d7b7b70da1683d9c028a73706a72cba66cac3e6143748820749bc4abf",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "015-local-file-manager.png",
+      "sha256": "82def1416afae3fd80dc98e08df71f1df2568c83fb2a0156f384b8863b7c528e",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "016-remote-file-manager.png",
+      "sha256": "c3bd864f1c7a44a1563c8283441bd1f7abe49c796aa50432ea16309b236961af",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "017-connections-import.png",
+      "sha256": "805b48bad7b143ff84f6af67756aa06398a9d4854037103429d0404df6649335",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "018-add-server-menu.png",
+      "sha256": "fd34e5f0e1656e4290547b54e806dbeaa7b63d17dd7aaef0d4cfe86087773fcb",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "019-imported-target.png",
+      "sha256": "5a55a3dcb3b21800e4ee98d3ff9cce0bdad9af5ad22913385b0832f203dc2dc2",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "020-registry-connect.png",
+      "sha256": "865c4ce486996c2a06915aa7cd15ca0551f48119337163f9397b9a6e76eff577",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "021-persistent-setup-input.png",
+      "sha256": "ce330cc84f2ab13598891fab62566f6b60f467a62e58d4cdb71e08c714492df2",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "022-persistent-base.png",
+      "sha256": "e0959cabe04b6c7982bbb44f0e7d284177fa19161a1bb394514846f49b2b9461",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "023-local-control-shell.png",
+      "sha256": "63706db7ea3229d7f1478dab7db1dfefad87e1c5aa4a78efacbfb137be39e1c7",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "024-daemon-control-input.png",
+      "sha256": "77e0899f92cdcd8c62d8ad49a6ca890dec012809c1b7459bfe24b9aaa04764e3",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "025-daemon-control-exit.png",
+      "sha256": "62ba8d0272fac4668770228a38bd33f4e5a386aaba96801607ca43226291352c",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "026-persistent-reconnected.png",
+      "sha256": "1e5a1c621be2ce2d1a311ff798cb422427554b57d84e096ebfdbec74f492a10d",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "027-persistent-after-input.png",
+      "sha256": "6cef7341fbf2511c60b1b5e6a8668239de58c153209a1b8d9b1bbaba173256aa",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "028-persistent-after.png",
+      "sha256": "d07684c7af710f828af8a360658312d033249441339c97ed1123510d71850f60",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "029-persistent-file-manager.png",
+      "sha256": "26d222bdb7ac67fade2434e45626c1d655c7fccade413d38f3bcf46ae154bf56",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "030-host-key-input.png",
+      "sha256": "7347274e10ceee473a58272ad904ef14035743e51420daef91345545fb56df10",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "031-host-key-proof.png",
+      "sha256": "5cf6e06d1f1fb674bd57695a7bb5270c2782d622cb18ea8cc94a4714346923b5",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "032-local-destination-ready.png",
+      "sha256": "e89b162a9e5ffaf4c94812bece4453672805a23cc197eee1d30207cb8955766d",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "033-sftp-trust-return.png",
+      "sha256": "26d222bdb7ac67fade2434e45626c1d655c7fccade413d38f3bcf46ae154bf56",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "034-sftp-ready.png",
+      "sha256": "39d7e64c5eaf384265d6a321d066ebd8953d186ed251bbacc894970e4ae6c9d0",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "035-copy-destination.png",
+      "sha256": "331b5c3aa68430485a43a292b88e09c97f4552baf821fda5334eb9cec35e9e03",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "036-transfer-running.png",
+      "sha256": "0f1908b5e042e7fdc251facf6156cdbe39ae677cede114d14777df52ef01bff2",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "037-transfer-terminal.png",
+      "sha256": "ff23ce735f30eecba6ed45a9e21d5c2e0523d7467c8c9e328f2e5f7e34ced9db",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "038-transfer-return-file-manager.png",
+      "sha256": "e246ff17f701a454a8c6b05fe4634ce61b293cc95495dcc2af3e7b49988bd7b7",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "039-transfer-other-tab.png",
+      "sha256": "8911b217bcf507b792107a5a0c35c71a61e1ac0b7380a55dd11f518279f3bc75",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "040-transfer-neighbor-terminal.png",
+      "sha256": "56b9cf833f6162bfcf526a20fe68911b0e67f810030b913569e8d56a424b5772",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "041-transfer-source-again.png",
+      "sha256": "91c7cb3ef84e79b83a5fb5e2833b75259cb644c7b86a6a38ff4aea538ae8e597",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "042-transfer-paused.png",
+      "sha256": "acf76fc04823f3c86f8bee2a21c1620ddac746b9d25165cbc3695fc643011e06",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "043-transfer-cancelled.png",
+      "sha256": "7f9007dc2b01e2746cd029522eb2e3954513f6081ab7f8ad2c564bf555ef74d4",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "044-after-cancel-target.png",
+      "sha256": "177d5faf1ef99ef28e15ae9074d8fe4082af1401a053a7096dbc5141c24c3572",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "045-target-verification-input.png",
+      "sha256": "d75aefd2d77935fdc724e9be22c72ea9e3be2a574383de84a5c4b2bfdbe52f28",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "046-target-after-cancel.png",
+      "sha256": "056f350f08c1ac80dd3f9e31b5d5d46e866d1a71ca669e908639204af42d45d3",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "047-source-verification-input.png",
+      "sha256": "8e76f006524fe17738a7b301587b713594495094786759a50aff4ba1423a88cc",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "048-source-after-cancel.png",
+      "sha256": "697e27586863d47f6e87cd3fa32aac65dffcb481c77232a8055ecd09934adbb5",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "049-target-compact-input.png",
+      "sha256": "f0a4b9c907899a9a9218c93a94ece52982aeb965e8e464f404c7f8beddb620e8",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "050-target-removed-proof.png",
+      "sha256": "bfa8e8fb7cc8a5d3d890e5b7f201ff0d3215512c8387798a35cc54dac3c448f9",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "051-evidence-archive-input.png",
+      "sha256": "5b271ba78287c7e65102ca7d3e079334efdefff195c7855866e9626b77c6c635",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch; additionally byte-matched VM archive"
+    },
+    {
+      "file": "052-evidence-archive-result.png",
+      "sha256": "1129a2891559ac690325cb66356db9297084a132df8e132d95e39e12b3bd4613",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch after archive creation"
+    },
+    {
+      "file": "053-finish-input.png",
+      "sha256": "f09e0e00c55640fe99552ac85f5053bb29826f829b209fa6309e54ad73a27182",
+      "visually_reviewed": true,
+      "provenance": "direct native operator fetch after archive creation"
+    }
+  ]
+}

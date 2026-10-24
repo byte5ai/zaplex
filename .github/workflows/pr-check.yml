@@ -546,6 +546,7 @@ jobs:
           sftp_manager::fm_registry::tests::captured_target_
           equal_paths_on_different_hosts_are_distinct_target_coordinates
           menu::tests::test_split_submenu_
+          menu::tooltip_tests::test_split_submenu_
           test_primary_disabled_split_submenu_keeps_child_keyboard_accessible
           test_submenu_parent_unhover_keeps_submenu_open
           removed_favorite_host_is_disabled_and_never_routed
