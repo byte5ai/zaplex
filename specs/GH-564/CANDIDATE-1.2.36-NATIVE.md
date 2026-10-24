@@ -54,18 +54,33 @@ geprüft. Die Originalaufnahmen zeigen zwei Fehler der Texterkennung:
   Setup-Ausgabe `ZQA 967960 963` wird als `ZQA 967968 963` gelesen. Der Test
   erreicht die Ziehgeste nicht; dieser Lauf beweist die Mindestgröße noch nicht.
 
-[PR #694](https://github.com/byte5ai/zaplex/pull/694) korrigiert den Testhelfer
-mit Pixelwiederholung und vollständiger Zeilensegmentierung. Exakte Vergleiche
-bleiben erhalten. Gespeicherte Originalausschnitte sichern die beiden Befunde,
-unbestätigte Eingaben und unabhängige Pane-Ausgaben ab. Die Linux-Diagnose und
-Swift-Syntaxprüfung bestanden; der tatsächliche macOS-Regressionstest muss
-vor XCTest bestehen.
+[PR #694](https://github.com/byte5ai/zaplex/pull/694) ergänzt Pixelwiederholung,
+vollständige Zeilensegmentierung und feste Gegenproben. Die Linux-Diagnose
+besteht, die [erste Fortsetzung 40131239409](https://github.com/byte5ai/zaplex/actions/runs/40131239409)
+stoppt jedoch vor XCTest an der schmalen Fensteraufnahme. Kein GUI-Fall wird
+in diesem Lauf ausgeführt. Das gesicherte Artefakt `12575350789` hat ZIP-SHA256
+`2ebaf49adca4243435b22564711908c1fd074ca93d103415789df6f688970406`.
 
-[Fortsetzung 40131239409](https://github.com/byte5ai/zaplex/actions/runs/40131239409)
-prüft ausschließlich die beiden fehlgeschlagenen Fälle mit Teststand
-`23fdcf043c206f2aad5a688c35b98afd50f20c29`. Die 14 bestandenen Fälle und der
-App-Build werden nicht wiederholt. Der Originalbatch bleibt fehlgeschlagen;
-ein vollständiger Nachweis erfordert die geprüfte Kombination beider Läufe.
+Der anschließende [native Bildvergleich 40131681579](https://github.com/byte5ai/zaplex/actions/runs/40131681579)
+verwendet dieselbe Swift-Implementierung und die tatsächliche macOS-Engine
+Tesseract 5.5.3. 96 Lesungen aus sechs Bildern und 16 festen Konfigurationen
+reproduzieren die Ziffernverwechslung bei dreifacher Pixelwiederholung.
+Zweifache Vergrößerung besteht alle positiven und negativen Erwartungen samt
+Koordinaten bei beiden Interpolationsarten und beiden Segmentierungsmodi.
+Artefakt `12575246799`, ZIP-SHA256
+`140c20036d4c94b27fd40cdf2ccd58f7de259e946719a8241753a4ac79ac4fdf`.
+Sprachdaten sind gegenüber der Linux-Diagnose identisch; deren Erfolg ersetzt
+die tatsächliche native Implementierung nicht.
+
+[PR #696](https://github.com/byte5ai/zaplex/pull/696) setzt den festen Standard
+auf zweifache Pixelwiederholung und vollständige Zeilensegmentierung.
+Exakte Vergleiche bleiben erhalten; kein Bild bekommt eine Sonderbehandlung.
+[Fortsetzung 40131994068](https://github.com/byte5ai/zaplex/actions/runs/40131994068)
+verwendet Teststand `31931bbd68994f3127a622cc266e788cca6bee1f`. Vor den zwei
+fehlgeschlagenen GUI-Fällen muss die vollständige Swift-Gegenprobe einschließlich
+Retina-Abbildung bestehen. Die 14 bestandenen Fälle und der App-Build werden
+nicht wiederholt. Der Originalbatch bleibt fehlgeschlagen; ein vollständiger
+Nachweis erfordert die geprüfte Kombination der tatsächlichen GUI-Ergebnisse.
 
 ## Native Render-Fixtures
 
