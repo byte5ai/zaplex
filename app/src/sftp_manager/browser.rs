@@ -5486,6 +5486,53 @@ impl SftpBrowserView {
         ))
     }
 
+    /// Only the active browser owns the global queue presentation.
+    /// The workspace supplies it when another kind of pane is active.
+    pub(crate) fn displays_transfer_panel(&self, app: &AppContext) -> bool {
+        if !self
+            .focus_handle
+            .as_ref()
+            .is_some_and(|handle| handle.is_focused(app))
+        {
+            return false;
+        }
+        let global_activities = super::transfer_queue::TransferQueue::as_ref(app)
+            .activities()
+            .collect::<Vec<_>>();
+        let has_global_transfers = !global_activities.is_empty();
+        let force_global_panel = global_activities.iter().any(|activity| {
+            matches!(
+                activity.state,
+                super::transfer_queue::QueuedTransferState::Running
+                    | super::transfer_queue::QueuedTransferState::Paused
+                    | super::transfer_queue::QueuedTransferState::Cancelling
+            ) || !activity.recovery_paths.is_empty()
+        });
+        (!self.transfers.is_empty() || has_global_transfers)
+            && (!self.transfer_panel_hidden || force_global_panel)
+    }
+
+    fn content_with_transfers(
+        &self,
+        content: Box<dyn Element>,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        if !self.displays_transfer_panel(app) {
+            return content;
+        }
+        let panel = Container::new(self.render_transfers(appearance, app))
+            .with_padding_left(PANEL_PADDING)
+            .with_padding_right(PANEL_PADDING)
+            .with_padding_bottom(PANEL_PADDING)
+            .finish();
+        let position_id = self.layout_position_id("transfer-panel");
+        super::transfer_panel::content_with_transfer_panel(
+            content,
+            save_layout_position(panel, &position_id),
+        )
+    }
+
     /// Render the transfer panel
     fn render_transfers(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let queue = super::transfer_queue::TransferQueue::as_ref(app);
@@ -7272,6 +7319,7 @@ impl View for SftpBrowserView {
                     .finish(),
             )
             .finish();
+            let content = self.content_with_transfers(content, appearance, app);
             let content = Container::new(content)
                 .with_border(Border::all(2.0).with_border_fill(pane_border_fill))
                 .finish();
@@ -7323,7 +7371,13 @@ impl View for SftpBrowserView {
 
         // 5. Loading indicator / file list
         if self.is_loading {
-            col.add_child(Expanded::new(1.0, self.render_loading(appearance)).finish());
+            col.add_child(
+                Expanded::new(
+                    1.0,
+                    self.content_with_transfers(self.render_loading(appearance), appearance, app),
+                )
+                .finish(),
+            );
         } else {
             let file_list = self.render_file_list(appearance, pane_is_focused);
             let scrollbar_color = theme.disabled_text_color(theme.background()).into();
@@ -7339,7 +7393,13 @@ impl View for SftpBrowserView {
             .finish();
             let body_position_id = self.layout_position_id("body");
             let positioned_body = save_layout_position(scrollable, &body_position_id);
-            col.add_child(Expanded::new(1.0, positioned_body).finish());
+            col.add_child(
+                Expanded::new(
+                    1.0,
+                    self.content_with_transfers(positioned_body, appearance, app),
+                )
+                .finish(),
+            );
             // 5b. What is marked, pinned under the list (only while something is).
             if let Some(status) = self.render_marked_status(appearance, pane_is_focused) {
                 let status_position_id = self.layout_position_id("marked-status");
@@ -7359,7 +7419,7 @@ impl View for SftpBrowserView {
         // a narrow split wraps the legend into two or four rows instead.
         col.add_child(self.render_responsive_function_bar(app, appearance, pane_actions_active));
 
-        // 7. Transfer panel (floating at the bottom)
+        // 7. Bound the pane content, including the reserved transfer area.
         // Wrap the `Flex(Max)` body in a tight `Container` before it becomes the
         // view root (same reason as the not-connected branch above): the pane
         // mounts this as a `Shrinkable` flex child, and a bare `Flex(Max)` root
@@ -7370,41 +7430,6 @@ impl View for SftpBrowserView {
             .finish();
         let root_position_id = self.layout_position_id("pane-root");
         main_content = save_layout_position(main_content, &root_position_id);
-
-        // 8. Transfer panel floating layer
-        let global_activities = super::transfer_queue::TransferQueue::as_ref(app)
-            .activities()
-            .collect::<Vec<_>>();
-        let has_global_transfers = !global_activities.is_empty();
-        let force_global_panel = global_activities.iter().any(|activity| {
-            matches!(
-                activity.state,
-                super::transfer_queue::QueuedTransferState::Running
-                    | super::transfer_queue::QueuedTransferState::Paused
-                    | super::transfer_queue::QueuedTransferState::Cancelling
-            ) || !activity.recovery_paths.is_empty()
-        });
-        if (!self.transfers.is_empty() || has_global_transfers)
-            && (!self.transfer_panel_hidden || force_global_panel)
-        {
-            let panel_el = Container::new(self.render_transfers(appearance, app))
-                .with_padding_left(PANEL_PADDING)
-                .with_padding_right(PANEL_PADDING)
-                .with_padding_bottom(PANEL_PADDING)
-                .finish();
-            let mut stack = Stack::new();
-            stack.add_child(main_content);
-            stack.add_positioned_overlay_child(
-                panel_el,
-                OffsetPositioning::offset_from_parent(
-                    Vector2F::new(0.0, 0.0),
-                    ParentOffsetBounds::ParentBySize,
-                    ParentAnchor::BottomLeft,
-                    ChildAnchor::BottomLeft,
-                ),
-            );
-            main_content = stack.finish();
-        }
 
         // 9. Context menu
         if let Some(ref cm_state) = self.context_menu {

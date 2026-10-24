@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use pathfinder_geometry::vector::vec2f;
-use warpui::elements::Stack;
+use warpui::elements::{Rect, Stack};
 use warpui::platform::WindowStyle;
 use warpui::{
     App, AppContext, Entity, Event, Presenter, SingletonEntity, TypedActionView, View, ViewContext,
@@ -27,6 +27,7 @@ struct TransferPanelTestView {
     scroll_state: ClippedScrollStateHandle,
     cancelled_ids: Vec<usize>,
     panel_toggle_count: usize,
+    reserve_content_space: bool,
 }
 
 struct WorkspaceTransferPanelTestView;
@@ -46,6 +47,7 @@ impl TransferPanelTestView {
             scroll_state: ClippedScrollStateHandle::default(),
             cancelled_ids: Vec::new(),
             panel_toggle_count: 0,
+            reserve_content_space: false,
         }
     }
 
@@ -150,18 +152,26 @@ impl View for TransferPanelTestView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        Stack::new()
-            .with_child(render_transfer_panel(
-                &self.transfers,
-                &self.cancel_btn_states,
-                &self.pause_btn_states,
-                &self.retry_btn_states,
-                appearance,
-                self.close_btn_state.clone(),
-                self.scroll_state.clone(),
-                TransferPanelTarget::Browser,
-            ))
-            .finish()
+        let panel = render_transfer_panel(
+            &self.transfers,
+            &self.cancel_btn_states,
+            &self.pause_btn_states,
+            &self.retry_btn_states,
+            appearance,
+            self.close_btn_state.clone(),
+            self.scroll_state.clone(),
+            TransferPanelTarget::Browser,
+        );
+        if self.reserve_content_space {
+            Stack::new()
+                .with_child(content_with_transfer_panel(
+                    SavePosition::new(Rect::new().finish(), "test-content").finish(),
+                    SavePosition::new(panel, "test-panel").finish(),
+                ))
+                .finish()
+        } else {
+            Stack::new().with_child(panel).finish()
+        }
     }
 }
 
@@ -484,4 +494,50 @@ fn workspace_observes_worker_progress_without_a_live_sftp_browser() {
             "workspace observers must be notified when a worker mutates the global queue"
         );
     });
+}
+
+#[test]
+fn reserved_transfer_panel_keeps_content_visible_and_returns_unused_space() {
+    crate::i18n::init(Some("en"));
+    for many in [false, true] {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let (window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| {
+                let mut view = if many {
+                    TransferPanelTestView::with_many_transfers()
+                } else {
+                    TransferPanelTestView::new()
+                };
+                view.reserve_content_space = true;
+                view
+            });
+            for size in [vec2f(300., 180.), vec2f(420., 360.), vec2f(1024., 800.)] {
+                let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+                build_scene(&mut app, window_id, presenter.clone(), size);
+                let presenter = presenter.borrow();
+                let positions = presenter.position_cache();
+                let content = positions.get_position("test-content").unwrap();
+                let panel = positions.get_position("test-panel").unwrap();
+                let history = positions
+                    .get_position("sftp_transfer_history_scroll")
+                    .unwrap();
+                assert!(
+                    content.height() >= size.y() / 2. - 0.5,
+                    "{content:?} at {size:?}"
+                );
+                assert!(
+                    content.max_y() <= panel.min_y() + 0.5,
+                    "{content:?}, {panel:?}"
+                );
+                assert!(panel.max_y() <= size.y() + 0.5, "{panel:?} at {size:?}");
+                assert!(history.height() > 0. && history.max_y() <= panel.max_y());
+                if !many && size.y() == 800. {
+                    assert!(
+                        content.height() > 600.,
+                        "short history must return space: {content:?}"
+                    );
+                }
+            }
+        });
+    }
 }

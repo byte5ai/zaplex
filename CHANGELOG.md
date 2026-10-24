@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.30] — 2026-10-24
+
+- Dateitransfers erscheinen einmal in der aktiven Dateipane oder im Workspace. Die Anzeige reserviert Platz und verdeckt weder Transferziel noch Dateiaktionen oder Terminaleingabe (#658).
+
 ## [1.2.29] — 2026-10-24
 
 - SSH-Kontrollbefehle für bestehende Verbindungen passieren die Shellintegration unverändert; Bash, Zsh, Fish und die interaktive Befehlserkennung starten dafür keine neue Sitzung (#657).

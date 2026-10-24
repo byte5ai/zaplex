@@ -18,7 +18,7 @@ use crate::gpu_state::GPUState;
 use crate::network::NetworkStatus;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::notebooks::notebook::NotebookView;
-use crate::pane_group::{Direction, PaneGroupAction, PaneId};
+use crate::pane_group::{Direction, PaneGroupAction, PaneId, SftpPane};
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::terminal::shared_session::protocol::SessionSourceType;
 use crate::terminal::shared_session::protocol::{ParticipantId, ParticipantList};
@@ -7547,5 +7547,111 @@ fn restart_preflight_rejects_raw_or_foreign_terminal_before_signal() {
             assert!(workspace.begin_agent_restart(terminal.id(), ctx).is_none());
             assert!(workspace.pending_agent_restarts.is_empty());
         });
+    });
+}
+
+#[test]
+fn transfer_panel_moves_between_file_browser_and_workspace_without_losing_controls() {
+    use crate::sftp_manager::transfer_queue::{
+        QueuedTransferState, TransferActionTarget, TransferQueue,
+    };
+    use crate::sftp_manager::types::ConnectionState;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| crate::sftp_manager::fm_registry::FileManagerRegistry::new());
+        let workspace = mock_workspace(&mut app);
+        let directory = tempfile::tempdir().unwrap();
+        let queue = TransferQueue::handle(&app);
+        let id = queue.update(&mut app, |queue, ctx| {
+            let id = queue.enqueue("workspace", 100).unwrap();
+            ctx.notify();
+            id
+        });
+        let window_id = workspace.read(&app, |workspace, _| workspace.window_id);
+        let presenter = app.presenter(window_id).unwrap();
+        assert!(
+            presenter.borrow().position_cache()
+                .get_position(format!("sftp_btn:cancel_transfer:{id}"))
+                .is_some(),
+            "queue notification must render workspace controls without a browser or manual invalidation"
+        );
+        let group = workspace.read(&app, |workspace, ctx| {
+            assert!(
+                workspace.render_global_transfer_panel(ctx).is_some(),
+                "terminal owns global panel"
+            );
+            workspace.active_tab_pane_group().clone()
+        });
+        let (source, manager, browser) = group.update(&mut app, |group, ctx| {
+            let source = group.focused_pane_id(ctx);
+            group.open_file_manager_in_place(
+                source,
+                crate::pane_group::FileManagerTarget::Local {
+                    start_path: directory.path().to_path_buf(),
+                },
+                ctx,
+            );
+            let manager = group.focused_pane_id(ctx);
+            let browser = group
+                .downcast_pane_by_id::<SftpPane>(manager)
+                .unwrap()
+                .browser_view(ctx);
+            (source, manager, browser)
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(browser.as_ref(ctx).displays_transfer_panel(ctx));
+            assert!(
+                workspace.render_global_transfer_panel(ctx).is_none(),
+                "no second list over browser"
+            );
+        });
+        browser.update(&mut app, |browser, ctx| {
+            browser.connection = ConnectionState::Disconnected;
+            ctx.notify();
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(browser.as_ref(ctx).displays_transfer_panel(ctx));
+            assert!(
+                workspace.render_global_transfer_panel(ctx).is_none(),
+                "connection changes must keep controls in the active browser"
+            );
+        });
+        browser.update(&mut app, |browser, ctx| {
+            browser.connection = ConnectionState::Connected;
+            ctx.notify();
+        });
+        group.update(&mut app, |group, ctx| group.close_pane(manager, ctx));
+        group.read(&app, |group, ctx| {
+            assert_eq!(group.focused_pane_id(ctx), source)
+        });
+        workspace.read(&app, |workspace, ctx| {
+            assert!(workspace.render_global_transfer_panel(ctx).is_some())
+        });
+        for (action, expected) in [
+            (
+                WorkspaceAction::PauseTransfer as fn(TransferActionTarget) -> WorkspaceAction,
+                QueuedTransferState::Paused,
+            ),
+            (
+                WorkspaceAction::ResumeTransfer,
+                QueuedTransferState::Running,
+            ),
+            (
+                WorkspaceAction::CancelTransfer,
+                QueuedTransferState::Cancelling,
+            ),
+        ] {
+            let target = queue.read(&app, |queue, _| TransferActionTarget {
+                id,
+                control_epoch: queue.activity(id).unwrap().control_epoch,
+            });
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace.handle_action(&action(target), ctx)
+            });
+            queue.read(&app, |queue, _| {
+                assert_eq!(queue.activity(id).unwrap().state, expected)
+            });
+        }
     });
 }

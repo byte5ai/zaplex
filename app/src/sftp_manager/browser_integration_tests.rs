@@ -6070,6 +6070,7 @@ fn global_transfer_ui_updates_and_controls_jobs_from_another_pane() {
             browser.attach_queue_transfer_for_test(task, queue_id);
         });
         let (other_window, other_view, _other_temp) = create_connected_view(&mut app, &[]);
+        attach_focused_transfer_pane(&mut app, &other_view);
         other_view.read(&app, |browser, _| {
             assert!(
                 browser.has_transfer_progress_poll_for_test(),
@@ -6168,6 +6169,7 @@ fn cancel_all_keeps_late_recovery_visible() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, view, _temp) = create_connected_view(&mut app, &[]);
+        attach_focused_transfer_pane(&mut app, &view);
         let (queue_id, worker) = app.update(|ctx| {
             super::transfer_queue::TransferQueue::handle(ctx).update(ctx, |queue, ctx| {
                 let id = queue
@@ -6262,6 +6264,7 @@ fn new_global_job_reopens_a_previously_hidden_transfer_panel() {
     warpui::App::test((), |mut app| async move {
         initialize_app(&mut app);
         let (window_id, view, _temp) = create_connected_view(&mut app, &[]);
+        attach_focused_transfer_pane(&mut app, &view);
         view.update(&mut app, |browser, ctx| {
             browser.handle_action(&SftpBrowserAction::ToggleTransferPanel, ctx);
         });
@@ -8264,6 +8267,80 @@ fn modifier_clicks_mark_folders_and_ranges() {
                     "a modified click on `..` changes no mark"
                 );
             });
+        }
+    });
+}
+
+fn attach_focused_transfer_pane(app: &mut App, view: &ViewHandle<SftpBrowserView>) {
+    let pane_id = PaneId::dummy_pane_id();
+    let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, false));
+    view.update(app, |view, ctx| {
+        view.set_focus_handle(PaneFocusHandle::new(pane_id, focus_state), ctx);
+    });
+}
+
+#[test]
+fn transfer_panel_has_one_owner_and_does_not_cover_file_actions() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        let (window_id, group, browsers, pane_ids, _temp_dirs) = create_three_pane_group(&mut app);
+        let last_id = TransferQueue::handle(&app).update(&mut app, |queue, ctx| {
+            let mut last_id = 0;
+            for index in 0..100 {
+                last_id = queue
+                    .enqueue_job(
+                        "workspace",
+                        PathBuf::from(format!("/source-{index}")),
+                        PathBuf::from(format!("/target-{index}")),
+                        TransferDirection::Copy,
+                        100,
+                    )
+                    .unwrap();
+            }
+            ctx.notify();
+            last_id
+        });
+        for size in [vec2f(1800., 800.), vec2f(900., 600.), vec2f(900., 360.)] {
+            for active in [0, 2, 1] {
+                group.update(&mut app, |group, ctx| {
+                    group.focus_pane_by_id(pane_ids[active], ctx)
+                });
+                let (presenter, _) = render_scene_at(&mut app, window_id, size);
+                for (index, browser) in browsers.iter().enumerate() {
+                    let panel =
+                        maybe_position(&presenter, &layout_id(browser, &app, "transfer-panel"));
+                    assert_eq!(panel.is_some(), index == active, "owner at {size:?}");
+                    if let Some(panel) = panel {
+                        let body = position(&presenter, &layout_id(browser, &app, "body"));
+                        let target =
+                            position(&presenter, &layout_id(browser, &app, "transfer-target"));
+                        let root = position(&presenter, &layout_id(browser, &app, "pane-root"));
+                        let (legend, _, _) = function_legend(&presenter, browser, &app);
+                        assert!(
+                            body.height() >= 24.,
+                            "file list must remain usable: {body:?}"
+                        );
+                        assert!(
+                            body.max_y() <= panel.min_y() + 0.5,
+                            "{body:?} overlaps {panel:?}"
+                        );
+                        assert!(
+                            panel.max_y() <= target.min_y() + 0.5,
+                            "{panel:?} overlaps {target:?}"
+                        );
+                        assert!(legend.max_y() <= root.max_y() + 0.5);
+                        assert_function_legend_shows_every_key(&presenter, browser, &app);
+                        let cancel =
+                            position(&presenter, &format!("sftp_btn:cancel_transfer:{last_id}"));
+                        let viewport = position(&presenter, "sftp_transfer_history_scroll");
+                        assert!(
+                            cancel.min_y() >= viewport.min_y()
+                                && cancel.max_y() <= viewport.max_y(),
+                            "cancel must remain visible at {size:?}: {cancel:?}, {viewport:?}"
+                        );
+                    }
+                }
+            }
         }
     });
 }
