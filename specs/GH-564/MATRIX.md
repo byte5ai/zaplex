@@ -66,6 +66,19 @@ nach erfolgreichem horizontalem Scrollen bei 350/500 Punkten auf die praktisch
 unbedienbare erreichbare Größe 100×100 eingegrenzt. Weitere englische Texte
 in deutschen Agent-Einstellungen sind #688. Die Gesamtmatrix bleibt offen.
 
+Die [Nachprüfung von 1.2.36](CANDIDATE-1.2.36-NATIVE.md) erfasst 44 einzeln
+betrachtete Originalbilder der nativen Fixtures ohne neue sichtbare Regression
+in den dargestellten Zuständen. Der neue Plattformtest zur Mindestgeometrie
+besteht. Am unveränderten DMG sind alle 16 automatischen GUI-Fälle aus dem Original-
+und zwei gezielten Fortsetzungsläufen mit geprüfter Herkunft bestätigt.
+Direkte native Bedienung ergänzt die Mindestgröße 480×320 samt Shellerhalt,
+erreichbare Agent-Einstellungen in EN/Hell/Dunkel bei dieser Größe und den
+ersten Escape in EN/Light für vollständig/teilweise ausgewählte F2-Namen sowie
+den bearbeiteten F7-Entwurf mit unveränderten Dateien. Die 54 Originalaufnahmen
+sind einzeln geprüft und gehasht; deutsche Varianten und die Gesamtmatrix
+bleiben ausstehend. Der Bericht trennt diese Belege von der vollständigen
+Produktabnahme.
+
 ## Referenzen und Bewertung
 
 - **C**: [Cockpit-Spezifikation](../../docs/ui/cockpit-sidebar-connections.html#spec),

@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "kind": "completed_gui_cases",
+  "local_gui": "pass",
+  "product_acceptance": "not-run",
+  "remote_and_providers": "not-run",
+  "visual_reference_comparison": "not-run",
+  "exploratory_agent": "not-run",
+  "app_source_sha": "5a35b11e2445f20b9e47b167252a63238ed6a20d",
+  "dmg_sha256": "98c623e3b58488ac586f590fa6350a790125c08ce45e6b1f23485db961c55039",
+  "version": "v1.2.36",
+  "runs": [
+    {
+      "id": 40125406009,
+      "run_attempt": 1,
+      "head_sha": "5a35b11e2445f20b9e47b167252a63238ed6a20d"
+    },
+    {
+      "id": 40131994068,
+      "run_attempt": 1,
+      "head_sha": "31931bbd68994f3127a622cc266e788cca6bee1f"
+    },
+    {
+      "id": 40134867825,
+      "run_attempt": 1,
+      "head_sha": "f053a58d92954f624f24fcbe6c7c1cf373db8620"
+    }
+  ],
+  "cases": [
+    {
+      "name": "NavigationTests/testCancelSplitKeepsOriginalShell",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "NavigationTests/testClosingTabPreservesOriginalShell",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "NavigationTests/testSettingsReturnToOriginalShell",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "NavigationTests/testSplitDown",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "NavigationTests/testSplitLeft",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "NavigationTests/testSplitRight",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "NavigationTests/testSplitUp",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "NavigationTests/testTabsKeepIndependentShells",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "SmokeTests/testNativeCloseButtonClosesWindow",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "SmokeTests/testNewWindowRunsItsOwnShell",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "SmokeTests/testRelaunchAcceptsTerminalInput",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "SmokeTests/testTerminalExecutesAndRendersOutput",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell",
+      "result": "Passed",
+      "run_id": 40131994068
+    },
+    {
+      "name": "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible",
+      "result": "Passed",
+      "run_id": 40125406009
+    },
+    {
+      "name": "SurfaceTests/testWindowMinimumSizePreservesOriginalShell",
+      "result": "Passed",
+      "run_id": 40134867825
+    }
+  ],
+  "evidence_artifacts": [
+    {
+      "run_id": 40125406009,
+      "id": 12574886767,
+      "name": "macos-gui-evidence-40125406009-1",
+      "zip_sha256": "53b937309e0614cd647f4e197cfdbd66a7f94579177f63b93e1101a35e060727"
+    },
+    {
+      "run_id": 40131994068,
+      "id": 12575780668,
+      "name": "macos-gui-evidence-40131994068-1",
+      "zip_sha256": "f09a7c41f606419901fca56d6731cf081568a0611ef911957ac7d67670d75cda"
+    },
+    {
+      "run_id": 40134867825,
+      "id": 12575818712,
+      "name": "macos-gui-evidence-40134867825-1",
+      "zip_sha256": "31a98dd0f4a6a17b9370420300ef2998e6f59a9d7cdd1373c3b7b3bcebc7cc51"
+    }
+  ]
+}
