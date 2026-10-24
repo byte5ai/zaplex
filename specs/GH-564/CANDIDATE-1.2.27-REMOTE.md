@@ -47,6 +47,10 @@ und weitere Matrixvarianten. Installiert sind Codex 0.163.0 und Claude Code
 2.1.306; Versions-/Hilfsausgabe allein belegt keinen Agentenlauf. Die verfügbaren
 API-Testprofile sind kein Abonnementnachweis.
 
+Die spätere [Agenten-/Theme-Exploration](CANDIDATE-1.2.27-AGENT-THEME.md)
+ergänzt den aktiven Claude-Transportabbruch sowie Filter- und Rename-Entwürfe;
+sie dokumentiert auch einen neuen Fokusfehler und den blockierten Codex-Werkzeuglauf.
+
 Das begrenzte GUI-Fenster wurde ausdrücklich beendet. Der Cleanup-Beleg meldet
 `owned-processes-stopped-and-data-trashed`. Keine Produktdaten außerhalb der
 isolierten Testumgebung wurden verändert.

@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.28] — 2026-10-24
+
+- Dateimanager stellen nach dem Wechsel aus Einstellungen oder anderen Tabs den Fokus im weiterhin sichtbaren Eingabefeld wieder her; geschlossene Dialoge und bewusst fokussierte Dateilisten behalten ihre Zuordnung (#656).
+
 ## [1.2.27] — 2026-10-24
 
 - Tokio auf die korrigierte Version 1.53.3 aktualisiert; die Abhängigkeitsprüfung erkennt einen Rückfall auf die von RUSTSEC-2026-0386 betroffene Version (#648).

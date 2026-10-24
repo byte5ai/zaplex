@@ -1,0 +1,349 @@
+{
+  "artifact_run_id": "40049854378",
+  "app_source_sha": "b270ee372f8548b83363916dc8fbddc1ee7b5884",
+  "harness_source_sha": "45935546251bbaa7ebc01d9b9ead22c5333941e9",
+  "dmg_sha256": "fcb082266c6b4f61fb8bb0c3d871e9ccafb8c229225e528f288bafb36f800644",
+  "exploration_run_id": "40056368953",
+  "locale": "en",
+  "themes": [
+    "dark",
+    "light"
+  ],
+  "screen": [
+    1024,
+    768
+  ],
+  "private_archive_sha256": "99e74655822cde59dffa04208c8b97bb20eb5424d67b2255fb7d2381f380e0dd",
+  "captures": [
+    {
+      "name": "001-initial-desktop.png",
+      "sha256": "15b4c02bf7e1f56b98f058c93b6e967efe1f7e04e1a0dfbe60b7807720353bf9",
+      "bytes": 261362
+    },
+    {
+      "name": "002-connections.png",
+      "sha256": "6195843992b58ba3ebf3c99e029e344dfe4fe1264fce472686562de207cef613",
+      "bytes": 73183
+    },
+    {
+      "name": "003-import-source.png",
+      "sha256": "323659526055cb5cd901935a460508babd43450f49e8d468f2debf42d36137d3",
+      "bytes": 83555
+    },
+    {
+      "name": "004-imported-host.png",
+      "sha256": "184b2e62aa4743d74e35879ec2270c42afcb7e1fdd145f5213dc1b9c2817e5ad",
+      "bytes": 95708
+    },
+    {
+      "name": "005-remote-connected.png",
+      "sha256": "e81af2921620e9639275c7271e2fd486695e1603b0fc0d5dcae471916f03c5e0",
+      "bytes": 85145
+    },
+    {
+      "name": "006-agent-baseline-input.png",
+      "sha256": "c0a5a64dd5d80695b0e4830e37c0ece30338444d6a89d07af6b43646c3d76fb1",
+      "bytes": 93537
+    },
+    {
+      "name": "007-agent-baseline.png",
+      "sha256": "2754f4e885fa283b435e34b1d5e93bb1f280d9465d5c36406956299beb4d8048",
+      "bytes": 101554
+    },
+    {
+      "name": "008-codex-command-input.png",
+      "sha256": "9448928d7a5fe6e56a2664b18da56f4e3624f69658a171d0f54502a047e6df97",
+      "bytes": 141944
+    },
+    {
+      "name": "009-codex-running.png",
+      "sha256": "493546efc31eeea007a948139a6d68441816695551cd9ea58b178dfce7d1d70f",
+      "bytes": 124453
+    },
+    {
+      "name": "010-observer-local.png",
+      "sha256": "613fd5559ea9cac9164e6c82a1a430cad5029d3077cd01f039bc36edde5b3e5a",
+      "bytes": 76458
+    },
+    {
+      "name": "011-process-observer-input.png",
+      "sha256": "fd95aafbe4b28bd5579d096636361903c2d6cfbac38be934336958dd1c88017e",
+      "bytes": 84094
+    },
+    {
+      "name": "012-process-baseline.png",
+      "sha256": "9b47591b385b9aa37c2650d1c7b36b360f87c6df8e9b960aaf9b3c7c31930409",
+      "bytes": 81374
+    },
+    {
+      "name": "013-agent-early-result.png",
+      "sha256": "4d2ffa967bd7b04d26d58b69e5f978a2e23886197a164e960a60ce858edaada5",
+      "bytes": 144051
+    },
+    {
+      "name": "014-claude-help-input.png",
+      "sha256": "4e2958c1cb75f510d43ea4f9f2ed05f528868d0bf5b63f39cacf7410b101d26f",
+      "bytes": 155003
+    },
+    {
+      "name": "015-claude-help.png",
+      "sha256": "786aa662254966d64a819a8096739cf3e0690b5eacabb6937d4c0bd4fa1980be",
+      "bytes": 141780
+    },
+    {
+      "name": "016-claude-command-input.png",
+      "sha256": "27478caf1c3eb0743e42a0754a825a4caa79dda693dcfb86ea1a849fb9353ad0",
+      "bytes": 169323
+    },
+    {
+      "name": "017-claude-running.png",
+      "sha256": "9186603260240cb585141b8fb43dd5671039117ac843c424a7bf882e34f6cfa8",
+      "bytes": 156160
+    },
+    {
+      "name": "018-observer-ready.png",
+      "sha256": "9b47591b385b9aa37c2650d1c7b36b360f87c6df8e9b960aaf9b3c7c31930409",
+      "bytes": 81374
+    },
+    {
+      "name": "019-claude-observer-input.png",
+      "sha256": "79c1dee8117658b1ffc8ae23be141be6d024feed4c7f4d0e79e5cc208d17a374",
+      "bytes": 95909
+    },
+    {
+      "name": "020-claude-process-baseline.png",
+      "sha256": "709209d6b96383622c7915728baeaec43ff234af67b7ac64c7954b8bada8990c",
+      "bytes": 110030
+    },
+    {
+      "name": "021-transport-drop-input.png",
+      "sha256": "2c2b166ff680c8a41b29997c346dae6566e1c4d64a6fa3dd62f6784f202312ba",
+      "bytes": 135961
+    },
+    {
+      "name": "022-processes-after-drop.png",
+      "sha256": "3f67cb53fdf089e8d5d5fde2b123f2fb6d455921382457bc3c1b3d30e0221bbb",
+      "bytes": 126802
+    },
+    {
+      "name": "023-remote-after-drop.png",
+      "sha256": "2db4b867fa1799857fe3d5c573fc0872b0f3090d40f61982d2c77d670f113060",
+      "bytes": 141216
+    },
+    {
+      "name": "024-long-agent-input.png",
+      "sha256": "7fd034eb2ae1e8da199b3b785aa8e57815a65133ad9487b81abf4bb8596b1be2",
+      "bytes": 178484
+    },
+    {
+      "name": "025-long-agent-running.png",
+      "sha256": "ff982e68bd56259001dcdc40e2140c524f421dc7185a3dffc42a55fb6c2ffc38",
+      "bytes": 162303
+    },
+    {
+      "name": "026-observer-for-drop.png",
+      "sha256": "df191cb385527a5025864467c8a1c175c92560cec07301c5af554d7d27206ce0",
+      "bytes": 126857
+    },
+    {
+      "name": "027-controlled-drop-input.png",
+      "sha256": "36e74cba4ca5e4bbd4d57f9fcce0a8e984b5c587ae462fb2a5b36a3d37900f98",
+      "bytes": 152030
+    },
+    {
+      "name": "028-processes-straddle-drop.png",
+      "sha256": "c6c2dd1b8491b6397a2d126b61290bb8bb43b9276f66132ea95735ef3b4bd267",
+      "bytes": 135565
+    },
+    {
+      "name": "029-drop-command-state.png",
+      "sha256": "c6c2dd1b8491b6397a2d126b61290bb8bb43b9276f66132ea95735ef3b4bd267",
+      "bytes": 135565
+    },
+    {
+      "name": "030-operator-command-cancelled.png",
+      "sha256": "07c241737eae0bb89e7c135e4da10e663ca8f63c13494e3add3582c020d3968d",
+      "bytes": 125930
+    },
+    {
+      "name": "031-native-ssh-drop-input.png",
+      "sha256": "c6054805957e5b49aab9de182ec4e919d65b566464c46d115fddfc4034678a8c",
+      "bytes": 147191
+    },
+    {
+      "name": "032-active-agent-after-drop.png",
+      "sha256": "6dd370ac1bb9fbc029a15d20c9bedde1aa2f241b20e13a2335158dc799b51fe1",
+      "bytes": 128897
+    },
+    {
+      "name": "033-reconnected-running-agent.png",
+      "sha256": "ff982e68bd56259001dcdc40e2140c524f421dc7185a3dffc42a55fb6c2ffc38",
+      "bytes": 162303
+    },
+    {
+      "name": "034-agent-completion.png",
+      "sha256": "9c3ee3341e5ea5b5357ba782c6b3ecc7ea8cb2f805512635421047c1ff6723ad",
+      "bytes": 161770
+    },
+    {
+      "name": "035-final-shell-input.png",
+      "sha256": "1c8034a4395372e128b7d3eae4df15e6d32b42e2b8cd440b7b53a5dca4850838",
+      "bytes": 179781
+    },
+    {
+      "name": "036-final-shell-and-result.png",
+      "sha256": "bab32bc68ba4dda863518b7f12ff2edc2f7f0c3f43472b858d92d7cb41b51f79",
+      "bytes": 180750
+    },
+    {
+      "name": "037-local-for-theme.png",
+      "sha256": "180de97de810248c45176ad43f2f19c392ff1be20a030289706d81bdb6dee3b6",
+      "bytes": 128953
+    },
+    {
+      "name": "038-theme-fixture-input.png",
+      "sha256": "0c0f5765c3f26d3114fce7f326b0730682fe1dff6d31b28ed486e2144c1484fc",
+      "bytes": 154514
+    },
+    {
+      "name": "039-theme-baseline.png",
+      "sha256": "c641eb417ec738f421bc8d69840fc2f413c93ad20a1188eac50de6f57efdc828",
+      "bytes": 137825
+    },
+    {
+      "name": "040-file-filter-target.png",
+      "sha256": "718bc77ebf1dbb0f504c843740de4cd1a4dfcc89f24603972dd237d2d9b3eeb5",
+      "bytes": 78100
+    },
+    {
+      "name": "041-filter-focused.png",
+      "sha256": "718bc77ebf1dbb0f504c843740de4cd1a4dfcc89f24603972dd237d2d9b3eeb5",
+      "bytes": 78100
+    },
+    {
+      "name": "042-filter-entered-dark.png",
+      "sha256": "0ddac0e7f32070127c524b3f4bad1b1027153ede9b70070dec362edb18e7ce01",
+      "bytes": 73921
+    },
+    {
+      "name": "043-filter-selection-dark.png",
+      "sha256": "5f06bfa3582997f2d517d8d9049cf8b402e10dc6945efa41c75aa567fbd99d16",
+      "bytes": 74025
+    },
+    {
+      "name": "044-settings.png",
+      "sha256": "d7fd855357b40381f94d1b95e07b6a02ad743aa4910276dae4de4dda1dab9827",
+      "bytes": 145294
+    },
+    {
+      "name": "045-appearance.png",
+      "sha256": "4679a16f45de806ce8ae04de7c6088dace5ea86082f9444bdfd41177057e06ea",
+      "bytes": 101668
+    },
+    {
+      "name": "046-theme-picker.png",
+      "sha256": "10d108f32b9bd229864af7d854d2d4fc54039eee9ab825cbfc6e6ea6379a07de",
+      "bytes": 120137
+    },
+    {
+      "name": "047-light-options.png",
+      "sha256": "3231f124cc8d2105d957f666e03c42b65b0310a2516108cff2fde833587b58c6",
+      "bytes": 119766
+    },
+    {
+      "name": "048-light-selected.png",
+      "sha256": "a20c0933653fb2d06d8da799c6a6a15b2013bc68e69d9e4858b3661181a5bcb1",
+      "bytes": 102823
+    },
+    {
+      "name": "049-light-settings.png",
+      "sha256": "34d0503debb66ee0d701d3fcaecd65b3494169beb3e488eb3d4e24f063551216",
+      "bytes": 86931
+    },
+    {
+      "name": "050-filter-after-light.png",
+      "sha256": "44710184bf53acd68888db4fa3c6087143fe409fb2587740dabb88c3b17f877a",
+      "bytes": 65347
+    },
+    {
+      "name": "051-filter-focus-preserved.png",
+      "sha256": "44710184bf53acd68888db4fa3c6087143fe409fb2587740dabb88c3b17f877a",
+      "bytes": 65347
+    },
+    {
+      "name": "052-filter-raw-key.png",
+      "sha256": "44710184bf53acd68888db4fa3c6087143fe409fb2587740dabb88c3b17f877a",
+      "bytes": 65347
+    },
+    {
+      "name": "053-filter-refocused.png",
+      "sha256": "52e60ab2ff4339f276c01734dcbf07a5bae52490900567650bd67c1b6f6c20f3",
+      "bytes": 64112
+    },
+    {
+      "name": "054-refocused-key-works.png",
+      "sha256": "d2b7a4ebbbf0a5c083dda3541e263a2a1d86f0a0924b2457dcba5c4201240ad4",
+      "bytes": 66866
+    },
+    {
+      "name": "055-rename-target.png",
+      "sha256": "3a541e966f44dbe59b73278c9fb5a448ef0353101004c204b44940c18fb2110c",
+      "bytes": 68299
+    },
+    {
+      "name": "056-rename-dialog-light.png",
+      "sha256": "25aa8ff5c9a95c3a404aa814f0c15d672a7832fcf1630d48a3831e75621dc2dc",
+      "bytes": 75498
+    },
+    {
+      "name": "057-rename-focused.png",
+      "sha256": "f8986cde9d23164a019cc079241ab266acbf7434510675c71b4d5c0a54c217c8",
+      "bytes": 75419
+    },
+    {
+      "name": "058-rename-draft-light.png",
+      "sha256": "06f6ff42b3596ecd36870a27d6c45b9e5108fae11bfbb76755655c2f454461b1",
+      "bytes": 75458
+    },
+    {
+      "name": "059-rename-selected-light.png",
+      "sha256": "8bccf7d2ac35166ebeaf078af097d5a638013b7b0489466d6e7cee31984eca31",
+      "bytes": 76007
+    },
+    {
+      "name": "060-settings-from-dialog.png",
+      "sha256": "6c683f9cc8b037141e59886cf29aa019fd1904eb7e2af4f0823de0294eea45d4",
+      "bytes": 121703
+    },
+    {
+      "name": "061-appearance-again.png",
+      "sha256": "cd9dfd8f36cac42ee792ab3983b6987261e4ee631163585b8753c337349e8535",
+      "bytes": 87087
+    },
+    {
+      "name": "062-dark-picker.png",
+      "sha256": "75dda105535e298d7dd1637242a390cf31f87b222f34b1d69c59b9e4ad3ed6e4",
+      "bytes": 103625
+    },
+    {
+      "name": "063-zaplex-dark-option.png",
+      "sha256": "94248e7a3a6f14e935dc919f8a557bf8113b045361fbfcdc61b0a108b82db46a",
+      "bytes": 96952
+    },
+    {
+      "name": "064-dark-selected.png",
+      "sha256": "02b3d15b26f11b739539d942f4db9460d0699f70bde23112a74a90207c45619b",
+      "bytes": 113111
+    },
+    {
+      "name": "065-dark-settings.png",
+      "sha256": "d15bb245daa6310ab6051fa24e91d92062b5d5c6ebccfd47bbfc51b76354eaa6",
+      "bytes": 101557
+    },
+    {
+      "name": "066-rename-after-dark.png",
+      "sha256": "ef009e11864f9f3e00a44d4ee9223ffe754c5ee1c361d0dc36a38e001695f1db",
+      "bytes": 86158
+    }
+  ]
+}
