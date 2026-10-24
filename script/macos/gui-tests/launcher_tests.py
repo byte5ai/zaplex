@@ -19,7 +19,7 @@ class LauncherTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
 
-    def test_full_runs_all_fifteen_without_filter_or_empty_argument(self):
+    def test_full_runs_all_required_cases_without_filter_or_empty_argument(self):
         result = self.invoke("full")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["full", "16", "0"])

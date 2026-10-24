@@ -148,7 +148,7 @@ class ReceiptTests(unittest.TestCase):
             "executed_cases_match": True, "app_source_sha": "a" * 40, "test_source_sha": "b" * 40,
             "dmg_sha256": "c" * 64, "required_cases": cases,
         }
-        self.summary = {"passedTests": 15, "failedTests": 0, "skippedTests": 0}
+        self.summary = {"passedTests": len(cases), "failedTests": 0, "skippedTests": 0}
         self.tree = {"testNodes": [{"nodeType": "Test Case", "nodeIdentifier": case + "()", "result": "Passed"}
                                    for case in cases]}
         self.info = {"WarpVersion": "v1.2.23"}
@@ -174,7 +174,7 @@ class ReceiptTests(unittest.TestCase):
                     self.receipt[key] = original
 
     def test_aggregate_failure_skip_or_empty_suite_is_rejected(self):
-        for key, value in (("passedTests", 0), ("passedTests", 14), ("failedTests", 1),
+        for key, value in (("passedTests", 0), ("passedTests", 15), ("failedTests", 1),
                            ("skippedTests", 1), ("expectedFailures", 1)):
             original = copy.deepcopy(self.summary)
             with self.subTest(key=key), self.assertRaises(ValueError):
