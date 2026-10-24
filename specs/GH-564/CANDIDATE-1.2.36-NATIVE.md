@@ -5,8 +5,9 @@ Der [Batch 40125406009](https://github.com/byte5ai/zaplex/actions/runs/401254060
 prüft die Korrekturen für den ersten Escape im Dateidialog (#684), die normale
 macOS-Mindestfenstergröße (#685) und verbliebene englische Agent-Einstellungen
 (#688). Der Batch ist abgeschlossen: alle Bau- und Paketgates bestanden,
-die installierte GUI-Suite meldet 14 bestandene und zwei fehlgeschlagene Fälle.
-Die gezielte Fortsetzung und die interaktive Nachprüfung stehen noch aus.
+die installierte GUI-Suite meldet zunächst 14 bestandene und zwei fehlgeschlagene
+Fälle. Eine gezielte Fortsetzung ergänzt einen weiteren Erfolg am gleichen DMG.
+Der Mindestgrößenfall und die vollständige interaktive Nachprüfung stehen noch aus.
 
 ## Bisherige CI-Nachweise
 
@@ -76,11 +77,24 @@ die tatsächliche native Implementierung nicht.
 auf zweifache Pixelwiederholung und vollständige Zeilensegmentierung.
 Exakte Vergleiche bleiben erhalten; kein Bild bekommt eine Sonderbehandlung.
 [Fortsetzung 40131994068](https://github.com/byte5ai/zaplex/actions/runs/40131994068)
-verwendet Teststand `31931bbd68994f3127a622cc266e788cca6bee1f`. Vor den zwei
-fehlgeschlagenen GUI-Fällen muss die vollständige Swift-Gegenprobe einschließlich
-Retina-Abbildung bestehen. Die 14 bestandenen Fälle und der App-Build werden
-nicht wiederholt. Der Originalbatch bleibt fehlgeschlagen; ein vollständiger
-Nachweis erfordert die geprüfte Kombination der tatsächlichen GUI-Ergebnisse.
+verwendet Teststand `31931bbd68994f3127a622cc266e788cca6bee1f` und besteht die
+vollständige Swift-Gegenprobe einschließlich Retina-Abbildung. Der Dateimanager-
+Fall besteht ebenfalls. Der Mindestgrößenfall erreicht nun die Ziehgeste, aber
+das Fenster bleibt bei 1024×678; der Test bricht vor Mindestgrößen- und
+Shellnachprüfung ab. Original `EC568B59-1F8D-4486-B141-505E5D4B09EE.png` wurde
+visuell geprüft, die zugehörige AX-Aufnahme bestätigt die unveränderte Geometrie.
+Das ist noch kein belegter Produktfehler; die Ursache wird in [#697](https://github.com/byte5ai/zaplex/issues/697)
+untersucht. Artefakt `12575780668`, ZIP-SHA256
+`f09a7c41f606419901fca56d6731cf081568a0611ef911957ac7d67670d75cda`.
+
+Damit sind 15 der 16 Pflichtfälle am unveränderten DMG tatsächlich bestanden.
+Nach drei fehlgeschlagenen Läufen wurde die Pipeline geprüft. [PR #698](https://github.com/byte5ai/zaplex/pull/698)
+erlaubt eine streng geprüfte Folge weiterer Teilläufe, ohne Erfolge zu wiederholen;
+die tatsächliche unvollständige 14+1-Evidenz bleibt abgewiesen. Ein ausdrücklich
+getrennter Diagnosemodus stellt interaktiven Zugang zur Ursachenklärung bereit
+und erzeugt keinen Abnahmepass. Der Originalbatch bleibt fehlgeschlagen; ein
+vollständiger Nachweis erfordert den verbliebenen Fall und die geprüfte Kombination
+aller tatsächlichen GUI-Ergebnisse. Der App-Build wurde nicht wiederholt.
 
 ## Native Render-Fixtures
 
