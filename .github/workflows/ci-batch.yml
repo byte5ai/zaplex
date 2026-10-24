@@ -26,6 +26,10 @@ on:
         description: Failed main batch; reuse verified unchanged Linux or compile/SFTP/doc gates
         type: string
         default: ''
+      resume_base_run_id:
+        description: Earlier failed batch proving Linux/security when resuming only SFTP and artifacts
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -44,6 +48,7 @@ jobs:
       dmg_tag: ${{ steps.inputs.outputs.dmg_tag }}
       reuse_checks: ${{ steps.resume.outputs.reuse_checks }}
       reuse_linux_checks: ${{ steps.resume.outputs.reuse_linux_checks }}
+      reuse_pre_sftp_checks: ${{ steps.resume.outputs.reuse_pre_sftp_checks }}
     steps:
       - name: Require a main dispatch
         shell: bash
@@ -78,22 +83,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          RESUME_BASE_RUN_ID: ${{ inputs.resume_base_run_id }}
           COVERAGE: ${{ inputs.coverage }}
         run: |
           python3 script/shell-ssh-runner-guard-tests
           python3 script/prepare-macos-rust-tests
+          python3 script/ci-batch-scheduling-tests
           python3 script/ci-batch-resume-tests
           python3 script/ci-batch-resume
 
   dependency_security:
     needs: preflight
-    if: needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_linux_checks != 'true'
+    if: needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_linux_checks != 'true' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true'
     uses: ./.github/workflows/dependency-security.yml
 
   compile_checks:
     needs: [preflight, dependency_security]
     if: >
-      !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_checks != 'true' &&
+      !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true' &&
       (needs.dependency_security.result == 'success' || needs.preflight.outputs.reuse_linux_checks == 'true')
     uses: ./.github/workflows/pr-check.yml
     with:
@@ -103,7 +110,7 @@ jobs:
   tests:
     needs: [preflight, compile_checks]
     if: >
-      !cancelled() && needs.preflight.result == 'success' &&
+      !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true' &&
       (needs.compile_checks.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
     uses: ./.github/workflows/test-dispatch.yml
     with:
@@ -114,7 +121,9 @@ jobs:
 
   live_sftp:
     needs: [preflight, compile_checks]
-    if: needs.preflight.outputs.reuse_checks != 'true'
+    if: >
+      !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_checks != 'true' &&
+      (needs.compile_checks.result == 'success' || needs.preflight.outputs.reuse_pre_sftp_checks == 'true')
     uses: ./.github/workflows/live-sftp-safety.yml
     secrets: inherit
 
@@ -122,7 +131,7 @@ jobs:
     needs: [preflight, tests, live_sftp]
     if: >
       !cancelled() && inputs.artifacts == 'test-dmg' && needs.preflight.result == 'success' &&
-      needs.tests.result == 'success' &&
+      (needs.tests.result == 'success' || needs.preflight.outputs.reuse_pre_sftp_checks == 'true') &&
       (needs.live_sftp.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
     uses: ./.github/workflows/test-dmg.yml
     with:
@@ -134,9 +143,25 @@ jobs:
     needs: [preflight, tests, live_sftp]
     if: >
       !cancelled() && inputs.artifacts == 'remote-server' && needs.preflight.result == 'success' &&
-      needs.tests.result == 'success' &&
+      (needs.tests.result == 'success' || needs.preflight.outputs.reuse_pre_sftp_checks == 'true') &&
       (needs.live_sftp.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
     uses: ./.github/workflows/build-remote-server.yml
     with:
       dmg_tag: ${{ needs.preflight.outputs.dmg_tag }}
     secrets: inherit
+
+  completion:
+    name: Verify all selected batch stages
+    if: always()
+    needs: [preflight, dependency_security, compile_checks, tests, live_sftp, test_dmg, remote_server]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Reject missing required stages
+        env:
+          BATCH_NEEDS: ${{ toJSON(needs) }}
+          ARTIFACTS: ${{ inputs.artifacts }}
+        run: python3 script/ci-batch-completion

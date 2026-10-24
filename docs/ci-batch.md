@@ -73,6 +73,20 @@ begrenzte Rust-Bootstrap ändern. Quellcommit und Ursprungslauf bleiben im Summa
 sichtbar. Die macOS-Einrichtung aktiviert den vollständigen Rust-Werkzeugpfad des
 Runner-Images und prüft die Proxies, bevor Cache- oder Compile-Schritte beginnen.
 
+Hat eine solche Fortsetzung macOS und Paket-/Dokumentationstests bestanden,
+Live-SFTP aber wegen eines Ablaufdefekts gar nicht ausgeführt, kann zusätzlich
+`resume_base_run_id` den ursprünglichen Linux-/Sicherheitslauf nennen. Beide
+Läufe müssen abgeschlossen sein. Die Vorprüfung kontrolliert die tatsächlichen
+Ergebnisse und die unveränderten Eingaben über beide Quellstände; erst danach
+laufen ausschließlich Live-SFTP und die gewählten Artefaktstufen. Ein grüner
+Workflowstatus allein ist kein Nachweis für eine ausgeführte Stufe.
+
+Die Bedingungen für Folgestufen berücksichtigen absichtlich übersprungene,
+bereits belegte Vorgänger mit einer expliziten Statusfunktion. Der abschließende
+Job „Verify all selected batch stages“ läuft immer und weist jede fehlende
+Pflichtstufe ohne validierten Wiederverwendungsbeleg zurück. Das gilt auch für
+eine angeforderte, aber nicht erzeugte DMG.
+
 ### Nach einem Runnerfehler beim App-Build fortsetzen
 
 Ein direkter `test-dmg.yml`-Dispatch auf `main` mit `resume_run_id` setzt nur den

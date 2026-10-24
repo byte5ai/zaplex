@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Reject a green batch when required jobs did not run or prove reuse."""
+
+import json
+import os
+import sys
+
+
+def validate(needs, artifacts):
+    if needs.get("preflight", {}).get("result") != "success":
+        raise ValueError("Batch preflight did not succeed")
+    outputs = needs["preflight"].get("outputs", {})
+    package = outputs.get("reuse_checks") == "true"
+    linux = outputs.get("reuse_linux_checks") == "true"
+    tail = outputs.get("reuse_pre_sftp_checks") == "true"
+    if sum((package, linux, tail)) > 1:
+        raise ValueError("Conflicting reuse modes")
+    reused = {
+        "dependency_security": package or linux or tail,
+        "compile_checks": package or tail,
+        "tests": tail,
+        "live_sftp": package,
+    }
+    for job, reuse in reused.items():
+        result = needs.get(job, {}).get("result")
+        if result != "success" and not (result == "skipped" and reuse):
+            raise ValueError(f"Required batch gate missing or unsuccessful: {job} ({result})")
+    if artifacts not in ("none", "test-dmg", "remote-server"):
+        raise ValueError("Invalid artifact selection")
+    for job, selection in (("test_dmg", "test-dmg"), ("remote_server", "remote-server")):
+        expected = "success" if artifacts == selection else "skipped"
+        if needs.get(job, {}).get("result") != expected:
+            raise ValueError(f"Artifact stage {job} must be {expected}")
+
+
+if __name__ == "__main__":
+    try:
+        validate(json.loads(os.environ["BATCH_NEEDS"]), os.environ["ARTIFACTS"])
+    except (ValueError, KeyError) as error:
+        print(f"Batch incomplete: {error}", file=sys.stderr)
+        sys.exit(1)
+    print("All selected batch stages succeeded or have verified reuse evidence.")

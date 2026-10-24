@@ -165,5 +165,46 @@ jobs:
                 verify(previous, changed)
 
 
+    def tail_jobs(self):
+        jobs = copy.deepcopy(self.jobs[:5])
+        jobs[0] = {"name": "dependency_security", "conclusion": "skipped"}
+        jobs[2]["conclusion"] = "skipped"
+        jobs[4]["conclusion"] = "skipped"
+        jobs += [{"name": "Validate main batch", "conclusion": "success"},
+                 {"name": "live_sftp", "conclusion": "skipped"},
+                 {"name": "test_dmg", "conclusion": "skipped"}, copy.deepcopy(self.jobs[-1])]
+        jobs[-1]["conclusion"] = "success"
+        jobs[-1]["steps"][0]["conclusion"] = "success"
+        return jobs
+
+    def test_tail_accepts_only_completed_native_and_package_evidence(self):
+        verify = module["validate_tail"]
+        for conclusion in ("success", "failure"):
+            verify({**self.run, "conclusion": conclusion}, self.tail_jobs(), [".github/workflows/ci-batch.yml"])
+        for index, job in enumerate(self.tail_jobs()):
+            changed = self.tail_jobs()
+            changed[index]["conclusion"] = "failure"
+            with self.subTest(name=job["name"]), self.assertRaises(ValueError):
+                verify(self.run, changed, [])
+        for index in range(3):
+            changed = self.tail_jobs()
+            changed[-1]["steps"][index]["conclusion"] = "failure"
+            with self.assertRaises(ValueError):
+                verify(self.run, changed, [])
+
+    def test_tail_rejects_changed_inputs_missing_jobs_and_live_runs(self):
+        verify = module["validate_tail"]
+        for path in ("Cargo.lock", "app/src/main.rs", ".github/workflows/test-dispatch.yml",
+                     ".github/actions/prepare_environment/action.yml", "script/prepare-macos-rust"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                verify(self.run, self.tail_jobs(), [path])
+        with self.assertRaises(ValueError):
+            verify({**self.run, "status": "in_progress"}, self.tail_jobs(), [])
+        with self.assertRaises(ValueError):
+            verify(self.run, self.tail_jobs()[1:], [])
+        with self.assertRaises(ValueError):
+            verify(self.run, self.tail_jobs() + [self.tail_jobs()[0]], [])
+
+
 if __name__ == "__main__":
     unittest.main()
