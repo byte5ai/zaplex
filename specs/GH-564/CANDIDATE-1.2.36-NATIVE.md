@@ -148,8 +148,51 @@ Zusammenfassungen, App-/Testrevisionen, identische DMG-Hashes und Artefakt-Diges
 Alle 16 Pflichtfälle sind damit bestanden, ohne vorherige Erfolge zu wiederholen.
 Der ursprüngliche fehlgeschlagene Batch wird dadurch nicht umgeschrieben.
 
-Deutsche Varianten, Escape in EN/Dark, weitere Flächen bei Mindestgröße,
-Neustartwiederherstellung und die übrige Gesamtmatrix sind damit nicht abgenommen.
+Die zusätzlichen Sprach-/Theme-Varianten folgen im nächsten Abschnitt. Weitere
+Flächen bei Mindestgröße, vollständige Neustartwiederherstellung und die übrige
+Gesamtmatrix sind damit nicht abgenommen.
+
+## Sprach- und Theme-Ergänzung
+
+[Exploration 40135145362](https://github.com/byte5ai/zaplex/actions/runs/40135145362)
+prüft vor dem Start die vollständige 16-Fall-Herkunft aus den drei genannten
+Läufen und verwendet dasselbe DMG. Bedienrevision:
+`f053a58d92954f624f24fcbe6c7c1cf373db8620`. Die Sitzung endet explizit vor ihrem
+Zeitlimit. Artefakt `12577325601`, ZIP-SHA256
+`e5cc818c8541097097e251be0f919f94a48d6479712db6a056c1b61d83e8ca7b`.
+Alle 64 erzeugten Original-PNGs wurden einzeln betrachtet und bytegenau mit
+dem Archiv verglichen; das [Manifest](evidence/candidate-136-native/exploration-40135145362.json)
+enthält die Einzelhashes. Für Sequenznummer 17 entstand kein Bild: nach dem
+erfolgreichen Beenden war der erste Startaufruf syntaktisch ungültig und
+führte keine Mutation aus. Der korrigierte Vordergrundstart gelingt; Bild 18
+zeigt die deutsche App nach vollständigem Neustart.
+
+| Variante / Aufgabe | Beobachtung | Belege |
+|---|---|---|
+| EN/Dark, F2 Anfangsauswahl und Teilmarkierung | Je genau ein Escape schließt den Dialog. Pfeil nach unten wählt danach die zweite Datei, deren Name im folgenden Dialog steht. | 04–08 |
+| EN/Dark, F7 bearbeiteter Entwurf | `cancelled136` wird ohne Feldklick eingegeben; ein Escape schließt, Pfeil nach oben bewegt den Listencursor. Dateinamen und unabhängige Hashes unverändert. | 09–12, `fixture-after-en-dark.json` |
+| DE/Dark, Agent-Texte | Nach Sprachwahl und vollständigem Neustart sind Sprachhilfe samt Wispr-Link, „Standard wiederherstellen“, „Linke Seite“ und „Rechte Seite“ deutsch. Denkmodusmenü: „Anzeigen und einklappen“, „Immer anzeigen“, „Nie anzeigen“. „Immer anzeigen“ bleibt nach Schließen/Wiederöffnen ausgewählt. | 14–26, [Original](evidence/candidate-136-native/23-de-dark-agent-lower.png) |
+| DE/Dark, 480×320 | Horizontales Scrollen erreicht rechte Kontrollen, vertikales Scrollen spätere Abschnitte; die Navigation scrollt unabhängig bis „Über“. Alle drei Denkmodusoptionen sind vollständig lesbar. | 27–32 |
+| DE/Dark, F2/F7 | Anfangsauswahl, Teilmarkierung und bearbeiteter Ordnerentwurf schließen jeweils mit einem Escape. Pfeilnavigation funktioniert anschließend; alle Dateinamen/Hashes unverändert. | 33–41, `fixture-after-de-dark.json` |
+| DE/Light, Agent-Texte und 480×320 | Tatsächlicher Themewechsel; dieselben korrigierten Texte und drei Denkmodusoptionen sind deutsch. Rechte/spätere Kontrollen, linke Beschriftungen und untere Navigationspunkte bleiben über ihre Scrollbereiche erreichbar. | 43–53, [Original](evidence/candidate-136-native/47-de-light-agent.png) |
+| DE/Light, F2/F7 | Alle drei Varianten schließen mit einem Escape; Pfeilnavigation kehrt in die Liste zurück. Dateinamen und Hashes stimmen erneut exakt mit der Ausgangsmenge überein. | 54–62, `fixture-after-de-light.json` |
+| Deutsche Shell nach Einstellungen und Dateiaktionen | Frische Ausgaben vor und nach der gesamten deutschen Folge zeigen PID 2730, nicht exportierten Wert `DE136` und dasselbe Fixture-Verzeichnis. | 21, 63–64, [Abschlussausgabe](evidence/candidate-136-native/64-de-original-shell.png) |
+
+Damit ist #684 für die drei geprüften Escape-Varianten in DE/EN und Hell/Dunkel
+am installierten 1.2.36-DMG bestätigt (EN/Light stammt aus der vorherigen Sitzung).
+Die konkret in #688 korrigierten Texte sind nativ in DE/Hell/Dunkel und
+EN/Dark belegt; EN/Light ergänzt Denkmodusmenü und Erreichbarkeit am Minimum,
+keine vollständige erneute Textsichtprüfung bei normaler Größe.
+Die Einstellungen sind bei der tatsächlich erreichten Mindestgröße
+bedienbar; daraus folgt kein Pass für jede andere Fläche oder Tab-Drag.
+
+Die Folge findet zwei zusätzliche Fehler: #701 betrifft weiterhin englisches
+`None` bei der Spracheingabetaste, `Agents` als Navigationsgruppe und `Default`
+beim App-Symbol. #702 betrifft fast weiße Kontext-Chip-Vorschauen auf hellem
+Grund nach Dark→Light, während benachbarte Aktionschips lesbar bleiben.
+Diese Befunde stehen einer pauschalen Settings-Freigabe entgegen. Sprachaufnahme,
+Netzaktionen, reale Konten, Bewegungsbelege und die übrigen Matrixvarianten
+wurden hier nicht geprüft. Die Bilder belegen abgetastete Zustände.
 
 ## Native Render-Fixtures
 

@@ -75,9 +75,12 @@ Direkte native Bedienung ergänzt die Mindestgröße 480×320 samt Shellerhalt,
 erreichbare Agent-Einstellungen in EN/Hell/Dunkel bei dieser Größe und den
 ersten Escape in EN/Light für vollständig/teilweise ausgewählte F2-Namen sowie
 den bearbeiteten F7-Entwurf mit unveränderten Dateien. Die 54 Originalaufnahmen
-sind einzeln geprüft und gehasht; deutsche Varianten und die Gesamtmatrix
-bleiben ausstehend. Der Bericht trennt diese Belege von der vollständigen
-Produktabnahme.
+sind einzeln geprüft und gehasht. Eine zweite Sitzung ergänzt 64 geprüfte
+Originale: deutsche Agent-Texte nach Neustart in Hell/Dunkel, Mindestgrößen-
+Navigation und alle drei Escape-Varianten in DE/Hell/Dunkel sowie EN/Dark
+mit unabhängig unveränderten Dateihashes. Verbliebene englische Einstellungswerte
+sind #701; schwacher Kontext-Chip-Kontrast nach Dark→Light ist #702. Der Bericht
+trennt diese Belege von der weiterhin offenen vollständigen Produktabnahme.
 
 ## Referenzen und Bewertung
 
