@@ -25,11 +25,18 @@ native Agent-/Workspace-Fixtures, Live-SFTP und Phase A. Die Paketsuite meldet
 vier ignoriert. Diese Ausnahmen sind von den **null übersprungenen installierten
 GUI-Pflichtfällen** zu unterscheiden.
 
-Von den erzeugten nativen Fixtures wurden acht Dateimanagerbilder einzeln
-betrachtet: DE/EN, normal/schmal, dunkel/hell. Filterhinweis, acht Aktionen,
-Zielauswahl und aktive Pane bleiben erkennbar. Diese Bilder beweisen keine
-Fokusrückgabe und keinen laufenden Transfer. Die übrigen Fixturebilder werden
-hier nicht als visuell geprüft bewertet.
+Alle 44 erzeugten nativen Fixturebilder wurden inzwischen einzeln betrachtet;
+das [Sichtprüfmanifest](evidence/candidate-132-local/fixture-review.json) ordnet
+jedem Bild Hash, Sprache und Beobachtung zu. DE/EN-Leerzustände bleiben in
+Hell/Dunkel bei 250/320/480 Punkten lesbar; Dateimanager zeigen ihre acht
+Aktionen, Zielauswahl und Fokuszuordnung auch schmal. Die Agenten-Fixtures
+zeigen erreichbare Aktionsgruppen für Freigabe, Fehler und beendete Session,
+aber teilweise gekürzte Metadaten. Volle Identität per Tooltip, echte
+Providerabläufe, initialer Dialogfokus und laufende Transfers sind damit
+nicht nachgewiesen. Der EN/Light-Favoriten-Flyout zeigt auch in diesem
+Fixture den verdeckten Identitätshinweis #672 auf 1.2.32; die spätere
+Korrektur wird daraus nicht als bestanden bewertet. Pane-Bilder zeigen
+erhaltene Entwürfe und Endgeometrien, keinen kontinuierlichen Drag.
 
 ## Installierte Exploration
 
