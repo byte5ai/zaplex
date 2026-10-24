@@ -1,3 +1,8 @@
+use crate::app_state::{
+    register_remote_terminal_identity, remove_remote_terminal_identity, RemoteTerminalIdentity,
+    RemoteTerminalTransport,
+};
+use warpui::{event::KeyEventDetails, Event as WindowEvent};
 use std::any::Any;
 use std::cell::RefCell;
 use std::pin::pin;
@@ -652,6 +657,110 @@ fn daemon_connect_failure_before_bootstrap_shows_no_shell_start_banner() {
                 Some("ssh: connect to host 192.0.2.10 port 22: Network is unreachable")
             );
         });
+    });
+}
+
+/// Recovery shortcuts must pass through the same keymap as native window events.
+#[test]
+fn remote_recovery_shortcuts_follow_visible_actions() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        app.add_singleton_model(ImportedConfigModel::new);
+        app.update(init::init);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let actions = Rc::new(RefCell::new(Vec::new()));
+        let observed = actions.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| match event {
+                Event::RetryRemoteRestore => observed.borrow_mut().push("retry"),
+                Event::CancelRemoteRestore => observed.borrow_mut().push("cancel"),
+                _ => {}
+            });
+        });
+        let uuid = uuid::Uuid::new_v4().as_bytes().to_vec();
+        register_remote_terminal_identity(
+            &uuid,
+            RemoteTerminalIdentity {
+                registry_node_id: "recovery-key-test".to_string(),
+                host: "127.0.0.1".to_string(),
+                transport: RemoteTerminalTransport::ClassicSsh,
+                current_working_directory: None,
+                input_draft: String::new(),
+            },
+        );
+        terminal.update(&mut app, |view, _| {
+            view.set_remote_restore_pane_uuid(uuid.clone());
+        });
+        let press = |app: &mut App, key: &str, composing: bool| {
+            app.update(|ctx| {
+                presenter.borrow_mut().invalidate(
+                    WindowInvalidation {
+                        updated: ctx.view_ids_for_window(window_id).into_iter().collect(),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter
+                    .borrow_mut()
+                    .build_scene(vec2f(1000., 700.), 1., None, ctx);
+                ctx.simulate_window_event(
+                    WindowEvent::KeyDown {
+                        keystroke: Keystroke::parse(key).unwrap(),
+                        chars: match key {
+                            "escape" => "\u{1b}",
+                            "enter" => "\r",
+                            _ => "",
+                        }
+                        .to_string(),
+                        details: KeyEventDetails::default(),
+                        is_composing: composing,
+                    },
+                    window_id,
+                    presenter.clone(),
+                );
+            });
+        };
+        for (phase, expected) in [
+            (RemoteInputPhase::Failed, vec!["cancel", "retry"]),
+            (RemoteInputPhase::Transport, vec!["cancel"]),
+            (RemoteInputPhase::Attach, vec!["cancel"]),
+            (RemoteInputPhase::Replay, vec!["cancel"]),
+            (RemoteInputPhase::Cancelled, vec!["retry"]),
+            (RemoteInputPhase::Corrupt, vec![]),
+            (RemoteInputPhase::Ready, vec![]),
+        ] {
+            terminal.update(&mut app, |view, ctx| {
+                // Reset between independent scenarios, bypassing the production
+                // transition guard that correctly makes failures terminal.
+                view.remote_input_phase = None;
+                view.set_remote_input_phase(phase, None, ctx);
+                view.focus_terminal(ctx);
+            });
+            actions.borrow_mut().clear();
+            for key in ["shift-escape", "ctrl-enter", "alt-escape"] {
+                press(&mut app, key, false);
+            }
+            press(&mut app, "escape", true);
+            press(&mut app, "enter", true);
+            assert!(actions.borrow().is_empty(), "modified/IME keys: {phase:?}");
+            press(&mut app, "escape", false);
+            press(&mut app, "enter", false);
+            assert_eq!(
+                *actions.borrow(),
+                expected,
+                "visible recovery actions: {phase:?}"
+            );
+            terminal.read(&app, |view, ctx| {
+                assert_eq!(view.remote_input_phase, Some(phase));
+                assert_eq!(
+                    view.input.as_ref(ctx).ordinary_command_input_is_ready(),
+                    phase == RemoteInputPhase::Ready
+                );
+            });
+        }
+        remove_remote_terminal_identity(&uuid);
     });
 }
 

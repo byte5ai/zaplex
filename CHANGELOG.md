@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.31] — 2026-10-24
+
+- Remote-Recovery verarbeitet die angezeigten Tastenkürzel; SSH-Pane-Titel folgen gespeicherten Hostnamen; Verbindungsaktionen und vollständige Hostnamen erhalten Tooltips.
+
 ## [1.2.30] — 2026-10-24
 
 - Dateitransfers erscheinen einmal in der aktiven Dateipane oder im Workspace. Die Anzeige reserviert Platz und verdeckt weder Transferziel noch Dateiaktionen oder Terminaleingabe (#658).

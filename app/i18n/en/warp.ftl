@@ -4658,3 +4658,6 @@ persistence-startup-error-legacy-database-copy-failed = Zaplex could not take ov
 
     { $error }
 persistence-startup-error-close = Close Zaplex
+
+workspace-left-panel-ssh-manager-collapse-all = Collapse all folders
+workspace-left-panel-ssh-manager-expand-all = Expand all folders

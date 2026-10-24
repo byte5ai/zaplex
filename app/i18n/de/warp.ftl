@@ -4314,3 +4314,6 @@ persistence-startup-error-legacy-database-copy-failed = Zaplex konnte die Daten 
 
     { $error }
 persistence-startup-error-close = Zaplex schließen
+
+workspace-left-panel-ssh-manager-collapse-all = Alle Ordner einklappen
+workspace-left-panel-ssh-manager-expand-all = Alle Ordner ausklappen
