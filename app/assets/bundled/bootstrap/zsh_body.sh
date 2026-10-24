@@ -851,6 +851,8 @@ if [[ -z $ZAPLEX_BOOTSTRAPPED ]]; then
                       T) return 1;;
                       # -W implies -T
                       W) return 1;;
+                      # -O controls an existing master; it never starts an interactive shell.
+                      O) return 1;;
                       # The user provided an invalid option; kick it to real ssh.
                       \?) return 1;;
                       # The user omitted a required argument; kick it to real ssh.

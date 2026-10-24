@@ -586,6 +586,10 @@ if test "$ZAPLEX_IS_LOCAL_SHELL_SESSION" = "1"
             # -W implies -T
             return 1
         end
+        if set -q _flag_O
+            # -O controls an existing master; it never starts an interactive shell.
+            return 1
+        end
 
         # If there is more than one positional argument, the user is attempting to
         # run a command, not start an interactive session.  If there is less than

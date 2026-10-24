@@ -107,8 +107,8 @@ impl InteractiveSshCommand {
         let mut i = 1;
         while i < tokens.len() {
             match tokens[i].as_str() {
-                // -T or -W imply a non-interactive session.
-                "-T" | "-W" => return None,
+                // -O controls an existing master, while -T/-W disable interactive input.
+                "-O" | "-T" | "-W" => return None,
 
                 "-p" => {
                     i += 1;
@@ -121,12 +121,28 @@ impl InteractiveSshCommand {
 
                 // SSH option that doesn't change interactivity and require an argument: Skip the next item.
                 "-B" | "-b" | "-c" | "-D" | "-E" | "-e" | "-F" | "-I" | "-i" | "-J" | "-L"
-                | "-l" | "-m" | "-O" | "-o" | "-P" | "-Q" | "-R" | "-S" | "-w" => {
+                | "-l" | "-m" | "-o" | "-P" | "-Q" | "-R" | "-S" | "-w" => {
                     i += 1;
                 }
 
-                // SSH option(s) that don't change interactivity.
-                arg if arg.starts_with('-') => {}
+                // Handle attached and clustered options (-Ocheck, -vOcheck), without
+                // mistaking an argument such as -i-Oidentity for a control option.
+                arg if arg.starts_with('-') => {
+                    let mut options = arg[1..].chars();
+                    while let Some(option) = options.next() {
+                        match option {
+                            'O' => return None,
+                            'B' | 'b' | 'c' | 'D' | 'E' | 'e' | 'F' | 'I' | 'i' | 'J' | 'L'
+                            | 'l' | 'm' | 'o' | 'P' | 'p' | 'Q' | 'R' | 'S' | 'W' | 'w' => {
+                                if options.as_str().is_empty() {
+                                    i += 1;
+                                }
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
 
                 // Otherwise, it's a positional argument (e.g., hostname, command to run)
                 pos_arg => {
@@ -466,7 +482,7 @@ mod tests {
                 == Some("root@127.14.80.1".to_string())
         );
         assert!(
-            parse_interactive_ssh_command("ssh -4vw root@127.14.80.1 -p 2222")
+            parse_interactive_ssh_command("ssh -4vw 0:0 root@127.14.80.1 -p 2222")
                 .unwrap()
                 .host
                 == Some("root@127.14.80.1".to_string())
@@ -498,3 +514,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "util_control_tests.rs"]
+mod control_tests;

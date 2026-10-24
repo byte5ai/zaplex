@@ -1,0 +1,191 @@
+{
+  "artifact_run_id": "40049854378",
+  "app_source_sha": "b270ee372f8548b83363916dc8fbddc1ee7b5884",
+  "harness_source_sha": "6927cdbfdede5c18165dfa302393a5ee00755922",
+  "dmg_sha256": "fcb082266c6b4f61fb8bb0c3d871e9ccafb8c229225e528f288bafb36f800644",
+  "exploration_run_id": "40059647737",
+  "locale": "en",
+  "theme": "dark",
+  "application_capture_pixels": [
+    1024,
+    678
+  ],
+  "private_archive_sha256": "c2d5f1e9c73808a2f9ff12a35642e111f89ec16587370d6ed2db7a3bba7e4225",
+  "captures": [
+    {
+      "name": "001-initial.png",
+      "sha256": "bb17c5b7bb51b90ac64d60d99b9c1f5cc94c6fd6bdc26c22369364bd116aab38",
+      "bytes": 76135
+    },
+    {
+      "name": "002-fixture-command.png",
+      "sha256": "706760019a06e103b20ac1f728effca90d66c93965a4ec01e13f8edf309038ac",
+      "bytes": 106203
+    },
+    {
+      "name": "003-fixture-hashes.png",
+      "sha256": "bcad378eba33ca0760109c4ff07cc79ab1cd7248e380c934b19ddc765528ca84",
+      "bytes": 93378
+    },
+    {
+      "name": "004-source-manager.png",
+      "sha256": "f11e377f82c8895b3e0c16607bb8e9b94ac36af7ed03d2883ec0ee918570760f",
+      "bytes": 60909
+    },
+    {
+      "name": "005-space-folder.png",
+      "sha256": "21ba2555487030f2f45915cff76f08e48f3e4eac2dcb8b3d0a88b943120f5b3a",
+      "bytes": 65574
+    },
+    {
+      "name": "006-mixed-marking.png",
+      "sha256": "5563c77392b26fcfa2c9e96d065a80f8ad2e33feeaefb910ba0089885f4456cc",
+      "bytes": 65255
+    },
+    {
+      "name": "007-marks-after-sort.png",
+      "sha256": "a12dba31e40352b323eb9bfce950b0cfbc67d8028c0053ca37d00e7aacc974b7",
+      "bytes": 65280
+    },
+    {
+      "name": "008-marks-after-refresh.png",
+      "sha256": "a12dba31e40352b323eb9bfce950b0cfbc67d8028c0053ca37d00e7aacc974b7",
+      "bytes": 65280
+    },
+    {
+      "name": "009-select-all.png",
+      "sha256": "c183cd5077b43290eb54f975cb8cae6012c65ea7bde94f1cbb2643bce3f2648b",
+      "bytes": 65595
+    },
+    {
+      "name": "010-delete-confirmation.png",
+      "sha256": "1218f3663c0dee1093905f5981309fbb9fdb71f666c7a4db4a18c668edd670ee",
+      "bytes": 80112
+    },
+    {
+      "name": "011-delete-cancelled.png",
+      "sha256": "c183cd5077b43290eb54f975cb8cae6012c65ea7bde94f1cbb2643bce3f2648b",
+      "bytes": 65595
+    },
+    {
+      "name": "012-observer-tab.png",
+      "sha256": "7282b190fa8d4d52ce644a008af193298025c6b4edeb7ddc27de0acc684432f5",
+      "bytes": 66549
+    },
+    {
+      "name": "013-observer-command.png",
+      "sha256": "d17e14234ea05ebdc9b9d0ea72e7b59425f86323d2660e7e9518579cf715f974",
+      "bytes": 67368
+    },
+    {
+      "name": "014-cancel-hashes.png",
+      "sha256": "af857a7c005663341c2218ff674282b561128a8b95018a99df722ba73554471c",
+      "bytes": 74525
+    },
+    {
+      "name": "015-destination-manager.png",
+      "sha256": "78c34392ecc9663a35039759583b5ac6e581c85b432a13d80bcb72a8d5214496",
+      "bytes": 55566
+    },
+    {
+      "name": "016-target-picker.png",
+      "sha256": "2e446ad9c0cb36f445bcaaaa4fed934853a02f693b9e1da9bcb609918ed6a49c",
+      "bytes": 81494
+    },
+    {
+      "name": "017-target-selected.png",
+      "sha256": "8c0600252aed3415dbba64eddc813a5f6a546cd2154f9ad367ed99138a8fcc95",
+      "bytes": 71150
+    },
+    {
+      "name": "018-target-next.png",
+      "sha256": "8f59c411b77f9f03391ba2151408c2c48b100d1768abb8759bdb8c5713dc28bd",
+      "bytes": 53191
+    },
+    {
+      "name": "019-target-follows-directory.png",
+      "sha256": "cccb56af5a290ab80e684b68ecc07d40bba95f093c796385bfb01886aa7e4030",
+      "bytes": 73984
+    },
+    {
+      "name": "020-copy-marked.png",
+      "sha256": "eead0914312e38d4043e018f26fb97c363625668d296bc4a14d949be21eff19d",
+      "bytes": 74590
+    },
+    {
+      "name": "021-copy-target.png",
+      "sha256": "c14a46cb2a897bded89372743a53533304cd9a50eb0cb61def625ad8000b3b88",
+      "bytes": 68459
+    },
+    {
+      "name": "022-alternate-shell.png",
+      "sha256": "f80632b1985d869ff62cd843b7019921139e30d4e7bb5942d5455e45d03dd39a",
+      "bytes": 81232
+    },
+    {
+      "name": "023-copy-observer-command.png",
+      "sha256": "344b8f819cb5310189167c995ed23366a276fe1cec8b96e633ceb9fb083961a7",
+      "bytes": 81349
+    },
+    {
+      "name": "024-copy-hashes.png",
+      "sha256": "420a72a2e99f11f0588ef3c96d0703918d0fc0340e26751852b6115fb4879723",
+      "bytes": 120110
+    },
+    {
+      "name": "025-alternate-manager.png",
+      "sha256": "b49d3320eaaacaa24f5e6aceae86492e249b9878974e70e8a7c9365b376b676e",
+      "bytes": 57480
+    },
+    {
+      "name": "026-transfer-panels-dismissed.png",
+      "sha256": "d776f24b3aa46b460f8df4ad4c2b703f8bbc81cb3c1e3f94c68a0ae5ba905a77",
+      "bytes": 52219
+    },
+    {
+      "name": "027-target-returned-shell.png",
+      "sha256": "e07151239878083d398c1ad9f17c6893d1b33a052708c77c7f1293d90ff40346",
+      "bytes": 89459
+    },
+    {
+      "name": "028-target-invalidated.png",
+      "sha256": "899665fae7cd3b69d6d0a47febcfc07ba9f741776ce2ab9f6a8da891944a792f",
+      "bytes": 66779
+    },
+    {
+      "name": "029-target-reselection-required.png",
+      "sha256": "12d94eb864f2f8764dc8109ce362b0fd3e08eb35989f96fe7d089a00fa2a6b18",
+      "bytes": 84271
+    },
+    {
+      "name": "030-delete-subset-confirmation.png",
+      "sha256": "9da1b9e3c3ab40357b651d5887ebb22a9a9cad027ad55fe0c7f62057330a7b0d",
+      "bytes": 82166
+    },
+    {
+      "name": "031-subset-deleted.png",
+      "sha256": "3e2cb8b9bc6fdae65013fa59e851dbf76cfced20f06f2589263b35526e555f38",
+      "bytes": 56055
+    },
+    {
+      "name": "032-observer-after-delete.png",
+      "sha256": "e07151239878083d398c1ad9f17c6893d1b33a052708c77c7f1293d90ff40346",
+      "bytes": 89459
+    },
+    {
+      "name": "033-delete-verification-command.png",
+      "sha256": "66cb622dccb8e7d221a751195c39e64b6d385e605a761bececc69d76ddae0216",
+      "bytes": 105714
+    },
+    {
+      "name": "034-subset-and-cancel-verified.png",
+      "sha256": "32da2d33006e12df437f7b7d0bcdd9097c87d09c09110094ab882a0af7e45105",
+      "bytes": 109552
+    },
+    {
+      "name": "035-finish-command.png",
+      "sha256": "659c30223c797e84e7472a239624d853bfea3958b6e08f3f55dfd8b655c3baa5",
+      "bytes": 117597
+    }
+  ]
+}
