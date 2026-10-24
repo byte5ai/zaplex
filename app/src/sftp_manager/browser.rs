@@ -10,7 +10,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::editor::{
-    EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
+    EditorView, Event as EditorEvent, PropagateAndNoOpEscapeKey, SingleLineEditorOptions,
+    TextColors, TextOptions,
 };
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
@@ -1296,9 +1297,21 @@ impl SftpBrowserView {
             .unwrap_or_else(|| crate::t!("terminal-remote-session-label").to_string());
         let pane_configuration =
             ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("sftp-file-manager-title")));
-        let rename_editor = make_editor(&crate::t!("fm-rename-placeholder"), ctx);
-        let new_folder_editor = make_editor(&crate::t!("fm-folder-name-placeholder"), ctx);
-        let search_editor = make_editor(&crate::t!("fm-search-placeholder"), ctx);
+        let rename_editor = make_editor(
+            &crate::t!("fm-rename-placeholder"),
+            PropagateAndNoOpEscapeKey::EmitEvent,
+            ctx,
+        );
+        let new_folder_editor = make_editor(
+            &crate::t!("fm-folder-name-placeholder"),
+            PropagateAndNoOpEscapeKey::EmitEvent,
+            ctx,
+        );
+        let search_editor = make_editor(
+            &crate::t!("fm-search-placeholder"),
+            PropagateAndNoOpEscapeKey::HandleFirst,
+            ctx,
+        );
         let host_detail = registry_connection_identity(&node_id);
 
         let mut me = Self {
@@ -7664,6 +7677,7 @@ fn file_manager_editor_text_colors(appearance: &Appearance) -> TextColors {
 /// Create a single-line editor
 fn make_editor(
     placeholder: &str,
+    escape_behavior: PropagateAndNoOpEscapeKey,
     ctx: &mut ViewContext<SftpBrowserView>,
 ) -> ViewHandle<EditorView> {
     let placeholder = placeholder.to_string();
@@ -7682,6 +7696,7 @@ fn make_editor(
         let options = {
             let appearance = Appearance::as_ref(ctx);
             SingleLineEditorOptions {
+                propagate_and_no_op_escape_key: escape_behavior,
                 text: TextOptions {
                     font_size_override: Some(appearance.ui_font_size()),
                     font_family_override: Some(appearance.monospace_font_family()),

@@ -3217,6 +3217,89 @@ fn file_dialog_opening_routes_first_typed_character_without_field_click() {
     }
 }
 
+#[test]
+fn file_dialog_escape_cancels_initial_and_partial_selections_on_first_press() {
+    for opening in ["f2", "f7"] {
+        App::test((), |mut app| async move {
+            crate::i18n::init(Some("en"));
+            initialize_app(&mut app);
+            app.update(crate::editor::init);
+            let (window, view, files) =
+                create_connected_view(&mut app, &[("file.txt", b"original")]);
+            let pane_id = PaneId::dummy_pane_id();
+            let focus_state = app.add_model(|_| PaneGroupFocusState::new(pane_id, None, true));
+            view.update(&mut app, |view, ctx| {
+                view.set_focus_handle(PaneFocusHandle::new(pane_id, focus_state), ctx);
+                view.focus_contents(ctx);
+            });
+
+            // Each cancellation is followed by a fresh opening on the same file.
+            for selection in ["initial", "partial", "edited", "initial"] {
+                let (presenter, _) = render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+                assert!(key_down(&mut app, window, presenter, opening));
+                let editor = view.read(&app, |view, _| {
+                    if opening == "f2" {
+                        assert!(matches!(view.dialog, Some(Dialog::Rename { .. })));
+                        view.rename_editor.clone()
+                    } else {
+                        assert!(matches!(view.dialog, Some(Dialog::CreateFolder { .. })));
+                        view.new_folder_editor.clone()
+                    }
+                });
+                editor.update(&mut app, |editor, ctx| {
+                    assert_eq!(
+                        editor.buffer_text(ctx),
+                        if opening == "f2" { "file.txt" } else { "" }
+                    );
+                    match selection {
+                        "partial" => {
+                            editor.set_buffer_text("draft.txt", ctx);
+                            editor.select_ranges_by_byte_offset([1.into()..4.into()], ctx);
+                        }
+                        "edited" => editor.set_buffer_text("draft.txt", ctx),
+                        "initial" => {}
+                        _ => unreachable!(),
+                    }
+                });
+                assert_eq!(app.focused_view_id(window), Some(editor.id()));
+                let (presenter, _) = render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+                assert!(key_down(&mut app, window, presenter, "escape"));
+                view.read(&app, |view, _| {
+                    assert!(
+                        view.dialog.is_none(),
+                        "{opening}, {selection}: first Escape must close"
+                    );
+                });
+                assert_eq!(app.focused_view_id(window), Some(view.id()));
+                assert_eq!(
+                    std::fs::read(files.path().join("file.txt")).unwrap(),
+                    b"original"
+                );
+                assert_eq!(std::fs::read_dir(files.path()).unwrap().count(), 1);
+            }
+
+            // A nonmodal editor still consumes its first Escape to clear selection.
+            view.update(&mut app, |view, ctx| view.focus_search_editor_for_test(ctx));
+            let (presenter, _) = render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+            assert!(app.update(|ctx| ctx.simulate_window_event(
+                Event::TypedCharacters {
+                    chars: "file".to_string()
+                },
+                window,
+                presenter,
+            )));
+            let (presenter, _) = render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+            assert!(key_down(&mut app, window, presenter, "shift-left"));
+            let (presenter, _) = render_scene_at(&mut app, window, vec2f(800.0, 600.0));
+            assert!(key_down(&mut app, window, presenter, "escape"));
+            view.read(&app, |view, _| {
+                assert_eq!(view.search_filter.as_deref(), Some("file"));
+                assert!(view.dialog.is_none());
+            });
+        });
+    }
+}
+
 fn assert_dialog_restores_list_keyboard_navigation(completion: &'static str) {
     for opening_key in ["f2", "f7"] {
         App::test((), |mut app| async move {
