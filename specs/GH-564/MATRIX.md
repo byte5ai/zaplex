@@ -55,6 +55,14 @@ für Theme-Fokusrückgabe und die sichere Verzeichnisübernahme bei einer lokal
 belegten Shell. Sie findet den initialen F2/F7-Dialogfokusfehler #673; die
 Gesamtmatrix bleibt ohne vollständige Fallkombinationen offen.
 
+Die [installierte Nachprüfung von 1.2.34](CANDIDATE-1.2.34-NATIVE.md) ergänzt
+EN/Dark und EN/Light für initialen F2/F7-/Ordnerdialogfokus sowie EN/Light für
+lange Favoritenhinweise in beiden Öffnungsrichtungen. Sie findet #684 (erster
+Escape bei ausgewähltem Namen) und #685 (abgeschnittene Agent-Einstellungen
+bei schmalem Fenster). 80 Originale sind einzeln geprüft; die 15 lokalen
+GUI-Pflichtfälle stammen aus dem ursprünglichen Batch und einer gezielten
+Fortsetzung mit verifiziert identischem DMG. Keine vollständige Variantenfreigabe.
+
 ## Referenzen und Bewertung
 
 - **C**: [Cockpit-Spezifikation](../../docs/ui/cockpit-sidebar-connections.html#spec),

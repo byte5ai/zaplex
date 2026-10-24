@@ -1,0 +1,1782 @@
+{
+  "run_id": 40093237854,
+  "artifact_id": 12560781025,
+  "app_source_sha": "b0eff3ee326b7a4884de3681123cd84fad5ef45f",
+  "harness_sha": "6b8a99e9a7312873d4943e4a334b56cd34771d3a",
+  "dmg_sha256": "ec3ce86d7fdf78c5dc5852f5b8c717c3252428450199b5a1929cebe602ec5319",
+  "original_images": 80,
+  "workflow_hashes_match": true,
+  "images": [
+    {
+      "name": "001-initial.png",
+      "sha256": "626ce69b4aaf3bf5a5c3e0d449088c20c3526a651c48d897eac337a434ca624c",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Fresh installed app, EN/Zaplex Dark."
+    },
+    {
+      "name": "002-setup-input.png",
+      "sha256": "4f7f2c7af02e38a324e2535a96ed0660c747550b175c0833c1acf6acd149596c",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Setup command typed, not executed."
+    },
+    {
+      "name": "003-baseline.png",
+      "sha256": "4f7f2c7af02e38a324e2535a96ed0660c747550b175c0833c1acf6acd149596c",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Return without foreground was rejected before dispatch; input unchanged."
+    },
+    {
+      "name": "004-baseline-output.png",
+      "sha256": "d361a8b63eed4ceba314380b65759a32018a637450b224a0de27f18c8afff4f2",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Baseline PID1268, unexported marker, CWD and alpha/beta hashes."
+    },
+    {
+      "name": "005-file-manager.png",
+      "sha256": "b82990dde30f005718f03a988cf826f4971685e86767ea7be3b47632c813d404",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "File manager initially contains child, alpha.txt, beta.txt."
+    },
+    {
+      "name": "006-filter-alpha.png",
+      "sha256": "b82990dde30f005718f03a988cf826f4971685e86767ea7be3b47632c813d404",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "First filter attempt clicked toolbar whitespace; no filter applied."
+    },
+    {
+      "name": "007-filter-focused.png",
+      "sha256": "659971adcd8c7c973ac820beace292ea82c59755200ab57119e4b5ee426929de",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Explicit filter field contains alpha."
+    },
+    {
+      "name": "008-f2-initial.png",
+      "sha256": "1e997399369683184f7dacafc9d55e938b1b570207b8a89964710f3898ea9063",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "F2 initially selects the complete old name."
+    },
+    {
+      "name": "009-f2-raw-z.png",
+      "sha256": "77d2c3804ab9eae6e14da940ad1cc5fd5fb9385eabf6381e3262c42dadae0be1",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z replaces selected filename without field click.",
+      "repository_copy": "009-f2-raw-z.png"
+    },
+    {
+      "name": "010-f2-reopened.png",
+      "sha256": "1e997399369683184f7dacafc9d55e938b1b570207b8a89964710f3898ea9063",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Reopened F2 selects old name."
+    },
+    {
+      "name": "011-f7-empty.png",
+      "sha256": "85f5ab8a3e8f95d5565f0c4c55ad05433cf7ddfaed7a214a674c4c0c76313643",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Despite filename, first Escape only cleared rename selection; F7 did not open a folder dialog."
+    },
+    {
+      "name": "012-f7-raw-z.png",
+      "sha256": "ee7306e03c6d5f73235a537e00e01cf09ed401ccd12dd0c5129d1f80e652cce1",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Despite filename, raw z is in the still-open rename dialog (zalpha.txt)."
+    },
+    {
+      "name": "013-f7-reopened-empty.png",
+      "sha256": "077c33ebf8a64fbc9248ac440e8527e43ce1dc050a7fab8a3b25a52a17533aaa",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "After Escape on edited rename, F7 opens an empty New Folder dialog."
+    },
+    {
+      "name": "014-after-escape.png",
+      "sha256": "659971adcd8c7c973ac820beace292ea82c59755200ab57119e4b5ee426929de",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Escape closes the empty folder dialog."
+    },
+    {
+      "name": "015-f7-initial-confirmed.png",
+      "sha256": "077c33ebf8a64fbc9248ac440e8527e43ce1dc050a7fab8a3b25a52a17533aaa",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "New Folder reopened empty."
+    },
+    {
+      "name": "016-f7-raw-z-confirmed.png",
+      "sha256": "2e1becb8880894cebe30bba15c5be4ff022442b9e2562b849d7bfc57b2de6a8d",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z reaches New Folder without field click.",
+      "repository_copy": "016-f7-raw-z-confirmed.png"
+    },
+    {
+      "name": "017-toolbar-folder-empty.png",
+      "sha256": "077c33ebf8a64fbc9248ac440e8527e43ce1dc050a7fab8a3b25a52a17533aaa",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Toolbar opens empty New Folder."
+    },
+    {
+      "name": "018-toolbar-raw-z.png",
+      "sha256": "2e1becb8880894cebe30bba15c5be4ff022442b9e2562b849d7bfc57b2de6a8d",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z reaches toolbar-opened folder editor."
+    },
+    {
+      "name": "019-f2-escape-before.png",
+      "sha256": "1e997399369683184f7dacafc9d55e938b1b570207b8a89964710f3898ea9063",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Fresh F2 dialog with selected filename before Escape.",
+      "repository_copy": "019-f2-escape-before.png"
+    },
+    {
+      "name": "020-f2-first-escape.png",
+      "sha256": "c2d67d91ed78324c35823bf570b1fc0ad04b5b3b5f8f7b7a09068b8dc25c6a36",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "First Escape removes selection but leaves rename dialog open: #684.",
+      "repository_copy": "020-f2-first-escape.png"
+    },
+    {
+      "name": "021-f2-second-escape.png",
+      "sha256": "659971adcd8c7c973ac820beace292ea82c59755200ab57119e4b5ee426929de",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Second Escape closes rename dialog.",
+      "repository_copy": "021-f2-second-escape.png"
+    },
+    {
+      "name": "022-settings.png",
+      "sha256": "269d21cbfa4e90f5139f878a7507449378ae1cceb5c1e6c3b6f85fb0fa55b833",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "English Agent settings support line readable at normal width."
+    },
+    {
+      "name": "023-settings-agent.png",
+      "sha256": "85997d598d8100bcb02dbb6338718cadc92415eb046e32a1103d6690138b4d69",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Third party CLI settings selected during navigation; no provider account tested."
+    },
+    {
+      "name": "024-en-agent-minimum.png",
+      "sha256": "e7af53dd9298da073f301ee10ca71af8b9841b3bfa5c65b3ade75c064f7439ef",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          500,
+          500
+        ]
+      ],
+      "image_size": [
+        500,
+        500
+      ],
+      "visually_reviewed": true,
+      "observation": "500x500 Agent settings clip text and controls: #685.",
+      "repository_copy": "024-en-agent-minimum.png"
+    },
+    {
+      "name": "025-en-agent-minimum-probe.png",
+      "sha256": "76f01510f4e2732585be64b3516e3e9ddc9d9dce3abb92adf5e04b1ad4f68794",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          350,
+          350
+        ]
+      ],
+      "image_size": [
+        350,
+        350
+      ],
+      "visually_reviewed": true,
+      "observation": "350x350 Agent settings clip content."
+    },
+    {
+      "name": "026-en-agent-native-limit.png",
+      "sha256": "680439bccd9e145f4c0215fbf17fb176dbbefe8004193ef3d3a92ad4a7131f0e",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          100,
+          100
+        ]
+      ],
+      "image_size": [
+        100,
+        100
+      ],
+      "visually_reviewed": true,
+      "observation": "100x100 is reachable; not asserted as absolute minimum."
+    },
+    {
+      "name": "027-appearance.png",
+      "sha256": "b4ed6a7a1805671daa2225282f2f0ff305cff80aa92c7601f96f04ad0c8b7083",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Appearance settings at restored normal size."
+    },
+    {
+      "name": "028-theme-selector.png",
+      "sha256": "d740c639d70a1d14f2907f977f22938e0d319f55675b062baa9856c74a28f6eb",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Theme picker open."
+    },
+    {
+      "name": "029-light-search.png",
+      "sha256": "2df5e22eaa19bfd1346368dd8533deae823c8d9f68925caab8628445608a5af3",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Light theme search result."
+    },
+    {
+      "name": "030-light-return.png",
+      "sha256": "1c888245a2b8f2e843842d4a7a2eb4c681a1bebf884ba1b417eb44391e375849",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Return from settings to file manager in Light, filter alpha retained."
+    },
+    {
+      "name": "031-light-f2-selected.png",
+      "sha256": "bb54dde7a7dae8cc69e54b88f2c2e708c613d43dd922d4bb2df0528ac9be7296",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "F2 initially selects filename after theme/settings round trip."
+    },
+    {
+      "name": "032-light-f2-raw-z.png",
+      "sha256": "37b9f97cf6deca5cf285ab04116697e1336843ab8deb16207c33847ab4596906",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z replaces selected filename in Light.",
+      "repository_copy": "032-light-f2-raw-z.png"
+    },
+    {
+      "name": "033-light-f7-raw-z.png",
+      "sha256": "85e5494b692759d5af2e3032eb9648d4cb4557c929907bc0c0a70a17de3940a4",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z reaches F7 folder editor in Light."
+    },
+    {
+      "name": "034-light-toolbar-raw-z.png",
+      "sha256": "85e5494b692759d5af2e3032eb9648d4cb4557c929907bc0c0a70a17de3940a4",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z reaches toolbar folder editor in Light.",
+      "repository_copy": "034-light-toolbar-raw-z.png"
+    },
+    {
+      "name": "035-connections.png",
+      "sha256": "57f45b42d8c3cdc4c53559490e1b5e65781501d04720588378858264cd63173c",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Empty Connections list."
+    },
+    {
+      "name": "036-host-form.png",
+      "sha256": "abfae8e81075173cab98b04e81428f8c39feb7ce59840112ff0fab4f0e4ee2e5",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Add-host choices."
+    },
+    {
+      "name": "037-blank-host.png",
+      "sha256": "90e8458269bdef519a3752d581f3bc7dcae04ef5bb6d15f9046c93d3c5dce097",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Blank synthetic host editor beside original file manager."
+    },
+    {
+      "name": "038-host-name.png",
+      "sha256": "3be1401a54cd1ef476b165010595856a802d8f33f3d02729e37b17bf7048dfc3",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Long synthetic host name entered."
+    },
+    {
+      "name": "039-host-address.png",
+      "sha256": "ac76201dcea8a15421927b76bc8d3b33fccced43aa327a0f147e0e5c263e7312",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Loopback address and port1 entered."
+    },
+    {
+      "name": "040-host-ready.png",
+      "sha256": "9275ac846dd798d216a22012519f3912659a57a1509975baaaee5214340dcf98",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Synthetic user qa entered; no password supplied."
+    },
+    {
+      "name": "041-host-saved.png",
+      "sha256": "52a5ea7bf3438b622ec8804023a3e4ad0929156e1151c591f85cbb84525fde14",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Synthetic host saved; original file manager retained."
+    },
+    {
+      "name": "042-favorite-menu.png",
+      "sha256": "5260e9ed16b54cdbef338e2f1aeb294cf0386dd72595f78b8516a62fdcbc4cb9",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Favorite appears in start menu."
+    },
+    {
+      "name": "043-right-flyout-hover-1.png",
+      "sha256": "47beeacb8ec2ae7477bc5efa8ce58b4c67358b83181fd6c43a22aa7af8838a26",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Right-opening flyout, full identity hint above it, stationary hover sample1.",
+      "repository_copy": "043-right-flyout-hover-1.png"
+    },
+    {
+      "name": "044-right-flyout-hover-2.png",
+      "sha256": "47beeacb8ec2ae7477bc5efa8ce58b4c67358b83181fd6c43a22aa7af8838a26",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Same stationary hover sample2."
+    },
+    {
+      "name": "045-right-flyout-hover-3.png",
+      "sha256": "47beeacb8ec2ae7477bc5efa8ce58b4c67358b83181fd6c43a22aa7af8838a26",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Same stationary hover sample3."
+    },
+    {
+      "name": "046-flyout-escape.png",
+      "sha256": "de23d567272fee491645cbbbc28519da44eb18aeb70d8e35375573bd9992a698",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Escape closes child flyout and preserves parent menu."
+    },
+    {
+      "name": "047-child-edit-hover.png",
+      "sha256": "8914b675bc184ec1c9a7c055830d0886c8ed9d5b131b9dd68517cdcee8cd0e00",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Edit child is highlighted after moving into flyout; hint no longer covers it."
+    },
+    {
+      "name": "048-edit-return.png",
+      "sha256": "cd8e24d49f2fde8290fb7da942804849118f61fd89973c35d430f4ccb2bc9c99",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Edit returns to existing host editor without duplicate pane."
+    },
+    {
+      "name": "049-three-tabs.png",
+      "sha256": "7099e2cd29d0eb96aaba0b8bd477c0204bfea5c80066f94c63bc94b6cac583fd",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Two extra terminal tabs created."
+    },
+    {
+      "name": "050-edge-menu.png",
+      "sha256": "f4136618d9f9ada67e8e51aad94bb464b68bc9380519d72c132494254803116a",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Dropdown did not visibly open; filename is not a successful menu observation."
+    },
+    {
+      "name": "051-left-flyout-hover-1.png",
+      "sha256": "7099e2cd29d0eb96aaba0b8bd477c0204bfea5c80066f94c63bc94b6cac583fd",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "No menu visible; not a left-flyout proof."
+    },
+    {
+      "name": "052-left-flyout-hover-2.png",
+      "sha256": "b049c3d7afd44f5067055167622492a68438a4381412f83024ea898589a4b769",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "No menu visible; not a left-flyout proof."
+    },
+    {
+      "name": "053-left-flyout-hover-3.png",
+      "sha256": "b049c3d7afd44f5067055167622492a68438a4381412f83024ea898589a4b769",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "No menu visible; not a left-flyout proof."
+    },
+    {
+      "name": "054-edge-menu-open.png",
+      "sha256": "f8aa7cab424c1a433a8dec98b58a1ae4b037626c913d4e122b9a75d144a8af5b",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Mouse attempt on dropdown still shows no menu."
+    },
+    {
+      "name": "055-edge-keyboard-menu.png",
+      "sha256": "f4136618d9f9ada67e8e51aad94bb464b68bc9380519d72c132494254803116a",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Control-Shift-T attempt; not the verified menu shortcut."
+    },
+    {
+      "name": "056-source-tab-return.png",
+      "sha256": "12a06d1f9b5eca785463d00ab8e0916c8a7dac2b20e857ef1ef924c534d5f863",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Return to original tab."
+    },
+    {
+      "name": "057-source-edge-menu.png",
+      "sha256": "f2348e8423024db3b9f26de644eb94d46f3b810402d61b4748c28a7421d66d2b",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Dropdown with three tabs still not visibly open."
+    },
+    {
+      "name": "058-menu-shortcut.png",
+      "sha256": "0090ea83f33138d93f3a0398ec098d4ac06b4e1e59ea92cf07c01a826bc64a51",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Control-Command-T attempt; no menu visible. Product cause unverified."
+    },
+    {
+      "name": "059-single-tab-return.png",
+      "sha256": "40c2e65f64821cd32d8445cc14b15fd747039a3abbefa9e32b73bf8946e82d42",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Extra tabs closed, original single tab retained."
+    },
+    {
+      "name": "060-single-tab-menu.png",
+      "sha256": "b23278e2efcd21764e688a101dea716da0e0d1b1c34856c50eb362190011021c",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Menu opens again with one tab."
+    },
+    {
+      "name": "061-menu-recheck.png",
+      "sha256": "4286135aa9e16b1db9845441c7fd1f0f6ed55dec8d0096b68c0415e5622d1731",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Right flyout and full hint visible again."
+    },
+    {
+      "name": "062-narrow-single-tab.png",
+      "sha256": "7d66825ed89c8e0e74b17e5df257a97950bead743154f5c6b0f1044f0e6d0c96",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Window narrowed to650x678."
+    },
+    {
+      "name": "063-narrow-menu.png",
+      "sha256": "c843bfd817c5bd54e378443fc4bef5a588362ce46f3a67eefcdd9ec5f8a8b7dd",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Parent menu open at650x678."
+    },
+    {
+      "name": "064-left-real-hover-1.png",
+      "sha256": "83cc96645d49538f52fe8f98a17d7f3016d70943b72871016397bdb4f604ae19",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Left-opening flyout; full hint inside650-point bounds, stationary sample1.",
+      "repository_copy": "064-left-real-hover-1.png"
+    },
+    {
+      "name": "065-left-real-hover-2.png",
+      "sha256": "83cc96645d49538f52fe8f98a17d7f3016d70943b72871016397bdb4f604ae19",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Same left-opening stationary sample2."
+    },
+    {
+      "name": "066-left-real-hover-3.png",
+      "sha256": "83cc96645d49538f52fe8f98a17d7f3016d70943b72871016397bdb4f604ae19",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Same left-opening stationary sample3."
+    },
+    {
+      "name": "067-left-edit-return.png",
+      "sha256": "0aa51b23467bdd30005cb82990ab1d079b083f419c7c430fd66c7fd13ad85ab4",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Edit from left flyout returns to existing editor."
+    },
+    {
+      "name": "068-primary-before.png",
+      "sha256": "5260e9ed16b54cdbef338e2f1aeb294cf0386dd72595f78b8516a62fdcbc4cb9",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Normal-size parent menu before primary label click."
+    },
+    {
+      "name": "069-primary-connection.png",
+      "sha256": "80d2ad14f80d08a42e5c40db80a46564f1bc9f9aabfb0c972837b1e002b11152",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Primary favorite starts one visible SSH attempt to loopback port1, Connection refused."
+    },
+    {
+      "name": "070-source-after-connection.png",
+      "sha256": "cd8e24d49f2fde8290fb7da942804849118f61fd89973c35d430f4ccb2bc9c99",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Return after cancelling and closing failed connection tab."
+    },
+    {
+      "name": "071-original-terminal.png",
+      "sha256": "aa448344d1cc7cf84ccb7f962b4a3b8517bd977cef05a89cfc98f76733b623d1",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Row click and F10 did not return to terminal; cause unverified."
+    },
+    {
+      "name": "072-final-check-input.png",
+      "sha256": "2513e14763f73bd9a0a664e3d1eda364eb04027b762df9a861a9c77524927244",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Check text reached Host field as unsaved draft; never submitted or saved."
+    },
+    {
+      "name": "073-header-terminal.png",
+      "sha256": "4b8db01a0e65799084a47e39b61bcada6d75de024ab494798487e2555e35279b",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Header click and F10 did not yet switch; operator focus behavior needs independent verification."
+    },
+    {
+      "name": "074-host-restored.png",
+      "sha256": "cd8e24d49f2fde8290fb7da942804849118f61fd89973c35d430f4ccb2bc9c99",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Host field restored to127.0.0.1; Save disabled again."
+    },
+    {
+      "name": "075-toolbar-terminal-return.png",
+      "sha256": "fe36db0207475d29a8a68f3f748f42bd686d95127f79aab775c2e1cbc2559342",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Click on F10 toolbar first activates the file-manager pane."
+    },
+    {
+      "name": "076-terminal-check-input.png",
+      "sha256": "fe36db0207475d29a8a68f3f748f42bd686d95127f79aab775c2e1cbc2559342",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Typing with file-manager focus produced no shell execution."
+    },
+    {
+      "name": "077-terminal-visible.png",
+      "sha256": "02484a327ef29cac673bddc3508d8e241af24fdff12004d641320b71f8383868",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "F10 now returns to original shell."
+    },
+    {
+      "name": "078-command-in-terminal.png",
+      "sha256": "2a977769d491190055ec628a3c1c74b65bd4bed9d9b51486e4ee21140fe7fedb",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Verification command visibly typed in original terminal before one Return."
+    },
+    {
+      "name": "079-final-shell-proof.png",
+      "sha256": "67a675bb8f180992bfd15cd081f8bb1f4fcd4fd994a1702843a66dc144e06b4e",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Fresh final output: samePID1268, marker, CWD, hashes and directory entries.",
+      "repository_copy": "079-final-shell-proof.png"
+    },
+    {
+      "name": "080-finish-input.png",
+      "sha256": "7f9030d9ed2561fec12c4853a7b57b71208ff82473d21292b8bb60ff82efb59a",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Finish command typed; workflow confirms finished marker and no expiry."
+    }
+  ]
+}
