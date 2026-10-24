@@ -296,6 +296,11 @@ fn cockpit_and_connections_sources_have_no_hard_coded_english_ui_literals() {
             include_str!("ssh_manager/panel.rs"),
             PANEL_ALLOWED,
         ),
+        (
+            "app/src/chip_configurator/modal_shell.rs",
+            include_str!("chip_configurator/modal_shell.rs"),
+            &[],
+        ),
     ];
     let findings: Vec<_> = sources
         .iter()

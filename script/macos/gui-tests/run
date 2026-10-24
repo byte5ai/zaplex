@@ -8,7 +8,7 @@ selection=${3:-}
 # Positional arguments also expand safely when empty under macOS Bash 3.2 + nounset.
 set --
 case "$suite" in
-  full) expected=15 ;;
+  full) expected=16 ;;
   terminal)
     expected=3
     set -- -only-testing:ZaplexUITests/SmokeTests -skip-testing:ZaplexUITests/SmokeTests/testNativeCloseButtonClosesWindow
@@ -18,7 +18,7 @@ case "$suite" in
     set -- -only-testing:ZaplexUITests/NavigationTests
     ;;
   surfaces)
-    expected=3
+    expected=4
     set -- -only-testing:ZaplexUITests/SurfaceTests
     ;;
   *) echo "Unknown suite: $suite" >&2; exit 2 ;;

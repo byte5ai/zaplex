@@ -369,11 +369,11 @@ settings::macros::implement_setting_for_enum!(
 
 impl ThinkingDisplayMode {
     /// Display name for the settings dropdown.
-    pub fn display_name(&self) -> &'static str {
+    pub fn display_name(&self) -> String {
         match self {
-            ThinkingDisplayMode::ShowAndCollapse => "Show & collapse",
-            ThinkingDisplayMode::AlwaysShow => "Always show",
-            ThinkingDisplayMode::NeverShow => "Never show",
+            ThinkingDisplayMode::ShowAndCollapse => crate::t!("settings-ai-thinking-show-collapse"),
+            ThinkingDisplayMode::AlwaysShow => crate::t!("settings-ai-thinking-always-show"),
+            ThinkingDisplayMode::NeverShow => crate::t!("settings-ai-thinking-never-show"),
         }
     }
 

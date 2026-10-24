@@ -21,11 +21,12 @@ Zaplex-Einstellungen und keine Anmeldedaten im Testprofil.
 | Dateimanager | Zeigt die Datei im Pane-Arbeitsverzeichnis und Dateiaktionen; Zurückwechseln erhält die Shell |
 | Connections | Öffnet sichtbar; Schließen erhält die ursprüngliche Shell |
 | Schmaler Dateimanager | Bei höchstens 700 Punkten Breite bleiben alle acht Dateiaktionen sichtbar |
+| Mindestfenstergröße | Native Ziehgeste hält mindestens 480×320 Punkte; am Minimum und nach Vergrößern verarbeitet die ursprüngliche Shell Eingaben sichtbar |
 
 Die erwartete Ausgabe steht nie vollständig im eingegebenen Befehl. Tesseract
 liest die gerenderten Pixel; bloßes Echo der Eingabe oder ein interner Modellzustand
 reicht nicht. XCTest-Anhänge enthalten Screenshots und den Accessibility-Baum.
-Alle fünfzehn Fälle müssen ausgeführt werden und bestehen; übersprungene Tests,
+Alle sechzehn Fälle müssen ausgeführt werden und bestehen; übersprungene Tests,
 Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
 
 ## Ausführung
@@ -37,7 +38,7 @@ Zeitüberschreitungen und fehlende Ergebnisse lassen den Workflow scheitern.
   `suite=navigation` prüft nur die acht neuen Navigationsfälle. Shellzustände
   werden durch nicht exportierte Variablen und pro Prüfung neue Ausgabemarker
   geprüft. TSV-OCR liefert die Positionen der sichtbaren Ausgabe und Menüpunkte.
-  `suite=surfaces` prüft Dateimanager und Connections. `only_tests` begrenzt
+  `suite=surfaces` prüft Dateimanager, Connections und Mindestfenstergröße. `only_tests` begrenzt
   Diagnoseläufe auf bekannte Testnamen (`Klasse/testMethode`, kommagetrennt);
   damit können nur fehlgeschlagene Fälle erneut ausgeführt werden. `full`
   lehnt eine solche Einschränkung ab.
@@ -121,4 +122,4 @@ einer falschen Nonce und eines falschen Zustands sowie Ablehnung des noch nicht
 abgeschickten Befehls. Unabhängig gemessene Bildkoordinaten prüfen die Abbildung
 bei normaler und halber Punktauflösung. `fixtures/ocr/provenance.json` enthält
 Herkunft und Hashes; `ocr-regression.log` archiviert Ergebnis und TSV. Diese
-Gegenproben ergänzen die fünfzehn unveränderten Nutzerabläufe.
+Gegenproben ergänzen die Nutzerabläufe; seit der Mindestgrößenprüfung sind es sechzehn.

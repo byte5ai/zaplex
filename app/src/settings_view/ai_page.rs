@@ -5060,11 +5060,13 @@ impl VoiceWidget {
         ));
 
         let voice_input_description_text_fragments = vec![
-            FormattedTextFragment::plain_text(
-                "Voice input allows you to control Zaplex by speaking directly to your terminal (powered by ",
-            ),
+            FormattedTextFragment::plain_text(crate::t!(
+                "settings-ai-voice-description-before-link"
+            )),
             FormattedTextFragment::hyperlink("Wispr Flow", WISPR_FLOW_URL),
-            FormattedTextFragment::plain_text(")."),
+            FormattedTextFragment::plain_text(crate::t!(
+                "settings-ai-voice-description-after-link"
+            )),
         ];
 
         let voice_input_description = FormattedTextElement::new(

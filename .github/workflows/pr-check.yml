@@ -490,6 +490,9 @@ jobs:
           earlier_timeout_does_not_clear_newer_attempt
           abort_or_shell_return_clear_attempt
           ui_copy_has_no_space_before_ellipsis
+          agent_settings_copy_is_available_in_both_locales
+          thinking_display_labels_preserve_their_behavior
+          cockpit_and_connections_sources_have_no_hard_coded_english_ui_literals
           spaced_ellipsis_detection_covers_catalog_whitespace_and_punctuation
           spaced_ellipsis_detection_ignores_comments_and_leading_ellipses
           cross_window_tab_transfer_preserves_mixed_host_identity_through_preview
