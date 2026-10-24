@@ -46,6 +46,43 @@ LINUX_INPUT = """    inputs:
         type: boolean
         default: false
 """
+TAIL_RESUME_PATHS = {
+    ".github/workflows/ci-batch.yml", "script/ci-batch-resume",
+    "script/ci-batch-resume-tests", "script/ci-batch-completion",
+    "script/ci-batch-scheduling-tests", "docs/ci-batch.md",
+}
+
+
+def validate_tail(run, jobs, changed_paths):
+    # A scheduling defect can leave a green run without executing its tail.
+    if (run.get("status") != "completed" or run.get("conclusion") not in ("success", "failure")
+            or run.get("event") != "workflow_dispatch" or run.get("head_branch") != "main"
+            or run.get("path") != ".github/workflows/ci-batch.yml"
+            or run.get("head_repository", {}).get("full_name") != REPO):
+        raise ValueError("Tail resume requires a completed main batch from this repository")
+    by_name = {job["name"]: job for job in jobs}
+    if len(by_name) != len(jobs):
+        raise ValueError("Ambiguous duplicate job names")
+    for name in ("Validate main batch", "compile_checks / detect build-relevant changes",
+                 MACOS_GATE, "tests / cargo test (Linux)"):
+        if by_name.get(name, {}).get("conclusion") != "success":
+            raise ValueError(f"Missing successful tail prerequisite: {name}")
+    for name in ("dependency_security", "compile_checks / cargo check (Linux x86_64)",
+                 "compile_checks / keymap validation (Linux x86_64)", "live_sftp"):
+        if by_name.get(name, {}).get("conclusion") != "skipped":
+            raise ValueError(f"Unexpected tail source gate: {name}")
+    steps = {step["name"]: step.get("conclusion")
+             for step in by_name["tests / cargo test (Linux)"].get("steps", [])}
+    if (steps.get("Isolated package tests") != "success"
+            or steps.get("Package documentation tests") != "success"
+            or steps.get("Rust workspace coverage tests") != "skipped"):
+        raise ValueError("Tail resume requires successful package/doc tests without coverage")
+    for name, job in by_name.items():
+        if name.startswith(("live_sftp /", "test_dmg", "remote_server")):
+            if job.get("conclusion") != "skipped":
+                raise ValueError(f"Tail stage already executed: {name}")
+    if any(path not in TAIL_RESUME_PATHS for path in changed_paths):
+        raise ValueError("Passed compile/test inputs changed since the tail source")
 
 
 def validate(run, jobs, changed_paths):
@@ -94,7 +131,7 @@ def validate(run, jobs, changed_paths):
     return "package"
 
 
-def validate_linux_inputs(previous, current):
+def validate_linux_inputs(previous, current, *, include_tests=False):
     workflow = ".github/workflows/pr-check.yml"
     def normalize_compile(text):
         text = text.replace(LINUX_INPUT, "")
@@ -136,7 +173,7 @@ def validate_linux_inputs(previous, current):
     for text in (previous[batch], current[batch]):
         if re.search(r"(?m)^env:", text):
             raise ValueError("Batch environment must remain unset")
-    for job in ("dependency_security", "compile_checks"):
+    for job in ("dependency_security", "compile_checks") + (("tests",) if include_tests else ()):
         def block(text):
             match = re.search(rf"(?ms)^  {job}:\n.*?(?=^  \w+:|\Z)", text)
             if match is None:
@@ -150,6 +187,21 @@ def validate_linux_inputs(previous, current):
 
 def command(*args):
     return subprocess.check_output(args, text=True, timeout=60)
+
+
+def read_run(run_id):
+    if not run_id.isdecimal():
+        raise ValueError("Invalid source run ID")
+    run = json.loads(command("gh", "api", f"repos/{REPO}/actions/runs/{run_id}"))
+    pages = json.loads(command(
+        "gh", "api", "--paginate", "--slurp",
+        f"repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
+    ))
+    source = run["head_sha"]
+    if len(source) != 40 or any(c not in "0123456789abcdef" for c in source):
+        raise ValueError("Invalid source SHA")
+    command("git", "fetch", "--no-tags", "--depth=1", "origin", source)
+    return run, [job for page in pages for job in page["jobs"]], source
 
 
 def validate_test_inputs(previous, current):
@@ -184,24 +236,44 @@ def validate_test_inputs(previous, current):
 
 def main():
     run_id = os.environ.get("RESUME_RUN_ID", "")
+    base_id = os.environ.get("RESUME_BASE_RUN_ID", "")
     if not run_id:
+        if base_id:
+            raise ValueError("A prerequisite run requires a primary resume run")
         return
     if not run_id.isdecimal() or os.environ.get("GITHUB_REPOSITORY") != REPO:
         raise ValueError("Invalid resume run or repository")
     if os.environ.get("COVERAGE") != "false":
         raise ValueError("Coverage batches cannot reuse package-test gates")
-    run = json.loads(command("gh", "api", f"repos/{REPO}/actions/runs/{run_id}"))
-    pages = json.loads(command(
-        "gh", "api", "--paginate", "--slurp",
-        f"repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
-    ))
-    jobs = [job for page in pages for job in page["jobs"]]
-    source = run["head_sha"]
-    if len(source) != 40 or any(c not in "0123456789abcdef" for c in source):
-        raise ValueError("Invalid source SHA")
-    command("git", "fetch", "--no-tags", "--depth=1", "origin", source)
+    run, jobs, source = read_run(run_id)
     changed = command("git", "diff", "--name-only", source, "HEAD").splitlines()
-    mode = validate(run, jobs, changed)
+    extra_evidence = ""
+    if base_id:
+        validate_tail(run, jobs, changed)
+        base_run, base_jobs, base_source = read_run(base_id)
+        inherited_changes = command("git", "diff", "--name-only", base_source, source).splitlines()
+        if validate(base_run, base_jobs, inherited_changes) != "linux":
+            raise ValueError("Tail prerequisite must prove the inherited Linux/security gates")
+        paths = (".github/workflows/pr-check.yml", ".github/workflows/ci-batch.yml",
+                 ".github/actions/prepare_environment/action.yml")
+        validate_linux_inputs(
+            {path: command("git", "show", f"{base_source}:{path}") for path in paths},
+            {path: command("git", "show", f"{source}:{path}") for path in paths},
+        )
+        validate_linux_inputs(
+            {path: command("git", "show", f"{source}:{path}") for path in paths},
+            {path: Path(path).read_text() for path in paths}, include_tests=True,
+        )
+        output_name = "reuse_pre_sftp_checks"
+        evidence = "macOS compile/native and package/doc-test"
+        remaining = "live SFTP and the previously unexecuted artifact stages"
+        extra_evidence = (
+            f" Inherited Linux/security gates independently verified from "
+            f"[run {base_id}](https://github.com/{REPO}/actions/runs/{base_id}) at `{base_source}`."
+        )
+        mode = "tail"
+    else:
+        mode = validate(run, jobs, changed)
     if mode == "linux":
         paths = (".github/workflows/pr-check.yml", ".github/workflows/ci-batch.yml",
                  ".github/actions/prepare_environment/action.yml")
@@ -212,7 +284,7 @@ def main():
         output_name = "reuse_linux_checks"
         evidence = "dependency-security and Linux compile/keymap"
         remaining = "macOS checks and the previously unexecuted downstream stages"
-    else:
+    elif mode == "package":
         workflow = ".github/workflows/test-dispatch.yml"
         validate_test_inputs(command("git", "show", f"{source}:{workflow}"), Path(workflow).read_text())
         output_name = "reuse_checks"
@@ -225,7 +297,7 @@ def main():
             f"Reusing passed {evidence} gates from "
             f"[run {run_id}](https://github.com/{REPO}/actions/runs/{run_id}) "
             f"at `{source}`. App and passed-gate inputs are unchanged. "
-            f"Running only {remaining}.\n"
+            f"Running only {remaining}.{extra_evidence}\n"
         )
 
 

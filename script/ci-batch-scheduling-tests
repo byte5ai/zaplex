@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Check actual batch conditions, including Actions' implicit success() rule."""
+
+import copy
+from pathlib import Path
+import re
+import runpy
+from types import SimpleNamespace
+import unittest
+
+
+ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW = ROOT / ".github/workflows/ci-batch.yml"
+validate = runpy.run_path(str(ROOT / "script/ci-batch-completion"))["validate"]
+JOBS = ("preflight", "dependency_security", "compile_checks", "tests", "live_sftp",
+        "test_dmg", "remote_server")
+
+
+def condition(job, needs, *, cancelled=False, inherited_success=True, artifact="test-dmg"):
+    block = re.search(rf"(?ms)^  {job}:\n.*?(?=^  \w+:|\Z)", WORKFLOW.read_text()).group()
+    match = re.search(r"(?m)^    if: (.*)\n((?:^      .*\n)*)", block)
+    if match is None:
+        expression = "success()"
+    else:
+        expression = match[2].strip() if match[1] == ">" else match[1]
+    # Actions injects success() unless an explicit status function is present.
+    # This is the behavior responsible for the skipped SFTP regression.
+    if not re.search(r"\b(?:always|success|failure|cancelled)\(\)", expression):
+        expression = f"success() && ({expression})"
+    expression = re.sub(r"!(?!=)", " not ", expression).replace("&&", " and ").replace("||", " or ")
+    expression = " ".join(expression.split())
+    def namespace(value):
+        return SimpleNamespace(**{key: namespace(item) if isinstance(item, dict) else item
+                                  for key, item in value.items()})
+    return eval(expression, {"__builtins__": {}}, {
+        "needs": namespace(needs), "inputs": SimpleNamespace(artifacts=artifact),
+        "cancelled": lambda: cancelled, "success": lambda: inherited_success and not cancelled,
+        "failure": lambda: not inherited_success and not cancelled, "always": lambda: True,
+    })
+
+
+def state(mode="normal", artifact="test-dmg"):
+    needs = {job: {"result": "success"} for job in JOBS}
+    needs["preflight"]["outputs"] = {
+        "reuse_checks": "true" if mode == "package" else "",
+        "reuse_linux_checks": "true" if mode == "linux" else "",
+        "reuse_pre_sftp_checks": "true" if mode == "tail" else "",
+    }
+    skipped = {
+        "normal": [], "linux": ["dependency_security"],
+        "package": ["dependency_security", "compile_checks", "live_sftp"],
+        "tail": ["dependency_security", "compile_checks", "tests"],
+    }[mode]
+    for job in skipped:
+        needs[job]["result"] = "skipped"
+    for job, selection in (("test_dmg", "test-dmg"), ("remote_server", "remote-server")):
+        needs[job]["result"] = "success" if artifact == selection else "skipped"
+    return needs
+
+
+class SchedulingTests(unittest.TestCase):
+    def test_each_mode_runs_every_unproven_gate(self):
+        expected = {
+            "normal": (True, True, True, True), "linux": (False, True, True, True),
+            "package": (False, False, True, False), "tail": (False, False, False, True),
+        }
+        for mode, outcomes in expected.items():
+            for job, outcome in zip(JOBS[1:5], outcomes):
+                with self.subTest(mode=mode, job=job):
+                    self.assertEqual(condition(job, state(mode), inherited_success=mode == "normal"), outcome)
+
+    def test_artifacts_run_after_success_despite_inherited_skips(self):
+        for mode in ("normal", "linux", "package", "tail"):
+            for artifact in ("none", "test-dmg", "remote-server"):
+                for job, selection in (("test_dmg", "test-dmg"), ("remote_server", "remote-server")):
+                    with self.subTest(mode=mode, artifact=artifact, job=job):
+                        self.assertEqual(condition(job, state(mode, artifact),
+                                                  inherited_success=mode == "normal", artifact=artifact),
+                                         artifact == selection)
+
+    def test_preflight_failure_and_cancellation_block_execution(self):
+        for mode in ("normal", "linux", "package", "tail"):
+            for job in JOBS[1:]:
+                needs = state(mode)
+                needs["preflight"]["result"] = "failure"
+                with self.subTest(mode=mode, job=job):
+                    self.assertFalse(condition(job, needs, inherited_success=False))
+                    self.assertFalse(condition(job, state(mode), cancelled=True))
+
+    def test_failed_compile_never_starts_sftp_or_tests(self):
+        for mode in ("normal", "linux"):
+            for result in ("failure", "skipped", "cancelled"):
+                needs = state(mode)
+                needs["compile_checks"]["result"] = result
+                for job in ("live_sftp", "tests"):
+                    with self.subTest(mode=mode, result=result, job=job):
+                        self.assertFalse(condition(job, needs, inherited_success=False))
+
+    def test_missing_sftp_blocks_artifacts(self):
+        for mode in ("normal", "linux", "tail"):
+            needs = state(mode)
+            needs["live_sftp"]["result"] = "skipped"
+            self.assertFalse(condition("test_dmg", needs, inherited_success=False))
+
+    def test_completion_requires_all_selected_stages(self):
+        for mode in ("normal", "linux", "package", "tail"):
+            for artifact in ("none", "test-dmg", "remote-server"):
+                needs = state(mode, artifact)
+                validate(needs, artifact)
+                for job in JOBS:
+                    if needs[job]["result"] != "success":
+                        continue
+                    for result in ("failure", "skipped", "cancelled"):
+                        changed = copy.deepcopy(needs)
+                        changed[job]["result"] = result
+                        with self.subTest(mode=mode, artifact=artifact, job=job, result=result), self.assertRaises(ValueError):
+                            validate(changed, artifact)
+
+    def test_reused_failure_is_not_success(self):
+        for mode, job in (("package", "compile_checks"), ("linux", "dependency_security"), ("tail", "tests")):
+            needs = state(mode)
+            needs[job]["result"] = "failure"
+            with self.assertRaises(ValueError):
+                validate(needs, "test-dmg")
+
+    def test_completion_runs_even_after_failed_or_skipped_dependencies(self):
+        text = WORKFLOW.read_text()
+        block = re.search(r"(?ms)^  completion:\n.*", text).group()
+        dependencies = re.search(r"    needs: \[(.*)\]", block)[1].replace(" ", "").split(",")
+        self.assertEqual(set(dependencies), set(JOBS))
+        self.assertTrue(condition("completion", state("tail"), inherited_success=False, cancelled=True))
+
+
+if __name__ == "__main__":
+    unittest.main()
