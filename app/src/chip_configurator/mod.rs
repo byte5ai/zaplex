@@ -44,14 +44,13 @@ pub enum ConfigurableItem {
 }
 
 impl ConfigurableItem {
-    pub fn from_toolbar_item(kind: AgentToolbarItemKind, appearance: &Appearance) -> Option<Self> {
+    pub fn from_toolbar_item(kind: AgentToolbarItemKind) -> Option<Self> {
         match kind {
             AgentToolbarItemKind::ContextChip(chip_kind) => {
                 ContextChipRenderer::default_from_kind_with_agent_view(
                     chip_kind,
                     ChipAvailability::Enabled,
                     true,
-                    appearance,
                 )
                 .map(Box::new)
                 .map(Self::ContextChip)
@@ -388,16 +387,15 @@ impl ChipConfigurator {
         left_items: Vec<AgentToolbarItemKind>,
         right_items: Vec<AgentToolbarItemKind>,
         available: Vec<AgentToolbarItemKind>,
-        appearance: &Appearance,
     ) {
         self.reset();
         self.left_chips = left_items
             .iter()
-            .filter_map(|kind| ConfigurableItem::from_toolbar_item(kind.clone(), appearance))
+            .filter_map(|kind| ConfigurableItem::from_toolbar_item(kind.clone()))
             .collect();
         self.right_chips = right_items
             .iter()
-            .filter_map(|kind| ConfigurableItem::from_toolbar_item(kind.clone(), appearance))
+            .filter_map(|kind| ConfigurableItem::from_toolbar_item(kind.clone()))
             .collect();
         let used_set: Vec<_> = left_items
             .iter()
@@ -408,7 +406,7 @@ impl ChipConfigurator {
             .into_iter()
             .filter_map(|kind| {
                 (!used_set.contains(&kind))
-                    .then(|| ConfigurableItem::from_toolbar_item(kind, appearance))
+                    .then(|| ConfigurableItem::from_toolbar_item(kind))
                     .flatten()
             })
             .collect();

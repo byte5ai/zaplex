@@ -1123,7 +1123,7 @@ impl SettingsView {
         // settings entries.
         let mut nav_items = vec![
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Agents",
+                crate::t_static!("settings-ai-agents-header"),
                 SettingsSection::ai_subpages().to_vec(),
             )),
             SettingsNavItem::Page(SettingsSection::Code),

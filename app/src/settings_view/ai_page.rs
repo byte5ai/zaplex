@@ -118,7 +118,7 @@ use crate::server::telemetry::{
 use crate::ui_components::icons::Icon;
 use crate::view_components::dropdown::DropdownAction;
 use crate::{
-    appearance::Appearance,
+    appearance::{Appearance, AppearanceEvent},
     editor::Event as EditorEvent,
     editor::{EditorView, TextOptions},
     settings::{AISettings, VoiceInputToggleKey},
@@ -560,37 +560,8 @@ impl AISettingsPageView {
             }
         });
 
-        let autodetection_denylist_editor = ctx.add_typed_action_view(|ctx| {
-            let appearance = Appearance::as_ref(ctx);
-            let options = EditorOptions {
-                autogrow: true,
-                soft_wrap: true,
-                text: TextOptions {
-                    font_size_override: Some(appearance.ui_font_size()),
-                    font_family_override: Some(appearance.monospace_font_family()),
-                    text_colors_override: Some(TextColors {
-                        default_color: appearance.theme().active_ui_text_color(),
-                        disabled_color: appearance.theme().disabled_ui_text_color(),
-                        hint_color: appearance.theme().disabled_ui_text_color(),
-                    }),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut editor = EditorView::new(options, ctx);
-
-            editor.set_placeholder_text(
-                crate::t!("settings-ai-commands-comma-separated-placeholder"),
-                ctx,
-            );
-
-            let current_value = AISettings::as_ref(ctx)
-                .autodetection_command_denylist
-                .value()
-                .clone();
-            editor.set_buffer_text(current_value.as_str(), ctx);
-            editor
-        });
+        let autodetection_denylist_editor =
+            ctx.add_typed_action_view(new_autodetection_denylist_editor);
         Self::update_editor_interaction_state(
             autodetection_denylist_editor.clone(),
             is_any_ai_enabled,
@@ -2895,6 +2866,52 @@ impl SettingsPageMeta for AISettingsPageView {
 impl From<ViewHandle<AISettingsPageView>> for SettingsPageViewHandle {
     fn from(view_handle: ViewHandle<AISettingsPageView>) -> Self {
         SettingsPageViewHandle::AI(view_handle)
+    }
+}
+
+fn new_autodetection_denylist_editor(ctx: &mut ViewContext<EditorView>) -> EditorView {
+    ctx.subscribe_to_model(
+        &Appearance::handle(ctx),
+        |editor: &mut EditorView, _, event, ctx| {
+            if let AppearanceEvent::ThemeChanged = event {
+                let colors = autodetection_denylist_text_colors(Appearance::as_ref(ctx));
+                editor.set_text_colors(colors, ctx);
+            }
+        },
+    );
+    let appearance = Appearance::as_ref(ctx);
+    let options = EditorOptions {
+        autogrow: true,
+        soft_wrap: true,
+        text: TextOptions {
+            font_size_override: Some(appearance.ui_font_size()),
+            font_family_override: Some(appearance.monospace_font_family()),
+            text_colors_override: Some(autodetection_denylist_text_colors(appearance)),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut editor = EditorView::new(options, ctx);
+
+    editor.set_placeholder_text(
+        crate::t!("settings-ai-commands-comma-separated-placeholder"),
+        ctx,
+    );
+
+    let current_value = AISettings::as_ref(ctx)
+        .autodetection_command_denylist
+        .value()
+        .clone();
+    editor.set_buffer_text(current_value.as_str(), ctx);
+    editor
+}
+
+fn autodetection_denylist_text_colors(appearance: &Appearance) -> TextColors {
+    let theme = appearance.theme();
+    TextColors {
+        default_color: theme.active_ui_text_color(),
+        disabled_color: theme.disabled_ui_text_color(),
+        hint_color: theme.disabled_ui_text_color(),
     }
 }
 
@@ -6062,3 +6079,7 @@ mod styles {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "ai_page_tests.rs"]
+mod tests;

@@ -194,6 +194,34 @@ Diese Befunde stehen einer pauschalen Settings-Freigabe entgegen. Sprachaufnahme
 Netzaktionen, reale Konten, Bewegungsbelege und die übrigen Matrixvarianten
 wurden hier nicht geprüft. Die Bilder belegen abgetastete Zustände.
 
+## Ergänzung: dunkle Favoriten, Tab-Join und englische Light-Texte
+
+[Exploration 40137786358](https://github.com/byte5ai/zaplex/actions/runs/40137786358)
+verwendet dasselbe unveränderte 1.2.36-DMG, mit Bedienrevision
+`3ff222a98f386dd4d660a5d264cdb807495a47e4`. Die 16 bestandenen Pflichtfälle
+werden nur anhand ihrer Herkunft geprüft. Alle 42 neuen Originalbilder sind
+einzeln betrachtet und bytegenau gegen Artefakt `12577909106` verglichen;
+ZIP-SHA256 `e74b3cd1458eb804c53757d144918f97dd5962476f4e258c0be727022ba98614`.
+Das [Manifest](evidence/candidate-136-native/exploration-40137786358.json)
+erfasst Fensterrechteck, Theme, Einzelhash und tatsächliche Beobachtung.
+Die Sitzung wurde ausdrücklich vor Zeitablauf beendet; der Workflow besteht.
+
+| Prüfung | Ergebnis und Grenze | Bilder |
+|---|---|---|
+| #672 EN/Dark, beide Öffnungsrichtungen | Vollständiger Langnamenhinweis über dem rechten Flyout bei 1024×678 und linken Flyout bei 650×678; je zwei stationäre Aufnahmen. Ein Escape schließt rechts nur das Untermenü; links führt Bearbeiten zum bestehenden Host-Editor. | 12–18, [links](evidence/candidate-136-native/16-dark-left-tooltip.png) |
+| Tab-Drag nach Mindestgrößenkorrektur #685 | Zweiter Tab an rechten Rand des ersten gezogen: zwei Panes, Quelltab entfällt, Quellpane fokussiert. Frische Ausgaben in beiden Panes bewahren PID, nicht exportierten Marker und CWD: `1272 / TAB136 / /tmp` und `2637 / SECOND136 / /Users`. | 21–29, [frische Nachweise](evidence/candidate-136-native/29-joined-left-output.png) |
+| #688 EN/Light bei normaler Größe | Vollständige Sprachhilfe samt Wispr-Link, Restore default, Left side/Right side und alle drei Denkmoduswerte sind lesbar. Die Überschrift Voice Input liegt im unteren Ausschnitt teilweise oberhalb des Viewports; sie ist im vorherigen Ausschnitt sichtbar. | 34–39 |
+| Zusätzlicher Fehler #704 | Nach Dark→Light sind Platzhalter und der eingegebene Wert `draft-zaplex136` in der Natural-language-denylist nahezu weiß auf weiß. Quellprüfung bestätigt einmalig gespeicherte Editorfarben. Der bereits bekannte Chip-Fehler #702 ist auch in EN/Light sichtbar. | 30, 33–38, [Eingabe](evidence/candidate-136-native/36-light-denylist-draft.png) |
+| Shellrückkehr | Nach Settings/Light bleibt die ursprüngliche linke Shell mit frischer Ausgabe `1272 / TAB136 / /tmp` erhalten; die zweite Pane bleibt bestehen. | 40–41 |
+
+Die bislang fehlende Kombination EN/Dark der Favoritenhinweise und die
+konkret korrigierten englischen Light-Texte aus #688 sind damit ergänzt.
+Tab-Join besteht als gezielte Regression des Mindestgrößenpatches; daraus
+folgt keine Abnahme sämtlicher Drag-/Fenstertransfer-Varianten. Stills belegen
+keinen kontinuierlichen Bewegungsverlauf. #701/#702/#704 benötigen für ihre
+anschließenden Korrekturen einen neuen App-Kandidaten; diese alten Bilder
+bestätigen ausschließlich die beschriebenen Befunde auf 1.2.36.
+
 ## Native Render-Fixtures
 
 Alle 44 erzeugten Original-PNGs wurden einzeln betrachtet: 41 Workspace- und

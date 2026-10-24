@@ -228,11 +228,7 @@ impl EditorModal {
         }
     }
 
-    fn chip_renderer_for_kind(
-        &self,
-        kind: ContextChipKind,
-        appearance: &Appearance,
-    ) -> Option<ContextChipRenderer> {
+    fn chip_renderer_for_kind(&self, kind: ContextChipKind) -> Option<ContextChipRenderer> {
         let availability = kind
             .to_chip()
             .map(|chip| chip.availability(&self.chip_runtime_capabilities))
@@ -241,20 +237,19 @@ impl EditorModal {
             return None;
         }
 
-        ContextChipRenderer::default_from_kind(kind, availability, appearance)
+        ContextChipRenderer::default_from_kind(kind, availability)
     }
 
-    fn update_used_chips(&mut self, used_chips: Vec<ContextChipKind>, ctx: &mut ViewContext<Self>) {
-        let appearance = Appearance::as_ref(ctx);
+    fn update_used_chips(&mut self, used_chips: Vec<ContextChipKind>) {
         let unused_chips = available_chips()
             .into_iter()
             .filter(|kind| !used_chips.contains(kind))
-            .filter_map(|kind| self.chip_renderer_for_kind(kind, appearance))
+            .filter_map(|kind| self.chip_renderer_for_kind(kind))
             .collect::<Vec<_>>();
 
         let used_chips = used_chips
             .into_iter()
-            .filter_map(|kind| self.chip_renderer_for_kind(kind, appearance))
+            .filter_map(|kind| self.chip_renderer_for_kind(kind))
             .collect::<Vec<_>>();
         self.chip_configurator
             .open_single_zone_with_renderers(used_chips, unused_chips);
@@ -274,7 +269,7 @@ impl EditorModal {
         self.chip_runtime_capabilities = chip_runtime_capabilities;
 
         let used_chips = Prompt::as_ref(ctx).chip_kinds();
-        self.update_used_chips(used_chips, ctx);
+        self.update_used_chips(used_chips);
 
         self.prompt_type = PromptType::from_settings(ctx);
         self.same_line_prompt_enabled = SessionSettings::as_ref(ctx)
@@ -424,7 +419,7 @@ impl TypedActionView for EditorModal {
                 // Disable the Zaplex separator dropdown, since SLP is off for the default Zaplex prompt.
                 self.update_warp_separator_dropdown_state(ctx);
                 let restored_chips = default_prompt.chip_kinds();
-                self.update_used_chips(restored_chips, ctx);
+                self.update_used_chips(restored_chips);
                 ctx.notify();
             }
             Self::Action::ToggleSameLinePrompt => {

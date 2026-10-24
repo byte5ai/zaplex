@@ -1151,6 +1151,8 @@ chip-editor-left-side = Left side
 chip-editor-right-side = Right side
 settings-ai-voice-key = Key for Activating Voice Input
 settings-ai-voice-key-hint = Press and hold to activate.
+settings-ai-voice-key-left = { $key } (Left)
+settings-ai-voice-key-right = { $key } (Right)
 
 # Other section
 settings-ai-show-use-agent-footer = Show "Use Agent" footer

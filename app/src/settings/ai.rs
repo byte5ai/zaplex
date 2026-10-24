@@ -166,34 +166,28 @@ impl VoiceInputToggleKey {
     }
 
     /// Display name for choosing key from the AI settings page.
-    pub fn display_name(&self) -> &'static str {
-        // We use the underlying host OS to determine the correct key name to display.
-        let (super_key_name, alt_key_name): (&'static str, &'static str) =
-            match OperatingSystem::get() {
-                OperatingSystem::Mac => ("Command", "Option"),
-                OperatingSystem::Windows => ("Windows", "Alt"),
-                OperatingSystem::Linux | OperatingSystem::Other(_) => ("Super", "Alt"),
-            };
-
-        match self {
-            VoiceInputToggleKey::None => "None",
-            VoiceInputToggleKey::Fn => "Fn",
-            VoiceInputToggleKey::AltLeft => {
-                Box::leak(format!("{alt_key_name} (Left)").into_boxed_str())
-            }
-            VoiceInputToggleKey::AltRight => {
-                Box::leak(format!("{alt_key_name} (Right)").into_boxed_str())
-            }
-            VoiceInputToggleKey::ControlLeft => "Control (Left)",
-            VoiceInputToggleKey::ControlRight => "Control (Right)",
-            VoiceInputToggleKey::SuperLeft => {
-                Box::leak(format!("{super_key_name} (Left)").into_boxed_str())
-            }
-            VoiceInputToggleKey::SuperRight => {
-                Box::leak(format!("{super_key_name} (Right)").into_boxed_str())
-            }
-            VoiceInputToggleKey::ShiftLeft => "Shift (Left)",
-            VoiceInputToggleKey::ShiftRight => "Shift (Right)",
+    pub fn display_name(&self) -> String {
+        let (super_key_name, alt_key_name) = match OperatingSystem::get() {
+            OperatingSystem::Mac => ("Command", "Option"),
+            OperatingSystem::Windows => ("Windows", "Alt"),
+            OperatingSystem::Linux | OperatingSystem::Other(_) => ("Super", "Alt"),
+        };
+        let (key, is_left) = match self {
+            Self::None => return crate::t!("common-none"),
+            Self::Fn => return "Fn".to_string(),
+            Self::AltLeft => (alt_key_name, true),
+            Self::AltRight => (alt_key_name, false),
+            Self::ControlLeft => ("Control", true),
+            Self::ControlRight => ("Control", false),
+            Self::SuperLeft => (super_key_name, true),
+            Self::SuperRight => (super_key_name, false),
+            Self::ShiftLeft => ("Shift", true),
+            Self::ShiftRight => ("Shift", false),
+        };
+        if is_left {
+            crate::t!("settings-ai-voice-key-left", key = key)
+        } else {
+            crate::t!("settings-ai-voice-key-right", key = key)
         }
     }
 

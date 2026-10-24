@@ -1,0 +1,767 @@
+{
+  "run_id": 40137786358,
+  "app_source_sha": "5a35b11e2445f20b9e47b167252a63238ed6a20d",
+  "harness_source_sha": "3ff222a98f386dd4d660a5d264cdb807495a47e4",
+  "dmg_sha256": "98c623e3b58488ac586f590fa6350a790125c08ce45e6b1f23485db961c55039",
+  "artifact_id": 12577909106,
+  "zip_sha256": "e74b3cd1458eb804c53757d144918f97dd5962476f4e258c0be727022ba98614",
+  "explicitly_finished": true,
+  "images": [
+    {
+      "file": "01-initial.png",
+      "artifact_path": "operator/01-initial.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "EN/Dark initial window, no host configured."
+    },
+    {
+      "file": "02-baseline-input.png",
+      "artifact_path": "operator/02-baseline-input.png",
+      "sha256": "d34e7e4eb7267d0aa83d70ce8a1aac5d7014e6f3e8470b1cde5991dfbda14947",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Original shell baseline command visible before submission."
+    },
+    {
+      "file": "03-baseline.png",
+      "artifact_path": "operator/03-baseline.png",
+      "sha256": "31b744f71880278d822c83bd2e5d547fa0eb1b68218918aef0c73dac33c878cd",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Unchanged input after rejected non-foreground Return; no mutation, no output yet."
+    },
+    {
+      "file": "04-baseline-output.png",
+      "artifact_path": "operator/04-baseline-output.png",
+      "sha256": "71b18e3065ab97bc7a8ebc9d82d9b911cbeb86bf10358d2213f15399054e3cb5",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh baseline PID1272, unexported TAB136, cwd /tmp."
+    },
+    {
+      "file": "05-connections.png",
+      "artifact_path": "operator/05-connections.png",
+      "sha256": "b80ea7519b85baa526ebfea1a77049fdc238c6907ce51ede082490b95f852751",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Empty Connections sidebar."
+    },
+    {
+      "file": "06-new-host.png",
+      "artifact_path": "operator/06-new-host.png",
+      "sha256": "f47736c529ab62de3773b70809351132b8e1c32474c1a4c2863ea42412b54254",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Add-host menu."
+    },
+    {
+      "file": "07-host-editor.png",
+      "artifact_path": "operator/07-host-editor.png",
+      "sha256": "79772ce2ef1c3188bd2d4e1c7f2a3e9ed42a8fda435551c474de96163c560d47",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "New host editor beside original shell."
+    },
+    {
+      "file": "08-host-draft.png",
+      "artifact_path": "operator/08-host-draft.png",
+      "sha256": "b201afa43e7ac2eaab01d0105ee7e55b17b9f0c141026332a4a5ec0fb916603b",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Initial long-name/loopback draft; removed hotkey syntax was rejected, explicit selection corrected next."
+    },
+    {
+      "file": "09-corrected-host-draft.png",
+      "artifact_path": "operator/09-corrected-host-draft.png",
+      "sha256": "0c3c5bfc29547e9ee7981c212f4a54ca0a8662f45b0136318766f033080b6171",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Corrected long name, loopback host and port1 draft."
+    },
+    {
+      "file": "10-favorite-menu.png",
+      "artifact_path": "operator/10-favorite-menu.png",
+      "sha256": "4a7093719eba51aa6de21e55d7ef1e6225cb768300e251bcf00b5abafd98baf0",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Saved host is favorite; launch menu visible."
+    },
+    {
+      "file": "11-dark-right-flyout.png",
+      "artifact_path": "operator/11-dark-right-flyout.png",
+      "sha256": "5f4d4afc54a07b55b19bb1b3d538b4df4adde765dbc54b44db6d9f761eb8f016",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Right-opening action flyout, tooltip not yet visible."
+    },
+    {
+      "file": "12-dark-right-tooltip.png",
+      "artifact_path": "operator/12-dark-right-tooltip.png",
+      "sha256": "0933a4e17fd79c608827972c164667d8f0798af80d1817606d22b6d2662b41fc",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Full long-name tooltip above right-opening flyout, within1024x678."
+    },
+    {
+      "file": "13-dark-right-tooltip-stationary.png",
+      "artifact_path": "operator/13-dark-right-tooltip-stationary.png",
+      "sha256": "0933a4e17fd79c608827972c164667d8f0798af80d1817606d22b6d2662b41fc",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Second stationary observation of same full tooltip and right flyout."
+    },
+    {
+      "file": "14-dark-right-escape.png",
+      "artifact_path": "operator/14-dark-right-escape.png",
+      "sha256": "b4191b962f4bb04d22107186d3697c4122f668e2cff2298ca8d117d5cf7bdc9d",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "One Escape closes submenu; parent favorite menu remains."
+    },
+    {
+      "file": "15-narrow-menu.png",
+      "artifact_path": "operator/15-narrow-menu.png",
+      "sha256": "a38bf30643d2208e946a84c01d89834abd9aab098059522555f64c82d9aa6580",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "observation": "650x678 narrow launch menu."
+    },
+    {
+      "file": "16-dark-left-tooltip.png",
+      "artifact_path": "operator/16-dark-left-tooltip.png",
+      "sha256": "e38eb3ca7cb74c2972bfd4e432f2612b0fef611fb44a2b5b10b5e3df8bd3fc2b",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "observation": "Full long-name tooltip above left-opening flyout, within650x678."
+    },
+    {
+      "file": "17-dark-left-tooltip-stationary.png",
+      "artifact_path": "operator/17-dark-left-tooltip-stationary.png",
+      "sha256": "e38eb3ca7cb74c2972bfd4e432f2612b0fef611fb44a2b5b10b5e3df8bd3fc2b",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "observation": "Second stationary observation of same full tooltip and left flyout."
+    },
+    {
+      "file": "18-edit-from-flyout.png",
+      "artifact_path": "operator/18-edit-from-flyout.png",
+      "sha256": "9d280e661f1015b09761a5dc27a9f62b163ce75b1fe05e8fa0d4160e544f7581",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "observation": "Edit action returns to existing host editor, unchanged saved values."
+    },
+    {
+      "file": "19-host-header.png",
+      "artifact_path": "operator/19-host-header.png",
+      "sha256": "e4ce5c3b3a00b313bb55910dd2503526f3ae987b2448862b089afa7ccfcec0eb",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Restored1024x678; hover exposes host-pane close button."
+    },
+    {
+      "file": "20-original-shell.png",
+      "artifact_path": "operator/20-original-shell.png",
+      "sha256": "eb40f6cf4ab49dc2643bd0df4fdf5c2045713e52483195c9758ad8c431918816",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Host editor closed, original shell retained."
+    },
+    {
+      "file": "21-second-tab.png",
+      "artifact_path": "operator/21-second-tab.png",
+      "sha256": "941d310698221070d814e2acfa2127d4bfc7c7126f3026b2b4ab2430c722c377",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Second terminal tab created."
+    },
+    {
+      "file": "22-second-input.png",
+      "artifact_path": "operator/22-second-input.png",
+      "sha256": "6f89b0a7580cb6378feb4b06f7d993b1f1a7616e418e0abb866081f3d64801ef",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Second shell baseline command visible before submission."
+    },
+    {
+      "file": "23-second-output.png",
+      "artifact_path": "operator/23-second-output.png",
+      "sha256": "b5deb3b79b7cdde111131bd242281fb3b3893b242cee9515e0fc1ff5182fdb90",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh second baseline PID2637, unexported SECOND136, cwd /Users."
+    },
+    {
+      "file": "24-tab-drag-target.png",
+      "artifact_path": "operator/24-tab-drag-target.png",
+      "sha256": "baeeab269dedca3e6471a4b7e25249fb1b5014a01d255c49bca536338cf99e94",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Original tab selected as drag destination, both tabs visible."
+    },
+    {
+      "file": "25-tab-joined.png",
+      "artifact_path": "operator/25-tab-joined.png",
+      "sha256": "d249e82e6b925734ec78aab47890e4478a4a10972d79df24ec800a72886c1c53",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Second tab dragged to right edge: one tab, two panes, source pane focused."
+    },
+    {
+      "file": "26-joined-right-input.png",
+      "artifact_path": "operator/26-joined-right-input.png",
+      "sha256": "d63b75e1aa4bd149a2b52187f7d8fd2d58900119ef13b834a1e3a686b6fb7691",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh right-shell verification input."
+    },
+    {
+      "file": "27-joined-right-output.png",
+      "artifact_path": "operator/27-joined-right-output.png",
+      "sha256": "dd7929c1723805aa41a01fa4679f484ea45f3de07f763ec8b5a4f01c963777ed",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Right-shell fresh output retains PID2637,SECOND136,/Users."
+    },
+    {
+      "file": "28-joined-left-input.png",
+      "artifact_path": "operator/28-joined-left-input.png",
+      "sha256": "a29dea6f9ebc60e98dc1bfebd94ab464929c52fb7032c0b1cf2aa3820a86fc58",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh left-shell verification input after explicit header move/click."
+    },
+    {
+      "file": "29-joined-left-output.png",
+      "artifact_path": "operator/29-joined-left-output.png",
+      "sha256": "71ad5d6009497bb07d60b3a1746fa61311427f87918bff34deb0f77b9048d627",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Left-shell fresh output retains PID1272,TAB136,/tmp; right proof visible."
+    },
+    {
+      "file": "30-settings.png",
+      "artifact_path": "operator/30-settings.png",
+      "sha256": "5b2875818963bb494cced5796f64e261bc3ca01ebc6ecf64a8b8f9a1c22b1bcb",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "EN/Dark Agent settings top, denylist placeholder readable."
+    },
+    {
+      "file": "31-appearance.png",
+      "artifact_path": "operator/31-appearance.png",
+      "sha256": "811192b56d62f0faea788da62c83ba1ab2f25494927c407a0b6810db77a9e1db",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Appearance before theme change."
+    },
+    {
+      "file": "32-theme-picker.png",
+      "artifact_path": "operator/32-theme-picker.png",
+      "sha256": "7ae0d0799d96d8259f1419e05c43b9e26145eb2c4495eb5beddba76cec466f34",
+      "locale": "en",
+      "theme": "Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Theme picker filtered to Light."
+    },
+    {
+      "file": "33-light-agent-top.png",
+      "artifact_path": "operator/33-light-agent-top.png",
+      "sha256": "14156e86dd84b7794b82947eb333fd326faea290a65740cbdbae7e5dd80a57c0",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "EN/Light Agent top; denylist placeholder nearly white on white (#704)."
+    },
+    {
+      "file": "34-light-agent-middle.png",
+      "artifact_path": "operator/34-light-agent-middle.png",
+      "sha256": "f017ce57caa97cebe25cd329f2605b6de6095f2c3107eefd9f9efa92fe7967f8",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "EN/Light full voice help/Wispr link, reset/left/right and thinking label; voice heading partly above viewport. Context chips almost white (#702)."
+    },
+    {
+      "file": "35-light-agent-help.png",
+      "artifact_path": "operator/35-light-agent-help.png",
+      "sha256": "7110f65619ae5afea389d8cb2dc55a7fe2a50e80c77763c9c9c7f5356c18b644",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Upper/middle Agent settings; denylist placeholder still almost white."
+    },
+    {
+      "file": "36-light-denylist-draft.png",
+      "artifact_path": "operator/36-light-denylist-draft.png",
+      "sha256": "3be2f40d0e3acd771b250f07ee525ddfebfc0b51998dc046d71883f491c6e770",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Typed draft-zaplex136 almost white in active denylist editor (#704)."
+    },
+    {
+      "file": "37-light-agent-help.png",
+      "artifact_path": "operator/37-light-agent-help.png",
+      "sha256": "3be2f40d0e3acd771b250f07ee525ddfebfc0b51998dc046d71883f491c6e770",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Same editor state after smooth-scroll attempt; no claimed scroll progress."
+    },
+    {
+      "file": "38-light-agent-lower.png",
+      "artifact_path": "operator/38-light-agent-lower.png",
+      "sha256": "f017ce57caa97cebe25cd329f2605b6de6095f2c3107eefd9f9efa92fe7967f8",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Lower Agent settings again, full voice help/reset/left/right texts visible."
+    },
+    {
+      "file": "39-light-thinking-menu.png",
+      "artifact_path": "operator/39-light-thinking-menu.png",
+      "sha256": "270590d0e4dfbcac0124342d1cb64ec99a3669ccdb8532788348187721943643",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "All three English thinking options readable on Light."
+    },
+    {
+      "file": "40-final-input.png",
+      "artifact_path": "operator/40-final-input.png",
+      "sha256": "2e55a157e3325852832a6c2d59e64ac87acb21cbd642597288d34e9360033472",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Settings closed, fresh original-shell final command visible."
+    },
+    {
+      "file": "41-final-output.png",
+      "artifact_path": "operator/41-final-output.png",
+      "sha256": "761ec09d403319977158ec1e564d2495d923bc4d45b492a1b80c30c63e343461",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh final original-shell PID1272,TAB136,/tmp after Light/settings; two panes retained."
+    },
+    {
+      "file": "42-finish-input.png",
+      "artifact_path": "operator/42-finish-input.png",
+      "sha256": "4d81a411307d8db724f4100916072a62a4f07241c0b0226b353e8dd3935e1577",
+      "locale": "en",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Explicit session-finish command inspected before one Return."
+    }
+  ]
+}

@@ -56,7 +56,7 @@ pub struct Renderer {
     kind: ContextChipKind,
     chip: ContextChip,
     value: ChipValue,
-    styles: RendererStyles,
+    is_in_agent_view: bool,
     draggable_state: DraggableState,
     tooltip_state_handle: MouseStateHandle,
     remove_button_state_handle: MouseStateHandle,
@@ -69,7 +69,7 @@ impl Renderer {
         kind: ContextChipKind,
         chip: ContextChip,
         value: ChipValue,
-        styles: RendererStyles,
+        is_in_agent_view: bool,
         availability: ChipAvailability,
     ) -> Self {
         let is_disabled = !availability.is_enabled();
@@ -78,7 +78,7 @@ impl Renderer {
             kind,
             chip,
             value,
-            styles,
+            is_in_agent_view,
             draggable_state: Default::default(),
             tooltip_state_handle: Default::default(),
             remove_button_state_handle: Default::default(),
@@ -90,25 +90,22 @@ impl Renderer {
     pub fn default_from_kind(
         chip_kind: ContextChipKind,
         availability: ChipAvailability,
-        appearance: &Appearance,
     ) -> Option<Self> {
-        Self::default_from_kind_with_agent_view(chip_kind, availability, false, appearance)
+        Self::default_from_kind_with_agent_view(chip_kind, availability, false)
     }
 
     pub fn default_from_kind_with_agent_view(
         chip_kind: ContextChipKind,
         availability: ChipAvailability,
         is_in_agent_view: bool,
-        appearance: &Appearance,
     ) -> Option<Self> {
         let chip = chip_kind.to_chip()?;
         let placeholder_value = chip_kind.placeholder_value();
-        let styles = chip_kind.default_styles(appearance, is_in_agent_view);
         Some(Self::new(
             chip_kind,
             chip,
             placeholder_value,
-            styles,
+            is_in_agent_view,
             availability,
         ))
     }
@@ -153,10 +150,7 @@ impl Renderer {
         remove_button: Option<Box<dyn Element>>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let mut color = self.styles.value_color;
-        if self.is_disabled {
-            color.a = (color.a / 2).max(48);
-        }
+        let color = self.value_color(appearance);
         let font_size = udi_font_size(appearance);
 
         let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
@@ -226,6 +220,17 @@ impl Renderer {
         }
 
         hoverable.finish()
+    }
+
+    fn value_color(&self, appearance: &Appearance) -> ColorU {
+        let mut color = self
+            .kind
+            .default_styles(appearance, self.is_in_agent_view)
+            .value_color;
+        if self.is_disabled {
+            color.a = (color.a / 2).max(48);
+        }
+        color
     }
 
     pub fn render_unused(
