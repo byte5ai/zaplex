@@ -1,7 +1,7 @@
 {
   "run_id": 40073495704,
   "source_sha": "c513867d323ad393a8cdfe951eff37a4a35ddcfc",
-  "scope": "Selected generated native fixture screenshots, not installed DMG acceptance",
+  "scope": "All 44 generated native fixture screenshots individually reviewed; synthetic states do not replace installed DMG exploration",
   "reviewed_images": [
     {
       "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-24T07-23-56/native-file-managers-narrow-light.png",
@@ -50,6 +50,222 @@
       "sha256": "76de1fbee30bc5d8f129c1968a43636914a0942568b1d13855e57d40e429ecd8",
       "locale": "de",
       "observation": "Filter hint readable after theme change; all eight function actions and target selector visible at normal/narrow width, active pane distinguished. No live transfer or editor-focus proof."
+    },
+    {
+      "path": "native-agent/test_subscription_agent_conversation_layout_evidence/2026-10-24T07-23-29/subscription-agent-narrow-540x670.png",
+      "sha256": "c8f3841b905fcfee87378f72fb52db2bb818550cc8587b1f265041a3316ef488",
+      "locale": "en",
+      "observation": "EN/Dark 540x670: ended-session recovery offers New conversation and Back to shell without overlap; explanatory status is ellipsized. No live agent or full tooltip proof."
+    },
+    {
+      "path": "native-agent/test_subscription_agent_conversation_layout_evidence/2026-10-24T07-23-29/subscription-agent-normal-1180x640.png",
+      "sha256": "77521110f812bc26fff4c9bfe29fb07b8a14035b542729dbf26662962af4ccea",
+      "locale": "en",
+      "observation": "EN/Dark 1180x640: waiting-approval metadata and Allow/Allow for session/Deny/Cancel actions visible. Long metadata and request sentence ellipsized; no full-identity or real approval execution proof."
+    },
+    {
+      "path": "native-agent/test_subscription_agent_conversation_layout_evidence/2026-10-24T07-23-29/subscription-agent-recoverable-error-540x670.png",
+      "sha256": "d715f328fe1d61e62eb397848f55b94df005c9b004fe02d79af4e79c8344f126",
+      "locale": "en",
+      "observation": "EN/Dark 540x670: recoverable-error metadata, Resume/New conversation/End, agent/account/model controls and directory entry visible without overlap. Long identity text ellipsized; no tooltip or real recovery proof."
+    },
+    {
+      "path": "native-workspace/test_native_file_manager_header_entry/2026-10-24T07-24-13/file-manager-header-after.png",
+      "sha256": "1f30e90d10f4de1cd10ebc871a06af17bf87945db13a069b93b31b754cc16812",
+      "locale": "en",
+      "observation": "EN/Dark: after own header entry left file manager shows ORIGINAL.txt and sibling-fixture, right retains NEIGHBOR.txt; left focus/accent and all eight actions visible. Synthetic local fixture only."
+    },
+    {
+      "path": "native-workspace/test_native_file_manager_header_entry/2026-10-24T07-24-13/file-manager-header-before.png",
+      "sha256": "b1be25e2411cc560a24e3cb6bebbeaed874e877390c30ad077fcd37c172ac713",
+      "locale": "en",
+      "observation": "EN/Dark: before header entry left is terminal in entry-fixture and right is focused sibling-fixture file manager with NEIGHBOR.txt; all eight actions visible."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-24T07-23-45/native-connections-dark-250.png",
+      "sha256": "fb6e9eb9ff5b8b3689ede26d2444e2ad87d15a7b53deb6f7c81d06cb0898b52c",
+      "locale": "en",
+      "observation": "EN/Dark, sidebar 250: complete registry-host tooltip visible; host action slots and indented synthetic session rows remain separate, recovery metadata wraps. Long session titles truncate; their own tooltip and actual connection are not demonstrated."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-24T07-23-45/native-connections-dark-320.png",
+      "sha256": "8ff111a5a7e5adaf7a9652e4e0b6eedb645dcca31ad561fa02c44d2eebe9028b",
+      "locale": "en",
+      "observation": "EN/Dark, sidebar 320: complete registry-host tooltip visible; host action slots and indented synthetic session rows remain separate, recovery metadata wraps. Long session titles truncate; their own tooltip and actual connection are not demonstrated."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-24T07-23-45/native-connections-dark-480.png",
+      "sha256": "63b9ee916a2b08b0ee4f7552796c3a01e589eaa5421ada0596cb3f15b1fb5419",
+      "locale": "en",
+      "observation": "EN/Dark, sidebar 480: complete registry-host tooltip visible; host action slots and indented synthetic session rows remain separate, recovery metadata wraps. Long session titles truncate; their own tooltip and actual connection are not demonstrated."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-24T07-23-45/native-connections-light-250.png",
+      "sha256": "4f0f178191c3c427eb0f0ca06c93624f14514a1dcd8fe9af99ec3816bb1c1654",
+      "locale": "en",
+      "observation": "EN/Light, sidebar 250: complete registry-host tooltip visible; host action slots and indented synthetic session rows remain separate, recovery metadata wraps. Long session titles truncate; their own tooltip and actual connection are not demonstrated."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-24T07-23-45/native-connections-light-320.png",
+      "sha256": "f83de9b718bc5b664c5c7a8ba5345d46574f6cb4533c32c3695440b4d6ba1c7f",
+      "locale": "en",
+      "observation": "EN/Light, sidebar 320: complete registry-host tooltip visible; host action slots and indented synthetic session rows remain separate, recovery metadata wraps. Long session titles truncate; their own tooltip and actual connection are not demonstrated."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-24T07-23-45/native-connections-light-480.png",
+      "sha256": "05fdbdfb89747193f54f4639d5cc6df2c3a25e50a59ff22230fced1d921266ad",
+      "locale": "en",
+      "observation": "EN/Light, sidebar 480: complete registry-host tooltip visible; host action slots and indented synthetic session rows remain separate, recovery metadata wraps. Long session titles truncate; their own tooltip and actual connection are not demonstrated."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_connections_evidence/2026-10-24T07-23-45/native-favorite-flyout.png",
+      "sha256": "7b983eca686c1dac01041943f118a8ec375ac6232c0612f21ab56eaadcacca40",
+      "locale": "en",
+      "observation": "EN/Light 900px: left-opening favorite flyout shows New agent/Edit/Remove from favorites alongside parent menu; full favorite tooltip is covered by flyout (#672 on 1.2.32). This image does not validate the later 1.2.34 fix."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-24T07-23-49/native-empty-connections-dark-250.png",
+      "sha256": "7bf4ef2f3e71e644935fd0d860cfc5b6ddeac48891f6a531e4fc57f345e346c1",
+      "locale": "en",
+      "observation": "EN/Dark, sidebar 250: complete empty-state guidance names folder and plus controls, wraps without clipping; both toolbar controls visible. No action execution proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-24T07-23-49/native-empty-connections-dark-320.png",
+      "sha256": "2740ea2e1368f3d4acb39e56cb84acd6b9bca1bc9ccfa9e2f8d6c7bd78f03041",
+      "locale": "en",
+      "observation": "EN/Dark, sidebar 320: complete empty-state guidance names folder and plus controls, wraps without clipping; both toolbar controls visible. No action execution proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-24T07-23-49/native-empty-connections-dark-480.png",
+      "sha256": "c9214b9d22a387a0b4d513115992351a55ce92c1635a8792e8c3bd42c14c0501",
+      "locale": "en",
+      "observation": "EN/Dark, sidebar 480: complete empty-state guidance names folder and plus controls, wraps without clipping; both toolbar controls visible. No action execution proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-24T07-23-49/native-empty-connections-light-250.png",
+      "sha256": "242902ff41d4c8f5624a63deddc8f05a21369037e608550f7866288614814de3",
+      "locale": "en",
+      "observation": "EN/Light, sidebar 250: complete empty-state guidance names folder and plus controls, wraps without clipping; both toolbar controls visible. No action execution proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-24T07-23-49/native-empty-connections-light-320.png",
+      "sha256": "e8e61efb491c97a27855276c0cba39e2e2f3f520d39129ff7c68d6f734d06ee8",
+      "locale": "en",
+      "observation": "EN/Light, sidebar 320: complete empty-state guidance names folder and plus controls, wraps without clipping; both toolbar controls visible. No action execution proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-24T07-23-49/native-empty-connections-light-480.png",
+      "sha256": "b774175f4e59a5f757bc8c7828cf644ba175843deaf1c2c91fb7c2c40fd2eedf",
+      "locale": "en",
+      "observation": "EN/Light, sidebar 480: complete empty-state folder/plus guidance wraps without clipping; toolbar controls visible."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-24T07-23-49/native-empty-favorites-dark.png",
+      "sha256": "0f2addb8781ff6970a4005a5f5d60ac3c8a789969c72e441c5dccae49cfb77a8",
+      "locale": "en",
+      "observation": "EN/Dark: empty favorites explanation wraps completely and names the star in the sidebar; parent menu visible. No interaction proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_evidence/2026-10-24T07-23-49/native-empty-favorites-light.png",
+      "sha256": "83a2c2f1f66975d5c2343fb3b9b3b02b064a95e2d445decebc9d29c2e7fc8290",
+      "locale": "en",
+      "observation": "EN/Light: empty favorites explanation wraps completely and names the star in the sidebar; parent menu visible. No interaction proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-24T07-23-52/native-empty-connections-dark-250.png",
+      "sha256": "44fbbc4ef2927b7a6e2ae10d580a793a96f91fe3fc90ff90a2bb86d088548251",
+      "locale": "de",
+      "observation": "DE/Dark, sidebar 250: German empty-state folder/plus guidance fully readable and toolbar visible; terminal entry guidance also German."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-24T07-23-52/native-empty-connections-dark-320.png",
+      "sha256": "81dcd934928c836909611efb290127722d155340d8e806a0719556f89c6e5c6c",
+      "locale": "de",
+      "observation": "DE/Dark, sidebar 320: German empty-state folder/plus guidance fully readable and toolbar visible; terminal entry guidance also German."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-24T07-23-52/native-empty-connections-dark-480.png",
+      "sha256": "9971b27408cc238c50a8061abe4eb05e0c8ff2b0a615ed0da51c216bef0c98ea",
+      "locale": "de",
+      "observation": "DE/Dark, sidebar 480: German empty-state folder/plus guidance fully readable and toolbar visible; terminal entry guidance also German."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-24T07-23-52/native-empty-connections-light-250.png",
+      "sha256": "7a628252670e239f16c2de53f962dcb58f1d337d13f50ef8cacf01992083a510",
+      "locale": "de",
+      "observation": "DE/Light, sidebar 250: German empty-state folder/plus guidance fully readable and toolbar visible; terminal entry guidance also German."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-24T07-23-52/native-empty-connections-light-320.png",
+      "sha256": "627d431ffe8e428a20e787e7048792e4d77ffda28cb4739a8f98593ac1554263",
+      "locale": "de",
+      "observation": "DE/Light, sidebar 320: German empty-state folder/plus guidance fully readable and toolbar visible; terminal entry guidance also German."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-24T07-23-52/native-empty-connections-light-480.png",
+      "sha256": "6a3387deba642fa4af161917de6015b423e44934ab3ad9dc08ef98471ddaf6f1",
+      "locale": "de",
+      "observation": "DE/Light, sidebar 480: German empty-state folder/plus guidance fully readable and toolbar visible; terminal entry guidance also German."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-24T07-23-52/native-empty-favorites-dark.png",
+      "sha256": "c5d40e68dba6de7066e5414202fd2565045c51b6ff0d0595dea4213e60e4ee9d",
+      "locale": "de",
+      "observation": "DE/Dark: complete German empty-favorite guidance wraps in three lines, names sidebar star, parent menu remains visible. No interaction proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_empty_states_german_evidence/2026-10-24T07-23-52/native-empty-favorites-light.png",
+      "sha256": "06a75ad0bca0f879de7976f0bafbca3f141178114d86a2f02cbfc48e58cd9e3d",
+      "locale": "de",
+      "observation": "DE/Light: complete German empty-favorite guidance wraps in three lines, names sidebar star, parent menu remains visible. No interaction proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-24T07-23-56/native-file-manager-focused-action.png",
+      "sha256": "0731236f706e429cd9482e2c193e581d33447b6450d1903485b00ccfd44a36ba",
+      "locale": "en",
+      "observation": "EN/Light 760px: New Folder dialog belongs to left focused file pane; input/Create/Cancel fit within pane, neighbor remains visible and both action strips dimmed. Image alone does not prove input focus (#673)."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-24T07-23-56/native-file-manager-full-name.png",
+      "sha256": "c494f1c06b4aefa44c25911b5f616e6881bdc379b81fb23707abcf3d748ff603",
+      "locale": "en",
+      "observation": "EN/Light 760px: complete long-file tooltip visible in inactive left pane while right pane keeps focus accent and enabled actions. No file operation or full path tooltip proof."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_evidence/2026-10-24T07-23-56/native-file-managers-restored-terminals.png",
+      "sha256": "fb3d393b9d9fb94fd255df79b4a93665a3c8e2ac83dbc6573174dc2e28c9ac4e",
+      "locale": "en",
+      "observation": "EN/Light 760px: both panes restored to terminals, right shows unsubmitted printf file-manager-draft; headers and separate shell content visible. No process identity proof from this image."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-24T07-24-01/native-file-manager-focused-action.png",
+      "sha256": "c6c73df8ba26d96684a62667970016d76312a194e07c6be60987c5e561e6c2c5",
+      "locale": "de",
+      "observation": "DE/Light 760px: Neuer Ordner dialog belongs to focused left file pane; Ordnername/Erstellen/Abbrechen fit, neighbor remains visible and action strips dimmed. No initial editor-focus proof (#673)."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-24T07-24-01/native-file-manager-full-name.png",
+      "sha256": "d2bbfe4c3be2a821ab3651f89e99be652868d12d0684c1ddb2ec2f639903acb5",
+      "locale": "de",
+      "observation": "DE/Light 760px: complete long-file tooltip visible in inactive left pane while right pane retains focus accent and enabled localized actions."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_file_managers_german_evidence/2026-10-24T07-24-01/native-file-managers-restored-terminals.png",
+      "sha256": "1cdce1b28cc3c14652b9739e7a5b9f32bae0982a5409b8d97c0a985652c31b41",
+      "locale": "de",
+      "observation": "DE/Light 760px: both panes restored to terminals, right retains unsubmitted printf file-manager-draft. No process identity proof from this image."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_panes_evidence/2026-10-24T07-24-06/native-panes-after-drag.png",
+      "sha256": "56439c32deb4eaba09cd0d179aad2e24298b5aee6ff17d5233cc15e8fe675a1c",
+      "locale": "en",
+      "observation": "EN/Dark 1180px: stacked panes preserve distinct header suffixes, upper retained-draft text and explicit Acceptance custom title; lower focus accent visible. Still image does not prove continuous drag."
+    },
+    {
+      "path": "native-workspace/test_native_workspace_panes_evidence/2026-10-24T07-24-06/native-panes-side-by-side.png",
+      "sha256": "670928d397ae3f2e60bd05e93da5d6e75e75a951e2b5f3f207bea56a2020528c",
+      "locale": "en",
+      "observation": "EN/Dark 1180px: side-by-side panes have distinct suffixes, right retains printf retained-draft and focus accent, left has independent shell output."
     }
   ]
 }
