@@ -8,7 +8,7 @@ enum RenderedText {
         let scale: Int
         let interpolation: CGInterpolationQuality
         let pageSegmentation: Int
-        static let standard = Configuration(scale: 3, interpolation: .none, pageSegmentation: 6)
+        static let standard = Configuration(scale: 2, interpolation: .none, pageSegmentation: 6)
     }
 
     struct Word {
