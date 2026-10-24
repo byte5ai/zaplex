@@ -23,6 +23,7 @@ FILES = (
     ".github/workflows/zap_release.yml",
     "README.md",
     "docs/release/1.0-user-guide.md",
+    "docs/release/1.0-readiness.md",
     "CHANGELOG.md",
     "script/set-version",
 )
@@ -72,6 +73,8 @@ def main() -> int:
         fixture = Path(directory)
         copy_fixture(root, fixture)
         original_lock = (fixture / "Cargo.lock").read_text(encoding="utf-8")
+        readiness_path = fixture / "docs/release/1.0-readiness.md"
+        original_readiness = readiness_path.read_text(encoding="utf-8")
 
         completed = run_updater(fixture, new_version)
         if completed.returncode != 0:
@@ -98,12 +101,21 @@ def main() -> int:
             ".github/workflows/zap_release.yml": f"default: v{new_version}",
             "README.md": f"Zaplex {new_version}",
             "docs/release/1.0-user-guide.md": f"v{new_version}",
+            "docs/release/1.0-readiness.md": f"# Zaplex {new_version} – Release-Bereitschaft",
             "CHANGELOG.md": f"## [{new_version}] — 2030-01-02",
         }
         for relative_path, marker in expected_markers.items():
             text = (fixture / relative_path).read_text(encoding="utf-8")
             if marker not in text:
                 raise RuntimeError(f"{relative_path} lacks {marker!r}")
+
+        readiness = readiness_path.read_text(encoding="utf-8")
+        if f"noch unveröffentlichte Version {new_version}." not in readiness:
+            raise RuntimeError("readiness prose did not follow the release version")
+        if readiness.split("## Integrationsbasis", 1)[1] != original_readiness.split(
+            "## Integrationsbasis", 1
+        )[1]:
+            raise RuntimeError("set-version changed readiness evidence or acceptance rows")
 
         nonrust_case("valid-version-update-is-atomic")
 
@@ -115,6 +127,18 @@ def main() -> int:
             raise RuntimeError("failed validation changed version-bearing files")
 
         nonrust_case("invalid-prerelease-preserves-all-files")
+
+        readiness_path.write_text(
+            readiness.replace(f"noch unveröffentlichte Version {new_version}.", "missing version"),
+            encoding="utf-8",
+        )
+        before_inconsistent = hashes(fixture)
+        inconsistent = run_updater(fixture, f"{major}.{minor}.{patch + 2}")
+        if inconsistent.returncode == 0:
+            raise RuntimeError("set-version accepted an inconsistent readiness protocol")
+        if hashes(fixture) != before_inconsistent:
+            raise RuntimeError("late readiness validation changed version-bearing files")
+        nonrust_case("inconsistent-readiness-preserves-all-files")
 
     print("PASS script/set-version updates every release source atomically")
     return 0
