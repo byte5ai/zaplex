@@ -7,12 +7,6 @@ class GUIFlowTestCase: XCTestCase {
     var window: XCUIElement { app.windows.firstMatch }
     private var lastOCR = ""
 
-    private struct Word {
-        let text: String
-        let rect: CGRect
-        let line: String
-    }
-
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication(url: URL(fileURLWithPath: "/Applications/Zaplex.app"))
@@ -45,52 +39,17 @@ class GUIFlowTestCase: XCTestCase {
         add(tree)
     }
 
-    private func words() throws -> [Word] {
-        let screenshot = window.screenshot().pngRepresentation
-        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: screenshot))
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/tesseract")
-        process.arguments = ["stdin", "stdout", "-l", "eng", "--psm", "11", "tsv"]
-        let input = Pipe()
-        let output = Pipe()
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        input.fileHandleForWriting.write(screenshot)
-        try input.fileHandleForWriting.close()
-        let tsv = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        lastOCR = tsv
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0, "Tesseract failed")
-        let scaleX = window.frame.width / CGFloat(bitmap.pixelsWide)
-        let scaleY = window.frame.height / CGFloat(bitmap.pixelsHigh)
-        return tsv.split(separator: "\n").compactMap { row in
-            let c = row.split(separator: "\t", omittingEmptySubsequences: false)
-            guard c.count == 12, c[0] == "5", !c[11].isEmpty,
-                  let x = Double(c[6]), let y = Double(c[7]),
-                  let w = Double(c[8]), let h = Double(c[9]) else { return nil }
-            return Word(text: String(c[11]),
-                        rect: CGRect(x: x * scaleX, y: y * scaleY, width: w * scaleX, height: h * scaleY),
-                        line: c[1...4].joined(separator: ":"))
-        }
-    }
-
     @discardableResult
     func visible(_ phrase: String, timeout: TimeInterval = 15) throws -> CGRect {
-        let expected = phrase.split(separator: " ").map(String.init)
         let deadline = Date().addingTimeInterval(timeout)
-        var last: [Word] = []
+        var last: [RenderedText.Word] = []
         repeat {
-            last = try words()
-            for line in Dictionary(grouping: last, by: { $0.line }).values {
-                guard line.count >= expected.count else { continue }
-                for start in 0...(line.count - expected.count) {
-                    let match = Array(line[start..<(start + expected.count)])
-                    if match.map({ $0.text }) == expected {
-                        return match.dropFirst().reduce(match[0].rect) { $0.union($1.rect) }
-                    }
-                }
+            let reading = try RenderedText.read(window.screenshot().pngRepresentation,
+                                                displaySize: window.frame.size)
+            last = reading.words
+            lastOCR = reading.tsv
+            if let rect = reading.rect(for: phrase) {
+                return rect
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         } while Date() < deadline
