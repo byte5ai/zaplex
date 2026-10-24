@@ -57,8 +57,8 @@ elf Schlüsselbilder liegen zusätzlich im Repo. Der Lauf wurde mit eigenem
 | #672 Favorit, EN/Light, rechts öffnend bei 1024×678 | Vollständiger Hinweis über dem Flyout, drei stationäre Beobachtungen stabil; Escape schließt nur die Unterebene, Bearbeiten bleibt erreichbar und verwendet vorhandenen Editor. Bilder 043–048. |
 | #672 Favorit, EN/Light, links öffnend bei 650×678 | Vollständiger Hinweis innerhalb der Fenstergrenzen, drei stationäre Beobachtungen stabil; Bearbeiten erreichbar. Bilder 063–067. |
 | Primärer Favoritenname | Separater Klick startet einen sichtbaren SSH-Versuch zum künstlichen Loopback-Ziel, endet mit tatsächlichem Connection refused. Bilder 068–070. |
-| #674 englische Agent-Einstellungen | Supportfrage und Link korrekt bei 1024×678. Deutsche Nachprüfung noch nicht durchgeführt. Bild 022. |
-| Schmale Agent-Einstellungen | **Fehler #685:** Bei 500×500 werden Texte/Schalter rechts abgeschnitten. Auch 350×350 und 100×100 sind erreichbar; daraus folgt keine behauptete absolute Mindestgröße. Bilder 024–026. |
+| #674 englische Agent-Einstellungen | Supportfrage und Link korrekt bei 1024×678. Deutsch wurde in diesem Lauf nicht geprüft; siehe Folgelauf unten. Bild 022. |
+| Schmale Agent-Einstellungen | Im Ausgangsausschnitt sind bei 500×500 Texte/Schalter rechts abgeschnitten. Die Nachprüfung unten bestätigt horizontales Scrollen bei 500×500 und 350×350; #685 ist auf den tatsächlich erreichbaren 100×100-Grenzfall eingegrenzt. Bilder 024–026. |
 
 Beim Startmenü mit drei Tabs öffnete sich über den Bedienweg kein sichtbares
 Menü (049–058). Nach Rückkehr zu einem Tab funktionierte es wieder (059–061).
@@ -77,4 +77,44 @@ und beide unveränderten Datei-Hashes. Es bleiben genau `alpha.txt`, `beta.txt`
 und `child`; keine Rename-/Create-Aktion wurde bestätigt. Die Zustandsfolge belegt
 abgetastete Hover-Zustände, keine lückenlose Animation oder vollständige
 Mausdurchlässigkeit. Deutsch, dunkle Favoritenmenüs und weitere Matrixvarianten
-sind hier nicht mitgeprüft.
+wurden in diesem englischen Lauf nicht mitgeprüft.
+
+
+## Installierte Exploration: Deutsch nach Neustart
+
+[40096737284](https://github.com/byte5ai/zaplex/actions/runs/40096737284),
+Bedienrevision `9161ff4f060997399fcd0cd126a5335dd6f3745a`, dasselbe unveränderte
+1.2.34-DMG. Die vorhandenen 15 GUI-Pflichtfälle wurden anhand ihrer Herkunft
+geprüft und nicht erneut ausgeführt. Alle 69 aufgenommenen Originalbilder
+wurden einzeln betrachtet und bytegenau gegen Artefakt 12562220790 geprüft;
+[das Manifest](evidence/candidate-134-german/review.json) erfasst jeden tatsächlichen
+Bildzustand, Sprache, Theme, Fensterrechteck und Hash. Neun Schlüsselbilder liegen
+im Repo. Der eigene Abschlussmarker beendete die Sitzung vor dem Zeitlimit;
+Aufräumen und Belegsicherung bestanden.
+
+| Prüfung | Tatsächliches Ergebnis |
+|---|---|
+| Sprache | Deutsch gewählt und App vollständig beendet/neugestartet, bevor die Shell-Kontrollwerte angelegt wurden. Die abgewiesene Hintergrund-Neustartanforderung führte zu keinem Start; der anschließende Vordergrundstart ist in Bild 007 sichtbar. Für Nummer 006 entstand kein Bild. |
+| #673, DE/Dark | Gefüllter Filter bleibt erhalten; F2 markiert `alpha.txt`, ein rohes `z` ersetzt es. F7 und Werkzeugleisten-Ordner nehmen jeweils das erste rohe `z` ohne Feldklick an. Entwürfe abgebrochen. Bilder 013–020. |
+| #673, DE/Light | Dieselben drei Einstiege funktionieren nach Settings-/Theme-Rundweg; das Filterkriterium bleibt erhalten. Bilder 037–042. Kein Nachweis für den erst später korrigierten sofortigen Escape mit Anfangsauswahl. |
+| #674, DE/Dark und DE/Light | „Eine Eingabe wurde falsch erkannt? Melde uns den Fehler“ ist vollständig übersetzt und bei 1024×678 lesbar. [Dunkel](evidence/candidate-134-german/021-de-dark-agent.png), [hell](evidence/candidate-134-german/036-de-light-agent-top.png). Der Link wurde nicht aktiviert. |
+| #672, DE/Light | Rechts öffnend bei 1024×678 und links öffnend bei 650×678 bleibt der vollständige lange Hinweis über dem Untermenü sichtbar. Je zwei stationäre Aufnahmen. Ein Escape schließt rechts nur die Unterebene; nach erneutem Eintritt führt Bearbeiten zum vorhandenen Editor zurück. Bilder 049–057, [linke Öffnung](evidence/candidate-134-german/056-de-light-left-flyout.png). |
+| #672, DE/Dark | Beide Öffnungsrichtungen behalten den vollständigen Hinweis innerhalb des Fensters, je zwei stationäre Aufnahmen. Bilder 062–065, [linke Öffnung](evidence/candidate-134-german/064-de-dark-left-flyout.png). Keine separate primäre Verbindung in diesem Lauf. |
+| #685, schmale Einstellungen | Horizontales Scrollen macht die Schalter bei [500×500](evidence/candidate-134-german/023-de-dark-agent-scroll-right.png) und 350×350 erreichbar (023/028). Die ursprüngliche Behauptung verlorener Inhalte bei diesen Breiten ist widerlegt. Bei [100×100](evidence/candidate-134-german/029-de-dark-agent-100.png) bleibt praktisch keine bedienbare Fläche; #685 untersucht jetzt diesen Grenzfall. Keine behauptete absolute Mindestgröße. |
+| Weitere Übersetzungen | [Bild 035](evidence/candidate-134-german/035-de-light-agent.png) zeigt englische Hilfe zur Spracheingabe, „Restore default“, „Left side“, „Right side“ und „Show & collapse“ trotz deutschem Neustart. Separat erfasst in #688; #674 betrifft ausschließlich den korrekt übersetzten Erkennungshinweis. |
+
+[Die frische Abschlussausgabe](evidence/candidate-134-german/069-final-check-output.png)
+bestätigt dieselbe PID 1832, denselben nicht exportierten Kontrollwert und dasselbe
+Arbeitsverzeichnis. Beide Datei-Hashes stimmen mit dem Anfang überein; das
+Verzeichnis enthält genau `alpha.txt`, `beta.txt` und `child`. Kein Rename-/Create-
+Entwurf wurde bestätigt. Der erste Klick auf F10 in der benachbarten inaktiven
+Dateipane aktivierte diese zunächst; der folgende F10-Tastendruck stellte die
+ursprüngliche Shell wieder her (066/067). Diese Beobachtung ist noch nicht von
+der Fokusbehandlung des Bedienwerkzeugs unabhängig eingegrenzt.
+
+Die Aufnahmen zeigen abgetastete Hover-Zustände, keine lückenlose Animation
+oder vollständige Mausdurchlässigkeit. Die native Kombination EN/Dark für die
+Favoritenmenüs und weitere Matrixfälle bleiben separat zu prüfen. #684 ist mit
+PR #687 (`37242850ce6ae4d3a57c173cf3ff6dab780481f4`, 1.2.35) inzwischen korrigiert;
+sechs gezielte lokale Tests und Clippy bestehen. Dieser 1.2.34-Lauf kann die
+native Korrektur nicht bestätigen.

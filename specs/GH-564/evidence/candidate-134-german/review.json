@@ -1,0 +1,1539 @@
+{
+  "run_id": 40096737284,
+  "artifact_id": 12562220790,
+  "app_source_sha": "b0eff3ee326b7a4884de3681123cd84fad5ef45f",
+  "harness_sha": "9161ff4f060997399fcd0cd126a5335dd6f3745a",
+  "dmg_sha256": "ec3ce86d7fdf78c5dc5852f5b8c717c3252428450199b5a1929cebe602ec5319",
+  "original_images": 69,
+  "workflow_hashes_match": true,
+  "missing_number_006": "Background relaunch rejected before dispatch; capture failed because no app window existed. Foreground relaunch produced image 007.",
+  "images": [
+    {
+      "name": "001-initial.png",
+      "sha256": "bb17c5b7bb51b90ac64d60d99b9c1f5cc94c6fd6bdc26c22369364bd116aab38",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Fresh English app in Zaplex Dark."
+    },
+    {
+      "name": "002-settings.png",
+      "sha256": "87fc0c086428abe1099702a4d85c4613612f8b185939596cf8c14923ae6d1485",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "English Agent settings at normal width."
+    },
+    {
+      "name": "003-appearance.png",
+      "sha256": "f3b93eb388d1d46150cd32d5918efec0e69052b1c666c0b3d4f74390c8427e35",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Appearance page before language change."
+    },
+    {
+      "name": "004-language-menu.png",
+      "sha256": "650230c9d052a557f6a607d92e710ee9da7670586ba871dfe1303dc671829f9f",
+      "locale": "en",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Language menu shows German choice."
+    },
+    {
+      "name": "005-language-restart-notice.png",
+      "sha256": "8a6708aa333d8c323a993e672cef748054e49fdb31b69c893ffcfe3639cc7bc2",
+      "locale": "mixed restart notice",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "German restart notice; underlying UI is only partially switched."
+    },
+    {
+      "name": "007-german-restarted.png",
+      "sha256": "83f4d26cc88df7659261a23acbc6d9b3f2cd246c26dbfff0e0fa49c49f826b87",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Full restart completed; terminal and sidebar are German."
+    },
+    {
+      "name": "008-baseline-input.png",
+      "sha256": "0d1c7f34973c24846631469b725b29f7a6a7ed12cc4f6631a45131e6ef49aa48",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Fixture setup command typed, not executed."
+    },
+    {
+      "name": "009-baseline-output.png",
+      "sha256": "21d3e1b7a498785cc7fbd43f93b0434ab4e8e326641b268c3494197a85755243",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Baseline PID1832, unexported marker DE_40096737284, directory and two file hashes."
+    },
+    {
+      "name": "010-de-file-manager.png",
+      "sha256": "25093fbaab8542e672c46baa1b66b1d1726cc24871e206a09cff747833dce615",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "File manager lists child, alpha.txt and beta.txt."
+    },
+    {
+      "name": "011-de-populated-filter.png",
+      "sha256": "25093fbaab8542e672c46baa1b66b1d1726cc24871e206a09cff747833dce615",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Despite filename, toolbar whitespace was clicked and filter remains empty."
+    },
+    {
+      "name": "012-de-filter-focused.png",
+      "sha256": "3d7bbf7f9fffa23ce07e3400abe7ccf3c3d2509b919461095ddc02bc75425cc4",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Filter editor explicitly focused."
+    },
+    {
+      "name": "013-de-filter.png",
+      "sha256": "d3b9c00c2b6e4412f386da6f191c243226b8f3f8981901a864badf3f9d7e2ba8",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Populated alpha filter leaves alpha.txt visible."
+    },
+    {
+      "name": "014-de-dark-f2-selected.png",
+      "sha256": "b043767b7cd63ea6a66edc37872f14e4790fc314fa35684e08b5e043edab84b8",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "German dark F2 selects the entire original filename."
+    },
+    {
+      "name": "015-de-dark-f2-first-char.png",
+      "sha256": "d06e6eb74eb50d56b9370635149d52f9669587012eb0b82698ff297d6bb02e06",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z replaces the selected name without a field click.",
+      "repository_copy": "015-de-dark-f2-first-char.png"
+    },
+    {
+      "name": "016-de-dark-cancelled.png",
+      "sha256": "d3b9c00c2b6e4412f386da6f191c243226b8f3f8981901a864badf3f9d7e2ba8",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Edited rename cancelled; filtered original entry remains."
+    },
+    {
+      "name": "017-de-dark-f7-empty.png",
+      "sha256": "8544eea16f72b95c33ad4b7a1bf79970d6981c70ad868fdd65a29f179b729c3c",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "F7 opens an empty German folder editor."
+    },
+    {
+      "name": "018-de-dark-f7-first-char.png",
+      "sha256": "7d07bfb1a843f37dd6a130c4f647d71002c971cf14d67a04c18d784002396767",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z reaches the F7 editor without a field click."
+    },
+    {
+      "name": "019-de-dark-toolbar-empty.png",
+      "sha256": "8544eea16f72b95c33ad4b7a1bf79970d6981c70ad868fdd65a29f179b729c3c",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Toolbar opens an empty German folder editor."
+    },
+    {
+      "name": "020-de-dark-toolbar-first-char.png",
+      "sha256": "7d07bfb1a843f37dd6a130c4f647d71002c971cf14d67a04c18d784002396767",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z reaches the toolbar folder editor without a field click."
+    },
+    {
+      "name": "021-de-dark-agent.png",
+      "sha256": "f19534eacc4613b8d6094a86d55939785687c66ee01d3ebe585c83f16efbd983",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "German support sentence and report link are complete in dark theme.",
+      "repository_copy": "021-de-dark-agent.png"
+    },
+    {
+      "name": "022-de-dark-agent-500.png",
+      "sha256": "f4e2f9c9fcfce6a34b7560ec4c78f3f661ff76162e9d6f697c7e8288a54e05e8",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          500,
+          500
+        ]
+      ],
+      "image_size": [
+        500,
+        500
+      ],
+      "visually_reviewed": true,
+      "observation": "At 500x500 the initial horizontal viewport clips controls on the right."
+    },
+    {
+      "name": "023-de-dark-agent-scroll-right.png",
+      "sha256": "7c130de777c67aa9aa90e9160e3593e58eaa1b0e66c2198729fbaebf8b9bb84a",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          500,
+          500
+        ]
+      ],
+      "image_size": [
+        500,
+        500
+      ],
+      "visually_reviewed": true,
+      "observation": "Horizontal scrolling exposes the right-hand controls at 500x500.",
+      "repository_copy": "023-de-dark-agent-scroll-right.png"
+    },
+    {
+      "name": "024-de-dark-agent-scroll-down.png",
+      "sha256": "f8039297671c1876f84e789dece095f1337b7718eee2f59734ec3fb25456a1f0",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          500,
+          500
+        ]
+      ],
+      "image_size": [
+        500,
+        500
+      ],
+      "visually_reviewed": true,
+      "observation": "Vertical scrolling exposes lower settings; English labels remain in German UI."
+    },
+    {
+      "name": "025-de-dark-agent-scroll-left.png",
+      "sha256": "e7d32c81c80c3ec521aee09e182be69aee2a414a501b09af18e7e01faa18db83",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          500,
+          500
+        ]
+      ],
+      "image_size": [
+        500,
+        500
+      ],
+      "visually_reviewed": true,
+      "observation": "Horizontal scrolling back exposes labels in lower settings."
+    },
+    {
+      "name": "026-de-dark-agent-support-scroll.png",
+      "sha256": "80a37d15cfaaaa56d037181cac41c8aed5e8031f7fca8dc0a45ea90f6255257c",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          500,
+          500
+        ]
+      ],
+      "image_size": [
+        500,
+        500
+      ],
+      "visually_reviewed": true,
+      "observation": "Despite filename, voice and miscellaneous settings are visible, not the support sentence."
+    },
+    {
+      "name": "027-de-dark-agent-350.png",
+      "sha256": "004b547f1f21f3388d08922534f0fcbd393a77e0bb8f85bb5c533a4fc02a3dec",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          350,
+          350
+        ]
+      ],
+      "image_size": [
+        350,
+        350
+      ],
+      "visually_reviewed": true,
+      "observation": "At 350x350 the settings viewport and sidebar shrink; lower labels are clipped."
+    },
+    {
+      "name": "028-de-dark-agent-350-controls.png",
+      "sha256": "9125c60fdbea7f6dc44d9e3d3bf547c150f7b6a417995be848df5151c7e457e5",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          350,
+          350
+        ]
+      ],
+      "image_size": [
+        350,
+        350
+      ],
+      "visually_reviewed": true,
+      "observation": "Horizontal scrolling exposes controls at 350x350."
+    },
+    {
+      "name": "029-de-dark-agent-100.png",
+      "sha256": "6128c76a6c1a9429285721443c59aaaf9b9a92981bd99b8c2a63a5e386136020",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          100,
+          100
+        ]
+      ],
+      "image_size": [
+        100,
+        100
+      ],
+      "visually_reviewed": true,
+      "observation": "At 100x100 almost no usable settings content remains visible.",
+      "repository_copy": "029-de-dark-agent-100.png"
+    },
+    {
+      "name": "030-de-dark-agent-support-position.png",
+      "sha256": "66e91ae569c1e27d04aa24f50435af6236e3f59a91d5319e8c31e4a5077d6f64",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          500,
+          500
+        ]
+      ],
+      "image_size": [
+        500,
+        500
+      ],
+      "visually_reviewed": true,
+      "observation": "Despite filename, voice and miscellaneous settings are visible, not the support sentence."
+    },
+    {
+      "name": "031-de-appearance-return.png",
+      "sha256": "9b069cdf36181a38bd72b78bd36c80a63e21b0219423706bc8f20d58517b8092",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Normal width restored; Appearance confirms German language and dark theme."
+    },
+    {
+      "name": "032-de-theme-picker.png",
+      "sha256": "6484b60110ed6e1227ca4a0f356daf4b952028482ad5caa490067c52d675b83f",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Theme picker opened."
+    },
+    {
+      "name": "033-de-light-search.png",
+      "sha256": "c07fa51242018cfe84bfdf49b11abcb65d2f576369a1a4db4d8e4ec0ef609747",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Light search result shown."
+    },
+    {
+      "name": "034-de-light-appearance.png",
+      "sha256": "012e66da68df4cbe83e2597dbc19bc4103276fdfced2dcee088d6c470cfc8d45",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Light theme applied and picker closed."
+    },
+    {
+      "name": "035-de-light-agent.png",
+      "sha256": "b2da0af3682dba5837da3387c49b43c66d8abd19a702120d31a22f0e425552b6",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "German Agent page retains English voice description, Restore default, Left side, Right side and Show & collapse.",
+      "repository_copy": "035-de-light-agent.png"
+    },
+    {
+      "name": "036-de-light-agent-top.png",
+      "sha256": "682f563fb39864cc78eae649b7e129f8fb9287b6aeba13561325692afe376b10",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "German support sentence and report link are complete in Light.",
+      "repository_copy": "036-de-light-agent-top.png"
+    },
+    {
+      "name": "037-de-light-f2-selected.png",
+      "sha256": "a00a785bb43d2f894d40d633a774252cf65dd125b257346b90b1e65e08c78182",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "After settings/theme round trip F2 again selects the original name; alpha filter preserved."
+    },
+    {
+      "name": "038-de-light-f2-first-char.png",
+      "sha256": "b5c030bea2ff81bea0d0ed7a60c8e5a12bf6ef77b3b49c14e66d83fb1d6912b0",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z replaces selected rename text in Light without a field click."
+    },
+    {
+      "name": "039-de-light-f7-empty.png",
+      "sha256": "a7ad85500c8a7391c2c3fb97b45bc57bc69f0ecf7538ef7769d76cdda4e6cc6e",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "F7 opens an empty German folder editor in Light."
+    },
+    {
+      "name": "040-de-light-f7-first-char.png",
+      "sha256": "bf2ffdbf3e4f292dd1f9395c5a31acf414bd363ee91f9418ba99e0ad3186085e",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z reaches the F7 editor in Light without a field click."
+    },
+    {
+      "name": "041-de-light-toolbar-empty.png",
+      "sha256": "a7ad85500c8a7391c2c3fb97b45bc57bc69f0ecf7538ef7769d76cdda4e6cc6e",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Toolbar opens an empty German folder editor in Light."
+    },
+    {
+      "name": "042-de-light-toolbar-first-char.png",
+      "sha256": "bf2ffdbf3e4f292dd1f9395c5a31acf414bd363ee91f9418ba99e0ad3186085e",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Raw z reaches toolbar folder editor in Light without a field click."
+    },
+    {
+      "name": "043-de-connections.png",
+      "sha256": "0e6c26459e9b383c6fcadb7133268c9889036784142fd032bb591061f432283e",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Cancelled draft; empty Connections sidebar and unchanged filtered file manager."
+    },
+    {
+      "name": "044-de-add-menu.png",
+      "sha256": "eaa90d66fddadaa7edad1c704bdfb53f38488c676469574c7c2fad2134a27151",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Add-host menu opened; no server connection attempted."
+    },
+    {
+      "name": "045-de-host-form.png",
+      "sha256": "ce1c0d25ed74a18603af17f67f01e547300d83747fcca61f317e1f4d4e9ea6eb",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Synthetic host form opened beside original file manager."
+    },
+    {
+      "name": "046-de-host-filled.png",
+      "sha256": "0a8ae0fcc266667fcba756ad73c2736203eb7dc80c48d5af7eb284405ba6f707",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Synthetic host fields filled, before saving; no password entered."
+    },
+    {
+      "name": "047-de-favorite-saved.png",
+      "sha256": "b62d8ec26958c8b800d569c5e620bc138249c5c2200cf28f46048bb05d3bfcfa",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Host saved and favorited, full synthetic name visible in heading; Save disabled."
+    },
+    {
+      "name": "048-de-light-start-menu.png",
+      "sha256": "c11459d5e134007d80da83ce4546131976a642ffd1adf8dd1d4957885b9c30c0",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Actual German start menu contains the saved favorite."
+    },
+    {
+      "name": "049-de-light-right-flyout.png",
+      "sha256": "9d48932fb2bc21d01b2e49176894e23920e553906eb65c15cef53e7833f97173",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Right-opening Light flyout; full German hint rendered above it within window bounds."
+    },
+    {
+      "name": "050-de-light-right-hover.png",
+      "sha256": "9d48932fb2bc21d01b2e49176894e23920e553906eb65c15cef53e7833f97173",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Second stationary Light right-flyout sample retains the complete hint."
+    },
+    {
+      "name": "051-de-light-flyout-escape.png",
+      "sha256": "44e0ee1f5e2d4bddcbb3729535d9811881607e398fba4c09eb1145ad44af62d7",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "One Escape closes only the child flyout; parent remains."
+    },
+    {
+      "name": "052-de-light-edit-hover.png",
+      "sha256": "5d26a0594dec7d1bbd2aeec0d4e57d9b3a58acf014c3def371a480b06c01cf2d",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Despite filename, child remains closed after Escape; no Edit hover is established."
+    },
+    {
+      "name": "053-de-light-flyout-reopened.png",
+      "sha256": "9d48932fb2bc21d01b2e49176894e23920e553906eb65c15cef53e7833f97173",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Leaving and reentering the favorite reopens the child flyout."
+    },
+    {
+      "name": "054-de-light-edit-return.png",
+      "sha256": "a082c6baa8637de30b484c947300fbe78b580168d8d27055d45bcb86030bf78a",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Edit returns to the existing host editor; still two panes, no connection attempt."
+    },
+    {
+      "name": "055-de-light-narrow-menu.png",
+      "sha256": "aed8d8549bcc5fd5a3de3d34d46f723733df5880de492a3cc10ccc7f69c45a0d",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Start menu opened at 650x678."
+    },
+    {
+      "name": "056-de-light-left-flyout.png",
+      "sha256": "5a361b01ba544aa1f1f4c5bb70f3c5bf2b325c9d90ff4b985d82a7e7f86c1c8b",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Left-opening Light flyout; complete German hint fits within 650-point window.",
+      "repository_copy": "056-de-light-left-flyout.png"
+    },
+    {
+      "name": "057-de-light-left-hover.png",
+      "sha256": "5a361b01ba544aa1f1f4c5bb70f3c5bf2b325c9d90ff4b985d82a7e7f86c1c8b",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Second stationary Light left-flyout sample retains the complete hint."
+    },
+    {
+      "name": "058-de-return-appearance.png",
+      "sha256": "5f89437e7f338190720ccc1c12a7048cf72b80b7e318a40d8fded8287d504d56",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Settings appearance reopened at normal width."
+    },
+    {
+      "name": "059-de-theme-picker-return.png",
+      "sha256": "9fa960b2e81178b0eac5db27aa7c6672fdd97abcd33e4ff6bffc1fcee0b13c4f",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Theme picker reopened."
+    },
+    {
+      "name": "060-de-dark-search.png",
+      "sha256": "6a27c817b7923852f646c962b0645502f3078f6d6aac3c4411f327654436993d",
+      "locale": "de",
+      "theme": "Light",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Zaplex Dark search result shown."
+    },
+    {
+      "name": "061-de-dark-host-return.png",
+      "sha256": "0eabf41c8d4c58bed3acb0e5bcb3a29bc430b357a9fa5e1393ff1839474f35e0",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Dark theme applied; original host editor and file manager preserved."
+    },
+    {
+      "name": "062-de-dark-right-flyout.png",
+      "sha256": "df4a48b5e28d57f3310df29fe71b7407164a06501a6ecf0695332b8e69058dc4",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Right-opening dark flyout; full German hint visible above child menu."
+    },
+    {
+      "name": "063-de-dark-right-hover.png",
+      "sha256": "df4a48b5e28d57f3310df29fe71b7407164a06501a6ecf0695332b8e69058dc4",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Second stationary dark right-flyout sample retains full hint."
+    },
+    {
+      "name": "064-de-dark-left-flyout.png",
+      "sha256": "639537939c6582998fd2ee8b3c20621f25d9bddf3e80dbd3c6da5c9017e9a91e",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Left-opening dark flyout; full German hint fits the 650-point window.",
+      "repository_copy": "064-de-dark-left-flyout.png"
+    },
+    {
+      "name": "065-de-dark-left-hover.png",
+      "sha256": "639537939c6582998fd2ee8b3c20621f25d9bddf3e80dbd3c6da5c9017e9a91e",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          650,
+          678
+        ]
+      ],
+      "image_size": [
+        650,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Second stationary dark left-flyout sample retains full hint."
+    },
+    {
+      "name": "066-final-pane-focus.png",
+      "sha256": "2a0ba3812e680b2c3038fe90d423594f3805e5335ecd9f01a0adb4f7425b03fc",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "First F10 toolbar click activates the adjacent file-manager pane; it remains open."
+    },
+    {
+      "name": "067-final-original-shell.png",
+      "sha256": "c41250a465e6a9890e09587098d4c8c025857a15c8be45053be1b63cbba11721",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Subsequent F10 returns to original terminal, before fresh verification."
+    },
+    {
+      "name": "068-final-check-input.png",
+      "sha256": "6784f5ac28592e5af2a4d0354bd6040a2f0a1ee0342b2b2c6cb251fc5fd84c55",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Final verification command typed into terminal, before Return."
+    },
+    {
+      "name": "069-final-check-output.png",
+      "sha256": "99131f6534b01d3d4eb27d464caddd13f4cbbd27959c828b2a0d3672b266f78c",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Fresh final output preserves PID1832, marker, directory, both hashes and exactly alpha.txt, beta.txt, child.",
+      "repository_copy": "069-final-check-output.png"
+    },
+    {
+      "name": "070-finish-input.png",
+      "sha256": "83742dfe54afee36b1a03ead927e2086b886fecea4494f5b8f4d6545fae90ef0",
+      "locale": "de",
+      "theme": "Zaplex Dark",
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "image_size": [
+        1024,
+        678
+      ],
+      "visually_reviewed": true,
+      "observation": "Owned finish marker command typed into terminal, before Return."
+    }
+  ]
+}
