@@ -12,7 +12,7 @@ Erwartungen für P03/P04/P05 und J1–J8 wurden vor den Aktionen festgehalten.
 |---|---|---|
 | Expliziter Tabtitel | `Acceptance Left` bleibt bei CWD-Wechsel erhalten; Löschen des Namens stellt den automatischen Titel `Local · /` wieder her. | 006–010 |
 | Einen Tab in anderen einfügen | Drag an den rechten Rand erzeugt zwei Panes im Zieltab, entfernt den Quelltab und fokussiert die Quelle. Frische Befehle bestätigen beide Shell-Identitäten. | 011–017 |
-| Pane-Kopfzeile verschieben | **Fehler [#665](https://github.com/byte5ai/zaplex/issues/665):** Vier Drags aus Titel und freiem Header-Hintergrund zu Tabband, Tabkante und anderer Pane bleiben wirkungslos, auch nach explizitem Terminalfokus. Header-Hintergrundklick fokussiert ebenfalls nicht. Dasselbe Werkzeug bewegt Tabs erfolgreich. Ursache noch unbestätigt. | 018–022 |
+| Pane-Kopfzeile verschieben | Vier Automationsdrags und ein Headerklick bleiben wirkungslos. **Befund korrigiert:** Es fehlte das ausdrückliche Heranführen des Mauszeigers vor Klick/Drag; die [native Gegenprobe](CANDIDATE-1.2.27-HEADERS.md) besteht mit unveränderter App. Diese Sequenzen belegen keinen Produktfehler. | 018–022 |
 | Verschachtelten Tab einfügen | Zwei-Pane-Tab an linken Rand eines dritten Tabs gezogen: Untergruppe, interne Reihenfolge und Quellfokus bleiben erhalten; Quelltab entfällt. Drei frische Ausgaben bestätigen alle Shells. | 024–032 |
 | Drop auf eigenen Tab | Einziger Tab auf eigene Pane gezogen: Layout bleibt unverändert. | 033 |
 
@@ -31,4 +31,5 @@ Workflow einschließlich Cleanup ist erfolgreich.
 
 Nicht nachgewiesen: kontinuierliche Sichtbarkeit des Ziels während des Drags,
 Escape-Abbruch, ungültige Ziele, sämtliche vier Kanten, Remote-Varianten und
-Reconnect. P03/P05 haben Teilnachweise; P04 bleibt fehlgeschlagen.
+Reconnect. P03/P05 haben Teilnachweise; für P04 gilt die spätere
+[native Gegenprobe](CANDIDATE-1.2.27-HEADERS.md).
