@@ -41,8 +41,8 @@ use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
 use warpui::{
-    AppContext, BlurContext, Entity, FocusContext, ModelHandle, SingletonEntity, TypedActionView,
-    View, ViewContext, ViewHandle,
+    AppContext, BlurContext, Entity, EntityId, FocusContext, ModelHandle, SingletonEntity,
+    TypedActionView, View, ViewContext, ViewHandle,
 };
 use zaplex_remote_session::types::{
     has_feature, FEATURE_SAFE_FILE_IDENTITY_BATCH_V1, FEATURE_SAFE_FILE_TRANSACTIONS_V1,
@@ -913,6 +913,8 @@ pub struct SftpBrowserView {
     focus_handle: Option<PaneFocusHandle>,
     /// Actual keyboard focus in this view or a child, independent of the tab's remembered pane.
     has_focus_within: bool,
+    /// Last focused child, retained while workspace chrome or another tab owns focus.
+    last_focused_child: Option<EntityId>,
     // ---- Connection ----
     /// Connection state
     pub(crate) connection: ConnectionState,
@@ -1304,6 +1306,7 @@ impl SftpBrowserView {
             pane_configuration,
             focus_handle: None,
             has_focus_within: false,
+            last_focused_child: None,
             connection: ConnectionState::Disconnected,
             _session: None,
             sftp: None,
@@ -4767,6 +4770,11 @@ impl SftpBrowserView {
         let editor_focused =
             self.rename_editor.is_focused(ctx) || self.new_folder_editor.is_focused(ctx);
         self.dialog = None;
+        if self.last_focused_child == Some(self.rename_editor.id())
+            || self.last_focused_child == Some(self.new_folder_editor.id())
+        {
+            self.last_focused_child = None;
+        }
         if editor_focused {
             ctx.focus_self();
         }
@@ -7213,7 +7221,11 @@ impl View for SftpBrowserView {
         "SftpBrowserView"
     }
 
-    fn on_focus(&mut self, _: &FocusContext, ctx: &mut ViewContext<Self>) {
+    fn on_focus(&mut self, focus: &FocusContext, ctx: &mut ViewContext<Self>) {
+        self.last_focused_child = match focus {
+            FocusContext::SelfFocused => None,
+            FocusContext::DescendentFocused(id) => Some(*id),
+        };
         self.has_focus_within = true;
         ctx.notify();
     }
@@ -7572,9 +7584,24 @@ impl BackingView for SftpBrowserView {
         ctx.emit(PaneEvent::Close);
     }
 
-    /// Focus the contents, setting window focus to the current view
+    /// Restore the editor only while it still belongs to the visible browser state.
     fn focus_contents(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.focus_self();
+        let editor = if !matches!(self.connection, ConnectionState::Connected) {
+            None
+        } else if matches!(self.dialog, Some(Dialog::Rename { .. })) {
+            Some(&self.rename_editor)
+        } else if matches!(self.dialog, Some(Dialog::CreateFolder { .. })) {
+            Some(&self.new_folder_editor)
+        } else if self.dialog.is_none() {
+            Some(&self.search_editor)
+        } else {
+            None
+        };
+        if let Some(editor) = editor.filter(|editor| self.last_focused_child == Some(editor.id())) {
+            ctx.focus(editor);
+        } else {
+            ctx.focus_self();
+        }
     }
 
     /// Render the header content

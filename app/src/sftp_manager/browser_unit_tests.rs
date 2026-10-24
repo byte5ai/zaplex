@@ -1,9 +1,114 @@
+use super::super::browser_integration_tests::{
+    create_connected_view, initialize_app, key_down, presenter_for_window, rerender,
+};
 use super::*;
 use std::path::PathBuf;
 use warp_core::ui::theme::{mock_terminal_colors, Details, WarpTheme};
 use warpui::color::ColorU;
 use warpui::platform::WindowStyle;
-use warpui::App;
+use warpui::{App, Event};
+
+#[test]
+fn file_manager_restores_visible_editor_after_focus_leaves_the_pane() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_app(&mut app);
+        app.update(crate::editor::init);
+        let (window, browser, _files) = create_connected_view(&mut app, &[("file.txt", b"file")]);
+        let outside = browser.update(&mut app, |_, ctx| {
+            ctx.add_view(|ctx| SftpBrowserView::new("other-tab".to_string(), None, ctx))
+        });
+
+        for dialog in [
+            None,
+            Some(Dialog::Rename {
+                entry: browser.read(&app, |view, _| view.entry_reference(0).unwrap()),
+                path: PathBuf::from("/file.txt"),
+                original_name: "file.txt".to_string(),
+            }),
+            Some(Dialog::CreateFolder {
+                parent_path: PathBuf::from("/"),
+            }),
+        ] {
+            let editor = browser.update(&mut app, |view, ctx| {
+                view.dialog = dialog;
+                ctx.notify();
+                if matches!(view.dialog, Some(Dialog::Rename { .. })) {
+                    view.rename_editor.clone()
+                } else if view.dialog.is_some() {
+                    view.new_folder_editor.clone()
+                } else {
+                    view.search_editor.clone()
+                }
+            });
+            let (_, invalidation) = presenter_for_window(&app, window);
+            let presenter = app.presenter(window).unwrap();
+            rerender(&mut app, presenter, invalidation);
+            editor.update(&mut app, |editor, ctx| {
+                editor.set_buffer_text("retained draft", ctx);
+                editor.select_all(ctx);
+                ctx.focus_self();
+            });
+            outside.update(&mut app, |_, ctx| ctx.focus_self());
+            assert_eq!(app.focused_view_id(window), Some(outside.id()));
+            browser.update(&mut app, |view, ctx| view.focus_contents(ctx));
+            assert_eq!(app.focused_view_id(window), Some(editor.id()));
+            editor.read(&app, |editor, ctx| {
+                assert_eq!(editor.buffer_text(ctx), "retained draft");
+                assert_eq!(editor.selected_text(ctx), "retained draft");
+            });
+            let (_, invalidation) = presenter_for_window(&app, window);
+            let presenter = app.presenter(window).unwrap();
+            rerender(&mut app, presenter.clone(), invalidation);
+            // Native text input follows an unhandled printable key-down with characters.
+            if !key_down(&mut app, window, presenter.clone(), "x") {
+                assert!(app.update(|ctx| ctx.simulate_window_event(
+                    Event::TypedCharacters {
+                        chars: "x".to_string()
+                    },
+                    window,
+                    presenter,
+                )));
+            }
+            editor.read(&app, |editor, ctx| assert_eq!(editor.buffer_text(ctx), "x"));
+
+            // Closing a dialog while another tab owns focus must forget its editor.
+            outside.update(&mut app, |_, ctx| ctx.focus_self());
+            browser.update(&mut app, |view, ctx| {
+                view.dismiss_dialog(ctx);
+                ctx.notify();
+                view.focus_contents(ctx);
+            });
+            if editor.id() != browser.read(&app, |view, _| view.search_editor.id()) {
+                assert_eq!(app.focused_view_id(window), Some(browser.id()));
+            }
+
+            // Explicit list focus wins over an earlier editor focus.
+            browser.update(&mut app, |_, ctx| ctx.focus_self());
+            outside.update(&mut app, |_, ctx| ctx.focus_self());
+            browser.update(&mut app, |view, ctx| view.focus_contents(ctx));
+            assert_eq!(app.focused_view_id(window), Some(browser.id()));
+        }
+    });
+}
+
+#[test]
+fn file_manager_does_not_restore_a_filter_hidden_by_disconnect() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_app(&mut app);
+        let (window, browser, _files) = create_connected_view(&mut app, &[]);
+        let (_, invalidation) = presenter_for_window(&app, window);
+        let presenter = app.presenter(window).unwrap();
+        rerender(&mut app, presenter, invalidation);
+        browser.update(&mut app, |view, ctx| ctx.focus(&view.search_editor));
+        browser.update(&mut app, |view, ctx| {
+            view.connection = ConnectionState::Disconnected;
+            view.focus_contents(ctx);
+        });
+        assert_eq!(app.focused_view_id(window), Some(browser.id()));
+    });
+}
 
 #[test]
 fn file_manager_editors_follow_theme_without_losing_text_selection_or_focus() {
