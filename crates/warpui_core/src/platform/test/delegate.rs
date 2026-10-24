@@ -23,6 +23,7 @@ use pathfinder_geometry::{
     vector::{vec2f, Vector2F},
 };
 use std::any::Any;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
@@ -66,6 +67,7 @@ impl IntegrationTestDelegate {
 #[derive(Default)]
 pub(crate) struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
+    active_window: Cell<Option<WindowId>>,
 }
 
 impl WindowManager {
@@ -95,10 +97,13 @@ impl platform::WindowManager for WindowManager {
 
     fn remove_window(&mut self, window_id: WindowId) {
         self.windows.remove(&window_id);
+        if self.active_window.get() == Some(window_id) {
+            self.active_window.set(None);
+        }
     }
 
     fn active_window_id(&self) -> Option<WindowId> {
-        None
+        self.active_window.get()
     }
 
     fn key_window_is_modal_panel(&self) -> bool {
@@ -114,8 +119,10 @@ impl platform::WindowManager for WindowManager {
         None
     }
 
-    fn show_window_and_focus_app(&self, _window_id: WindowId, _behavior: WindowFocusBehavior) {
-        // no-op for tests
+    fn show_window_and_focus_app(&self, window_id: WindowId, _behavior: WindowFocusBehavior) {
+        if self.windows.contains_key(&window_id) {
+            self.active_window.set(Some(window_id));
+        }
     }
 
     fn hide_app(&self) {
