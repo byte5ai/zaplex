@@ -75,7 +75,10 @@ use ai::project_context::model::ProjectContextModel;
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
 use terminal::view::ActiveSessionState;
 use warpui::AddSingletonModel;
-use warpui::{platform::WindowStyle, App, ViewHandle};
+use warpui::{
+    platform::{app::AppCallbackDispatcher, WindowStyle},
+    App, ViewHandle,
+};
 
 fn terminal_snapshot_leaf(uuid: Vec<u8>) -> PaneNodeSnapshot {
     PaneNodeSnapshot::Leaf(LeafSnapshot {
@@ -3864,15 +3867,27 @@ fn dragging_a_tab_onto_a_pane_joins_its_panes_as_a_split() {
 
 #[test]
 fn mouse_drag_of_terminal_header_detaches_existing_pane_in_workspace() {
-    assert_mouse_header_detach(false);
+    assert_mouse_header_detach(HeaderDetachSetup::Split);
 }
 
 #[test]
 fn mouse_drag_of_joined_terminal_header_detaches_existing_pane() {
-    assert_mouse_header_detach(true);
+    assert_mouse_header_detach(HeaderDetachSetup::JoinedTab);
 }
 
-fn assert_mouse_header_detach(from_joined_tab: bool) {
+#[test]
+fn mouse_dragged_tab_keeps_header_click_and_detach_working() {
+    assert_mouse_header_detach(HeaderDetachSetup::DraggedTab);
+}
+
+#[derive(Clone, Copy)]
+enum HeaderDetachSetup {
+    Split,
+    JoinedTab,
+    DraggedTab,
+}
+
+fn assert_mouse_header_detach(setup: HeaderDetachSetup) {
     App::test((), move |mut app| async move {
         initialize_app(&mut app);
         let workspace = mock_workspace(&mut app);
@@ -3882,23 +3897,31 @@ fn assert_mouse_header_detach(from_joined_tab: bool) {
                 workspace.window_id,
             )
         });
-        let (first, dragged) = if from_joined_tab {
+        let presenter = app.presenter(window_id).unwrap();
+        let dispatch = |app: &mut App, event| {
+            app.update(|ctx| {
+                ctx.simulate_window_event(event, window_id, presenter.clone());
+            });
+        };
+        let (first, dragged) = if !matches!(setup, HeaderDetachSetup::Split) {
             workspace.update(&mut app, |workspace, ctx| {
                 let first = group.as_ref(ctx).focused_pane_id(ctx);
                 workspace.add_terminal_tab(false, ctx);
                 let source = workspace.active_tab_pane_group().clone();
                 let dragged = source.as_ref(ctx).focused_pane_id(ctx);
                 workspace.set_active_tab_index(0, ctx);
-                workspace.join_tab_as_pane(
-                    TabJoinDropTarget {
-                        source_group_id: source.id(),
-                        target_group_id: group.id(),
-                        pane_id: first,
-                        direction: Direction::Right,
-                        zone: RectF::new(Vector2F::zero(), Vector2F::zero()),
-                    },
-                    ctx,
-                );
+                if matches!(setup, HeaderDetachSetup::JoinedTab) {
+                    workspace.join_tab_as_pane(
+                        TabJoinDropTarget {
+                            source_group_id: source.id(),
+                            target_group_id: group.id(),
+                            pane_id: first,
+                            direction: Direction::Right,
+                            zone: RectF::new(Vector2F::zero(), Vector2F::zero()),
+                        },
+                        ctx,
+                    );
+                }
                 (first, dragged)
             })
         } else {
@@ -3908,9 +3931,71 @@ fn assert_mouse_header_detach(from_joined_tab: bool) {
                 (first, dragged)
             })
         };
+        if matches!(setup, HeaderDetachSetup::DraggedTab) {
+            // Focus the platform window and deliver its activation callback before the gesture.
+            // Otherwise the inactive-window dimming overlay covers the tab bar under test.
+            app.read(|ctx| ctx.windows().show_window_and_focus_app(window_id));
+            AppCallbackDispatcher::new(Default::default(), app.clone())
+                .active_window_changed(Some(window_id));
+            workspace.update(&mut app, |_, ctx| ctx.notify());
+            let (start, target) = {
+                let presenter = presenter.borrow();
+                let tab = presenter
+                    .position_cache()
+                    .get_position(tab_position_id(1))
+                    .unwrap();
+                let pane = presenter
+                    .position_cache()
+                    .get_position(first.position_id())
+                    .unwrap();
+                assert!(
+                    tab.width() > 12. && tab.height() > 0.,
+                    "tab geometry: {tab:?}"
+                );
+                // Empty test font layouts can put the close button at the tab center.
+                // Start in the tab's left padding, outside that child control.
+                (
+                    vec2f(tab.min_x() + 6., tab.center().y()),
+                    vec2f(pane.max_x() - 30., pane.center().y()),
+                )
+            };
+            dispatch(
+                &mut app,
+                MouseEvent::MouseMoved {
+                    position: start,
+                    cmd: false,
+                    shift: false,
+                    is_synthetic: false,
+                },
+            );
+            dispatch(
+                &mut app,
+                MouseEvent::LeftMouseDown {
+                    position: start,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+            );
+            for position in [start + vec2f(0., 12.), target - vec2f(10., 0.), target] {
+                dispatch(
+                    &mut app,
+                    MouseEvent::LeftMouseDragged {
+                        position,
+                        modifiers: Default::default(),
+                    },
+                );
+            }
+            dispatch(
+                &mut app,
+                MouseEvent::LeftMouseUp {
+                    position: target,
+                    modifiers: Default::default(),
+                },
+            );
+        }
         group.update(&mut app, |group, ctx| group.focus_pane_by_id(first, ctx));
         workspace.read(&app, |workspace, _| assert_eq!(workspace.tab_count(), 1));
-        let presenter = app.presenter(window_id).unwrap();
         let (header_point, drop_point) = {
             let presenter = presenter.borrow();
             let pane = presenter
@@ -3925,11 +4010,6 @@ fn assert_mouse_header_detach(from_joined_tab: bool) {
                 vec2f(pane.min_x() + 40., pane.min_y() + 17.),
                 vec2f(bar.max_x() - 160., bar.center().y()),
             )
-        };
-        let dispatch = |app: &mut App, event| {
-            app.update(|ctx| {
-                ctx.simulate_window_event(event, window_id, presenter.clone());
-            });
         };
         dispatch(
             &mut app,
