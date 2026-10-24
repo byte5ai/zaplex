@@ -7,7 +7,9 @@ macOS-Mindestfenstergröße (#685) und verbliebene englische Agent-Einstellungen
 (#688). Der Batch ist abgeschlossen: alle Bau- und Paketgates bestanden,
 die installierte GUI-Suite meldet zunächst 14 bestandene und zwei fehlgeschlagene
 Fälle. Eine gezielte Fortsetzung ergänzt einen weiteren Erfolg am gleichen DMG.
-Der Mindestgrößenfall und die vollständige interaktive Nachprüfung stehen noch aus.
+Der automatische Mindestgrößenfall und die vollständige interaktive Nachprüfung
+stehen noch aus; direkte native Bedienung bestätigt inzwischen Mindestgeometrie,
+Shellerhalt und erste englische Einstellungen-/Escape-Varianten.
 
 ## Bisherige CI-Nachweise
 
@@ -95,6 +97,44 @@ getrennter Diagnosemodus stellt interaktiven Zugang zur Ursachenklärung bereit
 und erzeugt keinen Abnahmepass. Der Originalbatch bleibt fehlgeschlagen; ein
 vollständiger Nachweis erfordert den verbliebenen Fall und die geprüfte Kombination
 aller tatsächlichen GUI-Ergebnisse. Der App-Build wurde nicht wiederholt.
+
+## Direkte native Nachprüfung
+
+Die ausdrücklich diagnostische [Sitzung 40132816971](https://github.com/byte5ai/zaplex/actions/runs/40132816971)
+verwendet dasselbe installierte DMG mit Teststand
+`0a91784ba63bbcf832be8379cda49e51e7ffa726`. Sie wurde vor dem Zeitlimit explizit
+beendet; 54 Originalaufnahmen wurden einzeln betrachtet und stimmen bytegenau
+mit dem gesicherten Artefakt `12576836740` überein. ZIP-SHA256:
+`d9b675f45a50b345d135fe234c443332222ee69647ec9cf10946977ce00948f5`.
+Das [Manifest](evidence/candidate-136-native/exploration-40132816971.json) enthält
+die Einzelhashes. Der erfolgreiche Infrastrukturjob ergibt keinen GUI-Suitenpass.
+
+| Variante / Aufgabe | Beobachtung | Originalbelege im Artefakt |
+|---|---|---|
+| EN/Dark, native Ecke ziehen | 1024×678 bei (0,30) schrumpft auf 480×320 und lässt sich per Maus wieder vergrößern. Frische Ausgaben bestätigen durchgehend PID 1271, nicht exportierten Marker `NATIVE136` und dasselbe Verzeichnis. | 05–08, 14–16 |
+| EN/Dark, Gegenproben | Ziehen nach separater Zeigerbewegung und direktes Ziehen funktionieren. AX-Anforderung 100×100 bleibt bei 480×320; frische Shellausgabe auch dort unverändert. Fehlender Hover allein ist daher keine belegte Ursache des alten XCTest-Fehlers. | 09–13 |
+| Agent-Einstellungen EN/Dark, 480×320 | Horizontales Scrollen erreicht rechte Schalter; vertikales Scrollen erreicht spätere Einstellungen. Der eigene Navigationsscrollbereich erreicht die unteren Unterseiten. | 17–23 |
+| Agent-Einstellungen EN/Dark, normale Größe | Vollständige englische Sprachhilfe mit Wispr-Link, Rücksetzen sowie linke/rechte Werkzeugleiste sichtbar. Das Denkmodusmenü zeigt `Show & collapse`, `Always show`, `Never show`; `Always show` bleibt nach Schließen/Wiederöffnen ausgewählt. | 23, 25–27 |
+| Agent-Einstellungen EN/Light, 480×320 | Nach tatsächlichem Themewechsel bleiben rechte und spätere Kontrollen erreichbar. Alle drei Denkmodusoptionen sind im geöffneten Menü vollständig lesbar; Navigation scrollt unabhängig. | 28–37 |
+| F2 EN/Light, vollständig ausgewählter Anfangsname | Genau ein Escape schließt den Dialog; Pfeil nach unten bewegt anschließend den Listencursor. | 42–45 |
+| F2 EN/Light, teilweise ausgewählter Name | Nur das letzte Zeichen ist ausgewählt; genau ein Escape schließt den Dialog. | 46–47 |
+| F7 EN/Light, bearbeiteter Entwurf | `cancelled136` ist eingegeben; genau ein Escape schließt den Dialog. Pfeil nach oben bewegt anschließend den Listencursor. | 48–50 |
+| Dateien und Shell nach Dialogabbrüchen | Unabhängig neu gelesene Dateinamen und SHA256 stimmen exakt mit der Ausgangsmenge überein; kein Ordner wurde angelegt. F10 kehrt zur ursprünglichen Shell zurück; frische Ausgabe bestätigt PID/Marker und das bewusst gewechselte Fixture-Verzeichnis. | 39–41, 51–53 und `fixture-baseline.json` / `fixture-after-light.json` |
+
+Die anfängliche vorbereitende `printf`-Eingabe wurde vom Operator wegen dessen
+Zeilenumbruchinterpretation falsch eingegeben (03); die gültige Shellbaseline
+beginnt mit 05. Aufnahme 24 zeigt nach einem verfehlten Klick kein geöffnetes
+Menü und zählt nicht als Menübeleg. Das Denkmodusmenü ist erst in 25 geöffnet.
+Der AX-Verkleinerungsbefehl meldet erwartungsgemäß, dass die angeforderten
+100×100 nicht erreicht wurden; entscheidend ist die beobachtete Begrenzung.
+
+[PR #699](https://github.com/byte5ai/zaplex/pull/699) verwendet für den
+automatischen Fenstertest den ausdrücklichen nativen Maus-Klick-/Ziehpfad von
+XCTest. Die Geometrie- und Shell-Erwartungen bleiben unverändert. Nur dieser
+verbliebene Fall läuft in [40134867825](https://github.com/byte5ai/zaplex/actions/runs/40134867825)
+erneut; sein Ergebnis steht zum Zeitpunkt dieses Teilberichts noch aus.
+Deutsche Varianten, Escape in EN/Dark, weitere Flächen bei Mindestgröße,
+Neustartwiederherstellung und die übrige Gesamtmatrix sind damit nicht abgenommen.
 
 ## Native Render-Fixtures
 

@@ -1,0 +1,284 @@
+{
+  "app_source_sha": "5a35b11e2445f20b9e47b167252a63238ed6a20d",
+  "harness_source_sha": "0a91784ba63bbcf832be8379cda49e51e7ffa726",
+  "run_id": 40132816971,
+  "kind": "diagnostic-exploration",
+  "artifact_id": 12576836740,
+  "zip_sha256": "d9b675f45a50b345d135fe234c443332222ee69647ec9cf10946977ce00948f5",
+  "images": [
+    {
+      "path": "operator/01-initial.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/02-marker-input.png",
+      "sha256": "00f41cb85a61b9a1e1a77f1720e29012729ef39589efe81ff0a54cc20813ddff",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/03-baseline-input.png",
+      "sha256": "378bbfd9599e91d9df1fd767c97cb2ef0db1924b6a4a0c6fbd1987b6f93e1ff2",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/04-baseline-corrected-input.png",
+      "sha256": "df9ffabf2c707578dc7341e765aa15cf49307f629593efbfadf4ba0e3951bae4",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/05-baseline.png",
+      "sha256": "f7cfb6cef104229386044900b0dd3e4222b6fb79e88b68129743ef510d10a7e6",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/06-corner-drag-after-hover.png",
+      "sha256": "e8f4bc0014e9a12b55bbdf31ff84d70ea3d35546a50044c98993f7063cc698bb",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/07-minimum-input.png",
+      "sha256": "bb94f19283f263308752995954aed3514e1b705e3ca392594189a9772617be78",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/08-minimum-shell.png",
+      "sha256": "017026397ee1c6f0339e9afb8168bb5960d8944cd7e37aa2116c6aa07e6c4a64",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/09-restored.png",
+      "sha256": "f50b878f61d907b891185dd727ed1a5e87f464419ab0d43abdb01f0efad7baa4",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/10-corner-without-hover.png",
+      "sha256": "fb45cc7b401078e6baf780b212a0a1b69faf1ff401ba5c2b18cb2c9448ee207b",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/11-ax-minimum.png",
+      "sha256": "fb45cc7b401078e6baf780b212a0a1b69faf1ff401ba5c2b18cb2c9448ee207b",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/12-ax-input.png",
+      "sha256": "39a36e75ed1fa673e07875ce713114756e9a444a023373b729d428a639bbe63d",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/13-ax-shell.png",
+      "sha256": "efd2f72e99c3067bac4df1405c98a4e9ca13c953cc6cb90329a06c16c1f2ee47",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/14-mouse-restored.png",
+      "sha256": "6626dd361fdcb63f63c275aaafc0866f05c4c082ac1b4bab2e7739d401a9bda7",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/15-restore-input.png",
+      "sha256": "e42689793473db49dbb47c1d15583988d80f9d0f83853854048f35b7d776f651",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/16-restored-shell.png",
+      "sha256": "94784e273d27f74d278b648949c18e18ad26c4ececba67ce1b686a831c381a63",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/17-settings-normal.png",
+      "sha256": "1ad6dbe3c81ed924a7da5f79f78fbc510eb8c578542de4a6566b56af539e93b8",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/18-settings-minimum-en-dark.png",
+      "sha256": "77669ec1a684ff3dae7233722d25f079e2e19870b7f65b8d22bcbdbec996da8a",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/19-settings-minimum-right-en-dark.png",
+      "sha256": "f22aec0317567503f77afdc1030c9d1904cfbaa728974ef24c973c265ccfd94a",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/20-settings-minimum-later-en-dark.png",
+      "sha256": "8c052ecb5ff63adbda1bc9e3d2e33f668de586c89387017147ed88824a3e324d",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/21-settings-minimum-later-labels-en-dark.png",
+      "sha256": "7cad48455c5264ec548c23f16de672853d2ff715b362409b44e0bddf1c258ffb",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/22-settings-navigation-minimum-en-dark.png",
+      "sha256": "b685b049205196f9255392ce391cd95d81bd28f359593b27a9217f970cca3dc0",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/23-settings-restored-navigation.png",
+      "sha256": "3eaa80c974c6dc0cb4c6ceda7fa357848a46e7d4fde018f08ebbbcfe41f61faa",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/24-agent-choice-menu.png",
+      "sha256": "c675fed685b070361ef1ff44e7139413e0691df92d6bee61a68908d142c650ea",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/25-agent-thinking-en-dark.png",
+      "sha256": "7a1ee53120ecd991a60ad5688d898bb5958422b695c35a77d3f0b35856394371",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/26-agent-choice-selected.png",
+      "sha256": "c991e067d94bdf0f82ae6000e61a5eda715c69800bb50f339e5ad0826b249733",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/27-agent-choice-reopened.png",
+      "sha256": "c991e067d94bdf0f82ae6000e61a5eda715c69800bb50f339e5ad0826b249733",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/28-appearance-en.png",
+      "sha256": "c28fd0faa4e93e579f20f698d5fff56e44b1d59fe4322472d4cf81d930d3aa49",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/29-theme-picker.png",
+      "sha256": "320baf74fa1694f2c712f4207082354408678bbc74d3fb0de49c9aa837221d98",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/30-light-search.png",
+      "sha256": "77e4a76fe07f9ecc199fc8c71f80fdb82aa700f0748e3f88d75f79e20aaf019a",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/31-light-applied.png",
+      "sha256": "93f5f1972ab6bb2dac068c9892445a9d67ccb14b4aaede8848b8d111be3b14d6",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/32-appearance-light.png",
+      "sha256": "08640ded7e63b8faf064fa47d0c8b8c75696871cad9e70256509b8b0a6e47e1c",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/33-agent-minimum-en-light.png",
+      "sha256": "0d33962e87ade59278e75321442703b418acbd8886998d554f3b60e897aa5140",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/34-agent-minimum-right-en-light.png",
+      "sha256": "ac7f2a19d586ea4e5f5f909bcda094f39336d1a3884de8e5b9d3047a559831b2",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/35-agent-minimum-later-en-light.png",
+      "sha256": "1f5783ccc1da66d9392c014c3d4f559ee999a6d7a7fa53075b31c068e6de88ac",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/36-navigation-minimum-en-light.png",
+      "sha256": "8a47f7c6ec0a094e28ee8f7206b5f56eb950704970b71296482cf63f7dd6c6e2",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/37-thinking-minimum-en-light.png",
+      "sha256": "77430425f9ffaf21cf1d571fd175f17b83f5dde49e3c28a6803850601c30c72b",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/38-shell-after-settings.png",
+      "sha256": "b7256faba4e4f08b127d6ca5c332cb917019e2939644049135660ef0d104236b",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/39-fixture-input.png",
+      "sha256": "a2ddeddb16432858867b025b7e41451f8a525e2327374330ea94a10be85fba2d",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/40-fixture-created.png",
+      "sha256": "108a728e532914e53c87bcc5575253926ff088232b03ab8a84cc0c1d6a8ac386",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/41-cwd-input.png",
+      "sha256": "f043acb1e445683b27ddf8777efd7f55bf30d1fb1e7f90343b3f4e34845f1112",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/42-files-en-light.png",
+      "sha256": "a996acac290a3cfd01c48dab6b40e853094c6ce3d99087f329368da76deef5ac",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/43-f2-initial-en-light.png",
+      "sha256": "495eb969c5b0c8a7bc9d00b4caef1cd9ac07a91acd0a4094a9ec72ef76ef395a",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/44-f2-first-escape-en-light.png",
+      "sha256": "a996acac290a3cfd01c48dab6b40e853094c6ce3d99087f329368da76deef5ac",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/45-list-focus-en-light.png",
+      "sha256": "1be108617ddc9d3aced1b44fb89d8e3f6b899e33f9aa0de6a2b550ac007fc302",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/46-f2-partial-en-light.png",
+      "sha256": "1284ba86c8a6e142e142ae576eb7ad1d694043681366febac68c8090f27af717",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/47-f2-partial-escape-en-light.png",
+      "sha256": "1be108617ddc9d3aced1b44fb89d8e3f6b899e33f9aa0de6a2b550ac007fc302",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/48-f7-edited-en-light.png",
+      "sha256": "e385047ab810ea3ee818d12651e98dd785e8c367c0f522c52a878da30da09523",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/49-f7-first-escape-en-light.png",
+      "sha256": "1be108617ddc9d3aced1b44fb89d8e3f6b899e33f9aa0de6a2b550ac007fc302",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/50-f7-list-focus-en-light.png",
+      "sha256": "a996acac290a3cfd01c48dab6b40e853094c6ce3d99087f329368da76deef5ac",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/51-hash-input.png",
+      "sha256": "cc3cbc3694849d54940a569f076de84699f4b0de84af8eed2883802c3d3f9982",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/52-light-shell-input.png",
+      "sha256": "ec3a6008862baddd047591dd82ecd12c65bbaed3a1c8cbfcf1500d4405bf6876",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/53-light-original-shell.png",
+      "sha256": "97b5d724a8c2df1180e55441532cb78a45d9f5929d0234b37920625532669130",
+      "visually_reviewed": true
+    },
+    {
+      "path": "operator/54-finish-input.png",
+      "sha256": "f10fe69663a2abfe059c0f85ef4386cc620057c20d02c98e3e648fa920e84833",
+      "visually_reviewed": true
+    }
+  ],
+  "files_unchanged": {
+    "alpha.txt": "054ee4daacb7ff12728008b35ca4f8b1518a5ca9b7fb3a6f7995e8c8b3053036",
+    "beta.txt": "ef67bc949dcdeefda817c11799e7be468f54cd40a2a2851aef81191c22fa4406"
+  }
+}
