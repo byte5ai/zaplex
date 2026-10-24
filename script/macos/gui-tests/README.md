@@ -100,3 +100,19 @@ bleiben. Vor Return wird die vollständig angekommene Texteingabe am öffentlich
 AX-Wert geprüft und ein Screenshot gesichert; der Erfolgsnachweis bleibt OCR der
 Ausgabe. Feste Ablehnungsgründe aus dem App-Log helfen, eine Shell-Startsperre von
 verlorener Eingabe zu unterscheiden. Der alte Lauf belegt diese Ursache noch nicht.
+
+## OCR-Auflösung und gespeicherte Gegenproben
+
+Die Navigationserkennung vergrößert den Fenster-Screenshot im Testprozess auf
+jeweils die dreifache Pixelzahl pro Achse. Die App-Schriftgröße bleibt unverändert;
+die TSV-Positionen werden auf die tatsächliche Fenstergröße zurückgerechnet.
+Der Vergleich von Nonce, Shellzustand und Menütext bleibt exakt. Das folgt der
+[Tesseract-Empfehlung zur Bildauflösung](https://tesseract-ocr.github.io/tessdoc/ImproveQuality.html#rescaling).
+
+Vor XCTest prüft ein eigenständiger Swift-Test die Originalbilder aus dem
+fehlgeschlagenen Lauf 40087073327: korrekte Ausgabe `ZQA 149060 963`, Ablehnung
+einer falschen Nonce und eines falschen Zustands sowie Ablehnung des noch nicht
+abgeschickten Befehls. Unabhängig gemessene Bildkoordinaten prüfen die Abbildung
+bei normaler und halber Punktauflösung. `fixtures/ocr/provenance.json` enthält
+Herkunft und Hashes; `ocr-regression.log` archiviert Ergebnis und TSV. Diese
+Gegenproben ergänzen die fünfzehn unveränderten Nutzerabläufe.

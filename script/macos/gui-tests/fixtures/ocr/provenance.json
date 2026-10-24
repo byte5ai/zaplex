@@ -1,0 +1,18 @@
+{
+  "source_run": 40087073327,
+  "artifact_id": 12558924250,
+  "case": "NavigationTests/testSplitDown",
+  "app_source_sha": "b0eff3ee326b7a4884de3681123cd84fad5ef45f",
+  "original_ocr": "ZQA 149960 963",
+  "visible_output": "ZQA 149060 963",
+  "images": [
+    {
+      "name": "before-return.png",
+      "sha256": "e8fb2fb04d4669a4147289c83e6d2d8c54e86361b886112baf49cebcd11b66bb"
+    },
+    {
+      "name": "rendered-output.png",
+      "sha256": "fd8df4bcd578096de2824bb76635e581f7cf06f5fdc1fad2f898ae4c93de65a1"
+    }
+  ]
+}

@@ -46,6 +46,15 @@ cat /Users/Shared/macrunner-image.txt > "$art/runner-image.txt"
 xcodebuild -version > "$art/xcode.txt"
 sw_vers > "$art/macos.txt"
 
+# Older immutable test revisions predate the OCR helper and its fixtures.
+if [[ -f "$root/ZaplexUITests/RenderedText.swift" ]]; then
+  mkdir -p "$work/ocr"
+  cp "$root/ocr-regression.swift" "$work/ocr/main.swift"
+  xcrun swiftc "$root/ZaplexUITests/RenderedText.swift" "$work/ocr/main.swift" \
+    -o "$work/ocr/regression" > "$art/ocr-build.log" 2>&1
+  "$work/ocr/regression" "$root/fixtures/ocr" > "$art/ocr-regression.log" 2>&1
+fi
+
 xcodegen generate --spec "$work/project.yml"
 xcodebuild build-for-testing -project "$work/ZaplexGUI.xcodeproj" -scheme ZaplexGUI \
   -destination 'platform=macOS' -derivedDataPath "$work/build" \
