@@ -7,6 +7,25 @@ use crate::{
 use chrono::Utc;
 use warpui::{App, SingletonEntity};
 
+#[test]
+fn thinking_display_labels_preserve_their_behavior() {
+    crate::i18n::init(Some("en"));
+    for (mode, label, visible, expanded) in [
+        (
+            ThinkingDisplayMode::ShowAndCollapse,
+            "Show & collapse",
+            true,
+            false,
+        ),
+        (ThinkingDisplayMode::AlwaysShow, "Always show", true, true),
+        (ThinkingDisplayMode::NeverShow, "Never show", false, false),
+    ] {
+        assert_eq!(mode.display_name(), label);
+        assert_eq!(mode.should_render(), visible);
+        assert_eq!(mode.should_keep_expanded(), expanded);
+    }
+}
+
 fn create_test_request_limit_info(
     limit: usize,
     used: usize,

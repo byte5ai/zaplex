@@ -45,7 +45,7 @@ class CompletionTests(unittest.TestCase):
         result = self.combine()
         self.assertEqual(result["local_gui"], "pass")
         self.assertEqual(result["product_acceptance"], "not-run")
-        self.assertEqual(len(result["cases"]), 15)
+        self.assertEqual(len(result["cases"]), 16)
         self.assertEqual({case["name"] for case in result["cases"]}, CASES)
         self.assertEqual([case["name"] for case in result["cases"] if case["run_id"] == 456], [FAILED])
         self.assertEqual((self.before, self.after), originals)

@@ -22,14 +22,14 @@ class LauncherTests(unittest.TestCase):
     def test_full_runs_all_fifteen_without_filter_or_empty_argument(self):
         result = self.invoke("full")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["full", "15", "0"])
+        self.assertEqual(result.stdout.splitlines(), ["full", "16", "0"])
 
     def test_diagnostic_suites_have_exact_filters(self):
         cases = {
             "terminal": ["3", "2", "-only-testing:ZaplexUITests/SmokeTests",
                          "-skip-testing:ZaplexUITests/SmokeTests/testNativeCloseButtonClosesWindow"],
             "navigation": ["8", "1", "-only-testing:ZaplexUITests/NavigationTests"],
-            "surfaces": ["3", "1", "-only-testing:ZaplexUITests/SurfaceTests"],
+            "surfaces": ["4", "1", "-only-testing:ZaplexUITests/SurfaceTests"],
         }
         for suite, expected in cases.items():
             with self.subTest(suite=suite):

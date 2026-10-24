@@ -1,5 +1,59 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+#[test]
+fn agent_settings_copy_is_available_in_both_locales() {
+    use i18n_embed::{fluent::FluentLanguageLoader, LanguageLoader};
+
+    let cases = [
+        (
+            "settings-ai-thinking-show-collapse",
+            "Show & collapse",
+            "Anzeigen und einklappen",
+        ),
+        (
+            "settings-ai-thinking-always-show",
+            "Always show",
+            "Immer anzeigen",
+        ),
+        (
+            "settings-ai-thinking-never-show",
+            "Never show",
+            "Nie anzeigen",
+        ),
+        (
+            "prompt-editor-restore-default",
+            "Restore default",
+            "Standard wiederherstellen",
+        ),
+        ("chip-editor-left-side", "Left side", "Linke Seite"),
+        ("chip-editor-right-side", "Right side", "Rechte Seite"),
+    ];
+    for locale in ["en", "de"] {
+        // A private loader avoids changing the process-wide locale of other tests.
+        let loader = FluentLanguageLoader::new("warp", "en".parse().unwrap());
+        loader
+            .load_languages(&super::Localizations, &[locale.parse().unwrap()])
+            .unwrap();
+        for (key, english, german) in cases {
+            assert_eq!(
+                loader.get(key),
+                if locale == "en" { english } else { german }
+            );
+        }
+        let description = format!(
+            "{}Wispr Flow{}",
+            loader.get("settings-ai-voice-description-before-link"),
+            loader.get("settings-ai-voice-description-after-link"),
+        );
+        let expected = if locale == "en" {
+            "Voice input allows you to control Zaplex by speaking directly to your terminal (powered by Wispr Flow)."
+        } else {
+            "Mit der Spracheingabe kannst du Zaplex steuern, indem du direkt mit deinem Terminal sprichst (unterstützt von Wispr Flow)."
+        };
+        assert_eq!(description, expected);
+    }
+}
+
 #[derive(Debug, Default, Eq, PartialEq)]
 struct FluentEntrySignature {
     attributes: BTreeSet<String>,

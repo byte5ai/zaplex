@@ -1142,6 +1142,13 @@ settings-ai-rules-description = Rules help the Zaplex Agent follow your conventi
 
 # Voice
 settings-ai-voice-input-label = Voice Input
+settings-ai-voice-description-before-link = Voice input allows you to control Zaplex by speaking directly to your terminal (powered by{ " " }
+settings-ai-voice-description-after-link = ).
+settings-ai-thinking-show-collapse = Show & collapse
+settings-ai-thinking-always-show = Always show
+settings-ai-thinking-never-show = Never show
+chip-editor-left-side = Left side
+chip-editor-right-side = Right side
 settings-ai-voice-key = Key for Activating Voice Input
 settings-ai-voice-key-hint = Press and hold to activate.
 

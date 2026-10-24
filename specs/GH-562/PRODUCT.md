@@ -30,6 +30,14 @@ prüft das installierte DMG. Ein erfolgreicher Code-Review ersetzt keinen Ablauf
    Dateimanager-Aktionen sichtbar, wie in `docs/ui/README.md` vereinbart.
    Das echte Fenster wird dafür über das native Menü „Move & Resize → Left“
    schmaler gemacht; ein bloßes Browser-Mockup reicht nicht.
+10. Normale macOS-Fenster behalten mindestens 480×320 Punkte Inhaltsfläche.
+    Eine native Ziehgeste kann sie nicht auf 100×100 verkleinern; am Minimum und
+    nach erneutem Vergrößern verarbeitet dieselbe Shell Eingaben sichtbar und
+    behält ihren Zustand.
+    Gespeicherte und programmatisch gesetzte Größen beachten dieselbe Grenze.
+    Die Bedienbarkeit der Einstellungen bei kleinster Größe wird zusätzlich
+    in Deutsch/Englisch und Hell/Dunkel geprüft. Angeheftete Panels behalten
+    ihren eigenen Größenmechanismus.
 
 ## Vollständige Produktabnahme
 

@@ -8,7 +8,7 @@ import unittest
 from report import CASES, assess, matching_test_cases, validate_selection
 
 
-FULL_COUNT = 15
+FULL_COUNT = 16
 
 
 class AcceptanceReportTests(unittest.TestCase):

@@ -2,6 +2,11 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.36] — 2026-10-24
+
+- Agent-Einstellungen übersetzen Spracheingabe-Hilfe, Werkzeugleistenbereiche und Denkanzeige vollständig auf Deutsch (#688).
+- Normale macOS-Fenster behalten mindestens 480×320 Punkte Inhaltsfläche, auch beim Wiederherstellen und bei programmatischen Größenänderungen (#685).
+
 ## [1.2.35] — 2026-10-24
 
 - Umbenennen und Neuer Ordner schließen beim ersten Escape auch mit markiertem Text; die Dateiliste erhält den Fokus zurück (#684).

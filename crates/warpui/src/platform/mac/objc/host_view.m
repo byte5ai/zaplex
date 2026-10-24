@@ -135,7 +135,8 @@ void warp_marked_text_cleared(WarpHostView *);
     // We could receive invalid frame sizes when the window is moved offscreen.
     // Validate the size against the minimum drawable size of the window before
     // passing to the rust side.
-    if (size.height >= self.window.minSize.height && size.width >= self.window.minSize.width) {
+    if (size.height >= self.window.contentMinSize.height &&
+        size.width >= self.window.contentMinSize.width) {
         [super setFrameSize:size];
         // It's an important optimization to only invoke this if the size changed.
         if (self.readyForWarp && changed) {

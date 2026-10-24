@@ -1,9 +1,32 @@
 use cocoa::base::{id, nil};
-use cocoa::foundation::NSAutoreleasePool;
+use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize};
 use objc::runtime::{NO, YES};
 use objc::{class, msg_send, sel, sel_impl};
 
 use super::{to_string, warp_should_dispatch_native_window_chrome_event};
+
+extern "C" {
+    fn warp_constrain_window_frame(frame: NSRect, minimum_size: NSSize) -> NSRect;
+}
+
+#[test]
+fn undersized_window_frames_grow_without_moving_the_top_left_corner() {
+    let minimum = NSSize::new(480., 320.);
+    for (width, height, expected_width, expected_height, expected_y) in [
+        (100., 100., 480., 320., -170.),
+        (300., 600., 480., 600., 50.),
+        (800., 100., 800., 320., -170.),
+        (480., 320., 480., 320., 50.),
+        (1024., 678., 1024., 678., 50.),
+    ] {
+        let requested = NSRect::new(NSPoint::new(25., 50.), NSSize::new(width, height));
+        let constrained = unsafe { warp_constrain_window_frame(requested, minimum) };
+        assert_eq!(constrained.origin.x, 25.);
+        assert_eq!(constrained.origin.y, expected_y);
+        assert_eq!(constrained.size.width, expected_width);
+        assert_eq!(constrained.size.height, expected_height);
+    }
+}
 
 unsafe fn string_from_utf16(code_units: &[u16]) -> id {
     let string: id = msg_send![class!(NSString), alloc];

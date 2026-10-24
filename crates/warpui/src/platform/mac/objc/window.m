@@ -22,6 +22,15 @@ NSWindowStyleMask warpWindowMask = NSWindowStyleMaskClosable | NSWindowStyleMask
 // The default macOS titlebar height (in points).
 static const CGFloat DEFAULT_TITLEBAR_HEIGHT = 28.0;
 
+// Preserve the requested top-left corner when growing a frame to its minimum.
+NSRect warp_constrain_window_frame(NSRect frame, NSSize minimumSize) {
+    CGFloat height = MAX(frame.size.height, minimumSize.height);
+    frame.origin.y -= height - frame.size.height;
+    frame.size.width = MAX(frame.size.width, minimumSize.width);
+    frame.size.height = height;
+    return frame;
+}
+
 BOOL warp_should_dispatch_native_window_chrome_event(BOOL mouseDownOnWindowButton,
                                                      BOOL mouseDownOnResizeEdge,
                                                      BOOL nativeResizeDispatchIsSupported) {
@@ -313,6 +322,7 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
 @interface WarpWindow ()
 - (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event;
 - (BOOL)eventIsOverResizeEdge:(NSEvent *)event;
+- (NSRect)frameRespectingContentMinimum:(NSRect)frame;
 @end
 
 @implementation WarpWindow {
@@ -336,6 +346,29 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
 
 @synthesize testMode;
 @synthesize hideTitleBar;
+
+- (NSRect)frameRespectingContentMinimum:(NSRect)frame {
+    if (_suppressFrameConstraintsDuringDrag) {
+        return frame;
+    }
+    NSSize minimum = self.contentMinSize;
+    if (minimum.width == 0 && minimum.height == 0) {
+        return frame;
+    }
+    NSSize minimumFrame = [self frameRectForContentRect:NSMakeRect(0, 0, minimum.width,
+                                                                  minimum.height)].size;
+    return warp_constrain_window_frame(frame, minimumFrame);
+}
+
+// AppKit does not enforce contentMinSize in these two programmatic setters.
+// Restored bounds and Accessibility resizing must obey the same limit as dragging.
+- (void)setFrame:(NSRect)frame display:(BOOL)display {
+    [super setFrame:[self frameRespectingContentMinimum:frame] display:display];
+}
+
+- (void)setFrame:(NSRect)frame display:(BOOL)display animate:(BOOL)animate {
+    [super setFrame:[self frameRespectingContentMinimum:frame] display:display animate:animate];
+}
 
 - (void)applyTitlebarHeight:(CGFloat)height {
     _isApplyingTitlebarHeight = YES;
@@ -383,7 +416,11 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
 }
 
 - (void)setSuppressFrameConstraintsDuringDrag:(BOOL)value {
+    BOOL wasSuppressed = _suppressFrameConstraintsDuringDrag;
     _suppressFrameConstraintsDuringDrag = value;
+    if (wasSuppressed && !value) {
+        [self setFrame:self.frame display:NO];
+    }
 }
 
 - (BOOL)canBecomeMainWindow {
@@ -592,6 +629,14 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
                                                                 backing:NSBackingStoreBuffered
                                                                   defer:NO];
     init_warp_nswindow(window_result, testMode, hideTitleBar);
+
+    // Keep room for the settings navigation, scrollable page and window chrome.
+    // Headless rendering fixtures have no user-resizable window; real-display
+    // integration tests use the same limit as the installed app.
+    if (!testMode) {
+        window_result.contentMinSize = NSMakeSize(480., 320.);
+        [window_result setFrame:window_result.frame display:NO];
+    }
 
     return window_result;
 }
