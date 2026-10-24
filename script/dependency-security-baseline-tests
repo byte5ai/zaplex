@@ -188,6 +188,7 @@ for name, minimum in {
     "webpki-roots": "1.0.10",
     "webpki-root-certs": "1.0.10",
     "spin": "0.10.1",
+    "tokio": "1.53.3",
 }.items():
     if name not in versions:
         fail(f"expected dependency {name} is absent from Cargo.lock")
