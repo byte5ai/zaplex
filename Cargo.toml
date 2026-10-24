@@ -531,7 +531,7 @@ yaml-rust = { git = "https://github.com/warpdotdev/yaml-rust.git", rev = "516847
 
 tink-core = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/main" }
 tink-proto = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/main" }
-tink-hybrid = { git = "https://github.com/warpdotdev/tink-rust", branch = "warpdotdev/main" }
+tink-hybrid = { path = "crates/tink-hybrid" }
 
 tikv-jemallocator = { git = "https://github.com/warpdotdev/jemallocator.git", rev = "2ee30bfdf7059223b54810e4ea6c666f0a379e0b" }
 tikv-jemalloc-sys = { git = "https://github.com/warpdotdev/jemallocator.git", rev = "2ee30bfdf7059223b54810e4ea6c666f0a379e0b" }
