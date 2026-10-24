@@ -1127,7 +1127,7 @@ impl SshServerView {
                     Ok(Ok(snapshot)) => me.apply_reload_snapshot(snapshot, ctx),
                     Ok(Err(error)) => {
                         log::error!("ssh_server_view: reload failed: {error:?}");
-                        me.clear_reload_state();
+                        me.clear_reload_state(ctx);
                         me.status = Some(StatusBanner::Error(
                             error
                                 .downcast_ref::<SshSecretStoreError>()
@@ -1140,7 +1140,7 @@ impl SshServerView {
                     }
                     Err(error) => {
                         log::error!("ssh_server_view: reload worker failed: {error}");
-                        me.clear_reload_state();
+                        me.clear_reload_state(ctx);
                         me.status = Some(StatusBanner::Error(crate::t!("common-error")));
                         ctx.notify();
                     }
@@ -1149,8 +1149,20 @@ impl SshServerView {
         );
     }
 
-    fn clear_reload_state(&mut self) {
+    fn update_pane_title(&self, ctx: &mut ViewContext<Self>) {
+        let title = self
+            .node
+            .as_ref()
+            .map(|node| node.name.clone())
+            .unwrap_or_else(|| crate::t!("ssh-server-title"));
+        self.pane_configuration.update(ctx, |config, ctx| {
+            config.set_title(title, ctx);
+        });
+    }
+
+    fn clear_reload_state(&mut self, ctx: &mut ViewContext<Self>) {
         self.node = None;
+        self.update_pane_title(ctx);
         self.server = None;
         self.runtime_diagnostics_server = None;
         self.clear_runtime_diagnostics();
@@ -1177,6 +1189,7 @@ impl SshServerView {
         self.original_parent_id = node.as_ref().and_then(|node| node.parent_id.clone());
         self.current_group_id = self.original_parent_id.clone();
         self.node = node;
+        self.update_pane_title(ctx);
         self.server = server;
         self.runtime_diagnostics_server = diagnostics_server.clone();
         self.runtime_diagnostics_refresh_button

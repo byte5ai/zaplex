@@ -1,0 +1,231 @@
+{
+  "artifact_run_id": "40049854378",
+  "app_source_sha": "b270ee372f8548b83363916dc8fbddc1ee7b5884",
+  "harness_source_sha": "e31eb877c74dbcdc0dce7f66cfa5104ea183f419",
+  "dmg_sha256": "fcb082266c6b4f61fb8bb0c3d871e9ccafb8c229225e528f288bafb36f800644",
+  "exploration_run_id": "40063121804",
+  "locale": "de (001–006: en)",
+  "theme": "dark",
+  "application_capture_pixels": [
+    1024,
+    678
+  ],
+  "private_archive_sha256": "7ea5ddcd165b12bf7d1a0c8a34134c9de5bb450a45d82f5b1037f5956d780c5a",
+  "captures": [
+    {
+      "name": "001-initial.png",
+      "sha256": "bb17c5b7bb51b90ac64d60d99b9c1f5cc94c6fd6bdc26c22369364bd116aab38",
+      "bytes": 76135
+    },
+    {
+      "name": "002-settings.png",
+      "sha256": "87fc0c086428abe1099702a4d85c4613612f8b185939596cf8c14923ae6d1485",
+      "bytes": 139041
+    },
+    {
+      "name": "003-language-search.png",
+      "sha256": "5a6827c9cb344ca309e1127110f510e744c25d7384944c118d7ceabe49650c14",
+      "bytes": 128267
+    },
+    {
+      "name": "004-language-setting.png",
+      "sha256": "08252d969c5aef3381eaa453ae9daacd45b6fadde654a3d6857e9ec2cfbab63a",
+      "bytes": 46692
+    },
+    {
+      "name": "005-language-options.png",
+      "sha256": "5fc920d606188a9e4dced34a9dbc4a2fd0fbef222a4bfa5b66f218806467c9b0",
+      "bytes": 51134
+    },
+    {
+      "name": "006-german-selected.png",
+      "sha256": "cb689f7fdd9c53ad6c6cca725c010fd36d4057b017e9456dca44615256ffdfc3",
+      "bytes": 73590
+    },
+    {
+      "name": "007-german-restarted.png",
+      "sha256": "4e15ef165ef1a8cde710e0cd5c63e8f7df724d5674b7e3a35e86795f7756b062",
+      "bytes": 59577
+    },
+    {
+      "name": "008-connections-tooltip.png",
+      "sha256": "cb7f5cbff5da093b6df00bfac965c42c55cd36cf496850b3cb08c5dbce651646",
+      "bytes": 61353
+    },
+    {
+      "name": "009-connections-empty.png",
+      "sha256": "51d12cdd778b8660fec264367bf761816c9754d9d6d9f001126939de693e83f0",
+      "bytes": 55647
+    },
+    {
+      "name": "010-folder-tooltip.png",
+      "sha256": "0a26c0524b5c8dcf9bd7348fae31cb7492389c1417150badc1942f2d3cd57f12",
+      "bytes": 54406
+    },
+    {
+      "name": "011-new-folder.png",
+      "sha256": "9cffe39cc0dfaa8d146810c4f9220c95ccad11a64dba57d1091695a621767889",
+      "bytes": 46075
+    },
+    {
+      "name": "012-folder-name.png",
+      "sha256": "cbb85a2989af8da72b9b8df58f2abc540ad30c729328adfd50cb102d0bf7d3c8",
+      "bytes": 48161
+    },
+    {
+      "name": "013-new-host-form.png",
+      "sha256": "f56c1f6df80d1b8707644b7ce7b2feb41f2d027b75c2f41b1631e5d4b4a32948",
+      "bytes": 67155
+    },
+    {
+      "name": "014-host-editor.png",
+      "sha256": "5a4b9ff185af9d1636758e27b127ef005da8c926999cefaffa44b42cb3292f40",
+      "bytes": 77845
+    },
+    {
+      "name": "015-host-invalid.png",
+      "sha256": "4ae5c95b2af9fb391a0ae831788b9add31f27eedb93673502162e6b9f7728f28",
+      "bytes": 83281
+    },
+    {
+      "name": "016-host-invalid-save.png",
+      "sha256": "351561abdd125afbef2441607f5c396de905ce0e93e1adc65cb70da40c41a277",
+      "bytes": 90730
+    },
+    {
+      "name": "017-host-corrected.png",
+      "sha256": "d4f61ca7ac55a34877189e7e19b178ada350de6baf240857c7fe7af6621c602b",
+      "bytes": 82938
+    },
+    {
+      "name": "018-host-local-port.png",
+      "sha256": "2872f6b59f1df6b2204c573289673554e26ae59f991e74ce9e0b0d911a278d0b",
+      "bytes": 83157
+    },
+    {
+      "name": "019-host-group-options.png",
+      "sha256": "11f7ca51faf197eda60a9ce320688d76188d2b1c47aa8a9d71acfa22faba77ba",
+      "bytes": 85117
+    },
+    {
+      "name": "020-host-saved.png",
+      "sha256": "c815f9f711cde759ce05f8e29ed6acf103118af85f7165b330b52f9eb67769ef",
+      "bytes": 89989
+    },
+    {
+      "name": "021-test-closed-port.png",
+      "sha256": "c58e920eacb3c9b49e875fcaf81139d8f3f5b2df8bd99868cca1a31189d19c59",
+      "bytes": 94481
+    },
+    {
+      "name": "022-auth-fields.png",
+      "sha256": "5497c6b297b2b7d18c19d5821846df6cf63008bd8ca69548d726b83f50a40b56",
+      "bytes": 90763
+    },
+    {
+      "name": "023-synthetic-auth-value.png",
+      "sha256": "19c9a8276ff9d04bbd5737281cb9455bcf743322e7f25b5d3788173f929b5788",
+      "bytes": 90869
+    },
+    {
+      "name": "024-host-ready-to-test.png",
+      "sha256": "e77613689a4bdf628d45060fdbc79522b6df400de8fde8425d0938148fa11860",
+      "bytes": 90242
+    },
+    {
+      "name": "025-connection-refused.png",
+      "sha256": "2aeb3dd0c14875b445278823f112e62fc84432a2e2349bd969d6fb386e5bd0db",
+      "bytes": 100250
+    },
+    {
+      "name": "026-long-host-tooltip.png",
+      "sha256": "1e52a5af4c32b785adc18df1192a0d5ec96f020c407c7ddb05b8c8ff74414e80",
+      "bytes": 99879
+    },
+    {
+      "name": "027-favorite-tooltip.png",
+      "sha256": "54fb19d2a9037f48f2083b0caebd5552d3effd5b08573bc4059f50bbc82e3555",
+      "bytes": 99531
+    },
+    {
+      "name": "028-favorite-launch-menu.png",
+      "sha256": "7ed94217b1e302540f962a4036efd917ba52d9c48e7e6aeebf07ded0122be0b1",
+      "bytes": 100675
+    },
+    {
+      "name": "029-favorite-flyout.png",
+      "sha256": "63027ef38e96d503126a55afdb714a4bd53f771a72c5ef3ffba695e145e8ed36",
+      "bytes": 111281
+    },
+    {
+      "name": "030-favorite-edit.png",
+      "sha256": "c2ad0343e8e69f83928c827d8f4ed73ae95b85309cfd8df7d14c369ec43793c2",
+      "bytes": 100036
+    },
+    {
+      "name": "031-favorite-full-name.png",
+      "sha256": "db991e69b31098b694f991015e8ddb5059a82a18a496a86d9b12662abae66fe5",
+      "bytes": 93530
+    },
+    {
+      "name": "032-favorite-actions-tooltip.png",
+      "sha256": "00e004d4105b98453cd35657c9157aab7ec27e34221bf4bca4e2dd0f92df97c9",
+      "bytes": 104200
+    },
+    {
+      "name": "033-favorite-removed.png",
+      "sha256": "7c7f889fba24680fa79947b7ed8a8dfa4bc7a4cb46d1d33763edcdccdc61eeff",
+      "bytes": 89856
+    },
+    {
+      "name": "034-nonfavorite-menu.png",
+      "sha256": "7b86e5a6a6708392178838bbb3246fb2b9339fb7f42909b7c8fc37b635b35675",
+      "bytes": 98603
+    },
+    {
+      "name": "035-other-hosts-flyout.png",
+      "sha256": "5e101988ac2c8910ca4686c32a6d44ebedd92b0cd9de34b7923ccf301258acf2",
+      "bytes": 103956
+    },
+    {
+      "name": "036-other-host-connect.png",
+      "sha256": "905c74f67fc26e825f4094674e8fb8d02b2ab481b65b3158ba51e900977b0e7f",
+      "bytes": 84498
+    },
+    {
+      "name": "037-connect-aborted.png",
+      "sha256": "905c74f67fc26e825f4094674e8fb8d02b2ab481b65b3158ba51e900977b0e7f",
+      "bytes": 84498
+    },
+    {
+      "name": "038-cancel-button.png",
+      "sha256": "60345cf127cf88b9e90ded4acd7e8b298cfd1a02058bd4928e85d49b964997e8",
+      "bytes": 86275
+    },
+    {
+      "name": "039-retry-closed-port.png",
+      "sha256": "abcf4af927a81aa551d4c94164c025108ce7d7952871bea8a2c8b9fc600902dc",
+      "bytes": 83115
+    },
+    {
+      "name": "040-focused-escape.png",
+      "sha256": "2a6cdf16440db6ce74ae435e1d86ecf3dfb6e44f49dbb821af2c599e445b460e",
+      "bytes": 84061
+    },
+    {
+      "name": "041-return-to-source.png",
+      "sha256": "7c7f889fba24680fa79947b7ed8a8dfa4bc7a4cb46d1d33763edcdccdc61eeff",
+      "bytes": 89856
+    },
+    {
+      "name": "042-cleanup-terminal.png",
+      "sha256": "5abce53f1d574922baa853c347289faf6ed5820ed5a334bb87bb211d6dd70d88",
+      "bytes": 74155
+    },
+    {
+      "name": "043-cleanup-command.png",
+      "sha256": "ad471a1c843e0733f0ff04dc5ad947a4c09c8e1f50de9a786b252304241b2206",
+      "bytes": 73717
+    }
+  ]
+}

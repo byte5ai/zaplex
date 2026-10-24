@@ -73,6 +73,7 @@ use crate::ssh_manager::{
 };
 use crate::terminal::view::{terminal_identity, TerminalIdentity};
 use crate::ui_components::compact_row_action::CompactRowAction;
+use crate::ui_components::icons::Icon;
 use crate::ui_components::modal_frame;
 use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
 use crate::view_components::DismissibleToast;
@@ -80,7 +81,6 @@ use crate::workspace::ToastStack;
 
 // ---- visual constants (see Drive) ----
 const TOOLBAR_BUTTON_SIZE: f32 = 26.0;
-const TOOLBAR_ICON_SIZE: f32 = 14.0;
 const ITEM_PADDING_VERTICAL: f32 = 5.0;
 const ITEM_PADDING_HORIZONTAL: f32 = 8.0;
 const ITEM_ICON_TEXT_SPACING: f32 = 8.0;
@@ -925,9 +925,10 @@ pub struct SshManagerPanel {
     focused_row: Option<FocusedRow>,
     keyboard_focused: bool,
 
-    add_folder_btn: MouseStateHandle,
-    add_server_btn: MouseStateHandle,
-    toggle_all_btn: MouseStateHandle,
+    add_folder_btn: CompactRowAction,
+    add_server_btn: CompactRowAction,
+    collapse_all_btn: CompactRowAction,
+    expand_all_btn: CompactRowAction,
     /// Hover state of the whole tree area. It must survive re-renders: a fresh
     /// state reports a hover change on every synthetic mouse move and re-renders forever.
     tree_mouse_state: MouseStateHandle,
@@ -1098,9 +1099,30 @@ impl SshManagerPanel {
             selected_id: None,
             focused_row: None,
             keyboard_focused: false,
-            add_folder_btn: MouseStateHandle::default(),
-            add_server_btn: MouseStateHandle::default(),
-            toggle_all_btn: MouseStateHandle::default(),
+            add_folder_btn: CompactRowAction::new(
+                Icon::Folder,
+                crate::t!("workspace-left-panel-ssh-manager-menu-new-folder"),
+                SshManagerPanelAction::AddRootFolder,
+                ctx,
+            ),
+            add_server_btn: CompactRowAction::new(
+                Icon::Plus,
+                crate::t!("workspace-left-panel-ssh-manager-menu-new-server"),
+                SshManagerPanelAction::ToggleAddMode,
+                ctx,
+            ),
+            collapse_all_btn: CompactRowAction::new(
+                Icon::ChevronUp,
+                crate::t!("workspace-left-panel-ssh-manager-collapse-all"),
+                SshManagerPanelAction::ToggleAllFolders,
+                ctx,
+            ),
+            expand_all_btn: CompactRowAction::new(
+                Icon::ChevronDown,
+                crate::t!("workspace-left-panel-ssh-manager-expand-all"),
+                SshManagerPanelAction::ToggleAllFolders,
+                ctx,
+            ),
             tree_mouse_state: MouseStateHandle::default(),
             row_states: HashMap::new(),
             favorite_host_ids: std::collections::HashSet::new(),
@@ -2940,80 +2962,39 @@ impl SshManagerPanel {
         resolve_parent_for_new_node(self.selected_id.as_deref(), &self.nodes)
     }
 
-    fn render_toolbar(
-        &self,
-        appearance: &warp_core::ui::appearance::Appearance,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let icon_color = theme.sub_text_color(theme.surface_2());
-
-        let make_btn = |icon: crate::ui_components::icons::Icon,
-                        state: MouseStateHandle,
-                        action: SshManagerPanelAction|
-         -> Box<dyn Element> {
-            let icon_el = ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
-                .with_width(TOOLBAR_ICON_SIZE)
-                .with_height(TOOLBAR_ICON_SIZE)
-                .finish();
-            Hoverable::new(state, move |_| {
-                Container::new(
-                    ConstrainedBox::new(icon_el)
-                        .with_width(TOOLBAR_BUTTON_SIZE)
-                        .with_height(TOOLBAR_BUTTON_SIZE)
-                        .finish(),
-                )
-                .with_uniform_padding(2.0)
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                .finish()
-            })
-            .with_cursor(Cursor::PointingHand)
-            .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(action.clone());
-            })
+    fn render_toolbar(&self) -> Box<dyn Element> {
+        let button = |action: &CompactRowAction| {
+            Container::new(
+                ConstrainedBox::new(action.render())
+                    .with_width(TOOLBAR_BUTTON_SIZE)
+                    .with_height(TOOLBAR_BUTTON_SIZE)
+                    .finish(),
+            )
+            .with_uniform_padding(2.0)
             .finish()
         };
-
-        // Left group: create buttons
         let left_group = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_spacing(4.0)
-            .with_child(make_btn(
-                crate::ui_components::icons::Icon::Folder,
-                self.add_folder_btn.clone(),
-                SshManagerPanelAction::AddRootFolder,
-            ))
-            .with_child(make_btn(
-                crate::ui_components::icons::Icon::Plus,
-                self.add_server_btn.clone(),
-                SshManagerPanelAction::ToggleAddMode,
-            ))
+            .with_child(button(&self.add_folder_btn))
+            .with_child(button(&self.add_server_btn))
             .with_main_axis_size(MainAxisSize::Min)
             .finish();
-
-        // Right side: the collapse/expand-all button — smart toggle. If any folder is currently expanded → show
-        // ChevronUp (meaning "collapse"), otherwise show ChevronDown (meaning "expand").
         let any_expanded = self
             .nodes
             .iter()
-            .any(|n| matches!(n.kind, NodeKind::Folder) && !n.is_collapsed);
-        let toggle_icon = if any_expanded {
-            crate::ui_components::icons::Icon::ChevronUp
+            .any(|node| matches!(node.kind, NodeKind::Folder) && !node.is_collapsed);
+        let toggle = if any_expanded {
+            &self.collapse_all_btn
         } else {
-            crate::ui_components::icons::Icon::ChevronDown
+            &self.expand_all_btn
         };
-        let right_group = make_btn(
-            toggle_icon,
-            self.toggle_all_btn.clone(),
-            SshManagerPanelAction::ToggleAllFolders,
-        );
-
-        // The whole toolbar: align both ends (MainAxisAlignment::SpaceBetween).
         Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(warpui::elements::MainAxisAlignment::SpaceBetween)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(left_group)
-            .with_child(right_group)
+            .with_child(button(toggle))
             .finish()
     }
 
@@ -4128,6 +4109,9 @@ impl SshManagerPanel {
                 .finish();
         }
 
+        let full_name = node.name.clone();
+        let keyboard_focused = self.keyboard_focused
+            && self.focused_row == Some(FocusedRow::Node(node.id.clone()));
         let hoverable = Hoverable::new(state, move |mouse| {
             let mut c = Container::new(row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
@@ -4140,7 +4124,24 @@ impl SshManagerPanel {
             } else if mouse.is_hovered() {
                 c = c.with_background(internal_colors::fg_overlay_1(theme));
             }
-            c.finish()
+            let mut stack = Stack::new().with_child(c.finish());
+            if mouse.is_hovered() || keyboard_focused {
+                let tooltip = ConstrainedBox::new(
+                    appearance.ui_builder().tool_tip(full_name).build().finish(),
+                )
+                .with_max_width(400.0)
+                .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        Vector2F::new(0.0, 3.0),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::BottomLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+            stack.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
@@ -4781,7 +4782,7 @@ impl View for SshManagerPanel {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = warp_core::ui::appearance::Appearance::as_ref(app);
 
-        let toolbar = Container::new(self.render_toolbar(appearance))
+        let toolbar = Container::new(self.render_toolbar())
             .with_uniform_padding(PANEL_HORIZONTAL_PADDING)
             .finish();
 

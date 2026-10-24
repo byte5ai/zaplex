@@ -15,6 +15,8 @@ use warpui::color::ColorU;
 use warpui::platform::WindowStyle;
 use warpui::{App, Presenter, WindowInvalidation};
 
+use crate::pane_group::pane::ssh_server_pane::SshServerPane;
+use crate::pane_group::{PaneConfigurationEvent, PaneContent};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::view_components::dropdown::DropdownAction;
@@ -1009,4 +1011,111 @@ fn cockpit_and_ssh_dialogs_use_shared_state_contract() {
             "the same background target must work after closing"
         );
     });
+}
+
+#[test]
+fn ssh_saved_name_updates_existing_pane_header_but_draft_does_not() {
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        crate::i18n::init(Some("en"));
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        let (_, pane) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let server = ctx.add_typed_action_view(|ctx| {
+                let mut view = SshServerView::new_with_secret_store(
+                    "header-fixture".to_string(),
+                    Arc::new(MockSecretStore::new()),
+                    ctx,
+                );
+                view.reload_generation = view.reload_generation.wrapping_add(1);
+                view.reload_in_flight = false;
+                view.update_form_interaction(ctx);
+                view
+            });
+            let pane = SshServerPane::from_view("header-fixture".to_string(), server.clone(), ctx);
+            SshHeaderTestRoot { pane, server }
+        });
+        let server = pane.read(&app, |root, _| root.server.clone());
+        let pane_id = pane.read(&app, |root, _| root.pane.id());
+        let configuration = server.read(&app, |view, _| view.pane_configuration.clone());
+        let header_updates = Rc::new(RefCell::new(Vec::new()));
+        let observed = header_updates.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&configuration, move |configuration, event, ctx| {
+                if matches!(event, PaneConfigurationEvent::HeaderContentChanged) {
+                    observed
+                        .borrow_mut()
+                        .push(configuration.as_ref(ctx).title().to_string());
+                }
+            });
+        });
+        let snapshot = |name: &str| ServerReloadSnapshot {
+            node: Some(SshNode {
+                id: "header-fixture".to_string(),
+                parent_id: None,
+                kind: NodeKind::Server,
+                name: name.to_string(),
+                sort_order: 0,
+                created_at: chrono::Utc::now().naive_utc(),
+                updated_at: chrono::Utc::now().naive_utc(),
+                is_collapsed: false,
+            }),
+            server: None,
+            diagnostics_server: None,
+            folders: Vec::new(),
+            onekey_credentials: Vec::new(),
+            password_saved: false,
+            root_password_saved: false,
+        };
+        server.update(&mut app, |view, ctx| {
+            view.apply_reload_snapshot(snapshot("build-alpha"), ctx);
+        });
+        assert_eq!(&*header_updates.borrow(), &["build-alpha"]);
+        server.update(&mut app, |view, ctx| {
+            view.name_editor.update(ctx, |editor, ctx| {
+                editor.set_buffer_text("unsaved-host", ctx)
+            });
+        });
+        assert_eq!(
+            &*header_updates.borrow(),
+            &["build-alpha"],
+            "draft edits must not rename the pane"
+        );
+        server.update(&mut app, |view, ctx| {
+            view.apply_reload_snapshot(snapshot("deploy-beta-longer"), ctx);
+        });
+        assert_eq!(
+            &*header_updates.borrow(),
+            &["build-alpha", "deploy-beta-longer"]
+        );
+        server.read(&app, |view, ctx| {
+            assert_eq!(
+                view.pane_configuration.as_ref(ctx).title(),
+                "deploy-beta-longer"
+            );
+        });
+        assert_eq!(pane.read(&app, |root, _| root.pane.id()), pane_id);
+    });
+}
+
+struct SshHeaderTestRoot {
+    pane: SshServerPane,
+    server: ViewHandle<SshServerView>,
+}
+
+impl Entity for SshHeaderTestRoot {
+    type Event = ();
+}
+
+impl TypedActionView for SshHeaderTestRoot {
+    type Action = ();
+}
+
+impl View for SshHeaderTestRoot {
+    fn ui_name() -> &'static str {
+        "SshHeaderTestRoot"
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        self.pane.id().render(app)
+    }
 }

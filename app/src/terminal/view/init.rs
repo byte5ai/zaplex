@@ -58,6 +58,8 @@ pub const INPUT_BOX_VISIBLE_KEY: &str = "InputVisible";
 pub const KEYBOARD_PROTOCOL_ENABLED_KEY: &str = "KeyboardProtocolEnabled";
 pub const CLI_AGENT_SESSION_ACTIVE_KEY: &str = "CLIAgentSessionActive";
 pub const ROOT_AMBIENT_AGENT_PANE_KEY: &str = "RootAmbientAgentPane";
+pub const REMOTE_RETRY_VISIBLE_KEY: &str = "RemoteRetryVisible";
+pub const REMOTE_CANCEL_VISIBLE_KEY: &str = "RemoteCancelVisible";
 
 /// Some keybindings will do different things in different contexts. We break
 /// these into their own function to ensure we pay special attention to
@@ -68,13 +70,31 @@ fn init_overlapping_keybindings(app: &mut AppContext) {
     let escape_key: &str = "escape";
     let cmd_or_ctrl_enter: &str = "cmdorctrl-enter";
 
+    // Recovery participates in keymap dispatch, before ordinary terminal input.
+    // The contexts mirror the rendered actions; focused child dialogs still
+    // handle their own keys first through the normal responder chain.
+    app.register_fixed_bindings([
+        FixedBinding::new(
+            "enter",
+            TerminalAction::RetryRemoteRestore,
+            id!("Terminal") & id!(REMOTE_RETRY_VISIBLE_KEY) & !id!("IMEOpen"),
+        ),
+        FixedBinding::new(
+            escape_key,
+            TerminalAction::CancelRemoteRestore,
+            id!("Terminal") & id!(REMOTE_CANCEL_VISIBLE_KEY) & !id!("IMEOpen"),
+        ),
+    ]);
+
     // No Active Block Context
     app.register_fixed_bindings([FixedBinding::new(
         escape_key,
         TerminalAction::MaybeDismissToolTip {
             from_keybinding: true,
         },
-        !id!(SSH_ERROR_BLOCK_VISIBLE_KEY) & id!("Terminal"),
+        !id!(SSH_ERROR_BLOCK_VISIBLE_KEY)
+            & !id!(REMOTE_CANCEL_VISIBLE_KEY)
+            & id!("Terminal"),
     )]);
 
     let block_action_context = || id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand");
@@ -86,7 +106,9 @@ fn init_overlapping_keybindings(app: &mut AppContext) {
             TerminalAction::NotifySshErrorBlock(
                 SshErrorBlockAction::ContinueWithoutZaplexification,
             ),
-            id!(SSH_ERROR_BLOCK_VISIBLE_KEY) & block_action_context(),
+            id!(SSH_ERROR_BLOCK_VISIBLE_KEY)
+                & !id!(REMOTE_CANCEL_VISIBLE_KEY)
+                & block_action_context(),
         ),
         FixedBinding::new(
             cmd_or_ctrl_enter,

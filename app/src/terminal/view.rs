@@ -26448,26 +26448,6 @@ impl View for TerminalView {
             element
         };
 
-        let final_element = if self.remote_input_phase == Some(RemoteInputPhase::Failed) {
-            EventHandler::new(final_element)
-                .on_keydown(|ctx, _, keystroke| {
-                    let unmodified =
-                        !keystroke.cmd && !keystroke.ctrl && !keystroke.alt && !keystroke.shift;
-                    if unmodified && keystroke.key == "enter" {
-                        ctx.dispatch_typed_action(TerminalAction::RetryRemoteRestore);
-                        DispatchEventResult::StopPropagation
-                    } else if unmodified && keystroke.key == "escape" {
-                        ctx.dispatch_typed_action(TerminalAction::CancelRemoteRestore);
-                        DispatchEventResult::StopPropagation
-                    } else {
-                        DispatchEventResult::PropagateToParent
-                    }
-                })
-                .finish()
-        } else {
-            final_element
-        };
-
         let _ = ambient_agent_task_id_for_details_panel;
         final_element
     }
@@ -26500,6 +26480,19 @@ impl View for TerminalView {
 
     fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {
         let mut context = Self::default_keymap_context();
+        if let Some(phase) = self.remote_input_phase {
+            let has_restore_identity = self.has_remote_restore_identity();
+            if remote_readiness_retry_visible(phase, has_restore_identity) {
+                context.set.insert(init::REMOTE_RETRY_VISIBLE_KEY);
+            }
+            if remote_readiness_cancel_visible(
+                phase,
+                has_restore_identity || self.remote_input_session_id.is_some(),
+            ) || remote_readiness_close_visible(phase, self.remote_session_ended)
+            {
+                context.set.insert(init::REMOTE_CANCEL_VISIBLE_KEY);
+            }
+        }
         context.map.insert(
             "TerminalView_BlockSelectionCardinality",
             self.selected_blocks.cardinality().as_keymap_context_value(),
