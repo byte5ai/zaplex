@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reuse passed gates after a package-test runner failure, never after app changes."""
+"""Reuse proven CI gates after runner failures, never after app changes."""
 
 import json
 import os
@@ -28,6 +28,24 @@ RESUME_PATHS = {
     "script/ci-batch-resume-tests",
     "docs/ci-batch.md",
 }
+MACOS_RESUME_PATHS = {
+    ".github/workflows/ci-batch.yml",
+    ".github/workflows/pr-check.yml",
+    ".github/actions/prepare_environment/action.yml",
+    "script/prepare-macos-rust",
+    "script/prepare-macos-rust-tests",
+    "script/ci-batch-resume",
+    "script/ci-batch-resume-tests",
+    "docs/ci-batch.md",
+}
+MACOS_GATE = "compile_checks / cargo check (macOS Apple Silicon)"
+LINUX_GATES = PASSED_JOBS - {MACOS_GATE, "live_sftp / OpenSSH/SFTP commit-boundary recovery"}
+LINUX_INPUT = """    inputs:
+      reuse_linux_checks:
+        description: Reuse Linux gates validated by the batch preflight
+        type: boolean
+        default: false
+"""
 
 
 def validate(run, jobs, changed_paths):
@@ -43,6 +61,18 @@ def validate(run, jobs, changed_paths):
     by_name = {job["name"]: job for job in jobs}
     if len(by_name) != len(jobs):
         raise ValueError("Ambiguous duplicate job names")
+    if by_name.get(MACOS_GATE, {}).get("conclusion") == "failure":
+        for name in sorted(LINUX_GATES):
+            if by_name.get(name, {}).get("conclusion") != "success":
+                raise ValueError(f"Cannot reuse missing or unsuccessful gate: {name}")
+        # The following stages must not have executed: they run for the first time.
+        for name, job in by_name.items():
+            if name.startswith(("tests /", "live_sftp /", "test_dmg /", "remote_server /")):
+                if job.get("conclusion") != "skipped":
+                    raise ValueError(f"Downstream stage already executed: {name}")
+        if any(path not in MACOS_RESUME_PATHS for path in changed_paths):
+            raise ValueError("Passed Linux/security gate inputs changed")
+        return "linux"
     for name in sorted(PASSED_JOBS):
         if by_name.get(name, {}).get("conclusion") != "success":
             raise ValueError(f"Cannot reuse missing or unsuccessful gate: {name}")
@@ -61,6 +91,61 @@ def validate(run, jobs, changed_paths):
     ]
     if unsafe:
         raise ValueError(f"Passed-gate inputs changed; a new batch is needed: {unsafe}")
+    return "package"
+
+
+def validate_linux_inputs(previous, current):
+    workflow = ".github/workflows/pr-check.yml"
+    def normalize_compile(text):
+        text = text.replace(LINUX_INPUT, "")
+        for job in ("cargo_check", "keymap_smoke_test"):
+            text = re.sub(
+                rf"(?ms)^  {job}:\n.*?(?=^  \w+:|\Z)",
+                lambda block: re.sub(
+                    r"(?m)^(    if: .*)$",
+                    lambda match: match.group().replace("!inputs.reuse_linux_checks && ", "")
+                    .replace(" && !inputs.reuse_linux_checks", ""), block.group(),
+                ), text,
+            )
+        return text
+    if normalize_compile(previous[workflow]) != normalize_compile(current[workflow]):
+        raise ValueError("Linux compile/keymap workflow inputs changed")
+
+    action = ".github/actions/prepare_environment/action.yml"
+    def normalize_setup(text):
+        # Only the explicitly macOS-only Rust bootstrap may change. Everything
+        # else in the shared action still feeds the passed Linux commands.
+        pattern = (
+            r"(?m)^    - name: (?:Install rustup \(macOS runners without Rust\)|Prepare macOS Rust tools)\n"
+            r"      if: \$\{\{ inputs.target_os == 'macos' \}\}\n"
+            r"[\s\S]*?(?=^    - (?:name:|uses:)|\Z)"
+        )
+        text, count = re.subn(pattern, "", text)
+        if count != 1:
+            raise ValueError("Missing or unguarded macOS Rust bootstrap")
+        # This comment described the old macOS step only.
+        return text.replace(
+            "    # The own macOS runner (`macrunner`) starts a fresh VM without Rust. Install\n"
+            "    # a digest-pinned rustup-init there; rust-toolchain.toml then selects the\n"
+            "    # pinned toolchain on first use. Runners that already ship rustup skip this.\n", ""
+        )
+    if normalize_setup(previous[action]) != normalize_setup(current[action]):
+        raise ValueError("Shared Linux environment setup changed")
+
+    batch = ".github/workflows/ci-batch.yml"
+    for text in (previous[batch], current[batch]):
+        if re.search(r"(?m)^env:", text):
+            raise ValueError("Batch environment must remain unset")
+    for job in ("dependency_security", "compile_checks"):
+        def block(text):
+            match = re.search(rf"(?ms)^  {job}:\n.*?(?=^  \w+:|\Z)", text)
+            if match is None:
+                raise ValueError(f"Missing batch job: {job}")
+            return re.sub(r"(?m)^    if:.*\n(?:^      .*\n)*", "", match.group()).replace(
+                "    with:\n      reuse_linux_checks: ${{ needs.preflight.outputs.reuse_linux_checks == 'true' }}\n", ""
+            )
+        if block(previous[batch]) != block(current[batch]):
+            raise ValueError(f"Passed batch job inputs changed: {job}")
 
 
 def command(*args):
@@ -116,17 +201,31 @@ def main():
         raise ValueError("Invalid source SHA")
     command("git", "fetch", "--no-tags", "--depth=1", "origin", source)
     changed = command("git", "diff", "--name-only", source, "HEAD").splitlines()
-    validate(run, jobs, changed)
-    workflow = ".github/workflows/test-dispatch.yml"
-    validate_test_inputs(command("git", "show", f"{source}:{workflow}"), Path(workflow).read_text())
+    mode = validate(run, jobs, changed)
+    if mode == "linux":
+        paths = (".github/workflows/pr-check.yml", ".github/workflows/ci-batch.yml",
+                 ".github/actions/prepare_environment/action.yml")
+        validate_linux_inputs(
+            {path: command("git", "show", f"{source}:{path}") for path in paths},
+            {path: Path(path).read_text() for path in paths},
+        )
+        output_name = "reuse_linux_checks"
+        evidence = "dependency-security and Linux compile/keymap"
+        remaining = "macOS checks and the previously unexecuted downstream stages"
+    else:
+        workflow = ".github/workflows/test-dispatch.yml"
+        validate_test_inputs(command("git", "show", f"{source}:{workflow}"), Path(workflow).read_text())
+        output_name = "reuse_checks"
+        evidence = "dependency, compile, SFTP and doc-test"
+        remaining = "package tests and the requested artifact stages"
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-        output.write("reuse_checks=true\n")
+        output.write(f"{output_name}=true\n")
     with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
         summary.write(
-            f"Reusing passed dependency, compile, SFTP and doc-test gates from "
+            f"Reusing passed {evidence} gates from "
             f"[run {run_id}](https://github.com/{REPO}/actions/runs/{run_id}) "
             f"at `{source}`. App and passed-gate inputs are unchanged. "
-            "Only package tests and the requested artifact stages run again.\n"
+            f"Running only {remaining}.\n"
         )
 
 

@@ -100,5 +100,70 @@ jobs:
                 validate_test_inputs(previous, current.replace(old, new))
 
 
+    def macos_jobs(self):
+        jobs = copy.deepcopy(self.jobs[:5])
+        jobs[3]["conclusion"] = "failure"
+        return jobs
+
+    def test_macos_failure_reuses_only_proven_linux_gates(self):
+        self.assertEqual(validate(self.run, self.macos_jobs(), [
+            "script/prepare-macos-rust", ".github/actions/prepare_environment/action.yml",
+        ]), "linux")
+        for index in (0, 1, 2, 4):
+            for result in ("failure", "skipped", None):
+                jobs = self.macos_jobs()
+                jobs[index]["conclusion"] = result
+                with self.subTest(index=index, result=result), self.assertRaises(ValueError):
+                    validate(self.run, jobs, [])
+        with self.assertRaises(ValueError):
+            validate(self.run, self.macos_jobs()[1:], [])
+
+    def test_macos_resume_rejects_app_changes_and_executed_downstream(self):
+        for path in ("Cargo.lock", "Cargo.toml", "rust-toolchain.toml", "app/src/main.rs",
+                     ".github/workflows/dependency-security.yml", ".github/workflows/test-dispatch.yml"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                validate(self.run, self.macos_jobs(), [path])
+        for stage in ("tests / cargo test (Linux)", "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+                      "test_dmg / build", "remote_server / build"):
+            with self.subTest(stage=stage), self.assertRaises(ValueError):
+                validate(self.run, self.macos_jobs() + [{"name": stage, "conclusion": "success"}], [])
+
+    def test_linux_inputs_keep_shared_setup_and_commands_identical(self):
+        compile_path = ".github/workflows/pr-check.yml"
+        action = ".github/actions/prepare_environment/action.yml"
+        batch = ".github/workflows/ci-batch.yml"
+        previous = {
+            compile_path: "on:\n  workflow_call:\nenv:\n  CHANNEL: oss\njobs:\n"
+                "  cargo_check:\n    if: always() && needs.changes.result == 'success'\n"
+                "    steps:\n      - run: cargo clippy --locked --bin zaplex -- -D warnings\n",
+            action: "steps:\n    - name: Install rustup (macOS runners without Rust)\n"
+                "      if: ${{ inputs.target_os == 'macos' }}\n      run: old-installer\n\n"
+                "    - uses: cache@pinned\n      with:\n        key: unchanged\n",
+            batch: "jobs:\n  dependency_security:\n    if: old-condition\n"
+                "    uses: ./.github/workflows/dependency-security.yml\n\n"
+                "  compile_checks:\n    if: old-condition\n"
+                "    uses: ./.github/workflows/pr-check.yml\n",
+        }
+        current = dict(previous)
+        current[compile_path] = current[compile_path].replace("  workflow_call:\n", "  workflow_call:\n" + module["LINUX_INPUT"])
+        current[compile_path] = current[compile_path].replace("always() && ", "always() && !inputs.reuse_linux_checks && ")
+        current[action] = current[action].replace("Install rustup (macOS runners without Rust)", "Prepare macOS Rust tools").replace("old-installer", "bash script/prepare-macos-rust")
+        current[batch] = current[batch].replace("if: old-condition", "if: >\n      new-condition")
+        current[batch] += "    with:\n      reuse_linux_checks: ${{ needs.preflight.outputs.reuse_linux_checks == 'true' }}\n"
+        verify = module["validate_linux_inputs"]
+        verify(previous, current)
+        for path, old, new in (
+            (compile_path, "CHANNEL: oss", "CHANNEL: stable"),
+            (compile_path, "--bin zaplex", "--bin zaplex --all-features"),
+            (action, "key: unchanged", "key: changed"),
+            (action, "inputs.target_os == 'macos'", "inputs.target_os == 'linux'"),
+            (batch, "dependency-security.yml", "another-security.yml"),
+            (batch, "jobs:", "env:\n  RUSTFLAGS: changed\njobs:"),
+        ):
+            changed = {**current, path: current[path].replace(old, new)}
+            with self.subTest(path=path, old=old), self.assertRaises(ValueError):
+                verify(previous, changed)
+
+
 if __name__ == "__main__":
     unittest.main()
