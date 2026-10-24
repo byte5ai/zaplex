@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Exercise Rust proxy discovery without installing or invoking a toolchain."""
+
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+
+SCRIPT = Path(__file__).resolve().with_name("prepare-macos-rust")
+
+
+class RustSetupTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.metadata = self.root / "image.txt"
+        self.output = self.root / "github-path"
+        self.env = {**os.environ, "PATH": str(self.bin),
+                    "CARGO_HOME": str(self.root / "cargo"),
+                    "GITHUB_PATH": str(self.output), "RUNNER_TEMP": str(self.root)}
+
+    def executable(self, path, body="exit 0"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/bash\n" + body + "\n")
+        path.chmod(0o755)
+
+    def tools(self, directory):
+        for tool in ("rustup", "cargo", "rustc"):
+            self.executable(directory / tool)
+
+    def run_setup(self):
+        return subprocess.run(["/bin/bash", str(SCRIPT), str(self.metadata)],
+                              env=self.env, capture_output=True, text=True, timeout=10)
+
+    def test_image_directory_repairs_partial_path(self):
+        self.executable(self.bin / "rustup")
+        keg = self.root / "keg with space" / "bin"
+        self.tools(keg)
+        self.metadata.write_text(f"version 0.16.0\nrustup-bin {keg}\n")
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.output.read_text(), f"{keg}\n")
+
+    def test_invalid_image_directory_does_not_silently_use_other_tools(self):
+        self.tools(self.bin)
+        self.metadata.write_text(f"rustup-bin {self.root / 'absent'}\n")
+        result = self.run_setup()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing executable", result.stdout)
+        self.assertFalse(self.output.exists())
+
+    def test_custom_cargo_home_is_published(self):
+        directory = Path(self.env["CARGO_HOME"]) / "bin"
+        self.tools(directory)
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.output.read_text(), f"{directory}\n")
+
+    def test_complete_path_needs_no_install(self):
+        self.tools(self.bin)
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_partial_path_without_discovery_fails_early(self):
+        self.executable(self.bin / "rustup")
+        result = self.run_setup()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cargo/rustc are missing", result.stdout)
+
+    def test_homebrew_discovery(self):
+        keg = self.root / "homebrew-rustup"
+        self.tools(keg / "bin")
+        self.executable(self.bin / "rustup")
+        self.executable(self.bin / "brew", f'[[ "$*" == "--prefix rustup" ]] || exit 9\nprintf "%s\\n" "{keg}"')
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.output.read_text(), f"{keg / 'bin'}\n")
+
+    def test_missing_rust_uses_pinned_installer(self):
+        self.executable(self.bin / "uname", "echo arm64")
+        self.executable(self.bin / "chmod", 'exec /bin/chmod "$@"')
+        self.executable(self.bin / "curl", r'''[[ "$*" == *"https://static.rust-lang.org/rustup/archive/1.29.1/aarch64-apple-darwin/rustup-init" ]] || exit 9
+while [[ "$1" != -o ]]; do shift; done
+printf '%s\n' '#!/bin/bash' '[[ "$*" == "-y --no-modify-path --profile minimal --default-toolchain none" ]] || exit 9' '/bin/mkdir -p "$CARGO_HOME/bin"' 'for tool in rustup cargo rustc; do printf "#!/bin/bash\\nexit 0\\n" > "$CARGO_HOME/bin/$tool"; /bin/chmod +x "$CARGO_HOME/bin/$tool"; done' > "$2"''')
+        self.executable(self.bin / "shasum", r'''read -r digest file
+[[ "$*" == "-a 256 -c -" && "$digest" == ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a ]]''')
+        result = self.run_setup()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.output.read_text(), f"{self.env['CARGO_HOME']}/bin\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

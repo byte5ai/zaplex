@@ -5,6 +5,11 @@ name: PR Check
 # Called only by the approved post-merge batch on main.
 on:
   workflow_call:
+    inputs:
+      reuse_linux_checks:
+        description: Reuse Linux gates validated by the batch preflight
+        type: boolean
+        default: false
 
 concurrency:
   group: pr-check-${{ github.ref }}
@@ -52,7 +57,7 @@ jobs:
   cargo_check:
     name: cargo check (Linux x86_64)
     needs: changes
-    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.needs_build != 'false')
+    if: always() && (needs.changes.result != 'success' || needs.changes.outputs.needs_build != 'false') && !inputs.reuse_linux_checks
     # Same runner as release_linux, glibc 2.35, to avoid deps differences that
     # only appear on ubuntu-latest.
     runs-on: blacksmith-4vcpu-ubuntu-2204
@@ -275,7 +280,7 @@ jobs:
   keymap_smoke_test:
     name: keymap validation (Linux x86_64)
     needs: changes
-    if: needs.changes.outputs.needs_build == 'true'
+    if: needs.changes.outputs.needs_build == 'true' && !inputs.reuse_linux_checks
     # Runs in parallel with cargo_check so it does not delay compile feedback.
     # Same runner as cargo_check for consistent glibc/deps.
     runs-on: blacksmith-4vcpu-ubuntu-2204

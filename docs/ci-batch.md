@@ -60,6 +60,19 @@ erfolgreichen Jobs und Dokumentationstests werden übernommen; Quellcommit und
 Ursprungslauf stehen im Job-Summary. Ohne `resume_run_id` bleibt der vollständige
 Ablauf erhalten. Coverage-Läufe unterstützen diese begrenzte Fortsetzung nicht.
 
+### Nach einem macOS-Setupfehler fortsetzen
+
+Wenn der macOS-Compilejob scheitert, Sicherheitsprüfung und beide Linux-Jobs aber
+erfolgreich sind, übernimmt `resume_run_id` genau diese bestandenen Gates.
+macOS und alle bisher nicht ausgeführten Folgeprüfungen laufen anschließend.
+Die Vorprüfung lehnt einen laufenden Ursprungslauf, fehlende Linux-Erfolge und
+bereits ausgeführte Folgestufen ab. App, Lockfile und Toolchain müssen unverändert
+sein. Auch die Linux-Kommandos, ihre Umgebung und der gemeinsame Setup-Teil
+werden verglichen; im Setup darf sich ausschließlich der ausdrücklich auf macOS
+begrenzte Rust-Bootstrap ändern. Quellcommit und Ursprungslauf bleiben im Summary
+sichtbar. Die macOS-Einrichtung aktiviert den vollständigen Rust-Werkzeugpfad des
+Runner-Images und prüft die Proxies, bevor Cache- oder Compile-Schritte beginnen.
+
 ### Nach einem Runnerfehler beim App-Build fortsetzen
 
 Ein direkter `test-dmg.yml`-Dispatch auf `main` mit `resume_run_id` setzt nur den

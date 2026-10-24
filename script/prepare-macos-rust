@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Activate the complete Rust tool directory before cache/toolchain setup.
+set -euo pipefail
+
+activate() {
+  local directory="$1" tool
+  [[ "$directory" = /* ]] || { echo "::error::Rust tool directory must be absolute"; return 1; }
+  for tool in rustup cargo rustc; do
+    [[ -x "$directory/$tool" ]] || {
+      echo "::error::Rust tool directory is missing executable $tool"
+      return 1
+    }
+  done
+  echo "$directory" >> "$GITHUB_PATH"
+  export PATH="$directory:$PATH"
+}
+
+# The image publishes the location of Homebrew's keg-only rustup proxies.
+metadata="${1:-/Users/Shared/macrunner-image.txt}"
+if [[ -f "$metadata" ]]; then
+  while read -r key value; do
+    if [[ "$key" == rustup-bin ]]; then
+      activate "$value"
+      exit 0
+    fi
+  done < "$metadata"
+fi
+
+if [[ -x "${CARGO_HOME:-$HOME/.cargo}/bin/rustup" ]]; then
+  activate "${CARGO_HOME:-$HOME/.cargo}/bin"
+  exit 0
+fi
+if command -v rustup >/dev/null 2>&1; then
+  if command -v cargo >/dev/null 2>&1 && command -v rustc >/dev/null 2>&1; then
+    exit 0
+  fi
+  if command -v brew >/dev/null 2>&1; then
+    activate "$(brew --prefix rustup)/bin"
+    exit 0
+  fi
+  echo "::error::rustup is available but cargo/rustc are missing; no complete Rust tool directory found"
+  exit 1
+fi
+
+# Images without Rust use the digest-pinned bootstrap, with no default toolchain.
+version=1.29.1
+case "$(uname -m)" in
+  arm64)
+    triple=aarch64-apple-darwin
+    digest=ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a
+    ;;
+  x86_64)
+    triple=x86_64-apple-darwin
+    digest=259e2b84274434085163fe8d556510571772cda2aa6d87ca6aa664f57bc644e3
+    ;;
+  *)
+    echo "::error::No pinned rustup-init for $(uname -m)"
+    exit 1
+    ;;
+esac
+installer="$RUNNER_TEMP/rustup-init"
+curl --proto '=https' --tlsv1.2 -fsSL -o "$installer" \
+  "https://static.rust-lang.org/rustup/archive/$version/$triple/rustup-init"
+echo "$digest  $installer" | shasum -a 256 -c -
+chmod +x "$installer"
+"$installer" -y --no-modify-path --profile minimal --default-toolchain none
+activate "${CARGO_HOME:-$HOME/.cargo}/bin"
+

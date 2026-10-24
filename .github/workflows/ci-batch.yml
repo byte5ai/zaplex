@@ -23,7 +23,7 @@ on:
         type: boolean
         default: false
       resume_run_id:
-        description: Failed main batch with green compile/SFTP/doc gates; reuse only if their inputs are unchanged
+        description: Failed main batch; reuse verified unchanged Linux or compile/SFTP/doc gates
         type: string
         default: ''
 
@@ -43,6 +43,7 @@ jobs:
     outputs:
       dmg_tag: ${{ steps.inputs.outputs.dmg_tag }}
       reuse_checks: ${{ steps.resume.outputs.reuse_checks }}
+      reuse_linux_checks: ${{ steps.resume.outputs.reuse_linux_checks }}
     steps:
       - name: Require a main dispatch
         shell: bash
@@ -80,18 +81,23 @@ jobs:
           COVERAGE: ${{ inputs.coverage }}
         run: |
           python3 script/shell-ssh-runner-guard-tests
+          python3 script/prepare-macos-rust-tests
           python3 script/ci-batch-resume-tests
           python3 script/ci-batch-resume
 
   dependency_security:
     needs: preflight
-    if: needs.preflight.outputs.reuse_checks != 'true'
+    if: needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_linux_checks != 'true'
     uses: ./.github/workflows/dependency-security.yml
 
   compile_checks:
     needs: [preflight, dependency_security]
-    if: needs.preflight.outputs.reuse_checks != 'true'
+    if: >
+      !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_checks != 'true' &&
+      (needs.dependency_security.result == 'success' || needs.preflight.outputs.reuse_linux_checks == 'true')
     uses: ./.github/workflows/pr-check.yml
+    with:
+      reuse_linux_checks: ${{ needs.preflight.outputs.reuse_linux_checks == 'true' }}
     secrets: inherit
 
   tests:
