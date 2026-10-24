@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.35] — 2026-10-24
+
+- Umbenennen und Neuer Ordner schließen beim ersten Escape auch mit markiertem Text; die Dateiliste erhält den Fokus zurück (#684).
+
 ## [1.2.34] — 2026-10-24
 
 - Favoritenhinweise bleiben über geöffneten Aktionsmenüs lesbar, ohne Mausereignisse abzufangen; die Erkennungshilfe in den Agent-Einstellungen ist vollständig auf Deutsch verfügbar (#672, #674).

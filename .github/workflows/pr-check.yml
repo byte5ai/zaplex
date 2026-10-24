@@ -510,6 +510,7 @@ jobs:
         run: >
           cargo test --locked -p warp --lib --
           file_dialog_opening_routes_first_typed_character_without_field_click
+          file_dialog_escape_cancels_initial_and_partial_selections_on_first_press
           transfer_completion_
           sftp_manager::sftp_ops::tests::sftp_alias_
           parent_navigation

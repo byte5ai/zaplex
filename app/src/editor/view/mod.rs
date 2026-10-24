@@ -1358,6 +1358,9 @@ pub enum PropagateHorizontalNavigationKeys {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PropagateAndNoOpEscapeKey {
+    /// Emit `Event::Escape` immediately without changing selections or Vim state.
+    /// Used by modal editors whose parent cancels the dialog on Escape.
+    EmitEvent,
     /// Let this view's parent handle `esc` first and manually trigger this view's
     /// handlers if necessary. This means the parent will handle an `esc` keypress
     /// before this view exits vim mode. (Example: closing completions in the Input.)
@@ -6090,7 +6093,9 @@ impl EditorView {
     }
 
     pub fn escape(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.propagate_escape_key == PropagateAndNoOpEscapeKey::HandleFirst
+        if self.propagate_escape_key == PropagateAndNoOpEscapeKey::EmitEvent {
+            ctx.emit(Event::Escape);
+        } else if self.propagate_escape_key == PropagateAndNoOpEscapeKey::HandleFirst
             && self.vim_mode_enabled(ctx)
             && self.vim_has_pending(ctx)
         {
