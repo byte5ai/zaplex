@@ -325,7 +325,7 @@ fn test_split_submenu_trigger_has_stable_hover_identity_without_a_chevron() {
         Some(MENU_ITEM_VERTICAL_PADDING)
     );
     assert_eq!(first_render_fields.horizontal_padding_override, Some(0.));
-    assert_eq!(first_render_fields.tooltip(), Some("More actions for host"));
+    assert_eq!(first_render_fields.get_a11y_text(), "More actions for host");
 
     let standard_submenu = MenuItemFields::<TestAction>::new_submenu("standard submenu");
     assert!(standard_submenu.render_submenu_chevron);

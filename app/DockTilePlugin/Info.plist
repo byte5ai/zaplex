@@ -11,9 +11,9 @@
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.2.33</string>
+    <string>1.2.34</string>
     <key>CFBundleVersion</key>
-    <string>1.2.33</string>
+    <string>1.2.34</string>
     <key>NSPrincipalClass</key>
     <string>ZapDockTilePlugin</string>
     <key>CFBundleInfoDictionaryVersion</key>

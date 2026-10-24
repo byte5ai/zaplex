@@ -104,3 +104,7 @@ Einklappen mit vorhandenem Ordner, Inline-Rename und die EN-Verbindungsvarianten
 sind hier nicht geprüft. In Aufnahme 012 enthält die deutsche Agent-Einstellungsseite
 eine englische Supportzeile; der bestätigte Befund ist #674. Remote #657/#658
 und weitere Matrixkombinationen bleiben separat auszuführen.
+
+Die anschließende [Remote-Nachprüfung](CANDIDATE-1.2.32-REMOTE.md) bestätigt
+native SSH-Steuerbefehle (#657), dieselbe persistente Shell nach Transportabbruch
+und die einzelne Transferanzeige (#658) samt Pause/Abbruch für EN/dunkel.
