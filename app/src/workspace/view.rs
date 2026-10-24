@@ -231,6 +231,11 @@ use crate::notebooks::manager::{NotebookManager, NotebookSource};
 #[cfg(feature = "local_fs")]
 use crate::pane_group::FilePane;
 use crate::pane_group::ImagePane;
+use crate::pane_group::pane::sftp_pane::SftpPane;
+use crate::sftp_manager::transfer_panel::{
+    content_with_transfer_panel, render_workspace_transfer_panel,
+};
+use crate::sftp_manager::transfer_queue::TransferQueue;
 use crate::pane_group::{
     self, AnyPaneContent, CodeDiffPane, CodePane, Direction, NewTerminalOptions, PanesLayout,
     TabBarHoverIndex,
@@ -4214,6 +4219,7 @@ impl Workspace {
         let ai_assistant_panel = Self::build_ai_assistant_panel_view(ctx);
 
         ctx.observe(&tips_completed, Workspace::on_tips_model_changed);
+        ctx.observe(&TransferQueue::handle(ctx), |_, _, ctx| ctx.notify());
 
         let autoupdate_handle = AutoupdateState::handle(ctx);
         ctx.subscribe_to_model(&autoupdate_handle, |_view, _handle, evt, ctx| {
@@ -10782,6 +10788,21 @@ impl Workspace {
                 ctx,
             );
         });
+    }
+
+    fn render_global_transfer_panel(&self, app: &AppContext) -> Option<Box<dyn Element>> {
+        let group = self.active_tab_pane_group().as_ref(app);
+        let browser_owns_panel = group
+            .downcast_pane_by_id::<SftpPane>(group.focused_pane_id(app))
+            .is_some_and(|pane| {
+                pane.browser_view(app)
+                    .as_ref(app)
+                    .displays_transfer_panel(app)
+            });
+        if browser_owns_panel {
+            return None;
+        }
+        render_workspace_transfer_panel(app)
     }
 
     /// Opens the local file-manager pane (FM pane-mode P1) rooted at
@@ -32327,6 +32348,11 @@ impl View for Workspace {
             }
         }
 
+        let panels = if let Some(transfer_panel) = self.render_global_transfer_panel(app) {
+            content_with_transfer_panel(panels, transfer_panel)
+        } else {
+            panels
+        };
         stack.add_child(
             Container::new(panels)
                 .with_uniform_padding(WORKSPACE_PADDING)
@@ -33301,22 +33327,6 @@ impl View for Workspace {
                     ParentOffsetBounds::WindowByPosition,
                     ParentAnchor::TopRight,
                     ChildAnchor::TopRight,
-                ),
-            );
-        }
-
-        if let Some(transfer_panel) =
-            crate::sftp_manager::transfer_panel::render_workspace_transfer_panel(app)
-        {
-            stack.add_positioned_overlay_child(
-                ConstrainedBox::new(transfer_panel)
-                    .with_width(420.0)
-                    .finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(-8.0, -8.0),
-                    ParentOffsetBounds::ParentBySize,
-                    ParentAnchor::BottomRight,
-                    ChildAnchor::BottomRight,
                 ),
             );
         }

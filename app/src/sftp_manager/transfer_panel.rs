@@ -7,9 +7,9 @@
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    ParentElement, Radius, SavePosition, ScrollbarWidth, Shrinkable, SizeConstraintCondition,
-    SizeConstraintSwitch, Text,
+    CrossAxisAlignment, Expanded, Fill, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+    MouseStateHandle, ParentElement, Radius, SavePosition, ScrollbarWidth, Shrinkable,
+    SizeConstraintCondition, SizeConstraintSwitch, Text,
 };
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, SingletonEntity};
@@ -520,6 +520,25 @@ pub fn render_transfer_panel(
     .finish()
 }
 
+/// Reserve at most half of the available height for transfers. Measure the
+/// panel first so a short history gives its unused space back to the content.
+/// Reverse orientation puts the panel below the content without an overlay.
+pub(crate) fn content_with_transfer_panel(
+    content: Box<dyn Element>,
+    panel: Box<dyn Element>,
+) -> Box<dyn Element> {
+    Container::new(
+        Flex::column()
+            .with_reverse_orientation()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_child(Shrinkable::new(1.0, panel).finish())
+            .with_child(Expanded::new(1.0, content).finish())
+            .finish(),
+    )
+    .finish()
+}
+
 pub fn render_workspace_transfer_panel(app: &AppContext) -> Option<Box<dyn Element>> {
     let queue = super::transfer_queue::TransferQueue::as_ref(app);
     let mut transfers = Vec::new();
@@ -677,7 +696,13 @@ fn render_transfer_panel_at_height(
     )
     .with_max_height(max_history_height)
     .finish();
-    col.add_child(SavePosition::new(scroller, "sftp_transfer_history_scroll").finish());
+    col.add_child(
+        Shrinkable::new(
+            1.0,
+            SavePosition::new(scroller, "sftp_transfer_history_scroll").finish(),
+        )
+        .finish(),
+    );
 
     Container::new(col.finish())
         .with_uniform_padding(PANEL_PADDING)
