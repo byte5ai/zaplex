@@ -111,7 +111,7 @@ verlorener Eingabe zu unterscheiden. Der alte Lauf belegt diese Ursache noch nic
 ## OCR-Auflösung und gespeicherte Gegenproben
 
 Die Navigationserkennung vergrößert den Fenster-Screenshot im Testprozess auf
-jeweils die dreifache Pixelzahl pro Achse durch reine Pixelwiederholung. So verwischt
+jeweils die doppelte Pixelzahl pro Achse durch reine Pixelwiederholung. So verwischt
 keine Interpolation die kleinen Ziffern. Die App-Schriftgröße bleibt unverändert;
 die TSV-Positionen werden auf die tatsächliche Fenstergröße zurückgerechnet.
 Der Vergleich von Nonce, Shellzustand und Menütext bleibt exakt. Das folgt der
@@ -130,3 +130,18 @@ ließ die ausgewählte Dateizeile aus. `fixtures/ocr/provenance-136.json` dokume
 Originalhashes und verlustfreie Ausschnitte anhand der AX-Fenstergrenzen.
 `ocr-regression.log` archiviert Ergebnis und TSV. Diese
 Gegenproben ergänzen die Nutzerabläufe; seit der Mindestgrößenprüfung sind es sechzehn.
+
+`gui-ocr-diagnosis.yml` vergleicht bei abweichenden macOS-Ergebnissen ausschließlich
+die gespeicherten Bilder mit der tatsächlichen nativen Implementierung. Der
+manuelle Lauf auf `main` startet weder App noch XCTest und gibt keinen
+Abnahmenachweis ab. Er archiviert alle TSV-Ergebnisse für feste Kombinationen
+aus Maßstab, Interpolation und Segmentierung sowie Engine- und Sprachdatenstand.
+Die regulären GUI-Tests verwenden weiterhin genau eine feste Konfiguration;
+ein Diagnoseergebnis ersetzt keine bestandene native Gegenprobe.
+
+Der [native Vergleich 40131681579](https://github.com/byte5ai/zaplex/actions/runs/40131681579)
+mit Tesseract 5.5.3 reproduziert die Ziffernverwechslung bei dreifacher
+Pixelwiederholung. Zweifache Vergrößerung besteht alle sechs Bilder einschließlich
+falscher Nonces, falscher Zustände, unbestätigter Eingaben und Koordinaten, bei
+beiden Interpolationsarten und beiden Segmentierungsmodi. Deshalb verwendet der
+feste Standard zweifache Pixelwiederholung mit vollständiger Zeilensegmentierung.

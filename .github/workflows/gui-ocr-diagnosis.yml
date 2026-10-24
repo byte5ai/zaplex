@@ -1,0 +1,48 @@
+name: Diagnose saved GUI OCR images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gui-ocr-diagnosis
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.ref == 'refs/heads/main'
+    # ci-lint: allow-CI006  Main-only manual saved-image diagnosis without app or secrets
+    runs-on: macrunner
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install native OCR engine
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install --force-bottle tesseract
+      - name: Compare saved images with the actual native implementation
+        run: |
+          mkdir -p "$RUNNER_TEMP/ocr-diagnosis"
+          art="$RUNNER_TEMP/ocr-diagnosis"
+          /opt/homebrew/bin/tesseract --version > "$art/version.txt" 2>&1
+          shasum -a 256 /opt/homebrew/share/tessdata/eng.traineddata > "$art/language-data.sha256"
+          git rev-parse HEAD > "$art/source-sha.txt"
+          cp script/macos/gui-tests/ocr-diagnose.swift "$art/main.swift"
+          xcrun swiftc script/macos/gui-tests/ZaplexUITests/RenderedText.swift "$art/main.swift" -o "$art/diagnose" > "$art/build.log" 2>&1
+          "$art/diagnose" script/macos/gui-tests/fixtures/ocr > "$art/readings.jsonl" 2> "$art/errors.log"
+      - name: Preserve diagnostic readings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gui-ocr-diagnosis-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/ocr-diagnosis/*.txt
+            ${{ runner.temp }}/ocr-diagnosis/*.sha256
+            ${{ runner.temp }}/ocr-diagnosis/*.log
+            ${{ runner.temp }}/ocr-diagnosis/*.jsonl
+          if-no-files-found: error
+          retention-days: 14

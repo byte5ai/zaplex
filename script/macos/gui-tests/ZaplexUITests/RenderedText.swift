@@ -3,6 +3,14 @@ import AppKit
 // OCR belongs to the test process. Keep exact text matching and map the enlarged
 // image's coordinates back to the original window before driving mouse input.
 enum RenderedText {
+    // Fixed production settings; explicit alternatives are only for saved-image diagnosis.
+    struct Configuration {
+        let scale: Int
+        let interpolation: CGInterpolationQuality
+        let pageSegmentation: Int
+        static let standard = Configuration(scale: 2, interpolation: .none, pageSegmentation: 6)
+    }
+
     struct Word {
         let text: String
         let rect: CGRect
@@ -29,22 +37,23 @@ enum RenderedText {
         }
     }
 
-    static func read(_ png: Data, displaySize: CGSize) throws -> Reading {
+    static func read(_ png: Data, displaySize: CGSize,
+                     configuration: Configuration = .standard) throws -> Reading {
         guard let bitmap = NSBitmapImageRep(data: png), let original = bitmap.cgImage else {
             throw NSError(domain: "ZaplexOCR", code: 1)
         }
         // Small terminal glyphs are only about ten pixels high on the runner.
         // Replicate pixels at an integer scale so interpolation cannot blur the
         // distinctions between digits. Keep recognition and comparison exact.
-        let width = bitmap.pixelsWide * 3
-        let height = bitmap.pixelsHigh * 3
+        let width = bitmap.pixelsWide * configuration.scale
+        let height = bitmap.pixelsHigh * configuration.scale
         guard let context = CGContext(data: nil, width: width, height: height,
                                       bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(),
                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw NSError(domain: "ZaplexOCR", code: 2)
         }
-        context.interpolationQuality = .none
+        context.interpolationQuality = configuration.interpolation
         context.draw(original, in: CGRect(x: 0, y: 0, width: width, height: height))
         guard let image = context.makeImage(),
               let enlarged = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
@@ -54,7 +63,7 @@ enum RenderedText {
         process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/tesseract")
         // Sparse-text segmentation drops selected file rows. Preserve complete
         // lines, including adjacent panes, with uniform-block segmentation.
-        process.arguments = ["stdin", "stdout", "-l", "eng", "--psm", "6", "tsv"]
+        process.arguments = ["stdin", "stdout", "-l", "eng", "--psm", String(configuration.pageSegmentation), "tsv"]
         let input = Pipe()
         let output = Pipe()
         process.standardInput = input
