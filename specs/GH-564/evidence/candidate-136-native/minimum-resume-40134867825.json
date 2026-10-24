@@ -1,0 +1,25 @@
+{
+  "run_id": 40134867825,
+  "artifact_id": 12575818712,
+  "zip_sha256": "31a98dd0f4a6a17b9370420300ef2998e6f59a9d7cdd1373c3b7b3bcebc7cc51",
+  "images": [
+    {
+      "path": "attachments/03C1F0FB-2602-4449-8D1E-EF7D7497978C.png",
+      "sha256": "34b30a944ee250b16d106d9fc967de234b2e7dbc773df8b9b714380332c44578",
+      "visually_reviewed": true,
+      "observation": "before-resize: fresh nonce 578658, state741; 1024x678"
+    },
+    {
+      "path": "attachments/FC13F2AE-51EA-481E-9980-B225411A919C.png",
+      "sha256": "1e504b2615e687b2445aa81a9f6cfbfed69fe4263b087c2e19372e83842e386e",
+      "visually_reviewed": true,
+      "observation": "at-minimum: fresh nonce176609, state741; main window480x320"
+    },
+    {
+      "path": "attachments/F1332CC9-9E17-41F6-BF25-E0C801093860.png",
+      "sha256": "b875fb9495ad7f982bb412c356351ebb3f9bfd790639179aa898d24d1538b44e",
+      "visually_reviewed": true,
+      "observation": "restored: fresh nonce303497, state741; 1024x678"
+    }
+  ]
+}

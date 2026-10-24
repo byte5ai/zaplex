@@ -6,10 +6,10 @@ prüft die Korrekturen für den ersten Escape im Dateidialog (#684), die normale
 macOS-Mindestfenstergröße (#685) und verbliebene englische Agent-Einstellungen
 (#688). Der Batch ist abgeschlossen: alle Bau- und Paketgates bestanden,
 die installierte GUI-Suite meldet zunächst 14 bestandene und zwei fehlgeschlagene
-Fälle. Eine gezielte Fortsetzung ergänzt einen weiteren Erfolg am gleichen DMG.
-Der automatische Mindestgrößenfall und die vollständige interaktive Nachprüfung
-stehen noch aus; direkte native Bedienung bestätigt inzwischen Mindestgeometrie,
-Shellerhalt und erste englische Einstellungen-/Escape-Varianten.
+Fälle. Zwei gezielte Fortsetzungen ergänzen die verbleibenden Erfolge am gleichen
+DMG: alle 16 Pflichtfälle sind mit geprüfter gemeinsamer Herkunft bestanden.
+Direkte native Bedienung bestätigt zusätzlich Mindestgeometrie, Shellerhalt und
+erste englische Einstellungen-/Escape-Varianten; die Gesamtmatrix bleibt offen.
 
 ## Bisherige CI-Nachweise
 
@@ -132,7 +132,22 @@ Der AX-Verkleinerungsbefehl meldet erwartungsgemäß, dass die angeforderten
 automatischen Fenstertest den ausdrücklichen nativen Maus-Klick-/Ziehpfad von
 XCTest. Die Geometrie- und Shell-Erwartungen bleiben unverändert. Nur dieser
 verbliebene Fall läuft in [40134867825](https://github.com/byte5ai/zaplex/actions/runs/40134867825)
-erneut; sein Ergebnis steht zum Zeitpunkt dieses Teilberichts noch aus.
+erneut und besteht (ein ausgeführter Fall, keine Auslassungen). Artefakt
+`12575818712`, ZIP-SHA256
+`31a98dd0f4a6a17b9370420300ef2998e6f59a9d7cdd1373c3b7b3bcebc7cc51`.
+Die [drei visuell geprüften Originale](evidence/candidate-136-native/minimum-resume-40134867825.json)
+zeigen 1024×678 vor der Geste, 480×320 am Minimum und 1024×678 nach
+Wiedervergrößern. Frische Nonces 578658/176609/303497 tragen jeweils den
+erhaltenen, nicht exportierten Shellwert 741. Die AX-Hierarchie bestätigt die
+Geometrie des Hauptfensters; das unveränderte Hintergrundfenster ist separat.
+
+Die [kombinierte Herkunft](evidence/candidate-136-native/gui-completion.json)
+prüft Originalbatch, Teillauf 40131994068 und abschließenden Einzelfall
+40134867825 gegen aktuelle GitHub-Lauf-/Jobdaten, tatsächliche Testbäume,
+Zusammenfassungen, App-/Testrevisionen, identische DMG-Hashes und Artefakt-Digests.
+Alle 16 Pflichtfälle sind damit bestanden, ohne vorherige Erfolge zu wiederholen.
+Der ursprüngliche fehlgeschlagene Batch wird dadurch nicht umgeschrieben.
+
 Deutsche Varianten, Escape in EN/Dark, weitere Flächen bei Mindestgröße,
 Neustartwiederherstellung und die übrige Gesamtmatrix sind damit nicht abgenommen.
 
