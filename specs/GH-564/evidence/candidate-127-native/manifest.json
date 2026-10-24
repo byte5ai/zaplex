@@ -1,0 +1,322 @@
+{
+  "source_sha": "70d6b1f8fbf248cd51a0c57a227026d2ba9a0270",
+  "version": "1.2.27",
+  "run_id": "40048210472",
+  "kind": "Nativer Integrationsbuild, keine installierte DMG-Abnahme",
+  "artifact_ids": [
+    12543015062,
+    12542099056
+  ],
+  "review": "Alle 44 Originale einzeln gegen bestehende docs/ui-Referenzen und GH-564-Matrix betrachtet; keine aus Screenshots abgeleitete neue Sollreferenz.",
+  "originals": "Privat archiviert; Actions-Artefakte enthalten die Originalpfade.",
+  "images": [
+    {
+      "path": "agent-native/test_subscription_agent_conversation_layout_evidence/2026-10-24T01-13-16/subscription-agent-narrow-540x670.png",
+      "width": 540,
+      "height": 670,
+      "sha256": "c8f3841b905fcfee87378f72fb52db2bb818550cc8587b1f265041a3316ef488",
+      "visually_reviewed": true
+    },
+    {
+      "path": "agent-native/test_subscription_agent_conversation_layout_evidence/2026-10-24T01-13-16/subscription-agent-normal-1180x640.png",
+      "width": 1180,
+      "height": 640,
+      "sha256": "7180c924673424e7a126f1cf9d478ab1f9bd489acf71efc849f0899ba4fc53be",
+      "visually_reviewed": true
+    },
+    {
+      "path": "agent-native/test_subscription_agent_conversation_layout_evidence/2026-10-24T01-13-16/subscription-agent-recoverable-error-540x670.png",
+      "width": 540,
+      "height": 670,
+      "sha256": "d715f328fe1d61e62eb397848f55b94df005c9b004fe02d79af4e79c8344f126",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_file_manager_header_entry/2026-10-24T01-13-59/file-manager-header-after.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "1f30e90d10f4de1cd10ebc871a06af17bf87945db13a069b93b31b754cc16812",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_file_manager_header_entry/2026-10-24T01-13-59/file-manager-header-before.png",
+      "width": 1024,
+      "height": 640,
+      "sha256": "6f40c07871069771ce43385b13316852cd87444f16a7bf0f988845436f80498e",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_connections_evidence/2026-10-24T01-13-34/native-connections-dark-250.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "b1d0717f78c4ad96a799b65ebeb7e47ff7966074863e2b5ea40c9ef14be01714",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_connections_evidence/2026-10-24T01-13-34/native-connections-dark-320.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "e2d9dea9661d3817d547fec5eb526eda96fa7c2d4156471868b9e35372aa81be",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_connections_evidence/2026-10-24T01-13-34/native-connections-dark-480.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "5b0b694c40faa128e71d73749cd35d94334460c6ed2895f051a6b33c21ec4cd4",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_connections_evidence/2026-10-24T01-13-34/native-connections-light-250.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "37dbc9c43dd44f1860a12198ec74d15fbfbcfe0052dbae679f74b355fb6e5127",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_connections_evidence/2026-10-24T01-13-34/native-connections-light-320.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "3b49d064fa918fcbcd80bdcbde1d74c54c21f0f7181c44ec819f067173821e54",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_connections_evidence/2026-10-24T01-13-34/native-connections-light-480.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "2dd96e9b3bfba1af94cf92adf3f2809eebb0ba218d178e92739e30dd9ffe8a8b",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_connections_evidence/2026-10-24T01-13-34/native-favorite-flyout.png",
+      "width": 900,
+      "height": 640,
+      "sha256": "deb6c1527c54efc6736dd934cf1d6ee494ddd0b7167b99478796978290d09189",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_evidence/2026-10-24T01-13-38/native-empty-connections-dark-250.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "d0456a3666838d975c19ce162dfac015af71b5e54f2f8400f246e0bcf4471675",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_evidence/2026-10-24T01-13-38/native-empty-connections-dark-320.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "f6a15ff453870f71070a1d83f6a45663850a429b51d939680beac65ca6747250",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_evidence/2026-10-24T01-13-38/native-empty-connections-dark-480.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "36b4fc0e3e34706f76f2935c3efc4716d954aa5aab2a7301a386da46ecfefc78",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_evidence/2026-10-24T01-13-38/native-empty-connections-light-250.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "2c25a1784982e8048b89a0a44042d31cef88b8371e85d282a748732bc81b499a",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_evidence/2026-10-24T01-13-38/native-empty-connections-light-320.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "44c5ae65265711b9ab40f6a5bb1587950e7f2184e3f061be0ea0452dfc9ed453",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_evidence/2026-10-24T01-13-38/native-empty-connections-light-480.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "3b77a2844076a886180d20c386eee63d01c56b18d23bbfd4c3d65bf1cd0d448c",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_evidence/2026-10-24T01-13-38/native-empty-favorites-dark.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "6831a5ccab9accc26fa1e7b985ea3e088462bc892d4450210b10238ec22ab887",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_evidence/2026-10-24T01-13-38/native-empty-favorites-light.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "1c760dd7ea56d55d46eeece8e1a725ffc6ed93a9e6910e045da7af1946905b8f",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_german_evidence/2026-10-24T01-13-42/native-empty-connections-dark-250.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "db99ea96af84c37e3ab45629401d803cdc2292b3929f5d494326c73266df07ba",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_german_evidence/2026-10-24T01-13-42/native-empty-connections-dark-320.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "c768bcbeb7263053475b52613dac00c6246644f233bbc70a7a86e25036e71803",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_german_evidence/2026-10-24T01-13-42/native-empty-connections-dark-480.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "f0e71a9250d2e2e2a0f1c0f1a50c6a1dc00d3b3f0873963c20e90851067a0ae1",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_german_evidence/2026-10-24T01-13-42/native-empty-connections-light-250.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "5961433de99cda8f8b1bc340af2f4a2ee3affa00106a1f3268d4f962fc5c0d09",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_german_evidence/2026-10-24T01-13-42/native-empty-connections-light-320.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "093d85a0242be328a82e1e835dcc4159ff39a6ce9d3f09c536c39a0fb39f22cb",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_german_evidence/2026-10-24T01-13-42/native-empty-connections-light-480.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "d2eec8ec9f6d68ea836e52543c245fa8e6f74fd947ddc58d8bae040794732919",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_german_evidence/2026-10-24T01-13-42/native-empty-favorites-dark.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "aea8b56c74b3bacd4adf2d9d2c68359c0106d11579b7ed69a3b615613809ee56",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_empty_states_german_evidence/2026-10-24T01-13-42/native-empty-favorites-light.png",
+      "width": 1440,
+      "height": 640,
+      "sha256": "8b6812b6fbabaa0d9b5884fe5270b3a731e756a31ab2b415322a964c4d292880",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_evidence/2026-10-24T01-13-45/native-file-manager-focused-action.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "d35c7d615ae173e3674abbf019654d6e4aa394fd027c2814aebd0f53e2a55a6a",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_evidence/2026-10-24T01-13-45/native-file-manager-full-name.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "c242d1677af7d48266eb6357dc3e891fae7c381a8b5377259fd6841891297608",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_evidence/2026-10-24T01-13-45/native-file-managers-narrow-light.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "78ba4b2df8ee23c01c67bf860e043ad5361301bfced4845dcb2301873589b4aa",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_evidence/2026-10-24T01-13-45/native-file-managers-narrow.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "6b588350476929860e673cb66eeab981228c96997243650de2772bc296658fe1",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_evidence/2026-10-24T01-13-45/native-file-managers-normal-light.png",
+      "width": 1180,
+      "height": 640,
+      "sha256": "b607bc5a339eb36a28969c990aecdb887796a1368358bc2c7cbc81ae6338ea49",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_evidence/2026-10-24T01-13-45/native-file-managers-normal.png",
+      "width": 1180,
+      "height": 640,
+      "sha256": "cd5860305aa759498b8300e8a257c7fe16196f2d6d04f5ae0457021c3c1beb28",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_evidence/2026-10-24T01-13-45/native-file-managers-restored-terminals.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "f1f713265838c34e9befa711118c002f53794644566de66374801fd530e91b33",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_german_evidence/2026-10-24T01-13-49/native-file-manager-focused-action.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "bd6f180e6273c7be5ff193dbf3d7170f98f2609dace91b715c79eaa26f47bff1",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_german_evidence/2026-10-24T01-13-49/native-file-manager-full-name.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "a466abe8af63b3e9edc1efd27e560e32a4dcf26797e0cc1e8187bae4e0d3d310",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_german_evidence/2026-10-24T01-13-49/native-file-managers-narrow-light.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "14c023be8537221240cb43357bf8091d481bddddd0106b4b0d6dc28773d4ab6c",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_german_evidence/2026-10-24T01-13-49/native-file-managers-narrow.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "0f9714cc895d289ac88473f80b15608c52c9be994ca0e9c3289fe07144c8e37c",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_german_evidence/2026-10-24T01-13-49/native-file-managers-normal-light.png",
+      "width": 1180,
+      "height": 640,
+      "sha256": "54eac4c50431a9dc35c647488b43f7d8c4e3b182b2b3b4bbe05717172e6f1efa",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_german_evidence/2026-10-24T01-13-49/native-file-managers-normal.png",
+      "width": 1180,
+      "height": 640,
+      "sha256": "572ae51addd9cd89f4bc9d013ea37ea5059d9a83eca83ce885429608f92f861f",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_file_managers_german_evidence/2026-10-24T01-13-49/native-file-managers-restored-terminals.png",
+      "width": 760,
+      "height": 640,
+      "sha256": "3ab1596500e22f95be28354eceeb3703d594c9cfc07bb65af784ca3336ff26d7",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_panes_evidence/2026-10-24T01-13-54/native-panes-after-drag.png",
+      "width": 1180,
+      "height": 640,
+      "sha256": "b2a919faa961f2166ea54e764e6721c215f9fc14b3338546412b7a49094c6319",
+      "visually_reviewed": true
+    },
+    {
+      "path": "workspace-native/test_native_workspace_panes_evidence/2026-10-24T01-13-54/native-panes-side-by-side.png",
+      "width": 1180,
+      "height": 640,
+      "sha256": "4e5b234e4ed1c8640c74b97f9950473b91d7749247cb64e93ff8eb9a474b8658",
+      "visually_reviewed": true
+    }
+  ]
+}

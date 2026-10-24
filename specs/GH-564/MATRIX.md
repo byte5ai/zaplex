@@ -31,6 +31,11 @@ Umbenennen-Dialog; der wirkungslose Ordner-Klick wird in #604 untersucht.
 Die [abgeschlossene Dateiaktionsprüfung](FILE-ACTIONS-2026-10-22.md) ergänzt F2-Abbruch, F7, Elternnavigation und F4 mit Inhaltsvergleich; sie findet den pfadabhängigen Rename-Fehler #614 sowie #615/#616/#617.
 Die [Settings-Exploration](SETTINGS-2026-10-22.md) ergänzt Suchtreffer/Leerzustand, Dark→Light, gültige Schriftgrößenänderung und erhaltenen Shellmarker; ungültige Schriftgröße ohne Rückmeldung ist #622. Die Korrektur aus PR #625 besteht lokal in DE/EN mit zwölf kontrollierten Originalbildern ([Nachweis](FONT-VALIDATION-2026-10-22.md)); macOS besteht ebenfalls in DE/EN ([30 native Bildnachweise für Dateiaktionen und Schriftgröße](NATIVE-ACTIONS-FONT-2026-10-22.md)).
 Die [Pane-Exploration vom 23.10.](PANES-2026-10-23.md) ergänzt rechte/untere lokale Splits, unabhängige Shells, CWD-/Titelwechsel und erhaltene Quellshell; Escape im Kopfzeilenmenü ist #629.
+Die [Sichtprüfung auf 1.2.27](CANDIDATE-1.2.27-NATIVE.md) umfasst 44 einzeln
+betrachtete native Originale auf `70d6b1f8f`: Der Filterhinweis bleibt nach
+Dark→Light in DE/EN lesbar (#644), der lokale inaktive Header-Einstieg erhält
+die Nachbar-Pane (#645). Echte Remote-Varianten, eingegebene Editorentwürfe
+über Themewechsel und die installierte DMG-Abnahme sind davon nicht abgedeckt.
 Weder Altbuild noch Fixtures ersetzen die vollständigen Fallkombinationen.
 Die [aktuelle Sichtprüfung auf 1.2.23](CANDIDATE-1.2.23-NATIVE.md) umfasst 42 einzeln
 betrachtete Originalaufnahmen desselben Quellstands: Agentenzustände, gefüllte und
