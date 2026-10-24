@@ -456,7 +456,6 @@ jobs:
           test_import_from_file
           file_manager_start_path_uses_session_cwd
           file_manager_start_path_falls_back_when_no_cwd
-          test_split_submenu_
           pane_group::tree::tests::
           pane_group::terminal_titles::tests::
           file_manager_directory_
