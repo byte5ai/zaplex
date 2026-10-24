@@ -172,7 +172,7 @@ def main():
     body = root / "release-body.md"
     body.write_text(
         f"Zaplex {tag} für macOS Apple Silicon mit passendem Linux-x86_64-Daemon.\n\n"
-        "Unverändertes signiertes und notarisiertes DMG; alle 15 lokalen GUI-Pflichtfälle bestanden.\n\n"
+        f"Unverändertes signiertes und notarisiertes DMG; alle {len(report['CASES'])} lokalen GUI-Pflichtfälle bestanden.\n\n"
         f"- [Build und Regressionstests](https://github.com/{REPO}/actions/runs/{build_id})\n"
         f"- [Installierte DMG-Prüfung](https://github.com/{REPO}/actions/runs/{gui_id})\n"
         f"- [Änderungen](https://github.com/{REPO}/blob/{source}/CHANGELOG.md)\n\n"
