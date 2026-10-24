@@ -1,12 +1,12 @@
 import copy
 import unittest
 
-from completion import CASES, combine
+from completion import CASES, combine, combine_sequence
 
 
 SOURCE = "a" * 40
 ORIGINAL = {"id": 123, "run_attempt": 1, "head_sha": SOURCE}
-RESUMED = {"id": 456, "run_attempt": 2, "head_sha": "b" * 40}
+RESUMED = {"id": 456, "run_attempt": 2, "head_sha": "b" * 40, "conclusion": "success"}
 FAILED = "NavigationTests/testSplitDown"
 
 
@@ -116,6 +116,42 @@ class CompletionTests(unittest.TestCase):
                 combine(self.before, self.after, SOURCE, ORIGINAL, run)
         with self.assertRaises(ValueError):
             combine(self.before, self.after, SOURCE, dict(ORIGINAL, head_sha="f" * 40), RESUMED)
+
+    def test_successes_accumulate_without_repeating_a_passed_case(self):
+        other = "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell"
+        before = evidence({name: "Failed" if name in (FAILED, other) else "Passed" for name in CASES},
+                          "full", SOURCE)
+        partial_run = dict(RESUMED, conclusion="failure")
+        partial = evidence({FAILED: "Failed", other: "Passed"}, "selected", partial_run["head_sha"])
+        final_run = dict(RESUMED, id=789, head_sha="d" * 40)
+        final = evidence({FAILED: "Passed"}, "selected", final_run["head_sha"])
+        inputs = copy.deepcopy((before, partial, final))
+        result = combine_sequence(before, [(partial, partial_run), (final, final_run)], SOURCE, ORIGINAL)
+        self.assertEqual({case["name"]: case["run_id"] for case in result["cases"]},
+                         {name: 789 if name == FAILED else 456 if name == other else 123 for name in CASES})
+        self.assertEqual([run["id"] for run in result["runs"]], [123, 456, 789])
+        self.assertEqual((before, partial, final), inputs)
+        self.assertEqual(result["product_acceptance"], "not-run")
+        for changes in ("repeated-case", "reordered", "duplicate-run", "missing-final", "wrong-verdict"):
+            with self.subTest(change=changes):
+                sequence = [(partial, partial_run), (final, final_run)]
+                if changes == "repeated-case":
+                    sequence[1] = (evidence({FAILED: "Passed", other: "Passed"}, "selected", final_run["head_sha"]), final_run)
+                elif changes == "reordered":
+                    sequence.reverse()
+                elif changes == "duplicate-run":
+                    sequence[1] = (final, dict(final_run, id=456))
+                elif changes == "missing-final":
+                    sequence.pop()
+                else:
+                    sequence[0] = (partial, dict(partial_run, conclusion="success"))
+                with self.assertRaises(ValueError):
+                    combine_sequence(before, sequence, SOURCE, ORIGINAL)
+
+    def test_empty_or_extra_continuation_is_rejected(self):
+        for sequence in ([], [(self.after, RESUMED), (self.after, dict(RESUMED, id=789))]):
+            with self.assertRaises(ValueError):
+                combine_sequence(self.before, sequence, SOURCE, ORIGINAL)
 
 
 if __name__ == "__main__":
