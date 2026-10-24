@@ -4,8 +4,9 @@ App-Quellstand: `5a35b11e2445f20b9e47b167252a63238ed6a20d`.
 Der [Batch 40125406009](https://github.com/byte5ai/zaplex/actions/runs/40125406009)
 prüft die Korrekturen für den ersten Escape im Dateidialog (#684), die normale
 macOS-Mindestfenstergröße (#685) und verbliebene englische Agent-Einstellungen
-(#688). Der vollständige Batch und die installierte Nachprüfung sind zum
-Zeitpunkt dieses Zwischenstands noch nicht abgeschlossen.
+(#688). Der Batch ist abgeschlossen: alle Bau- und Paketgates bestanden,
+die installierte GUI-Suite meldet 14 bestandene und zwei fehlgeschlagene Fälle.
+Die gezielte Fortsetzung und die interaktive Nachprüfung stehen noch aus.
 
 ## Bisherige CI-Nachweise
 
@@ -23,8 +24,9 @@ App-/Daemon-Bau, Signierung und Notarisierung sind abgeschlossen. Das DMG
 Der Linux-Daemon (45541420 Byte, Artefakt `12574066919`) hat SHA256
 `a3222a00dce2747870580f7525e1709d817ebf5c4356ac6aef11dee325b7d503`.
 Beide Downloads stimmen mit den ZIP-Digests der GitHub-Artefakte überein;
-die zusätzliche Daemon-Prüfsummendatei stimmt ebenfalls. Die Zuordnung zur
-installierten GUI-Suite wird nach deren Abschluss geprüft.
+die zusätzliche Daemon-Prüfsummendatei stimmt ebenfalls. Die installierte
+GUI-Suite verwendet dieses DMG; die zwei fehlgeschlagenen Fälle werden mit
+demselben Paket fortgesetzt.
 
 Der macOS-Job `120966248327` besteht sechs Plattformtests, darunter
 `undersized_window_frames_grow_without_moving_the_top_left_corner`, einen
@@ -38,6 +40,32 @@ Veröffentlichungssperre auf: 15 bestandene Fälle trotz nun 16 Pflichtfällen.
 vorbereiteten Beschreibungstext; 21 Prüfungen bestehen danach, ein Nachweis
 mit nur 15 Fällen bleibt abgewiesen. App und GUI-Testfälle sind unverändert.
 Es wurde kein Release veröffentlicht.
+
+## Installierte GUI-Suite: gezielte Fortsetzung
+
+Der ursprüngliche GUI-Job `120977429187` meldet 14/16 bestanden, zwei Fehler
+und keine übersprungenen Fälle. Sein Artefakt `12574886767` wurde gegen den
+GitHub-ZIP-Digest `53b937309e0614cd647f4e197cfdbd66a7f94579177f63b93e1101a35e060727`
+geprüft. Die Originalaufnahmen zeigen zwei Fehler der Texterkennung:
+
+- `SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell`: `SAMPLE`
+  ist sichtbar, fehlt aber vollständig im OCR-Ergebnis.
+- `SurfaceTests/testWindowMinimumSizePreservesOriginalShell`: die sichtbare
+  Setup-Ausgabe `ZQA 967960 963` wird als `ZQA 967968 963` gelesen. Der Test
+  erreicht die Ziehgeste nicht; dieser Lauf beweist die Mindestgröße noch nicht.
+
+[PR #694](https://github.com/byte5ai/zaplex/pull/694) korrigiert den Testhelfer
+mit Pixelwiederholung und vollständiger Zeilensegmentierung. Exakte Vergleiche
+bleiben erhalten. Gespeicherte Originalausschnitte sichern die beiden Befunde,
+unbestätigte Eingaben und unabhängige Pane-Ausgaben ab. Die Linux-Diagnose und
+Swift-Syntaxprüfung bestanden; der tatsächliche macOS-Regressionstest muss
+vor XCTest bestehen.
+
+[Fortsetzung 40131239409](https://github.com/byte5ai/zaplex/actions/runs/40131239409)
+prüft ausschließlich die beiden fehlgeschlagenen Fälle mit Teststand
+`23fdcf043c206f2aad5a688c35b98afd50f20c29`. Die 14 bestandenen Fälle und der
+App-Build werden nicht wiederholt. Der Originalbatch bleibt fehlgeschlagen;
+ein vollständiger Nachweis erfordert die geprüfte Kombination beider Läufe.
 
 ## Native Render-Fixtures
 
