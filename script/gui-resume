@@ -95,31 +95,50 @@ def caller_proved_full_suite():
     }.items())
 
 
-def validate_completion_run(run, jobs):
+def validate_completion_run(run, jobs, allow_partial=False):
     if any(run.get(key) != value for key, value in {
-        "status": "completed", "conclusion": "success", "event": "workflow_dispatch",
+        "status": "completed", "event": "workflow_dispatch",
         "head_branch": "main", "path": ".github/workflows/gui-resume.yml",
     }.items()) or run.get("head_repository", {}).get("full_name") != helpers["REPO"]:
-        raise ValueError("A successful main GUI continuation is required")
+        raise ValueError("A completed main GUI continuation is required")
+    allowed = ("success", "failure") if allow_partial else ("success",)
+    if run.get("conclusion") not in allowed:
+        raise ValueError("Unexpected GUI continuation verdict")
     by_name = {job["name"]: job for job in jobs}
     if len(by_name) != len(jobs):
         raise ValueError("Ambiguous GUI continuation jobs")
-    for name in ("Verify existing DMG provenance", "gui / Installed DMG user flows"):
-        if by_name.get(name, {}).get("conclusion") != "success":
-            raise ValueError(f"Missing successful continuation gate: {name}")
+    for name, expected in (("Verify existing DMG provenance", "success"),
+                           ("gui / Installed DMG user flows", run["conclusion"])):
+        if by_name.get(name, {}).get("conclusion") != expected:
+            raise ValueError(f"Unexpected continuation gate result: {name}")
+    if any(job.get("conclusion") not in ("success", "skipped")
+           for name, job in by_name.items() if name != "gui / Installed DMG user flows"):
+        raise ValueError("A non-GUI continuation prerequisite failed")
+
+
+def continuation_ids(value):
+    if not re.fullmatch(r"[1-9][0-9]*(?:,[1-9][0-9]*)*", value):
+        raise ValueError("Comma-separated numeric GUI continuation runs required")
+    ids = value.split(",")
+    if len(ids) > 10 or len(set(ids)) != len(ids):
+        raise ValueError("Expected at most ten distinct continuation runs")
+    return ids
 
 
 def completed_cases(original_run, original_jobs, artifacts, source, continuation_id):
-    if not continuation_id.isdecimal():
-        raise ValueError("Numeric GUI continuation run required")
+    ids = continuation_ids(continuation_id)
     validate_batch_resume(original_run, original_jobs, artifacts, source)
-    continuation_run = api(f"actions/runs/{continuation_id}")
-    validate_completion_run(continuation_run, pages(f"actions/runs/{continuation_id}/jobs", "jobs"))
+    continuation_runs = []
+    for index, run_id in enumerate(ids):
+        run = api(f"actions/runs/{run_id}")
+        validate_completion_run(run, pages(f"actions/runs/{run_id}/jobs", "jobs"),
+                                allow_partial=index < len(ids) - 1)
+        continuation_runs.append(run)
     completion = runpy.run_path(str(Path(__file__).parent / "macos/gui-tests/completion.py"))
     evidence = []
     evidence_artifacts = []
     with tempfile.TemporaryDirectory(prefix="zaplex-gui-completion-") as directory:
-        for run in (original_run, continuation_run):
+        for run in [original_run] + continuation_runs:
             run_id, attempt = run["id"], run["run_attempt"]
             if type(run_id) is not int or type(attempt) is not int or run_id <= 0 or attempt <= 0:
                 raise ValueError("Invalid GUI run identity")
@@ -132,7 +151,8 @@ def completed_cases(original_run, original_jobs, artifacts, source, continuation
             subprocess.run(["gh", "run", "download", str(run_id), "--repo", helpers["REPO"],
                             "--name", name, "--dir", str(destination)], check=True, timeout=300)
             evidence.append(completion["read_evidence"](destination))
-    receipt = completion["combine"](*evidence, source, original_run, continuation_run)
+    receipt = completion["combine_sequence"](evidence[0], list(zip(evidence[1:], continuation_runs)),
+                                              source, original_run)
     receipt["evidence_artifacts"] = evidence_artifacts
     return receipt
 
@@ -148,6 +168,16 @@ def main():
     jobs, artifacts = (pages(f"actions/runs/{run_id}/{key}", key) for key in ("jobs", "artifacts"))
     batch = run.get("path") == ".github/workflows/ci-batch.yml"
     completion_id = os.environ.get("GUI_COMPLETION_RUN_ID", "")
+    if os.environ.get("GUI_DIAGNOSTIC") == "true":
+        if not batch or os.environ.get("GUI_EXPLORATION") != "true" or completion_id or caller_proved_full_suite():
+            raise ValueError("Diagnosis requires a separate batch exploration without completion claims")
+        validate_batch_resume(run, jobs, artifacts, source)
+        receipt = {"kind": "diagnostic_exploration", "app_source_sha": source,
+                   "artifact_run_id": int(run_id), "local_gui": "not-run", "product_acceptance": "not-run"}
+        (Path(os.environ["GITHUB_WORKSPACE"]) / "gui-diagnosis.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+            summary.write("DIAGNOSIS ONLY: GUI acceptance is incomplete. This run provides interaction infrastructure, not an acceptance pass.\n")
+        return
     if completion_id:
         if not batch or os.environ.get("GUI_EXPLORATION") != "true":
             raise ValueError("GUI completion is only supported for batch exploration")

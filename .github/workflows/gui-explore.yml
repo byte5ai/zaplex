@@ -12,9 +12,13 @@ on:
         type: string
         required: true
       gui_completion_run_id:
-        description: Optional successful GUI continuation passing exactly the failed batch cases
+        description: Optional ordered continuation run IDs, comma-separated, completing exactly the remaining failed cases
         type: string
         default: ''
+      diagnostic:
+        description: Investigate failed GUI flows without granting an acceptance pass
+        type: boolean
+        default: false
       remote_target:
         description: Prepare the isolated Linux acceptance target (private captures)
         type: boolean
@@ -30,6 +34,9 @@ on:
       gui_completion_run_id:
         type: string
         default: ''
+      diagnostic:
+        type: boolean
+        default: false
       remote_target:
         type: boolean
         default: false
@@ -57,6 +64,7 @@ jobs:
           APP_SOURCE_SHA: ${{ inputs.source_sha }}
           GUI_EXPLORATION: 'true'
           GUI_COMPLETION_RUN_ID: ${{ inputs.gui_completion_run_id }}
+          GUI_DIAGNOSTIC: ${{ inputs.diagnostic }}
           GUI_ACCEPTANCE_IN_CALLER: ${{ inputs.after_full_suite && github.workflow == 'Resume installed DMG acceptance' }}
         run: |
           python3 script/gui-resume-tests
@@ -69,6 +77,14 @@ jobs:
         with:
           name: gui-completion-${{ github.run_id }}-${{ github.run_attempt }}
           path: gui-completion.json
+          if-no-files-found: error
+
+      - name: Preserve diagnostic scope
+        if: inputs.diagnostic
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gui-diagnosis-${{ github.run_id }}
+          path: gui-diagnosis.json
           if-no-files-found: error
 
   explore:
