@@ -39,6 +39,17 @@ geändert wird. Exakte Nonce, Shellzustand, negative Gegenproben und richtige
 Bildkoordinaten bleiben die Abnahmekriterien. Danach sind ausschließlich die
 zwei fehlgeschlagenen Nutzerabläufe am unveränderten DMG nachzuprüfen.
 
+Die [native Diagnose 40146026138](https://github.com/byte5ai/zaplex/actions/runs/40146026138)
+auf `d9f60714fee76ba9f96452e66364609a2a1eee43` ist erfolgreich abgeschlossen.
+144 Lesungen vergleichen neun Bilder mit 16 Konfigurationen. Die
+[Auswertung](evidence/candidate-137-native/ocr-diagnosis.json) hält die exakten
+Positiv-/Negativprüfungen und die unabhängig gemessenen Koordinaten fest.
+Bei zweifacher Pixelwiederholung besteht Modus 11 **9/9**, während Modus 6
+beide aktuellen Fehler reproduziert (**7/9**). Der Testhelfer wird auf diese
+eine feste Konfiguration umgestellt. Die vollständige Swift-Gegenprobe samt
+Retina-Abbildung und die zwei tatsächlichen GUI-Abläufe sind bis zum gezielten
+Fortsetzungslauf weiterhin unbestätigt; die Diagnose allein ist kein GUI-Pass.
+
 | Artefakt | GitHub-ID | SHA-256 |
 |---|---|---|
 | App-ZIP | `12579753960` | `792a5ad5e575507839dae0f4410aaaf2c6f3382a698dcab7e9ea4401825d805e` |

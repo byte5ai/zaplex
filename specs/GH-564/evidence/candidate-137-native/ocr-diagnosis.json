@@ -1,0 +1,321 @@
+{
+  "run_id": 40146026138,
+  "source_sha": "d9f60714fee76ba9f96452e66364609a2a1eee43",
+  "artifact_id": 12581221342,
+  "zip_sha256": "c67706e39e7700bbfb1f7895501d9564daa58a5568ba184a4f72a6f452fc0a70",
+  "native_engine": "Tesseract 5.5.3 / Leptonica 1.87.0",
+  "language_data_sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
+  "readings": 144,
+  "scope": "Saved original images through the native Swift renderer; exact positive/negative phrases and independently measured coordinates. Not a GUI user-flow pass.",
+  "selected": {
+    "scale": 2,
+    "interpolation": "nearest",
+    "psm": 11,
+    "passed": 9,
+    "cases": [
+      {
+        "file": "rendered-output.png",
+        "failures": [],
+        "positive_rectangles": {
+          "ZQA 149060 963": [
+            17.0,
+            576.0,
+            128.0,
+            588.0
+          ]
+        }
+      },
+      {
+        "file": "before-return.png",
+        "failures": [],
+        "positive_rectangles": {}
+      },
+      {
+        "file": "selected-file-row.png",
+        "failures": [],
+        "positive_rectangles": {
+          "SAMPLE": [
+            35.0,
+            218.0,
+            81.0,
+            233.0
+          ]
+        }
+      },
+      {
+        "file": "narrow-rendered-output.png",
+        "failures": [],
+        "positive_rectangles": {
+          "ZQA 967960 963": [
+            17.0,
+            548.0,
+            128.0,
+            560.0
+          ]
+        }
+      },
+      {
+        "file": "narrow-before-return.png",
+        "failures": [],
+        "positive_rectangles": {}
+      },
+      {
+        "file": "split-right-output.png",
+        "failures": [],
+        "positive_rectangles": {
+          "ZQA 285052 741": [
+            17.0,
+            546.0,
+            128.0,
+            558.0
+          ],
+          "ZQA 221710 963": [
+            528.0,
+            546.0,
+            639.0,
+            558.0
+          ]
+        }
+      },
+      {
+        "file": "close-tab-screen.png",
+        "failures": [],
+        "positive_rectangles": {
+          "ZQA 799030 963": [
+            17.0,
+            546.0,
+            128.0,
+            558.0
+          ]
+        }
+      },
+      {
+        "file": "close-tab-before-screen.png",
+        "failures": [],
+        "positive_rectangles": {}
+      },
+      {
+        "file": "settings-screen.png",
+        "failures": [],
+        "positive_rectangles": {
+          "Keyboard shortcuts": [
+            34.0,
+            390.0,
+            137.0,
+            402.0
+          ]
+        }
+      }
+    ]
+  },
+  "previous": {
+    "scale": 2,
+    "interpolation": "nearest",
+    "psm": 6,
+    "passed": 7,
+    "cases": [
+      {
+        "file": "rendered-output.png",
+        "failures": [],
+        "positive_rectangles": {
+          "ZQA 149060 963": [
+            17.0,
+            576.0,
+            128.0,
+            588.0
+          ]
+        }
+      },
+      {
+        "file": "before-return.png",
+        "failures": [],
+        "positive_rectangles": {}
+      },
+      {
+        "file": "selected-file-row.png",
+        "failures": [],
+        "positive_rectangles": {
+          "SAMPLE": [
+            33.0,
+            218.0,
+            82.5,
+            233.5
+          ]
+        }
+      },
+      {
+        "file": "narrow-rendered-output.png",
+        "failures": [],
+        "positive_rectangles": {
+          "ZQA 967960 963": [
+            17.0,
+            548.0,
+            128.0,
+            560.0
+          ]
+        }
+      },
+      {
+        "file": "narrow-before-return.png",
+        "failures": [],
+        "positive_rectangles": {}
+      },
+      {
+        "file": "split-right-output.png",
+        "failures": [],
+        "positive_rectangles": {
+          "ZQA 285052 741": [
+            17.0,
+            546.0,
+            128.0,
+            558.0
+          ],
+          "ZQA 221710 963": [
+            528.0,
+            546.0,
+            639.0,
+            558.0
+          ]
+        }
+      },
+      {
+        "file": "close-tab-screen.png",
+        "failures": [
+          "missing: ZQA 799030 963",
+          "false positive: ZQA 7990308 963"
+        ],
+        "positive_rectangles": {
+          "ZQA 799030 963": null
+        }
+      },
+      {
+        "file": "close-tab-before-screen.png",
+        "failures": [],
+        "positive_rectangles": {}
+      },
+      {
+        "file": "settings-screen.png",
+        "failures": [
+          "missing: Keyboard shortcuts"
+        ],
+        "positive_rectangles": {
+          "Keyboard shortcuts": null
+        }
+      }
+    ]
+  },
+  "matrix": [
+    {
+      "scale": 2,
+      "interpolation": "high",
+      "psm": 6,
+      "passed_images": 8,
+      "total_images": 9
+    },
+    {
+      "scale": 2,
+      "interpolation": "high",
+      "psm": 11,
+      "passed_images": 9,
+      "total_images": 9
+    },
+    {
+      "scale": 2,
+      "interpolation": "nearest",
+      "psm": 6,
+      "passed_images": 7,
+      "total_images": 9
+    },
+    {
+      "scale": 2,
+      "interpolation": "nearest",
+      "psm": 11,
+      "passed_images": 9,
+      "total_images": 9
+    },
+    {
+      "scale": 3,
+      "interpolation": "high",
+      "psm": 6,
+      "passed_images": 8,
+      "total_images": 9
+    },
+    {
+      "scale": 3,
+      "interpolation": "high",
+      "psm": 11,
+      "passed_images": 7,
+      "total_images": 9
+    },
+    {
+      "scale": 3,
+      "interpolation": "nearest",
+      "psm": 6,
+      "passed_images": 7,
+      "total_images": 9
+    },
+    {
+      "scale": 3,
+      "interpolation": "nearest",
+      "psm": 11,
+      "passed_images": 6,
+      "total_images": 9
+    },
+    {
+      "scale": 4,
+      "interpolation": "high",
+      "psm": 6,
+      "passed_images": 6,
+      "total_images": 9
+    },
+    {
+      "scale": 4,
+      "interpolation": "high",
+      "psm": 11,
+      "passed_images": 5,
+      "total_images": 9
+    },
+    {
+      "scale": 4,
+      "interpolation": "nearest",
+      "psm": 6,
+      "passed_images": 5,
+      "total_images": 9
+    },
+    {
+      "scale": 4,
+      "interpolation": "nearest",
+      "psm": 11,
+      "passed_images": 8,
+      "total_images": 9
+    },
+    {
+      "scale": 6,
+      "interpolation": "high",
+      "psm": 6,
+      "passed_images": 5,
+      "total_images": 9
+    },
+    {
+      "scale": 6,
+      "interpolation": "high",
+      "psm": 11,
+      "passed_images": 8,
+      "total_images": 9
+    },
+    {
+      "scale": 6,
+      "interpolation": "nearest",
+      "psm": 6,
+      "passed_images": 5,
+      "total_images": 9
+    },
+    {
+      "scale": 6,
+      "interpolation": "nearest",
+      "psm": 11,
+      "passed_images": 3,
+      "total_images": 9
+    }
+  ]
+}

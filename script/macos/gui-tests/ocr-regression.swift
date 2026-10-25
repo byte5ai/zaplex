@@ -59,4 +59,26 @@ guard let left = split.rect(for: "ZQA 285052 741"), let right = split.rect(for: 
 precondition(left.maxX < 512 && right.minX > 512, "Output must map to the correct pane")
 precondition(split.rect(for: "ZQA 285052 963") == nil, "The other pane's state must not be substituted")
 precondition(split.rect(for: "ZQA 221710 741") == nil, "Pane states must remain distinct")
-print("OCR regression: exact output, selected filename, split panes, negative controls and window coordinates passed")
+let closeTab = try RenderedText.read(fixtureImage(fixtures, "close-tab-screen.png"), displaySize: wideSize)
+FileHandle.standardOutput.write(Data(closeTab.tsv.utf8))
+guard let closeTabOutput = closeTab.rect(for: "ZQA 799030 963") else {
+    fatalError("The new shell's rendered nonce must be recognized exactly")
+}
+precondition(closeTab.rect(for: "ZQA 7990308 963") == nil, "The observed extra OCR digit must fail")
+precondition(closeTab.rect(for: "ZQA 799030 741") == nil, "A different shell state must fail")
+precondition(abs(closeTabOutput.minX - 17) < 4 && abs(closeTabOutput.minY - 546) < 4)
+precondition(abs(closeTabOutput.maxX - 128) < 4 && abs(closeTabOutput.maxY - 558) < 4)
+let closeTabBefore = try RenderedText.read(fixtureImage(fixtures, "close-tab-before-screen.png"),
+                                          displaySize: wideSize)
+precondition(closeTabBefore.rect(for: "ZQA 799030 963") == nil, "The new unsubmitted input is not output")
+precondition(closeTab.rect(for: "Keyboard shortcuts") == nil, "A terminal is not the settings page")
+
+let settings = try RenderedText.read(fixtureImage(fixtures, "settings-screen.png"), displaySize: wideSize)
+FileHandle.standardOutput.write(Data(settings.tsv.utf8))
+guard let shortcuts = settings.rect(for: "Keyboard shortcuts") else {
+    fatalError("The visible settings navigation label must be recognized exactly")
+}
+precondition(settings.rect(for: "Keyboard shortcut") == nil, "A partial label must fail")
+// Measured in the original screen image, subtracting its recorded AX origin.
+precondition(shortcuts.minX >= 30 && shortcuts.maxX <= 140 && shortcuts.minY >= 386 && shortcuts.maxY <= 405)
+print("OCR regression: exact output, settings navigation, selected filename, split panes, negative controls and window coordinates passed")
