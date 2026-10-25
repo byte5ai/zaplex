@@ -90,8 +90,14 @@ nach Dark→Light. Die übrigen Varianten bleiben getrennt offen.
 Die [Fixture-Sichtprüfung von 1.2.37](CANDIDATE-1.2.37-NATIVE.md) ergänzt
 44 einzeln geprüfte Originalbilder auf dem Korrekturstand für #701/#702/#704.
 In den dargestellten Agenten-, Verbindungs-, Dateimanager- und Pane-Zuständen
-wurde keine neue Regression beobachtet. Die gezielte installierte Nachprüfung
-der Einstellungen und die vollständigen Varianten sind damit noch nicht belegt.
+wurde keine neue Regression beobachtet. Am selben DMG sind anschließend alle
+16 automatischen GUI-Pflichtfälle aus Original und gezielter Fortsetzung
+belegt. Weitere 46 einzeln geprüfte Originale der direkten Exploration
+bestätigen die korrigierten Einstellungswerte nach deutschem Neustart,
+lesbare Chips und Ausschlusslistenwerte bei Dark→Light→Dark, Chip-Drag,
+Entfernen/Zurücksetzen und das vollständige deutsche Tastenmenü bei 480×320
+in Light. Der frische Shell-Rückweg erhält PID, Marker und CWD. Die vollständigen
+Varianten und Bewegungsbelege bleiben davon getrennt; siehe Kandidatenbericht.
 
 ## Referenzen und Bewertung
 
