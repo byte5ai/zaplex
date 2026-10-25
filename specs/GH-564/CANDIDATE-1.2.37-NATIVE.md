@@ -153,3 +153,41 @@ In den geprüften Zuständen sind die drei korrigierten Fehler nicht erneut
 aufgetreten. Deaktivierte Varianten, Bewegungsbelege sowie die weiteren
 Dateimanager-/Remote-/Provider-Fälle wurden in dieser Sitzung nicht geprüft;
 daraus folgt keine vollständige Produktabnahme.
+
+## Direkte Dateimanager-Prüfung und Fokusbefund
+
+[Exploration 40148243776](https://github.com/byte5ai/zaplex/actions/runs/40148243776)
+verwendet dasselbe DMG mit Teststand `c136c772e6437231c30824f8e82b02ecb62792f0`.
+Die Sitzung ist ausdrücklich beendet. Alle **33 Originale** sind einzeln
+betrachtet und bytegleich mit dem archivierten Operator-Verzeichnis;
+[Manifest](evidence/candidate-137-native/exploration-40148243776.json).
+Artefakt `12581960971`, ZIP-SHA256
+`26fba290af9c65d279752ee6093644c553cbcda478c55db7b97589f1600cc52d`.
+
+**F02, Teilprüfung EN/Dark:** Alle acht Kurzbeschriftungen sind bei 1024 Punkten
+ohne Sidebar in [einer Reihe](evidence/candidate-137-native/files-06-one-row.png),
+bei 760 Punkten in [zwei Reihen](evidence/candidate-137-native/files-07-two-rows.png)
+und bei Fensterbreite 480 mit Sidebar in
+[vier Reihen](evidence/candidate-137-native/files-09-four-rows-focused.png)
+sichtbar. Die Zellen sind je Reihe gleich breit; keine horizontale Leiste
+oder ausgeblendete Beschriftung. Andere Sprach-/Theme-Kombinationen sind in
+dieser Sitzung nicht geprüft.
+
+**F03, fail:** Ein Klick auf eine Dateizeile der inaktiven Pane aktiviert sie
+nicht. Nach [linkem Zeilenklick](evidence/candidate-137-native/files-18-left-focus.png)
+zeigt F3 weiterhin die [rechte Datei mit 16 Byte](evidence/candidate-137-native/files-19-left-details.png).
+Nach Klick auf den linken Pane-Kopf zeigt F3 korrekt die
+[linke Datei mit 7 Byte](evidence/candidate-137-native/files-22-left-details-after-header.png).
+Die umgekehrte Gegenprobe reproduziert den Fehler:
+[rechter Zeilenklick](evidence/candidate-137-native/files-23-right-row-click.png),
+danach [weiter linke Details](evidence/candidate-137-native/files-24-right-row-f3.png).
+Klicks auf den Pane-Kopf oder leere Fläche wechseln dagegen den Kontext.
+Das ist [#709](https://github.com/byte5ai/zaplex/issues/709), Priorität High;
+nativ wurde ausschließlich die nichtdestruktive Details-Aktion verwendet.
+
+F10 kehrt nach korrekter Aktivierung in beide ursprünglichen Shells zurück:
+links PID1304/LEFT137, rechts PID2248/RIGHT137, jeweils ursprüngliches CWD.
+Die [unabhängigen Datei-Hashes](evidence/candidate-137-native/files-32-final-hash-output.png)
+bleiben unverändert. Die zwei gleichnamigen Testdateien unterscheiden sich
+bewusst in Inhalt und Größe. Die Session bestätigt keinen Transfer und keine
+destruktive Dateiaktion; der Fokusfehler verhindert den Pass von F03.
