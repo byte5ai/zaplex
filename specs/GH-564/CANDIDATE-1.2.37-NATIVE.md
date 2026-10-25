@@ -191,3 +191,30 @@ Die [unabhängigen Datei-Hashes](evidence/candidate-137-native/files-32-final-ha
 bleiben unverändert. Die zwei gleichnamigen Testdateien unterscheiden sich
 bewusst in Inhalt und Größe. Die Session bestätigt keinen Transfer und keine
 destruktive Dateiaktion; der Fokusfehler verhindert den Pass von F03.
+
+## Lokale Korrektur für 1.2.38
+
+Die Korrektur zu #709 lässt die Dateiliste auch bereits konsumierte Mausklicks
+beobachten. Sie stellt zuerst den Listenfokus her und aktiviert anschließend
+die zugehörige Pane. Vorhandene Markierungs- und Zeilenaktionen bleiben erhalten.
+Die verzögerte Pane-Aktivierung erfolgt nach der Fokusaktualisierung und vermeidet
+auch den Wiedereintritt in die gerade bearbeitete Browser-View.
+
+Der neue Mausregressionstest scheiterte vor der Korrektur am fehlenden Pane-Wechsel
+vor Mouse-up. Nach der Korrektur bestehen **neun gezielte Tests**, darunter beide
+neuen Fälle: F3 erreicht in beiden Wechselrichtungen die richtige gleichnamige
+Datei; ein Zeilenklick nach Suchfokus gibt den Listenfokus zurück und erhält
+Markierungen, sowohl innerhalb der aktiven Pane als auch nach einem Pane-Wechsel.
+Bestehende Gegenproben für Modifier-Klicks, Elternzeile, veraltete Dateiidentität,
+deaktivierte Aktionen, Dialogfokus und Kontextmenü bestehen ebenfalls.
+
+`cargo check --locked -p warp`, App-Clippy mit `-D warnings`, die Formatprüfung
+der drei geänderten Rust-Dateien und alle 13 Phase-A-Prüfungen sind bestanden.
+Die ausschließlich in Versionswerten geänderten Workflows liefern dieselben
+Actionlint-Befunde wie der Basisstand; daraus wird kein vollständiger
+Actionlint-Pass abgeleitet. Der [lokale Nachweis](evidence/focus-709-local.json)
+nennt die tatsächlich ausgeführten Tests und bindet sie an Quell- und Loghashes.
+
+**F03 bleibt nativ fehlgeschlagen**, bis ein neues 1.2.38-DMG den Zeilenklick in
+beiden Richtungen und die Rückkehr aus dem Suchfeld bestätigt. Die alten
+Aufnahmen werden nicht zum Nachweis der Korrektur umgedeutet.

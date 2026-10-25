@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.38] — 2026-10-25
+
+- Ein Klick auf eine Dateizeile aktiviert deren Dateimanager und gibt der Liste den Tastaturfokus zurück; F3 verwendet anschließend die angeklickte Pane, ohne vorhandene Markierungen zu verlieren (#709).
+
 ## [1.2.37] — 2026-10-25
 
 - Die Befehls-Ausschlussliste behält bei Themewechseln lesbare Eingaben und Platzhalter, ohne Entwurf, Auswahl oder Fokus zurückzusetzen (#704).
