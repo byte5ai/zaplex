@@ -1,0 +1,682 @@
+{
+  "run_id": 40148243776,
+  "app_source_sha": "a0705b38a92c8fe2877d43492f5190d372a053de",
+  "harness_source_sha": "c136c772e6437231c30824f8e82b02ecb62792f0",
+  "dmg_sha256": "7aaa925da5abbced8fb537ed4af8a5fdbdba92b8bf8cd1a19bb65328f296213e",
+  "artifact_id": 12581960971,
+  "zip_sha256": "26fba290af9c65d279752ee6093644c553cbcda478c55db7b97589f1600cc52d",
+  "explicitly_finished": true,
+  "operator_closed": true,
+  "images": [
+    {
+      "file": "01-initial.png",
+      "artifact_path": "operator/01-initial.png",
+      "sha256": "bb17c5b7bb51b90ac64d60d99b9c1f5cc94c6fd6bdc26c22369364bd116aab38",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Initial EN/Dark terminal."
+    },
+    {
+      "file": "02-fixture-input.png",
+      "artifact_path": "operator/02-fixture-input.png",
+      "sha256": "4f9b3916a1d736ef217527e0d49e1c99942c1438786823a6d1fef4f6db0d3631",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Isolated two-directory fixture command before submission."
+    },
+    {
+      "file": "03-fixture-output.png",
+      "artifact_path": "operator/03-fixture-output.png",
+      "sha256": "412fdb760ccb7899cd9e49a692f53fa65fc002dce4d075e4858493cd11baa00c",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Independent initial file sizes and SHA256: left7 bytes, right16 bytes."
+    },
+    {
+      "file": "04-left-input.png",
+      "artifact_path": "operator/04-left-input.png",
+      "sha256": "3ca54697f5dd6289cc913f293b47d72bd80cd1eff9b6ca605d69b024bfc9f415",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Left shell marker/CWD command before submission."
+    },
+    {
+      "file": "05-left-baseline.png",
+      "artifact_path": "operator/05-left-baseline.png",
+      "sha256": "f2d6da1cf55c24c3cac068b6a2704a1af520384e6e4f2ee9bc3a981b10141b72",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Left baseline PID1304, unexported LEFT137, left directory."
+    },
+    {
+      "file": "06-one-row.png",
+      "artifact_path": "operator/06-one-row.png",
+      "sha256": "edabdc3365fc053f351bf5cadc0561595df7364ad1613d3c27911073f57a5b1d",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "1024-wide pane, sidebar hidden: eight captions in one row."
+    },
+    {
+      "file": "07-two-rows.png",
+      "artifact_path": "operator/07-two-rows.png",
+      "sha256": "ddd6023e4a5356eb90bc615ffee8a49b1f9fc66b58901eaccb5ce95c2e0eae52",
+      "image_size": [
+        760,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          760,
+          678
+        ]
+      ],
+      "observation": "760-wide pane: eight captions in two rows."
+    },
+    {
+      "file": "08-four-rows.png",
+      "artifact_path": "operator/08-four-rows.png",
+      "sha256": "8fd4926d00797db1a7ead5531c11b0f0a5029039af75738dce965c8916923f15",
+      "image_size": [
+        480,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          678
+        ]
+      ],
+      "observation": "480-wide window with sidebar: narrow file pane shows all eight captions in four rows; keyboard focus had moved to sidebar."
+    },
+    {
+      "file": "09-four-rows-focused.png",
+      "artifact_path": "operator/09-four-rows-focused.png",
+      "sha256": "8fd4926d00797db1a7ead5531c11b0f0a5029039af75738dce965c8916923f15",
+      "image_size": [
+        480,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          678
+        ]
+      ],
+      "observation": "Click on file row after sidebar navigation does not restore active keyboard actions."
+    },
+    {
+      "file": "10-small-details-left.png",
+      "artifact_path": "operator/10-small-details-left.png",
+      "sha256": "8fd4926d00797db1a7ead5531c11b0f0a5029039af75738dce965c8916923f15",
+      "image_size": [
+        480,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          678
+        ]
+      ],
+      "observation": "F3 after row click opens no dialog; filename is not a pass assertion."
+    },
+    {
+      "file": "11-split-menu.png",
+      "artifact_path": "operator/11-split-menu.png",
+      "sha256": "0c0fd9db7927f243bb774e08fb58cdeff50ee6dfab4e06b3360c2d1d257873ea",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Split-right start menu after Cmd+D; prior F10 did not close the unfocused file browser."
+    },
+    {
+      "file": "12-two-panes.png",
+      "artifact_path": "operator/12-two-panes.png",
+      "sha256": "6a2633096288b9e0ac3c45b0fc160801025a25e93261842c23cffec63faf0c9d",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Terminal selected from split menu creates right pane; left file browser retained."
+    },
+    {
+      "file": "13-right-input.png",
+      "artifact_path": "operator/13-right-input.png",
+      "sha256": "f9802d9241af8196283b30288731a289a515258c65b09d0fe14fc00f3262a463",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Right baseline command before submission."
+    },
+    {
+      "file": "14-right-baseline.png",
+      "artifact_path": "operator/14-right-baseline.png",
+      "sha256": "9859923a18365fa9696edcb6e8b579c05aa5d5db9e79c0a74dda7fb520bf94c0",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Right baseline PID2248, unexported RIGHT137, right directory."
+    },
+    {
+      "file": "15-two-file-panes.png",
+      "artifact_path": "operator/15-two-file-panes.png",
+      "sha256": "aebaf278cecf4f24dc65340cbbfe9f01c76f19e079fb532411a751a21943f087",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Two file panes show same.txt sizes7/16 and reciprocal destination paths; right focused."
+    },
+    {
+      "file": "16-right-details-click.png",
+      "artifact_path": "operator/16-right-details-click.png",
+      "sha256": "87d4df78c185e637218ca513545e72c61711db401a2a7dc4bf92ad35669f89be",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Mouse Details action on right opens correct16-byte file/path."
+    },
+    {
+      "file": "17-right-details-key.png",
+      "artifact_path": "operator/17-right-details-key.png",
+      "sha256": "87d4df78c185e637218ca513545e72c61711db401a2a7dc4bf92ad35669f89be",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Escape then F3 reopens right16-byte details."
+    },
+    {
+      "file": "18-left-focus.png",
+      "artifact_path": "operator/18-left-focus.png",
+      "sha256": "867e7ceab0c2133a0344bf364fa62cad180a7853c71d369c04b3eb373dc9637a",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "After Escape and left row click: right remains active; left row hover visible."
+    },
+    {
+      "file": "19-left-details.png",
+      "artifact_path": "operator/19-left-details.png",
+      "sha256": "37994df0ceb986de72d4191baa01bc7cab64031f293a8633f6b023466bf18800",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "F3 after left row click opens wrong-side right16-byte details."
+    },
+    {
+      "file": "20-details-cancel-mouse.png",
+      "artifact_path": "operator/20-details-cancel-mouse.png",
+      "sha256": "aebaf278cecf4f24dc65340cbbfe9f01c76f19e079fb532411a751a21943f087",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Mouse Cancel closes details."
+    },
+    {
+      "file": "21-left-header-focus.png",
+      "artifact_path": "operator/21-left-header-focus.png",
+      "sha256": "e43e2eb317a4b7eba7f47860639db6a2d9a1425c14f678cda788596475af9911",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Click on left pane header activates left and changes tab context."
+    },
+    {
+      "file": "22-left-details-after-header.png",
+      "artifact_path": "operator/22-left-details-after-header.png",
+      "sha256": "ed154e8c92601790528d602561f2f1c4ad6665cbe7bb153a4d5770d231520412",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "F3 after header click opens correct left7-byte details."
+    },
+    {
+      "file": "23-right-row-click.png",
+      "artifact_path": "operator/23-right-row-click.png",
+      "sha256": "3f0a74b356da487f9b5ee1b82b5614ced55b0b06027e3868d6e3cee5c4ca8477",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "After Escape and right row click: left remains active."
+    },
+    {
+      "file": "24-right-row-f3.png",
+      "artifact_path": "operator/24-right-row-f3.png",
+      "sha256": "ed154e8c92601790528d602561f2f1c4ad6665cbe7bb153a4d5770d231520412",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "F3 after right row click opens wrong-side left7-byte details."
+    },
+    {
+      "file": "25-right-blank-click.png",
+      "artifact_path": "operator/25-right-blank-click.png",
+      "sha256": "aebaf278cecf4f24dc65340cbbfe9f01c76f19e079fb532411a751a21943f087",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Click on blank right pane area activates right; distinguishes row from general pane hit-testing."
+    },
+    {
+      "file": "26-right-terminal.png",
+      "artifact_path": "operator/26-right-terminal.png",
+      "sha256": "12cc22d19b0f350b2a062fcf804a1dae71c6f7418403245c186d21393faa1ea1",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "F10 returns right file browser to original terminal."
+    },
+    {
+      "file": "27-right-check-input.png",
+      "artifact_path": "operator/27-right-check-input.png",
+      "sha256": "4de8f20bc6d2b7aa7870ce1ce8b7774c05523d6bc8567a424c990d322eaaa097",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Right shell-check command before submission."
+    },
+    {
+      "file": "28-right-check-output.png",
+      "artifact_path": "operator/28-right-check-output.png",
+      "sha256": "662aaa52c6e371f4633897f7a15db4ba88264d1cef2de6c176a78c5447ef9b3c",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh right PID2248/RIGHT137/right directory retained."
+    },
+    {
+      "file": "29-left-check-input.png",
+      "artifact_path": "operator/29-left-check-input.png",
+      "sha256": "165ddc911ca4902fab84cadaa9ad92914b9fb4b2861234112fd08999938f7c05",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Left shell-check command after header focus and F10, before submission."
+    },
+    {
+      "file": "30-left-check-output.png",
+      "artifact_path": "operator/30-left-check-output.png",
+      "sha256": "0c8cbda170513d27b9e5dfed9e63ac7da676aad1133c8c3498cc295c2cdf6eb6",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh left PID1304/LEFT137/left directory retained beside right original shell."
+    },
+    {
+      "file": "31-final-hash-input.png",
+      "artifact_path": "operator/31-final-hash-input.png",
+      "sha256": "9d5fab26cd0274d57b58e0bf2189378b898e66dc335819deba46a80ae5aa2c4b",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Final independent file-hash command before submission."
+    },
+    {
+      "file": "32-final-hash-output.png",
+      "artifact_path": "operator/32-final-hash-output.png",
+      "sha256": "be487ef2839a2f8da6890b4612d0f26d83985fe3c063f25522557a9926c11d69",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Both file sizes and hashes unchanged after exploration."
+    },
+    {
+      "file": "33-finish-input.png",
+      "artifact_path": "operator/33-finish-input.png",
+      "sha256": "dc004233a0fc8a5382302fd9fb2578af45313fdb45b7f5faef747ee23ef73f1b",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Explicit finish command before submission; final file hashes and both shell proofs visible."
+    }
+  ],
+  "action_log_sha256": "ea0d7606501e8ea61bd3404f2c355ee5ef18c636c7dc814f6cf2c4878f4e2cd3",
+  "findings": [
+    "F02 partial: EN/Dark one/two/four rows visible; other locale/theme variants not-run.",
+    "F03 fail: row click does not focus opposite pane; F3 uses previous pane in both directions. Issue709.",
+    "Header/blank-area focus and F10 shell returns work; both contents unchanged."
+  ],
+  "limitations": [
+    "Stills show sampled states; no continuous-motion evidence.",
+    "No destructive file action, transfer, remote or provider operation performed."
+  ]
+}

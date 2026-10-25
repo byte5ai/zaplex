@@ -15,7 +15,9 @@ use crate::editor::{
 };
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view;
-use crate::pane_group::{BackingView, PaneConfiguration, PaneEvent};
+use crate::pane_group::{
+    ActivationReason, BackingView, PaneConfiguration, PaneEvent, PaneGroupAction,
+};
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::sftp_manager::file_list::FileColumns;
 use crate::terminal::view::terminal_identity;
@@ -398,6 +400,8 @@ pub enum SftpBrowserAction {
     Refresh,
     /// Retry the SSH/SFTP connection from the beginning.
     RetryConnection,
+    /// Give a pointer interaction with the file list its pane and keyboard focus.
+    FocusFileList,
     /// Select the referenced entry if that exact object is still listed.
     SelectEntry(EntryReference),
     /// Toggle the multi-selection mark on the referenced entry — the
@@ -5404,7 +5408,7 @@ impl SftpBrowserView {
     /// Render the file list. `pane_focused` dims the cursor and the marks of
     /// an inactive pane without hiding them.
     fn render_file_list(&self, appearance: &Appearance, pane_focused: bool) -> Box<dyn Element> {
-        SizeConstraintSwitch::new(
+        let list = SizeConstraintSwitch::new(
             self.render_file_list_columns(appearance, pane_focused, FileColumns::All),
             vec![
                 (
@@ -5421,7 +5425,20 @@ impl SftpBrowserView {
                 ),
             ],
         )
-        .finish()
+        .finish();
+        // Rows and mark zones consume mouse-down before it reaches the pane
+        // wrapper. Observe their presses without replacing their own actions.
+        EventHandler::new(list)
+            .with_always_handle()
+            .on_left_mouse_down(|ctx, _, _| {
+                ctx.dispatch_typed_action(SftpBrowserAction::FocusFileList);
+                DispatchEventResult::PropagateToParent
+            })
+            .on_right_mouse_down(|ctx, _, _| {
+                ctx.dispatch_typed_action(SftpBrowserAction::FocusFileList);
+                DispatchEventResult::PropagateToParent
+            })
+            .finish()
     }
 
     fn render_file_list_columns(
@@ -6525,6 +6542,17 @@ impl TypedActionView for SftpBrowserView {
                 // Rows appear/disappear underneath the cursor and the marks.
                 self.retain_marks_to_visible();
                 ctx.notify();
+            }
+            SftpBrowserAction::FocusFileList => {
+                // Clear a remembered filter/editor focus before pane activation
+                // restores its contents. This also works within the active pane.
+                ctx.focus_self();
+                if let Some(handle) = &self.focus_handle {
+                    ctx.dispatch_typed_action_deferred(PaneGroupAction::Activate(
+                        handle.pane_id(),
+                        ActivationReason::Click,
+                    ));
+                }
             }
             SftpBrowserAction::SelectEntry(entry) => {
                 let Some(index) = self.resolve_entry_reference(entry) else {

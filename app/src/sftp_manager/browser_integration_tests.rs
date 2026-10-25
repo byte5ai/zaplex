@@ -4255,6 +4255,127 @@ fn inactive_function_bar_keeps_geometry_but_does_not_dispatch() {
 }
 
 #[test]
+fn file_row_click_focuses_its_pane_before_function_key_dispatch() {
+    App::test((), |mut app| async move {
+        let (window_id, pane_group, browsers, pane_ids, temp_dirs) =
+            create_three_pane_group(&mut app);
+        let contents: [&[u8]; 3] = [b"left137", b"middle137-content", b"right137"];
+        for ((browser, temp_dir), content) in browsers.iter().zip(&temp_dirs).zip(contents) {
+            std::fs::write(temp_dir.path().join("same.txt"), content).unwrap();
+            let backend = Arc::new(InMemorySftpBackend::new(temp_dir.path().to_path_buf()))
+                as Arc<dyn SftpBackend>;
+            browser.update(&mut app, |view, ctx| {
+                view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+                let index = view
+                    .entries
+                    .iter()
+                    .position(|entry| entry.name == "same.txt")
+                    .unwrap();
+                view.handle_action(
+                    &entry_action(view, index, SftpBrowserAction::SelectEntry),
+                    ctx,
+                );
+            });
+        }
+        pane_group.update(&mut app, |group, ctx| {
+            group.focus_pane_by_id(pane_ids[1], ctx)
+        });
+
+        for target in [0, 2, 1] {
+            let (_, invalidation) = presenter_for_window(&app, window_id);
+            let presenter = app.presenter(window_id).unwrap();
+            rerender(&mut app, presenter, invalidation);
+            let browser = &browsers[target];
+            let index = browser.read(&app, |view, _| {
+                view.entries
+                    .iter()
+                    .position(|entry| entry.name == "same.txt")
+                    .unwrap()
+            });
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(1200., 800.));
+            let row = position(
+                &presenter,
+                &layout_id(browser, &app, &format!("row:{index}")),
+            );
+            let point = vec2f(row.min_x() + 80., row.center().y());
+            mouse_move(&mut app, window_id, presenter.clone(), point);
+            mouse_down(&mut app, window_id, presenter, point);
+            assert_eq!(
+                pane_group.read(&app, |group, ctx| group.focused_pane_id(ctx)),
+                pane_ids[target],
+                "a consumed row press must activate the clicked pane before mouse-up"
+            );
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(1200., 800.));
+            mouse_up(&mut app, window_id, presenter, point);
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(1200., 800.));
+            assert!(key_down(&mut app, window_id, presenter, "f3"));
+            for (index, candidate) in browsers.iter().enumerate() {
+                candidate.read(&app, |view, _| {
+                    if index == target {
+                        assert!(matches!(&view.dialog, Some(Dialog::FileDetails { entry })
+                            if entry.name == "same.txt" && entry.size == contents[target].len() as u64));
+                    } else {
+                        assert!(view.dialog.is_none(), "F3 must not reach another pane");
+                    }
+                });
+            }
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(1200., 800.));
+            assert!(key_down(&mut app, window_id, presenter, "escape"));
+        }
+    });
+}
+
+#[test]
+fn file_row_click_restores_list_focus_without_losing_marks() {
+    for switch_away in [false, true] {
+        App::test((), move |mut app| async move {
+            let (window_id, pane_group, browsers, pane_ids, temp_dirs) =
+                create_three_pane_group(&mut app);
+            let browser = &browsers[0];
+            let backend = Arc::new(InMemorySftpBackend::new(temp_dirs[0].path().to_path_buf()))
+                as Arc<dyn SftpBackend>;
+            browser.update(&mut app, |view, ctx| {
+                view.set_backend_for_test(backend, PathBuf::from("/"), ctx);
+                view.handle_action(&entry_action(view, 0, SftpBrowserAction::ToggleMark), ctx);
+            });
+            pane_group.update(&mut app, |group, ctx| {
+                group.focus_pane_by_id(pane_ids[0], ctx)
+            });
+            let (_, invalidation) = presenter_for_window(&app, window_id);
+            let presenter = app.presenter(window_id).unwrap();
+            rerender(&mut app, presenter, invalidation);
+            browser.update(&mut app, |view, ctx| view.focus_search_editor_for_test(ctx));
+            let search_id = app.focused_view_id(window_id).unwrap();
+            assert_ne!(search_id, browser.id());
+            if switch_away {
+                pane_group.update(&mut app, |group, ctx| {
+                    group.focus_pane_by_id(pane_ids[1], ctx)
+                });
+            }
+
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(1200., 800.));
+            let row = position(&presenter, &layout_id(browser, &app, "row:0"));
+            let point = vec2f(row.min_x() + 80., row.center().y());
+            mouse_move(&mut app, window_id, presenter.clone(), point);
+            mouse_down(&mut app, window_id, presenter, point);
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(1200., 800.));
+            mouse_up(&mut app, window_id, presenter, point);
+            assert_eq!(app.focused_view_id(window_id), Some(browser.id()));
+            browser.read(&app, |view, _| {
+                assert_eq!(marked_entry_names(view), vec!["left.txt"]);
+                assert_eq!(view.cursor_entry_index(), Some(0));
+            });
+            let (presenter, _) = render_scene_at(&mut app, window_id, vec2f(1200., 800.));
+            assert!(key_down(&mut app, window_id, presenter, "f3"));
+            browser.read(&app, |view, _| {
+                assert!(matches!(&view.dialog, Some(Dialog::FileDetails { entry })
+                if entry.name == "left.txt" && entry.size == 4));
+            });
+        });
+    }
+}
+
+#[test]
 fn disabled_function_click_cannot_execute_after_mouse_down_focuses_the_pane() {
     App::test((), |mut app| async move {
         let (window_id, pane_group, browsers, pane_ids, temp_dirs) =

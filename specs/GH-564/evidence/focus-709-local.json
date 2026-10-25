@@ -1,0 +1,82 @@
+{
+  "issue": 709,
+  "version": "1.2.38",
+  "native_status": "Not yet verified on a fixed-version DMG; 1.2.37 native F03 remains failed.",
+  "red_before_fix": {
+    "test": "file_row_click_focuses_its_pane_before_function_key_dispatch",
+    "assertion": "a consumed row press must activate the clicked pane before mouse-up",
+    "result": "failed as expected"
+  },
+  "focused_tests": {
+    "passed": 9,
+    "failed": 0,
+    "ignored": 0,
+    "tests": [
+      "sftp_manager::browser_integration_tests::replaced_entry_at_same_path_aborts_pending_action",
+      "sftp_manager::browser_integration_tests::parent_row_click_survives_rerender",
+      "sftp_manager::browser_integration_tests::modifier_clicks_mark_folders_and_ranges",
+      "sftp_manager::browser_integration_tests::test_right_click_opens_menu_and_selects_entry",
+      "sftp_manager::browser_integration_tests::function_bar_tracks_subtree_focus_when_the_remembered_pane_does_not_change",
+      "sftp_manager::browser_integration_tests::disabled_function_click_cannot_execute_after_mouse_down_focuses_the_pane",
+      "sftp_manager::browser_integration_tests::file_dialog_opening_routes_first_typed_character_without_field_click",
+      "sftp_manager::browser_integration_tests::file_row_click_restores_list_focus_without_losing_marks",
+      "sftp_manager::browser_integration_tests::file_row_click_focuses_its_pane_before_function_key_dispatch"
+    ]
+  },
+  "commands": {
+    "check": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "warp"
+    ],
+    "clippy": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "warp",
+      "--bin",
+      "zaplex",
+      "--no-deps",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "green-verified": [
+      "cargo",
+      "test",
+      "--locked",
+      "-p",
+      "warp",
+      "--lib",
+      "--",
+      "file_row_click_",
+      "modifier_clicks_mark_folders_and_ranges",
+      "parent_row_click_survives_rerender",
+      "replaced_entry_at_same_path_aborts_pending_action",
+      "disabled_function_click_cannot_execute_after_mouse_down_focuses_the_pane",
+      "file_dialog_opening_routes_first_typed_character_without_field_click",
+      "function_bar_tracks_subtree_focus_when_the_remembered_pane_does_not_change",
+      "test_right_click_opens_menu_and_selects_entry",
+      "--nocapture"
+    ]
+  },
+  "phase_a": "13 passed: twelve unchanged gates plus release metadata after completing version updates",
+  "actionlint": {
+    ".github/workflows/test-dmg.yml": "same diagnostics and exit as base; version-only change",
+    ".github/workflows/zap_release.yml": "same diagnostics and exit as base; version-only change"
+  },
+  "source_sha256": {
+    "app/src/sftp_manager/browser.rs": "4f987b660f8913b9bba24fd1f3586396f236476df39193e94d173780aa061f6a",
+    "app/src/sftp_manager/browser_integration_tests.rs": "d616ba899c857bbc53edbfb18ec765f047e2f8414d8c06d8ec1a6a175c720b1c",
+    "app/src/sftp_manager/context_menu.rs": "9ab3ad4215e1f7df0846c3c3146167638c62dbd7624a937a1c88a6105639a8d1"
+  },
+  "local_log_sha256": {
+    "red.log": "798df7d59ee52098e0d779b606eb9fac6a3b3d7f28ccff088ecb503c05c5325c",
+    "green-verified.log": "882a26daf0014f28e2d4fb1eafc74857ad8b96add36ed570ae7bc83cd5ac7297",
+    "check.log": "e99b029cfab93d5d8146447fa01665123dd19728d62f50fd08bb853925a3561f",
+    "clippy.log": "da3787c6f4d7af51cb39139aa9268c9b386c94e72f60e0df4ba46b3973142645"
+  }
+}
