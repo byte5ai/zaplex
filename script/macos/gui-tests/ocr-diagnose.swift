@@ -9,6 +9,9 @@ let images: [(String, CGSize)] = [
     ("narrow-rendered-output.png", CGSize(width: 513, height: 680)),
     ("narrow-before-return.png", CGSize(width: 513, height: 680)),
     ("split-right-output.png", CGSize(width: 1024, height: 678)),
+    ("close-tab-screen.png", CGSize(width: 1024, height: 678)),
+    ("close-tab-before-screen.png", CGSize(width: 1024, height: 678)),
+    ("settings-screen.png", CGSize(width: 1024, height: 678)),
 ]
 for scale in [2, 3, 4, 6] {
     for (name, interpolation) in [("nearest", CGInterpolationQuality.none), ("high", .high)] {
@@ -16,7 +19,7 @@ for scale in [2, 3, 4, 6] {
             let configuration = RenderedText.Configuration(scale: scale, interpolation: interpolation,
                                                            pageSegmentation: segmentation)
             for (file, size) in images {
-                let reading = try RenderedText.read(Data(contentsOf: fixtures.appendingPathComponent(file)),
+                let reading = try RenderedText.read(fixtureImage(fixtures, file),
                                                     displaySize: size, configuration: configuration)
                 let record: [String: Any] = ["file": file, "scale": scale, "interpolation": name,
                                            "psm": segmentation, "tsv": reading.tsv]

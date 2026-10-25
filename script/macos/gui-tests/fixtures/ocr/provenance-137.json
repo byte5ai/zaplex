@@ -1,0 +1,49 @@
+{
+  "source_run": 40140544738,
+  "artifact_id": 12579744904,
+  "artifact_sha256": "c07c035b55c473f2c3348774d9857f76aaca587b9d25970fe6261bb1de810cd3",
+  "app_source_sha": "a0705b38a92c8fe2877d43492f5190d372a053de",
+  "transformation": "Stored originals unchanged. Native fixture loader crops to the paired AX main-window bounds without resampling or color changes.",
+  "images": [
+    {
+      "name": "close-tab-screen.png",
+      "original": "0A503C47-5F85-4DB2-857D-A5C498B7F413.png",
+      "sha256": "40b46c2d5ab323555f61fd911cbd774530ef84ee205642878046dac116e81053",
+      "window_crop_xyxy": [
+        0,
+        30,
+        1024,
+        708
+      ],
+      "visible_output": [
+        "ZQA 799030 963"
+      ]
+    },
+    {
+      "name": "close-tab-before-screen.png",
+      "original": "AA04C39E-8E02-42CF-80F4-E8167EC72DC2.png",
+      "sha256": "57884f7ae6e66e0b1b9b536df3aece4c6626987e740892b21bdb181a9bfa5943",
+      "window_crop_xyxy": [
+        0,
+        30,
+        1024,
+        708
+      ],
+      "visible_output": []
+    },
+    {
+      "name": "settings-screen.png",
+      "original": "914AC665-94E3-4EA1-9A0C-C56BB2862765.png",
+      "sha256": "c1022b8aefe3769ee5f0c0e45baac5bba911f67bfe476097765e0f8fa3f1f23d",
+      "window_crop_xyxy": [
+        0,
+        30,
+        1024,
+        708
+      ],
+      "visible_output": [
+        "Keyboard shortcuts"
+      ]
+    }
+  ]
+}
