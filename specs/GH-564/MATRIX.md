@@ -87,6 +87,12 @@ beider Shells und vollständige englische Light-Texte aus #688. Sie findet
 zusätzlich #704: fast weiße Eingaben/Platzhalter in der Befehls-Ausschlussliste
 nach Dark→Light. Die übrigen Varianten bleiben getrennt offen.
 
+Die [Fixture-Sichtprüfung von 1.2.37](CANDIDATE-1.2.37-NATIVE.md) ergänzt
+44 einzeln geprüfte Originalbilder auf dem Korrekturstand für #701/#702/#704.
+In den dargestellten Agenten-, Verbindungs-, Dateimanager- und Pane-Zuständen
+wurde keine neue Regression beobachtet. Die gezielte installierte Nachprüfung
+der Einstellungen und die vollständigen Varianten sind damit noch nicht belegt.
+
 ## Referenzen und Bewertung
 
 - **C**: [Cockpit-Spezifikation](../../docs/ui/cockpit-sidebar-connections.html#spec),

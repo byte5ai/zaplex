@@ -32,7 +32,7 @@ jobs:
           shasum -a 256 /opt/homebrew/share/tessdata/eng.traineddata > "$art/language-data.sha256"
           git rev-parse HEAD > "$art/source-sha.txt"
           cp script/macos/gui-tests/ocr-diagnose.swift "$art/main.swift"
-          xcrun swiftc script/macos/gui-tests/ZaplexUITests/RenderedText.swift "$art/main.swift" -o "$art/diagnose" > "$art/build.log" 2>&1
+          xcrun swiftc script/macos/gui-tests/ZaplexUITests/RenderedText.swift script/macos/gui-tests/fixture-image.swift "$art/main.swift" -o "$art/diagnose" > "$art/build.log" 2>&1
           "$art/diagnose" script/macos/gui-tests/fixtures/ocr > "$art/readings.jsonl" 2> "$art/errors.log"
       - name: Preserve diagnostic readings
         if: always()
