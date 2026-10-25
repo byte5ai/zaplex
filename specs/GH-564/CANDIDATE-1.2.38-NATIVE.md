@@ -16,8 +16,9 @@ Abhängigkeitsprüfung und Compile-Jobs für Linux und macOS sind bestanden.
 Die gezielten Plattform-/Keymapprüfungen und Live-SFTP sind ebenfalls bestanden.
 Die Linux-Gesamtsuite meldet **4438 bestanden, 13 übersprungen**; die
 Dokumentationstests **4 bestanden, 4 ignoriert**. Diese Ausnahmen werden nicht
-als ausgeführte Erfolge gezählt. Phase A ist bestanden. Paketbau und installierte
-GUI-Abnahme sind noch nicht als erfolgreich nachgewiesen.
+als ausgeführte Erfolge gezählt. Phase A, der App-Bau und der Bau des gebündelten
+Linux-Daemons sind bestanden. Signieren/Paketieren und installierte GUI-Abnahme
+sind noch nicht als erfolgreich nachgewiesen.
 
 Die neun gezielten lokalen Regressionstests, Compile-Gate und App-Clippy sind
 bereits im [lokalen Nachweis](evidence/focus-709-local.json) dokumentiert und
@@ -34,6 +35,11 @@ Die beiden heruntergeladenen Artefakt-ZIPs stimmen mit ihren GitHub-Digests
 überein. Alle 41 Workspace-Bildhashes stimmen zusätzlich mit dem Manifest des
 Laufs überein. Das [Bildverzeichnis](evidence/candidate-138-native/manifest.json)
 enthält Herkunft, Hash, Maße und Beobachtung für alle **44 Originale**.
+Die unveränderten ZIPs sind mit diesem Bericht dauerhaft gesichert:
+[Agentenbilder](evidence/candidate-138-native/native-agent.zip) und
+[Workspace-Bilder](evidence/candidate-138-native/native-workspace.zip), zusammen
+4,2 MB. Jeder Bilddatensatz nennt Archiv und darin enthaltenen Originalpfad;
+alle 44 Bildhashes wurden auch gegen diese gespeicherten Archive geprüft.
 
 **27 Bilder wurden einzeln betrachtet; 17 sind bytegenau identisch** mit einzeln
 geprüften Originalen aus 1.2.37. Für diese 17 nennt das Verzeichnis die genaue
