@@ -133,10 +133,14 @@ abgeschickten Befehls. Unabhängig gemessene Bildkoordinaten prüfen die Abbildu
 bei normaler und halber Punktauflösung. `fixtures/ocr/provenance.json` enthält
 Herkunft und Hashes. Weitere Fensterbilder aus Lauf 40125406009 prüfen die zuvor
 ausgelassene ausgewählte Dateizeile, die Ziffernverwechslung im schmalen Fenster
-und unabhängige Ausgaben in zwei nebeneinanderliegenden Panes. Tesseract erkennt
-dazu vollständige Zeilen (`--psm 6`); die bisherige Sparse-Text-Segmentierung
-ließ die ausgewählte Dateizeile aus. `fixtures/ocr/provenance-136.json` dokumentiert
+und unabhängige Ausgaben in zwei nebeneinanderliegenden Panes.
+`fixtures/ocr/provenance-136.json` dokumentiert
 Originalhashes und verlustfreie Ausschnitte anhand der AX-Fenstergrenzen.
+Die drei unveränderten Vollbildoriginale in `provenance-137.json` ergänzen eine
+zusätzliche falsch gelesene Nonce, ihren nicht abgeschickten Befehl und die
+Settings-Navigation. `fixture-image.swift` schneidet diese erst beim Laden auf
+das dokumentierte AX-Fensterrechteck zu. Positive und negative Textprüfungen
+sowie unabhängig gemessene Koordinaten bleiben Teil derselben Gegenprobe.
 `ocr-regression.log` archiviert Ergebnis und TSV. Diese
 Gegenproben ergänzen die Nutzerabläufe; seit der Mindestgrößenprüfung sind es sechzehn.
 
@@ -152,5 +156,12 @@ Der [native Vergleich 40131681579](https://github.com/byte5ai/zaplex/actions/run
 mit Tesseract 5.5.3 reproduziert die Ziffernverwechslung bei dreifacher
 Pixelwiederholung. Zweifache Vergrößerung besteht alle sechs Bilder einschließlich
 falscher Nonces, falscher Zustände, unbestätigter Eingaben und Koordinaten, bei
-beiden Interpolationsarten und beiden Segmentierungsmodi. Deshalb verwendet der
-feste Standard zweifache Pixelwiederholung mit vollständiger Zeilensegmentierung.
+beiden Interpolationsarten und beiden Segmentierungsmodi.
+
+Der [erweiterte native Vergleich 40146026138](https://github.com/byte5ai/zaplex/actions/runs/40146026138)
+erfasst 144 Lesungen auf neun Bildern. Der bisherige Modus für einen einheitlichen
+Textblock (`--psm 6`) reproduziert beide neuen Fehler. Zweifache Vergrößerung mit
+Sparse-Text-Segmentierung (`--psm 11`) besteht alle neun Bilder einschließlich
+der Gegenproben und Koordinaten. Der feste Standard kombiniert deshalb zweifache
+Pixelwiederholung mit Modus 11. Exakte Textvergleiche bleiben unverändert;
+Ergebnisse unterschiedlicher Konfigurationen werden nicht zusammengeführt.

@@ -50,7 +50,7 @@ sw_vers > "$art/macos.txt"
 if [[ -f "$root/ZaplexUITests/RenderedText.swift" ]]; then
   mkdir -p "$work/ocr"
   cp "$root/ocr-regression.swift" "$work/ocr/main.swift"
-  xcrun swiftc "$root/ZaplexUITests/RenderedText.swift" "$work/ocr/main.swift" \
+  xcrun swiftc "$root/ZaplexUITests/RenderedText.swift" "$root/fixture-image.swift" "$work/ocr/main.swift" \
     -o "$work/ocr/regression" > "$art/ocr-build.log" 2>&1
   "$work/ocr/regression" "$root/fixtures/ocr" > "$art/ocr-regression.log" 2>&1
 fi

@@ -8,7 +8,7 @@ enum RenderedText {
         let scale: Int
         let interpolation: CGInterpolationQuality
         let pageSegmentation: Int
-        static let standard = Configuration(scale: 2, interpolation: .none, pageSegmentation: 6)
+        static let standard = Configuration(scale: 2, interpolation: .none, pageSegmentation: 11)
     }
 
     struct Word {
@@ -61,8 +61,8 @@ enum RenderedText {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/tesseract")
-        // Sparse-text segmentation drops selected file rows. Preserve complete
-        // lines, including adjacent panes, with uniform-block segmentation.
+        // UI labels and terminal output occupy separate blocks. Sparse-text
+        // segmentation preserves those regions at the verified twofold scale.
         process.arguments = ["stdin", "stdout", "-l", "eng", "--psm", String(configuration.pageSegmentation), "tsv"]
         let input = Pipe()
         let output = Pipe()
