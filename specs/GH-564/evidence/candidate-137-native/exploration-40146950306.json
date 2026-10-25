@@ -1,0 +1,939 @@
+{
+  "run_id": 40146950306,
+  "app_source_sha": "a0705b38a92c8fe2877d43492f5190d372a053de",
+  "harness_source_sha": "88d754b123fdf4d44dd241e281e3272de0c08e36",
+  "dmg_sha256": "7aaa925da5abbced8fb537ed4af8a5fdbdba92b8bf8cd1a19bb65328f296213e",
+  "artifact_id": 12581575270,
+  "zip_sha256": "d877e70f781bceb7080d92524f37fcce031ef99d101e5f66396d27d0cd0861c7",
+  "explicitly_finished": true,
+  "operator_closed": true,
+  "images": [
+    {
+      "file": "01-initial.png",
+      "artifact_path": "operator/01-initial.png",
+      "sha256": "bb17c5b7bb51b90ac64d60d99b9c1f5cc94c6fd6bdc26c22369364bd116aab38",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Initial EN/Dark terminal."
+    },
+    {
+      "file": "02-baseline-input.png",
+      "artifact_path": "operator/02-baseline-input.png",
+      "sha256": "df378b50f8d38245d02fb84405f401d6947469b322d1056b571921e6056e46d6",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Unsubmitted initial shell baseline."
+    },
+    {
+      "file": "03-baseline-output.png",
+      "artifact_path": "operator/03-baseline-output.png",
+      "sha256": "f7d01ac604f469659ac0aef50f38a91e6bc0a13a9f199fc9c4c7990b456b8ea5",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh PID1271, marker TAB137, cwd /tmp."
+    },
+    {
+      "file": "04-settings.png",
+      "artifact_path": "operator/04-settings.png",
+      "sha256": "8ce73a5d8876a8e8185816438047cbabf84ad18daa42b61b0775548132e3138b",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Initial agent settings and empty denylist placeholder."
+    },
+    {
+      "file": "05-denylist-draft-dark.png",
+      "artifact_path": "operator/05-denylist-draft-dark.png",
+      "sha256": "54e49fc7241ddd993c7b14976a325d854e92720919cec06b77296b467a50894e",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Synthetic denylist value draft-zaplex137 entered."
+    },
+    {
+      "file": "06-denylist-selection-dark.png",
+      "artifact_path": "operator/06-denylist-selection-dark.png",
+      "sha256": "d722ee3795b6e41fd958d8de88bf7cbfb9f6caad80c52de21f835d078520e793",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Substring 137 visibly selected before theme navigation."
+    },
+    {
+      "file": "07-appearance-dark.png",
+      "artifact_path": "operator/07-appearance-dark.png",
+      "sha256": "06d785b2f608af51479206dd147fd294c8b7e49ce6cf139de0993e0537d9e7c0",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "EN Default app icon and current Zaplex Dark."
+    },
+    {
+      "file": "08-theme-selector.png",
+      "artifact_path": "operator/08-theme-selector.png",
+      "sha256": "7858ef629fcc31fae42766fef2aefbcddbd59f575988aa1764f7ece7136daef2",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Theme picker open."
+    },
+    {
+      "file": "09-light-search.png",
+      "artifact_path": "operator/09-light-search.png",
+      "sha256": "77f9b17c1d358bf232266cfff229207f1c37b7b0e655757d3a0743991bc9d117",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Light search results before selection."
+    },
+    {
+      "file": "10-denylist-light.png",
+      "artifact_path": "operator/10-denylist-light.png",
+      "sha256": "8930dcd821d4a17b1f6a115081f3c5dd40b6645352fa2a94ea1c9ce0c5b37e1a",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Denylist draft retained and readable after Dark to Light; selection not visibly highlighted while editor is unfocused."
+    },
+    {
+      "file": "11-agent-light-controls.png",
+      "artifact_path": "operator/11-agent-light-controls.png",
+      "sha256": "33f8478e9b647f865989e013fc181a2f96112c674853a52b15a698e6ff0f28f1",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Light context chips and controls readable, voice value None."
+    },
+    {
+      "file": "12-voice-en-options.png",
+      "artifact_path": "operator/12-voice-en-options.png",
+      "sha256": "6b634e4a4d787a241356dd1515f1c1d7a11ebce1336de866f5dfb81a0cfa6f43",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "All six EN voice choices visible: None, Fn, Option Left/Right, Control Left/Right."
+    },
+    {
+      "file": "13-chip-added-light.png",
+      "artifact_path": "operator/13-chip-added-light.png",
+      "sha256": "66441770627b27ddc9a2df55a92c0255a4e3dabadd88faf15905a4168532a56c",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Mouse drag adds alice to left toolbar; removed from available chips."
+    },
+    {
+      "file": "14-theme-light-picker.png",
+      "artifact_path": "operator/14-theme-light-picker.png",
+      "sha256": "8d6a7a91dbbd394d08812fd043fc11502b1770d4f3e54817e1ad4a71f2c1d746",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Light appearance before return to Dark."
+    },
+    {
+      "file": "15-dark-search.png",
+      "artifact_path": "operator/15-dark-search.png",
+      "sha256": "836dda03b0b78f3710aab99aa00a385863165a2ddc191b91bd824c9ff1627dcb",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Zaplex Dark search results before selection."
+    },
+    {
+      "file": "16-chips-dark-retained.png",
+      "artifact_path": "operator/16-chips-dark-retained.png",
+      "sha256": "181c7990fcb1cd0cb50a33de9a1ef8cb1f549c59afee64098f580f285a627bc2",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Added alice and all context chips retained and readable after Light to Dark."
+    },
+    {
+      "file": "17-chip-removed-dark.png",
+      "artifact_path": "operator/17-chip-removed-dark.png",
+      "sha256": "5817b9a0eed0e95face1d16b985d5d4c5e57ce00bf1ab1bb638cbd1e69cbffc9",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Remove action returns alice to available chips."
+    },
+    {
+      "file": "18-denylist-dark-return.png",
+      "artifact_path": "operator/18-denylist-dark-return.png",
+      "sha256": "3ca844118f7d92d9e8fc15081cbd7ba1cf811010b3d46eeae38993dd91595732",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Denylist draft still present and readable after Dark-Light-Dark."
+    },
+    {
+      "file": "19-language-menu.png",
+      "artifact_path": "operator/19-language-menu.png",
+      "sha256": "d30c0316e90a03bffaebf1b02a43558a034162e98a65c52e253c296d4453c6af",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Language choices before selecting German."
+    },
+    {
+      "file": "20-language-selected.png",
+      "artifact_path": "operator/20-language-selected.png",
+      "sha256": "aa731308bfe8282fa59e0d5655ec7ded2a345bda87ba20ad677b391c6941015b",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Language-change restart notice; mixed text before full restart is not final locale evidence."
+    },
+    {
+      "file": "21-restarted-de.png",
+      "artifact_path": "operator/21-restarted-de.png",
+      "sha256": "cb1f60d530a2c8e865cc9f371e1422160a9023a880aec9564492e8514e14b80c",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fully restarted German app; displayed prior-session output is historical only."
+    },
+    {
+      "file": "22-settings-de-dark.png",
+      "artifact_path": "operator/22-settings-de-dark.png",
+      "sha256": "37395181a5a9e927b65419b02c5b650424ddd2b653ffa42daeb3b9e2bf4370bb",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Agenten navigation and retained denylist draft after full restart."
+    },
+    {
+      "file": "23-de-controls-dark.png",
+      "artifact_path": "operator/23-de-controls-dark.png",
+      "sha256": "c38b9eaf7cfa4c3e8544c2e44179aa57bba3dfb923c067cb7e51fdc0c16c6f24",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "German context chips, Keine and side labels in Dark."
+    },
+    {
+      "file": "24-de-voice-options.png",
+      "artifact_path": "operator/24-de-voice-options.png",
+      "sha256": "8236fba88fc051f09ae2d9ebbe51ebec9fa8fd1fb25c4775fdd4557920932769",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "All six DE voice choices visible: Keine, Fn, Option Links/Rechts, Control Links/Rechts."
+    },
+    {
+      "file": "25-de-appearance.png",
+      "artifact_path": "operator/25-de-appearance.png",
+      "sha256": "97e557544814c3adef7ae8e7a59c6d36919fca0404d020a93b4dd0ee50caa968",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Deutsch and Standard icon after full restart."
+    },
+    {
+      "file": "26-de-light-search.png",
+      "artifact_path": "operator/26-de-light-search.png",
+      "sha256": "b39051396bead1588f009f6c0c9d6950374b1ce11fd6ece8479ed2b923c637f8",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Light theme search in German settings."
+    },
+    {
+      "file": "27-de-chips-light.png",
+      "artifact_path": "operator/27-de-chips-light.png",
+      "sha256": "56482960fe561cb305c054568071773cab2719825c26b78254521322c5251bb4",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "German Light context chips readable."
+    },
+    {
+      "file": "28-de-chip-added.png",
+      "artifact_path": "operator/28-de-chip-added.png",
+      "sha256": "1ad92693d94d1d2c30dad757627042cf87fc6e456b0b3282493ccc945dde67f1",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Mouse drag adds alice to left toolbar in German Light."
+    },
+    {
+      "file": "29-de-chips-reset.png",
+      "artifact_path": "operator/29-de-chips-reset.png",
+      "sha256": "dda4d83913ae92365dfc3dbe31e6c7d6c03c051d9cd2b9b7211698c376e75ca9",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Restore default returns alice to available chips and restores original toolbar layout."
+    },
+    {
+      "file": "30-denylist-de-light.png",
+      "artifact_path": "operator/30-denylist-de-light.png",
+      "sha256": "b57f41b9e779b36c3bbbd7f99a128a0283d4b1ecec1083803069a80d5a2484f0",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Denylist draft retained and readable in German Light."
+    },
+    {
+      "file": "31-denylist-de-placeholder-light.png",
+      "artifact_path": "operator/31-denylist-de-placeholder-light.png",
+      "sha256": "60ea70c9c854237207cc805396303bb3af6a14e2411b7a620c5b1293e4887ac1",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Cleared denylist shows readable German placeholder in Light."
+    },
+    {
+      "file": "32-min-settings-light.png",
+      "artifact_path": "operator/32-min-settings-light.png",
+      "sha256": "bdebb68d9dc6fba3738c9145a8bea30bd69ec2f2e9ff2b5f177e3f448216c9a4",
+      "image_size": [
+        480,
+        320
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          320
+        ]
+      ],
+      "observation": "480x320 settings viewport: content clipped on right before horizontal scrolling."
+    },
+    {
+      "file": "33-min-settings-bottom.png",
+      "artifact_path": "operator/33-min-settings-bottom.png",
+      "sha256": "5ccf83ffa1bdf3a916b38175015c61bf538b59f11caf4191c5012ac180f34d2e",
+      "image_size": [
+        480,
+        320
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          320
+        ]
+      ],
+      "observation": "480x320 bottom of settings shows horizontal scrollbar."
+    },
+    {
+      "file": "34-min-after-horizontal-scroll.png",
+      "artifact_path": "operator/34-min-after-horizontal-scroll.png",
+      "sha256": "039d89f96f537ea8a0168bffdb0e636501ed1ed75eaeed9006deb5e946f5f8c5",
+      "image_size": [
+        480,
+        320
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          320
+        ]
+      ],
+      "observation": "Horizontal scroll reaches right-side switches and selectors."
+    },
+    {
+      "file": "35-min-right-controls.png",
+      "artifact_path": "operator/35-min-right-controls.png",
+      "sha256": "5e7e570ff1a19b6bd03ae83aa7eb4cedfeec0bffa44d1b00ad153a173380fdfa",
+      "image_size": [
+        480,
+        320
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          320
+        ]
+      ],
+      "observation": "Vertical scroll reaches voice selector at right edge."
+    },
+    {
+      "file": "36-min-voice.png",
+      "artifact_path": "operator/36-min-voice.png",
+      "sha256": "eaf961837206d88c87868ef64c079e94182038a6fa13ff68d33898f46559e174",
+      "image_size": [
+        480,
+        320
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          320
+        ]
+      ],
+      "observation": "Further vertical scroll reaches upper switches; filename is not a claim of voice visibility."
+    },
+    {
+      "file": "37-min-menu.png",
+      "artifact_path": "operator/37-min-menu.png",
+      "sha256": "b1f548d99e149eff89bb897787ec2bfe0be2180230a5306c05a12e3ea3724fc7",
+      "image_size": [
+        480,
+        320
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          320
+        ]
+      ],
+      "observation": "All six voice menu choices fully visible within 480x320 viewport."
+    },
+    {
+      "file": "38-de-theme-restore.png",
+      "artifact_path": "operator/38-de-theme-restore.png",
+      "sha256": "0750b08d822e7b4fa072cdf43b95dcc717fb559972c2205855dd10fdfcc11031",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Restored 1024x678 geometry and Light theme picker."
+    },
+    {
+      "file": "39-de-dark-search.png",
+      "artifact_path": "operator/39-de-dark-search.png",
+      "sha256": "bf45a0da4141082d25fc0c816915dffc8db164f8f51db1a9dfbf21fef4e13fa8",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Zaplex Dark search before restoring Dark."
+    },
+    {
+      "file": "40-de-dark-return.png",
+      "artifact_path": "operator/40-de-dark-return.png",
+      "sha256": "c759f7f8c6aff0f8c94fc3620f952767b5abd00c9a0a21cb20bd887058489322",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "German context chips readable after Dark-Light-Dark."
+    },
+    {
+      "file": "41-de-placeholder-dark.png",
+      "artifact_path": "operator/41-de-placeholder-dark.png",
+      "sha256": "e5ffbfae43e0c3e9a95927e6a25e7aeaf36a930eae31473dbb9d42278f79c994",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Empty denylist placeholder readable after return to Dark."
+    },
+    {
+      "file": "42-de-shell-input.png",
+      "artifact_path": "operator/42-de-shell-input.png",
+      "sha256": "961f04470bf8a29b14c6a6a6ded3567ee70ad8c9e26ec54e8893d78a0acc62a5",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "New post-restart marker command before submission."
+    },
+    {
+      "file": "43-de-shell-output.png",
+      "artifact_path": "operator/43-de-shell-output.png",
+      "sha256": "62be23ac7ec179a6672c901a1c69d7dbbd81074cf48009bb2616e3b2b60d6e3c",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh post-restart PID2837, marker DE137, cwd /tmp."
+    },
+    {
+      "file": "44-return-input.png",
+      "artifact_path": "operator/44-return-input.png",
+      "sha256": "1fa7892ce4ed042db78b1617c594810b03929cce1dbb7d56addcbd711be76d0b",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Fresh shell-check command after reopening and closing Settings."
+    },
+    {
+      "file": "45-return-output.png",
+      "artifact_path": "operator/45-return-output.png",
+      "sha256": "ea1a225231272c35fc07da798b648dc32b0f40d5da499a6ef6f5b18be04370ac",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "PID2837, DE137 and /tmp retained after Settings round trip."
+    },
+    {
+      "file": "46-finish-input.png",
+      "artifact_path": "operator/46-finish-input.png",
+      "sha256": "f5977034e549915e3ac75c70d2ecd487c190e86f1a29fe7a8c3ed5f1ee51b04f",
+      "image_size": [
+        1024,
+        678
+      ],
+      "window_bounds": [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "observation": "Explicit finish command before submission; prior fresh shell output visible."
+    }
+  ],
+  "action_log_sha256": "d124e3ccb0399464df6d916cf9c71bb2c4146e1edb97d158f0b2f5c30fc6d439",
+  "limitations": [
+    "Still images prove sampled states only, not continuous motion.",
+    "Selection retention across theme navigation not independently visible after focus leaves editor; covered separately by existing unit test.",
+    "No disabled-style exercise, provider request, remote operation or file-manager row/focus acceptance in this session.",
+    "Minimum-size native menu checked in German Light only."
+  ]
+}

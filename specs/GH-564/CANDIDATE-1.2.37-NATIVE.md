@@ -36,8 +36,8 @@ zufolge nimmt der bisherige Modus 6 einen einheitlichen Textblock an; Modus 11
 sucht verstreuten Text. Die native Diagnose vergleicht Segmentierung und
 Skalierung auf alten und neuen Originalen, bevor die feste Konfiguration
 geändert wird. Exakte Nonce, Shellzustand, negative Gegenproben und richtige
-Bildkoordinaten bleiben die Abnahmekriterien. Danach sind ausschließlich die
-zwei fehlgeschlagenen Nutzerabläufe am unveränderten DMG nachzuprüfen.
+Bildkoordinaten bleiben die Abnahmekriterien. Die anschließende Fortsetzung
+prüft ausschließlich die zwei fehlgeschlagenen Nutzerabläufe am unveränderten DMG.
 
 Die [native Diagnose 40146026138](https://github.com/byte5ai/zaplex/actions/runs/40146026138)
 auf `d9f60714fee76ba9f96452e66364609a2a1eee43` ist erfolgreich abgeschlossen.
@@ -45,10 +45,26 @@ auf `d9f60714fee76ba9f96452e66364609a2a1eee43` ist erfolgreich abgeschlossen.
 [Auswertung](evidence/candidate-137-native/ocr-diagnosis.json) hält die exakten
 Positiv-/Negativprüfungen und die unabhängig gemessenen Koordinaten fest.
 Bei zweifacher Pixelwiederholung besteht Modus 11 **9/9**, während Modus 6
-beide aktuellen Fehler reproduziert (**7/9**). Der Testhelfer wird auf diese
-eine feste Konfiguration umgestellt. Die vollständige Swift-Gegenprobe samt
-Retina-Abbildung und die zwei tatsächlichen GUI-Abläufe sind bis zum gezielten
-Fortsetzungslauf weiterhin unbestätigt; die Diagnose allein ist kein GUI-Pass.
+beide aktuellen Fehler reproduziert (**7/9**). PR #707 stellt den Testhelfer auf
+diese eine feste Konfiguration um. Die Diagnose allein ist kein GUI-Pass.
+
+## Installierte GUI-Abnahme vervollständigt
+
+[Fortsetzungslauf 40146604008](https://github.com/byte5ai/zaplex/actions/runs/40146604008)
+auf Teststand `88d754b123fdf4d44dd241e281e3272de0c08e36` besteht die vollständige
+Swift-OCR-Gegenprobe einschließlich Retina-Abbildung und ausschließlich die
+beiden zuvor fehlgeschlagenen Nutzerabläufe. App und DMG bleiben unverändert.
+
+Der [kombinierte Nachweis](evidence/candidate-137-native/gui-completion.json)
+bestätigt **16/16 lokale GUI-Pflichtfälle** aus Original und Fortsetzung. Er
+gleicht die tatsächlichen Testbäume, Zähler, Prozessausgänge, Quellstände,
+GitHub-Jobstatus und Paket-/Artefakt-Hashes ab. Jeder Fall nennt seinen eigenen
+Lauf; die 14 ursprünglichen Erfolge wurden nicht wiederholt. Der Originalbatch
+bleibt fehlgeschlagen. Produktmatrix, Remote-/Provider-Varianten und die
+direkte Einstellungsprüfung bleiben von diesem funktionalen Nachweis getrennt.
+
+Fortsetzungsartefakt `12580912705`, ZIP-SHA256:
+`7e3336b86ebf4965760000c2d22fac1527d8408d2a41505c81cab551616cb878`.
 
 | Artefakt | GitHub-ID | SHA-256 |
 |---|---|---|
@@ -65,8 +81,8 @@ hat das macOS-Compile-Gate samt nativen Fixture-Prüfungen bestanden.
 Das abgeschlossene Jobprotokoll bestätigt sechs Plattformtests, einen
 Agenten-Layouttest, sechs Workspace-Fälle und einen Header-Einstiegstest,
 jeweils ohne Fehler oder übersprungene Tests.
-Die beiden fehlgeschlagenen installierten GUI-Fälle sind davon getrennt;
-die vollständige DMG-Abnahme ist noch nicht bestätigt.
+Die später vervollständigte installierte GUI-Abnahme ist davon getrennt
+oben dokumentiert.
 
 Alle **44 Originalbilder** wurden einzeln betrachtet. Die heruntergeladenen
 ZIP-Hashes stimmen mit den GitHub-Artefakt-Digests überein; zusätzlich stimmen
@@ -104,3 +120,36 @@ für nicht beobachtete Kombinationen offen.
 Je Interaktion werden Zustand vorher/nachher, Aktion, Erwartung und Beobachtung
 festgehalten. Standbilder gelten nur als Zustandsbelege. Es erfolgt keine
 Release-Freigabe aus diesen Teilnachweisen.
+
+## Direkte Einstellungsprüfung am installierten DMG
+
+[Exploration 40146950306](https://github.com/byte5ai/zaplex/actions/runs/40146950306)
+ist erfolgreich abgeschlossen und ausdrücklich beendet. App und DMG entsprechen
+dem obigen Kandidaten; der Teststand ist `88d754b123fdf4d44dd241e281e3272de0c08e36`.
+Alle **46 Originalaufnahmen** wurden einzeln betrachtet und stimmen bytegenau
+mit dem archivierten Operator-Verzeichnis überein. Das
+[Manifest](evidence/candidate-137-native/exploration-40146950306.json)
+enthält pro Aufnahme Hash, Fenstergeometrie und Beobachtung. Artefakt
+`12581575270`, ZIP-SHA256
+`d877e70f781bceb7080d92524f37fcce031ef99d101e5f66396d27d0cd0861c7`.
+
+| Nachprüfung | Direkt beobachtetes Ergebnis |
+|---|---|
+| #701, Sprache | EN: Agents, Default, None und Left/Right. Nach tatsächlicher Sprachauswahl und vollständigem Neustart: Agenten, Standard, Keine und Links/Rechts. Alle sechs angebotenen Tastenoptionen sind sichtbar; Fn, Option und Control bleiben erhalten. Keine Sprach-/Modellanfrage ausgelöst. |
+| #702, Kontext-Chips | EN und DE: Dark→Light→Dark mit lesbaren Texten und Symbolen. Maus-Drag fügt `alice` links ein; im englischen Ablauf bleibt die Anordnung beim Themewechsel erhalten, Entfernen stellt den verfügbaren Chip wieder her. Im deutschen Ablauf stellt „Standard wiederherstellen“ nach Drag die ursprüngliche Anordnung wieder her. |
+| #704, Ausschlussliste | `draft-zaplex137` bleibt nach Themewechseln und vollständigem Sprachneustart erhalten und lesbar. Nach Leeren ist der deutsche Platzhalter in Light und Dark lesbar. Die vor dem ersten Wechsel markierte Teilzeichenfolge ist dokumentiert; ihr Erhalt nach Fokusverlust ist visuell nicht unabhängig belegt. Der bestehende gezielte Unit-Test deckt Auswahl/Fokus getrennt ab. |
+| Mindestgröße | Bei 480×320 ist die Seite horizontal scrollbar. Die zunächst rechts abgeschnittenen Kontrollen sind erreichbar; alle sechs Einträge des deutschen Tastenmenüs passen im hellen Theme vollständig ins Fenster. Danach wieder 1024×678. |
+| Shell-Rückweg | Nach dem Sprachneustart frischer Nachweis `PID 2837 / DE137 / /tmp`; nach erneutem Öffnen und Schließen der Einstellungen derselbe nicht exportierte Marker, dieselbe PID und dasselbe Verzeichnis. Die historische Ausgabe vor dem App-Neustart wird nicht als Persistenznachweis gezählt. |
+
+Ausgewählte unveränderte Originale:
+[Ausschlussliste Light](evidence/candidate-137-native/10-denylist-light.png),
+[beibehaltene Chips Dark](evidence/candidate-137-native/16-chips-dark-retained.png),
+[deutsches Tastenmenü](evidence/candidate-137-native/24-de-voice-options.png),
+[deutsche Chips Light](evidence/candidate-137-native/27-de-chips-light.png),
+[Menü bei Mindestgröße](evidence/candidate-137-native/37-min-menu.png),
+[frischer Shell-Nachweis](evidence/candidate-137-native/45-return-output.png).
+
+In den geprüften Zuständen sind die drei korrigierten Fehler nicht erneut
+aufgetreten. Deaktivierte Varianten, Bewegungsbelege sowie die weiteren
+Dateimanager-/Remote-/Provider-Fälle wurden in dieser Sitzung nicht geprüft;
+daraus folgt keine vollständige Produktabnahme.
