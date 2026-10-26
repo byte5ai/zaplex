@@ -7879,3 +7879,101 @@ fn transfer_panel_moves_between_file_browser_and_workspace_without_losing_contro
         }
     });
 }
+
+#[test]
+fn new_session_sidecar_fits_beside_parent_at_minimum_width_and_after_resize() {
+    // Native horizontal/vertical menu geometry, both edges, and an exact fit.
+    // Re-evaluating the same anchor after resizing must restore the preferred width.
+    for (window_width, left, parent_width, opens_left, width) in [
+        (480., 272., 186., true, 268.),
+        (480., 10., 186., false, 280.),
+        (480., 10., 268., false, 198.),
+        (480., 147., 186., false, 143.),
+        (1024., 272., 186., false, 300.),
+        (1024., 780., 186., true, 300.),
+        (1024., 534., 186., false, 300.),
+        (480., 272., 186., true, 268.),
+    ] {
+        let parent = RectF::new(vec2f(left, 170.), vec2f(parent_width, 24.));
+        let layout = new_session_sidecar_layout(parent, window_width, 300.);
+        assert_eq!(
+            layout.opens_left, opens_left,
+            "{parent:?} in {window_width}"
+        );
+        assert_eq!(layout.width, width, "{parent:?} in {window_width}");
+        let child_left = if layout.opens_left {
+            parent.min_x() - 4. - layout.width
+        } else {
+            parent.max_x() + 4.
+        };
+        let child_right = child_left + layout.width;
+        assert!(child_left >= 0. && child_right <= window_width);
+        assert!(child_right < parent.min_x() || child_left > parent.max_x());
+    }
+}
+
+#[test]
+fn new_session_sidecar_render_constrains_search_and_footer_beside_parent() {
+    let _tab_configs_guard = FeatureFlag::TabConfigs.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let window = workspace.read(&app, |workspace, _| workspace.window_id);
+        let presenter = app.presenter(window).unwrap();
+        app.read(|ctx| ctx.windows().show_window_and_focus_app(window));
+        AppCallbackDispatcher::new(Default::default(), app.clone())
+            .active_window_changed(Some(window));
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.open_new_session_dropdown_menu(vec2f(150., 100.), ctx);
+            workspace
+                .new_session_dropdown_menu
+                .update(ctx, |menu, ctx| {
+                    // The test platform is fixed at1024 points. A wide parent reproduces
+                    // the same insufficient space on both sides as the native480 window.
+                    menu.set_width(700.);
+                    assert!(menu.set_selected_by_name("New worktree config", ctx));
+                });
+        });
+        for parent_width in [700., 186., 700.] {
+            workspace.update(&mut app, |workspace, ctx| {
+                workspace
+                    .new_session_dropdown_menu
+                    .update(ctx, |menu, ctx| {
+                        menu.set_width(parent_width);
+                        ctx.notify();
+                    });
+                ctx.notify();
+            });
+            // Placement uses the anchor from the preceding frame.
+            workspace.update(&mut app, |_, ctx| ctx.notify());
+            let (parent, child) = {
+                let presenter = presenter.borrow();
+                let cache = presenter.position_cache();
+                (
+                    cache
+                        .get_position("New worktree config")
+                        .expect("parent row"),
+                    cache
+                        .get_position(NEW_SESSION_SIDECAR_POSITION_ID)
+                        .expect("sidecar"),
+                )
+            };
+            assert!(child.min_x() >= 0. && child.max_x() <= 1024., "{child:?}");
+            assert!(
+                child.max_x() < parent.min_x() || child.min_x() > parent.max_x(),
+                "parent {parent:?}, child {child:?}",
+            );
+            assert!(child.width() > 100. && child.height() >= 32., "{child:?}");
+            if parent_width > 300. {
+                assert!(child.width() < 300., "{child:?}");
+            } else {
+                assert_eq!(child.width(), 300.);
+            }
+            workspace.read(&app, |workspace, ctx| {
+                assert!(workspace.show_new_session_sidecar);
+                assert!(workspace.worktree_sidecar_search_editor.is_focused(ctx));
+                assert_eq!(workspace.tab_count(), 1);
+            });
+        }
+    });
+}

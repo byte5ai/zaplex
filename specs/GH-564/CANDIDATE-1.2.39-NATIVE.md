@@ -120,10 +120,35 @@ abgefangen worden: Desktop20/21 zeigt die Überlagerung,23 deren Entfernung,
 `hotkey` ist in der Operatorversion entfernt; der Aufruf führte keine Aktion aus.
 Keine dieser Operatorabweichungen wird als Produktfehler gezählt.
 
-Der neue Mindestbreitenfehler ist von der bei Normalbreite erfolgreichen
+Der neue Mindestbreitenfehler [#714](https://github.com/byte5ai/zaplex/issues/714)
+ist von der bei Normalbreite erfolgreichen
 Tooltip-Korrektur getrennt: `should_render_sidecar_left` fällt auf rechts zurück,
 wenn300 Punkte auf keiner Seite passen. Die Fensterbegrenzung schiebt das
 Untermenü dann über die Elternzeile. Soll vor Korrektur: Elternzeile und vollständiger
 Hinweis lesbar, Suchfeld und Aktion erreichbar, richtiger Fokus und Abbruch ohne
 Sessionanlage bei Mindestbreite und nach Größenwechsel. Standbilder beweisen
 weiterhin keine kontinuierliche Hover-Bewegung.
+
+## Ergänzung: Split links und oben
+
+[Exploration 40354187509](https://github.com/byte5ai/zaplex/actions/runs/40354187509)
+prüft ausschließlich die fehlenden Richtungen am unveränderten 1.2.39-DMG.
+Sie ist am 26.10.2026 um 16:10 UTC erfolgreich und mit ausdrücklichem
+Abschlussmarker beendet. App-/Harness-Quellstand und DMG-Hash stimmen mit oben
+überein. Artefakt `12666001711`, ZIP-SHA256
+`edbb9cf3692776e0f4018ac5cae8df41f6aaaf575f717e36b28fff8c88e4a108`.
+Alle **20 Originale** wurden einzeln betrachtet und bytegenau gegen das
+CI-Artefakt geprüft. [Manifest](evidence/candidate-139-native/exploration-40354187509/manifest.json),
+[Aktionen](evidence/candidate-139-native/exploration-40354187509/actions.json)
+und beide Abschlussmarker sind gesichert.
+
+| Kriterium | Ergebnis |
+|---|---|
+| L01, links/oben, EN/Light 1024×678 | Bestanden für das vorhandene leere Inventar: Terminal, New agent, Favorites und Leerzustandsanleitung in derselben Reihenfolge (10/13). Plus ergänzt nur seine Tab-Einträge (16). Zusammen mit dem ersten Lauf sind alle vier Split-Richtungen geprüft. |
+| L05, Außenklick links/oben | Bestanden: keine zusätzliche Pane; frische Ausgabe nach beiden Abbrüchen bestätigt unveränderte PID 1317, nicht exportierten Marker `native139b` und dasselbe Arbeitsverzeichnis (02/15). |
+| A03, Agenteneinstieg ohne Konto | Nicht abschließend geprüft: nach dem Klick auf New agent bleibt die normale Terminalansicht sichtbar (17/18). Eine tatsächlich erreichte Konto-/Provider-Auswahl ist nicht belegt; weder Erfolg noch Produktfehler wird daraus abgeleitet. |
+
+Die ergänzten Ergebnisse gelten für EN/Light bei Normalbreite und leerem
+Inventar. Sie ersetzen keine anderen Sprachen, Größen, Kontozustände oder
+Bewegungsnachweise. Die [lokale Korrektur für #714](evidence/menu-714-local.json)
+gehört zu 1.2.40; diese 1.2.39-Aufnahmen prüfen sie nicht.

@@ -1,0 +1,811 @@
+{
+  "run_id": 40354187509,
+  "source_sha": "8a569cc4844a1b3b04668d727d184b294e07b310",
+  "dmg_sha256": "7e23137b6df9b6ad7e728bae4649ad1375ad340733f055ea732b88f3a1c75e9e",
+  "artifact_id": 12666001711,
+  "artifact_zip_digest": "sha256:edbb9cf3692776e0f4018ac5cae8df41f6aaaf575f717e36b28fff8c88e4a108",
+  "finished": true,
+  "operator_closed": true,
+  "images": [
+    {
+      "file": "00-initial.png",
+      "sha256": "bb17c5b7bb51b90ac64d60d99b9c1f5cc94c6fd6bdc26c22369364bd116aab38",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Initial EN/Dark window with conversation sidebar.",
+      "coordinate_context": {
+        "version": 1,
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "index": 0,
+          "window_id": 39,
+          "title": "Local \u00b7 ~"
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "reference_id": "ps1_868faad8c45878dfacb65cc00c9df34d"
+      }
+    },
+    {
+      "file": "01-before-command.png",
+      "sha256": "c4f07beff0fc9aabdc19fc9f6508560e35575af18b14fd7a40df28df9bc2a0a9",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "BEFORE command entered after closing sidebar.",
+      "coordinate_context": {
+        "version": 1,
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 39,
+          "index": 0
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "reference_id": "ps1_c10fcbe828be4f426253919df0a6ed6c"
+      }
+    },
+    {
+      "file": "02-before-proof.png",
+      "sha256": "4956fe6c4ff94e67d53d5f1e83bc90bb31c9e2d2f9c1e1b4ebd67998c8dbfe20",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "BEFORE executed: PID1317, non-exported marker native139b, home working directory.",
+      "coordinate_context": {
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_3a007d0461629186bec08656007ab24e",
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 39,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "origin": "top_left"
+      }
+    },
+    {
+      "file": "03-settings.png",
+      "sha256": "770d783999f2aeccaedac054245853fa0ded4a7880fd85beb934b3e5e9cff1a3",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Settings Agent page; no provider session established.",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 39
+        },
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_9c28451d70ab9fbe2e62bb6fc7e6b4ed"
+      }
+    },
+    {
+      "file": "04-appearance.png",
+      "sha256": "8b52140c53698c59613f99edf46a4716f636616e4360e2e3b96b5f7ae445c1fd",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Appearance settings.",
+      "coordinate_context": {
+        "origin": "top_left",
+        "window": {
+          "window_id": 39,
+          "title": "Settings",
+          "index": 0
+        },
+        "reference_id": "ps1_f779d81af47a9b8f3892e8ae8027dff8",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        }
+      }
+    },
+    {
+      "file": "05-theme-picker.png",
+      "sha256": "f32e5e30e20785cc924906752360e08b9e6640a82853506050613d4206c86763",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Theme chooser opened.",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "window": {
+          "window_id": 39,
+          "title": "Settings",
+          "index": 0
+        },
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_ddd53d4bbcbd0be33bca9aa42113727a",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "origin": "top_left"
+      }
+    },
+    {
+      "file": "06-light-search.png",
+      "sha256": "af4e6cc8932cf7a3d8f8eddb14ea2a4b96a3671263c80afdcbdf4104f3e64a1b",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Light query arrived despite operator typing error.",
+      "coordinate_context": {
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 39
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_fc149ba93f9a61a23e0631ced71ba7be",
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        }
+      }
+    },
+    {
+      "file": "07-light-selected.png",
+      "sha256": "e14c144de011347f6c08e2f026b1fe79eb95ebafec0e74debdf926efa5f760a6",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Light theme selected.",
+      "coordinate_context": {
+        "origin": "top_left",
+        "reference_id": "ps1_8113d6f9fbd4dc710f7a28b773be0957",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Settings",
+          "window_id": 39,
+          "index": 0
+        },
+        "logical_space": "global_display_points"
+      }
+    },
+    {
+      "file": "08-terminal-desktop.png",
+      "sha256": "d2c64a802c032dc93bd8407c62ba987bd58ac5d61f4bbca1b5f18a582e39506d",
+      "width": 1024,
+      "height": 768,
+      "review": "original individually viewed",
+      "observation": "Desktop after closing settings: terminal plus macOS notifications at top right.",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "version": 1,
+        "display": {
+          "index": 0,
+          "name": "1"
+        },
+        "delivered_image_size": [
+          1024,
+          768
+        ],
+        "reference_id": "ps1_23246647995c31052b1fb6e615e68416",
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ]
+      }
+    },
+    {
+      "file": "09-tab-menu-left.png",
+      "sha256": "20f609423219f2a41023d981f0beb69a273853d6df3bf0d4c6d473d2fa441949",
+      "width": 1024,
+      "height": 768,
+      "review": "original individually viewed",
+      "observation": "Native Tab menu exposes all four split directions; left selected next.",
+      "coordinate_context": {
+        "reference_id": "ps1_ea34fa0775f2a9ff80e05e04368a771b",
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ],
+        "version": 1,
+        "display": {
+          "name": "1",
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "native_scale": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          768
+        ]
+      }
+    },
+    {
+      "file": "10-split-left.png",
+      "sha256": "766c2476f9fded030ecdf5370d77369c3c45c446d3b7a4faa1acd29d5d5b270e",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Left split launch menu: Terminal, New agent, Favorites and empty-state guidance; no tab-only extras.",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_5e180c6f7e613cb672b9d7799495ea81",
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "output_scale": 1,
+        "window": {
+          "index": 0,
+          "title": "Local \u00b7 ~",
+          "window_id": 39
+        },
+        "version": 1,
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        }
+      }
+    },
+    {
+      "file": "11-left-cancelled.png",
+      "sha256": "09cd42a8bd7958ac4cd56ad10fed16fc933131d6357d7e41bbc897725d655fb6",
+      "width": 1024,
+      "height": 768,
+      "review": "original individually viewed",
+      "observation": "Outside-click cancellation of left: one pane remains.",
+      "coordinate_context": {
+        "display": {
+          "index": 0,
+          "name": "1"
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          768
+        ],
+        "reference_id": "ps1_44d5d1408c0f390e515289c9fb7421fc",
+        "logical_space": "global_display_points",
+        "version": 1,
+        "native_scale": 1
+      }
+    },
+    {
+      "file": "12-tab-menu-up.png",
+      "sha256": "49398a302086e74a121860ef5b136e222225488ae51199004f8810b377a452c4",
+      "width": 1024,
+      "height": 768,
+      "review": "original individually viewed",
+      "observation": "Native Tab menu: up selected next.",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          768
+        ],
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ],
+        "output_scale": 1,
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "reference_id": "ps1_9bc3232474c7d44712fb484394e7f3e4",
+        "display": {
+          "index": 0,
+          "name": "1"
+        },
+        "version": 1
+      }
+    },
+    {
+      "file": "13-split-up.png",
+      "sha256": "766c2476f9fded030ecdf5370d77369c3c45c446d3b7a4faa1acd29d5d5b270e",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Up split launch menu matches left; no tab-only extras.",
+      "coordinate_context": {
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "window": {
+          "window_id": 39,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "reference_id": "ps1_2667af86d5690de5607934f62fb955f5",
+        "native_scale": 1,
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      }
+    },
+    {
+      "file": "14-after-command.png",
+      "sha256": "490ba1aa63ceaf226a4168ec68474115bcd7e7c63951ea0ea2008f244429b590",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Fresh AFTER command entered after outside-click cancellation of up.",
+      "coordinate_context": {
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "window": {
+          "index": 0,
+          "title": "Local \u00b7 ~",
+          "window_id": 39
+        },
+        "reference_id": "ps1_197de7bfd31166072712ed14436a87a9",
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ]
+      }
+    },
+    {
+      "file": "15-after-proof.png",
+      "sha256": "15ffcee02a44b7f7eb3bd045fba6fdb1adbcdd2d6feda23bc131f4c7f8f0d834",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "AFTER executed: same PID1317, non-exported marker native139b and working directory; one pane.",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 39,
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "native_scale": 1,
+        "reference_id": "ps1_c9777aa38a32e839e81ff02459e321e6",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      }
+    },
+    {
+      "file": "16-plus-for-agent.png",
+      "sha256": "1ff2a2429adbbf614ae5f5330a3c92dd30c9d0e0e8c55c9975010ecccf251f88",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Plus menu shares Terminal, New agent and Favorites with split menus; tab-only extras present.",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 39,
+          "index": 0,
+          "title": "Local \u00b7 ~"
+        },
+        "version": 1,
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_fd7504d6fbc05cf52902c9d01c957e78"
+      }
+    },
+    {
+      "file": "17-new-agent.png",
+      "sha256": "15ffcee02a44b7f7eb3bd045fba6fdb1adbcdd2d6feda23bc131f4c7f8f0d834",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "After New agent row click: ordinary terminal; no established provider/account state. Inconclusive for A03.",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "window": {
+          "window_id": 39,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "reference_id": "ps1_60b9bd6fff19e4c05aa3ce11024cf5c6",
+        "native_scale": 1,
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        }
+      }
+    },
+    {
+      "file": "18-agent-desktop.png",
+      "sha256": "87b14481a798721824c42c1a7df88a3ccaa97048c74de8c5ffd4bc67029b9040",
+      "width": 1024,
+      "height": 768,
+      "review": "original individually viewed",
+      "observation": "Delayed desktop capture: ordinary terminal and macOS notifications; still no established provider/account state.",
+      "coordinate_context": {
+        "display": {
+          "name": "1",
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          768
+        ],
+        "reference_id": "ps1_67cdd64ed25e5864d020e00526e68340",
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ],
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "version": 1,
+        "output_scale": 1
+      }
+    },
+    {
+      "file": "19-finish-command.png",
+      "sha256": "88e69ff27e3db40fcd10219ebbf9c37344a74b951c3259b1b0babbfad44bd361",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Explicit finish command entered and individually inspected before Return; archive confirms completion markers.",
+      "coordinate_context": {
+        "version": 1,
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_65b3172b066cb7e01d15922236f97e3c",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "window": {
+          "window_id": 39,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        }
+      }
+    }
+  ]
+}

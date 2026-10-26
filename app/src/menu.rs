@@ -3249,7 +3249,9 @@ impl<A: Action + Clone> SubMenu<A> {
                 }
 
                 if depth == 0 {
-                    row.add_child(menu.finish());
+                    // Honor a constrained flyout width instead of laying out the root
+                    // at its preferred width with an unbounded main axis.
+                    row.add_child(Shrinkable::new(1., menu.finish()).finish());
                 } else {
                     let Some(saved_position_id) = anchor_position_id else {
                         return;
@@ -3305,7 +3307,12 @@ impl<A: Action + Clone> SubMenu<A> {
 
         // The footer (if any) was already placed inside the styled container above.
         // Wrap the full row in an EventHandler before passing to Dismiss.
-        let dismiss_child = EventHandler::new(row.finish()).finish();
+        let dismiss_child = EventHandler::new(
+            ConstrainedBox::new(row.finish())
+                .with_max_width(submenu_width)
+                .finish(),
+        )
+        .finish();
         let mut dismiss = Dismiss::new(dismiss_child)
             .on_dismiss(|ctx, _app| ctx.dispatch_typed_action(MenuAction::Close(false)));
 

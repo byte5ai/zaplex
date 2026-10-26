@@ -1,0 +1,212 @@
+{
+  "issue": 714,
+  "version": "1.2.40",
+  "red_baseline": {
+    "result": {
+      "exit": 101,
+      "seconds": 708.8070383071899,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "workspace::view::tests::new_session_sidecar_fits_beside_parent_at_minimum_width_and_after_resize",
+        "--",
+        "--exact",
+        "--nocapture"
+      ]
+    },
+    "passed": 0,
+    "failed": 1,
+    "ignored": 0,
+    "finding": "Original side selection opens right at minimum width although the larger free region is left."
+  },
+  "initial_fix": {
+    "result": {
+      "exit": 101,
+      "seconds": 737.9592201709747,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--",
+        "workspace::view::tests::new_session_sidecar_",
+        "workspace::view::tests::native_favorite_submenu_clears_external_sidecar_and_restores_menu_focus",
+        "--nocapture"
+      ]
+    },
+    "passed": 2,
+    "failed": 1,
+    "ignored": 0,
+    "finding": "Geometry and focus passed; actual rendered child still overlapped the parent because the shared menu ignored its external width constraint."
+  },
+  "geometry_regression": {
+    "test": "workspace::view::tests::new_session_sidecar_fits_beside_parent_at_minimum_width_and_after_resize",
+    "passed": true,
+    "evidence": "first-tests.log",
+    "reuse_reason": "The placement helper and independent geometry expectations were unchanged during subsequent shared-menu refinements."
+  },
+  "tests": {
+    "result": {
+      "exit": 0,
+      "seconds": 610.6428487300873,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--",
+        "workspace::view::tests::new_session_sidecar_render_constrains_search_and_footer_beside_parent",
+        "menu::",
+        "workspace::view::tests::native_favorite_submenu_clears_external_sidecar_and_restores_menu_focus",
+        "--nocapture"
+      ]
+    },
+    "passed": [
+      "menu::tests::test_leaf_hover_clears_previously_selected_submenu_parent",
+      "menu::tests::test_right_is_a_noop_for_leaf_items",
+      "menu::tests::test_primary_disabled_split_submenu_keeps_child_keyboard_accessible",
+      "menu::tests::test_next_and_previous_indexes",
+      "menu::tests::test_split_submenu_enter_runs_primary_action_without_opening_child",
+      "menu::tests::test_split_submenu_preserves_identity_width_and_full_text_metadata",
+      "menu::tests::test_leaf_mouse_in_tracking_does_not_clear_open_submenu",
+      "menu::tests::test_split_submenu_right_opens_child_and_escape_returns_to_parent",
+      "menu::tests::test_split_submenu_trailing_target_opens_without_selecting_primary_action",
+      "menu::tests::test_right_opens_selected_submenu_and_selects_first_child",
+      "menu::tests::test_split_submenu_trigger_has_stable_hover_identity_without_a_chevron",
+      "menu::tests::test_submenu_edge_placement_reverses_only_when_right_side_overflows",
+      "menu::tests::test_switching_submenu_parent_clears_nested_selection",
+      "menu::tests::test_submenu_parent_unhover_keeps_submenu_open",
+      "menu::tests::test_enter_uses_the_active_submenu_selection",
+      "menu::tests::test_stale_submenu_parent_unhover_does_not_clear_new_hover_selection",
+      "menu::tests::test_nested_submenu_leaf_hover_is_handled_at_child_depth",
+      "menu::tests::test_up_and_down_navigate_the_active_submenu",
+      "menu::tests::test_split_submenu_accessibility_tracks_primary_trigger_and_nested_selection",
+      "notebooks::context_menu::tests::test_split_pane_actions",
+      "search::ai_context_menu::diffset::search_item::tests::diffset_has_higher_priority_tier",
+      "search::ai_context_menu::files::data_source_tests::test_directory_fuzzy_matching",
+      "search::ai_context_menu::files::data_source_tests::test_directory_search_support",
+      "search::ai_context_menu::files::data_source_tests::test_directory_vs_file_scoring",
+      "search::ai_context_menu::files::data_source_tests::test_example_ui_star_rs",
+      "search::ai_context_menu::files::data_source_tests::test_file_data_source_for_pwd_holistic_behavior",
+      "search::ai_context_menu::files::data_source_tests::test_filename_priority_with_spaces",
+      "search::ai_context_menu::files::data_source_tests::test_fuzzy_match_files_directory_boost",
+      "search::ai_context_menu::files::data_source_tests::test_fuzzy_match_files_non_empty_query",
+      "search::ai_context_menu::files::data_source_tests::test_fuzzy_query_recently_opened_bonus",
+      "search::ai_context_menu::files::data_source_tests::test_git_changed_files_no_boost_with_query",
+      "search::ai_context_menu::files::data_source_tests::test_mixed_file_directory_search",
+      "search::ai_context_menu::files::data_source_tests::test_multi_term_query_all_match",
+      "notebooks::context_menu::tests::test_rich_text_actions",
+      "search::ai_context_menu::files::data_source_tests::test_multi_term_query_combined_score",
+      "search::ai_context_menu::files::data_source_tests::test_path_proximity_ranking",
+      "search::ai_context_menu::files::data_source_tests::test_multi_term_query_partial_match",
+      "search::ai_context_menu::files::data_source_tests::test_proximity_ranking_realistic_scenario",
+      "search::ai_context_menu::files::data_source_tests::test_three_term_query",
+      "search::ai_context_menu::files::data_source_tests::test_single_term_query",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_case_insensitive",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_at_beginning",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_exact_match",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_no_match",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_mixed_with_spaces",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_question_mark",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_star_in_directory",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_star_in_filename",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_star_multiple",
+      "search::ai_context_menu::files::data_source_tests::test_wildcard_single",
+      "search::ai_context_menu::notebooks::data_source_test::tests::filtered_state_adds_recency_bonus_to_equal_matches",
+      "menu::tooltip_tests::test_split_submenu_tooltip_paints_above_flyout_without_stealing_pointer",
+      "search::ai_context_menu::notebooks::data_source_test::tests::zero_state_scores_reflect_recency",
+      "search::ai_context_menu::rules::data_source::tests::filtered_state_adds_recency_bonus",
+      "search::slash_command_menu::static_commands::commands::tests::strip_command_prefix_trailing_space_only",
+      "search::slash_command_menu::fuzzy_match_tests::test_match_two_commands_with_same_name_but_different_description",
+      "search::ai_context_menu::blocks::data_source::tests::zero_state_scores_reflect_recency",
+      "notebooks::context_menu::tests::test_plain_text_actions",
+      "sftp_manager::context_menu::tests::test_render_context_menu_via_browser",
+      "search::ai_context_menu::blocks::data_source::tests::zero_state_very_recent_inactive_outranks_old_active",
+      "search::ai_context_menu::blocks::data_source::tests::zero_state_active_bonus_boosts_nearby_blocks",
+      "search::ai_context_menu::blocks::data_source::tests::fuzzy_query_active_session_blocks_rank_above_other_sessions",
+      "workspace::view::tests::new_session_sidecar_render_constrains_search_and_footer_beside_parent",
+      "workspace::view::tests::native_favorite_submenu_clears_external_sidecar_and_restores_menu_focus"
+    ],
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 4384,
+    "scope": "Final menu implementation, actual sidecar layout/focus, and tooltip pointer routing with bounded and unbounded parent constraints."
+  },
+  "check": {
+    "exit": 0,
+    "seconds": 403.7557773590088,
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "warp"
+    ]
+  },
+  "clippy": {
+    "exit": 0,
+    "seconds": 351.7435550689697,
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "warp",
+      "--bin",
+      "zaplex",
+      "--no-deps",
+      "--",
+      "-D",
+      "warnings"
+    ]
+  },
+  "interrupted_clippy_attempt": {
+    "runner_exit": 143,
+    "diagnostic_failure_observed": false,
+    "recovery": "Repeated only the incomplete Clippy step; passed tests and cargo check were not repeated."
+  },
+  "phase_a": {
+    "result": {
+      "exit": 0,
+      "seconds": 18.906128883361816,
+      "command": [
+        "python3",
+        "script/check-v1-release-readiness",
+        "--phase-a"
+      ]
+    },
+    "passes": 13,
+    "reuse_reason": "Version metadata and Phase-A contract inputs unchanged by final shared-menu and tooltip-test refinement."
+  },
+  "changed_source_sha256": {
+    "app/src/workspace/view.rs": "499a451b342e8d66457c28d5e2d9e6f2df8ace4bbf3fa740bfab79b261d4b89c",
+    "app/src/workspace/view_test.rs": "e9164771bfaa8a6ff8c93c95b5e96d9706e69b5fc7ffd6220f5dba25f2876e30",
+    "app/src/menu.rs": "aadd9b83e0e2a46a85f2cb9c183341178213e2822848c900358a53190acd2f13",
+    "app/src/menu/tooltip_tests.rs": "3c63e7d82281b48be848c1de3e808cb7b89e941a390944c1e58a7f5beecb121d"
+  },
+  "local_log_sha256": {
+    "red.log": "f066b39e1ea8845be0fbed12ee452108c09a550d864afa8028d8d6a2106ed19c",
+    "first-tests.log": "4bc85c4b1ff9fb530d2f7bd83cce8c1826c3130b8aa3c3faefa2f2b168fffc70",
+    "tests.log": "0cc598b878e6113a3d9ee6dd13d8eca2a9f6f4b3c733a70b4345c62cbead554f",
+    "check.log": "aefbfdf0b2e36675c00e188bbbded5f62dda360d5839472cc69bbb9a3e1fca84",
+    "clippy.log": "d0550bffede2b0fd5428dad627ec82cf43cf5e20b1e6c10934ebc0a3cde35095",
+    "phase-a.log": "9e6a3178957ea1782776dc1288c1383f5d45e939f0b9b89a52ac4aa14a111325"
+  },
+  "workflow_validation": {
+    "changed_workflows": [
+      ".github/workflows/release_configurations.json",
+      ".github/workflows/test-dmg.yml",
+      ".github/workflows/zap_release.yml"
+    ],
+    "validation": "Only existing 1.2.39 version literals changed to 1.2.40; no workflow structure or command changes."
+  },
+  "native_fix_verification": "Pending a newly authorized 1.2.40 CI batch and DMG. Native 1.2.39 evidence reproduces the bug, not the correction."
+}

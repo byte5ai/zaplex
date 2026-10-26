@@ -5,7 +5,7 @@ use pathfinder_geometry::{
     vector::{vec2f, Vector2F},
 };
 use warpui::{
-    elements::{ChildView, Container, Element, ParentElement, Stack},
+    elements::{ChildView, Container, Element, Flex, ParentElement, Stack},
     event::KeyEventDetails,
     keymap::Keystroke,
     platform::WindowStyle,
@@ -25,6 +25,7 @@ enum Click {
 struct Root {
     menu: ViewHandle<Menu<Click>>,
     offset: Vector2F,
+    unbounded_parent: bool,
     actions: Vec<Click>,
 }
 
@@ -46,14 +47,17 @@ impl View for Root {
     }
 
     fn render(&self, _: &AppContext) -> Box<dyn Element> {
-        Stack::new()
-            .with_child(
-                Container::new(ChildView::new(&self.menu).finish())
-                    .with_padding_left(self.offset.x())
-                    .with_padding_top(self.offset.y())
-                    .finish(),
-            )
-            .finish()
+        let menu = Container::new(ChildView::new(&self.menu).finish())
+            .with_padding_left(self.offset.x())
+            .with_padding_top(self.offset.y())
+            .finish();
+        let child = if self.unbounded_parent {
+            // A non-flexible row child receives an unbounded horizontal constraint.
+            Flex::row().with_child(menu).finish()
+        } else {
+            menu
+        };
+        Stack::new().with_child(child).finish()
     }
 }
 
@@ -136,7 +140,12 @@ fn test_split_submenu_tooltip_paints_above_flyout_without_stealing_pointer() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         app.update(super::init);
-        for offset in [vec2f(20., 20.), vec2f(780., 700.)] {
+        for (offset, unbounded_parent) in [
+            (vec2f(20., 20.), false),
+            (vec2f(780., 700.), false),
+            (vec2f(20., 20.), true),
+            (vec2f(780., 700.), true),
+        ] {
             let (window, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
                 let menu = ctx.add_typed_action_view(|ctx| {
                     let mut menu = Menu::new().with_ignore_hover_when_covered();
@@ -162,6 +171,7 @@ fn test_split_submenu_tooltip_paints_above_flyout_without_stealing_pointer() {
                 Root {
                     menu,
                     offset,
+                    unbounded_parent,
                     actions: Vec::new(),
                 }
             });
