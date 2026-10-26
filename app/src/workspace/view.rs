@@ -222,8 +222,8 @@ use crate::drive::{
 };
 use crate::experiments::{BlockOnboarding, Experiment};
 use crate::menu::{
-    Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource, SubMenu,
-    DEFAULT_WIDTH as MENU_DEFAULT_WIDTH,
+    Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuSelectionSource, MenuTooltipPosition,
+    SubMenu, DEFAULT_WIDTH as MENU_DEFAULT_WIDTH,
 };
 use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::network::{NetworkStatus, NetworkStatusEvent};
@@ -15452,8 +15452,11 @@ impl Workspace {
         // 5c. Separator + worktree config entry + new tab config
         if FeatureFlag::TabConfigs.is_enabled() {
             menu_items.push(MenuItem::Separator);
+            let worktree_config_label = crate::t!("workspace-new-worktree-config");
             menu_items.push(
-                MenuItemFields::new_submenu(crate::t!("workspace-new-worktree-config"))
+                MenuItemFields::new_submenu(worktree_config_label.clone())
+                    .with_tooltip(worktree_config_label)
+                    .with_tooltip_position(MenuTooltipPosition::Above)
                     .with_icon(icons::Icon::Dataflow02)
                     .into_item(),
             );

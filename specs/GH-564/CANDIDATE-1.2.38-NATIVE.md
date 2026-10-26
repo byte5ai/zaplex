@@ -100,7 +100,7 @@ sind dauerhaft gespeichert. Die Bildnummern unten sind ihre Dateipräfixe.
 | F03 DE/Light nach vollständigem Neustart, 1024×678 | Frische Shellausgabe belegt neue PID; beide Zeilenklick-/F3-Richtungen zeigen das richtige Ziel. | 45–49 |
 | DE/Light, 760×678 | Beide Fokusrichtungen bestehen; linker Suchfokus und separate Markierung bleiben nach Pane-Wechsel korrekt. | 50–52 |
 | F02 DE/Light | Alle acht Aktionen sind bei 1024 Punkten in zwei und bei 760 Punkten in vier Reihen lesbar. Eine Reihe wurde in dieser Sitzung nicht erreicht. | 48–53 |
-| E04 EN/Dark | `New worktree config` ist im Plusmenü abgeschnitten; auch mit geöffnetem Untermenü fehlt ein vollständiger Titel/Tooltip. Escape schließt die Menüs ohne neue Pane. | 31–35 |
+| E04 EN/Dark | `New worktree config` ist im Plusmenü abgeschnitten; auch mit geöffnetem Untermenü fehlt ein vollständiger Titel/Tooltip (#711). Escape schließt die Menüs ohne neue Pane. | 31–35 |
 | E04 DE/Light | `Worktree-Konfig` ist vollständig sichtbar; Untermenü und Escape funktionieren. Keine Konfiguration oder Repository angelegt. | 54–56 |
 | Zustand/Dateien | Frische EN-Ausgaben erhalten PID, nicht exportierten Marker und CWD über den Menürückweg; alle vier Dateien danach unverändert. Frische DE-Ausgaben erhalten die neue PID und CWD über die Dateiaktionen. | 30, 35, 37, 47, 58 |
 
@@ -122,3 +122,13 @@ Modifier-Klick. Erst korrigierte Eingabe bzw. frische Beobachtung und explizit
 globale Modifier-Koordinaten liefern die oben bewerteten Ergebnisse.
 Bewegung/Reduced Motion, weitere Sprach-/Theme-Kombinationen und die vollständige
 Produktmatrix bleiben ungeprüft.
+
+Die Korrektur für [#711](https://github.com/byte5ai/zaplex/issues/711) wird als
+1.2.39 vorbereitet: vorhandener lokalisierter Tooltip oberhalb der Zeile, damit
+das seitliche Untermenü den vollständigen Titel nicht verdeckt. Dies ist noch
+kein nativer Nachweis der Korrektur.
+
+Die [lokalen Prüfungen für 1.2.39](evidence/menu-711-local.json) sind bestanden:
+Compile-Gate, vier bestehende Menü-/Tooltip-Regressionen ohne übersprungene Fälle,
+App-Clippy mit `-D warnings` und 13 Phase-A-Prüfungen. Diese Prüfungen ersetzen
+die native Sichtprüfung des neuen Tooltips nicht.
