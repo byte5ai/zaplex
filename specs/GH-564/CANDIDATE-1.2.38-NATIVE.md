@@ -11,14 +11,28 @@ den Tastaturfokus zurück, ohne Markierungen zu löschen.
 ## Lauf und Aussagegrenze
 
 Der freigegebene [CI-Batch 40242122433](https://github.com/byte5ai/zaplex/actions/runs/40242122433)
-wurde am 25.10.2026 um 22:51 UTC mit Test-DMG gestartet. Die Vorprüfung,
+wurde am 25.10.2026 um 22:51 UTC mit Test-DMG gestartet und am 26.10.2026
+um 00:08 UTC erfolgreich abgeschlossen. Die Vorprüfung,
 Abhängigkeitsprüfung und Compile-Jobs für Linux und macOS sind bestanden.
 Die gezielten Plattform-/Keymapprüfungen und Live-SFTP sind ebenfalls bestanden.
 Die Linux-Gesamtsuite meldet **4438 bestanden, 13 übersprungen**; die
 Dokumentationstests **4 bestanden, 4 ignoriert**. Diese Ausnahmen werden nicht
 als ausgeführte Erfolge gezählt. Phase A, der App-Bau und der Bau des gebündelten
-Linux-Daemons sind bestanden. Signieren/Paketieren und installierte GUI-Abnahme
-sind noch nicht als erfolgreich nachgewiesen.
+Linux-Daemons sind bestanden. Signieren/Paketieren einschließlich akzeptierter
+Notarisierung und der Job für die installierte GUI-Abnahme sind bestanden.
+Die direkte native Produktnachprüfung ist davon getrennt.
+
+Alle **16/16 installierten GUI-Fälle** sind im ersten Lauf bestanden. Testbaum,
+Zusammenfassung, Prozess-Exit, Version, App-/Testquellstand und DMG-Hash wurden
+gegeneinander geprüft; es war keine Fortsetzung erforderlich. Der
+[geprüfte Nachweis](evidence/candidate-138-native/verified-full-gui.json) verweist
+auf beide Artefakte. Die zugehörigen Original-JSONs sind daneben gespeichert.
+
+Das unveränderte Test-DMG aus Artefakt `12618983528` hat 195.245.336 Bytes und
+SHA256 `7f5643fa1b24bf52e844417bdc231cc31125ff81b1e0777a021a9ea8be25a05c`.
+Sein heruntergeladenes ZIP stimmt mit dem GitHub-Digest
+`befe73087b97fcae06319f490bbf118a87db8b24a8d828dc4cc6405a0981a906` überein.
+Es wurde kein Release und kein Tag erstellt.
 
 Die neun gezielten lokalen Regressionstests, Compile-Gate und App-Clippy sind
 bereits im [lokalen Nachweis](evidence/focus-709-local.json) dokumentiert und
