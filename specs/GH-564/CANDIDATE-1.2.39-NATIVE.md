@@ -36,8 +36,8 @@ Das unveränderte DMG aus Artefakt `12656692394` hat 195.244.936 Bytes und SHA25
 `7e23137b6df9b6ad7e728bae4649ad1375ad340733f055ea732b88f3a1c75e9e`.
 Das heruntergeladene ZIP stimmt mit dem GitHub-Digest
 `e1c7d2aa420c4f20fbeb7987cb390756e186519adbcbfa10a71383aef8191652` überein.
-Kein Release oder Tag wurde erstellt. Die direkte Produktnachprüfung folgt
-getrennt von diesem vollständigen CI-/GUI-Ergebnis.
+Kein Release oder Tag wurde erstellt. Die direkte Produktnachprüfung ist unten getrennt von diesem vollständigen
+CI-/GUI-Ergebnis dokumentiert.
 
 Die [lokalen Prüfungen der Korrektur](evidence/menu-711-local.json) sind bereits
 bestanden: Compile-Gate, vier gezielte bestehende Menü-/Tooltiptests, App-Clippy
@@ -91,3 +91,39 @@ Archive gehasht.
 
 Die [Sollreferenzen mit Hashes](evidence/candidate-139-native/design-reference.json)
 sind unabhängig von den nativen Aufnahmen festgehalten.
+
+## Direkte native Nachprüfung am unveränderten DMG
+
+[Exploration 40338712200](https://github.com/byte5ai/zaplex/actions/runs/40338712200)
+ist erfolgreich abgeschlossen und ausdrücklich vor dem Zeitlimit beendet.
+App und Harness entsprechen dem oben genannten Quellstand, der DMG-Hash ist
+unverändert. Artefakt `12660361804`, ZIP-SHA256
+`49e8c86a62ed4b9452e44474fb30526202c9f12568a1b0b84001572a573d2701`.
+Alle **38 Originalaufnahmen** wurden einzeln betrachtet und bytegenau mit dem
+CI-Artefakt verglichen. [Manifest und Beobachtungen](evidence/candidate-139-native/exploration-40338712200/manifest.json),
+[Aktionen einschließlich Fehlern](evidence/candidate-139-native/exploration-40338712200/actions.json)
+sowie Abschlussmarker sind dauerhaft gesichert.
+
+| Kriterium | Ergebnis |
+|---|---|
+| E04 / #711, EN/Dark und EN/Light, 1024×678 | Bestanden: vollständiger Worktree-Titel oberhalb der Zeile und rechtes Untermenü gleichzeitig lesbar (04/15). |
+| E04, tatsächliche Mindestbreite 480×678 | Fehlgeschlagen: Worktree-Untermenü überdeckt seine Elternzeile; vollständiger Titel nicht sichtbar. Dark zweimal (07/08), Light ebenfalls (17). Die Größenanforderung 200 wurde auf480 geklemmt; dies ist kein Größenfehler der App. |
+| L01, rechts/unten | Gemeinsame Einträge Terminal, New agent und Favorites mit Leerzustand; keine Tab-Konfigurationen oder Wiederöffnen im Split-Menü (24–26). Links/oben in diesem Lauf nicht geprüft: der versuchte Shortcut öffnete die Sitzungssuche (28/29). |
+| L05, Außenklick rechts/unten | Keine zusätzliche Pane. Frisch ausgeführte Ausgabe nach beiden Abbrüchen bestätigt PID1279, nicht exportierten Marker `native139` und dasselbe Arbeitsverzeichnis (02/31). |
+| Leere Connections, EN/Light1024 | Ordner/Plus ohne Hover sichtbar (34), Plus mit vollständigem Tooltip (35), öffnet Hostauswahl (36). Keine Verbindung angelegt. Die fehlenden Icons einzelner Layout-Fixtures sind hier nicht reproduziert. |
+| A03 / echter Agent ohne Konto | Nicht geprüft. Settings- und Konversations-Leerzustände sind kein Nachweis einer echten Provider-Interaktion. |
+
+Die zunächst wirkungslosen Pane-Menüklicks waren durch macOS-Mitteilungen
+abgefangen worden: Desktop20/21 zeigt die Überlagerung,23 deren Entfernung,
+24 das danach funktionierende Produktmenü. Operator-Tippfehler meldeten
+`mutation_dispatched`; der tatsächliche Text wurde jeweils vor Return betrachtet.
+`hotkey` ist in der Operatorversion entfernt; der Aufruf führte keine Aktion aus.
+Keine dieser Operatorabweichungen wird als Produktfehler gezählt.
+
+Der neue Mindestbreitenfehler ist von der bei Normalbreite erfolgreichen
+Tooltip-Korrektur getrennt: `should_render_sidecar_left` fällt auf rechts zurück,
+wenn300 Punkte auf keiner Seite passen. Die Fensterbegrenzung schiebt das
+Untermenü dann über die Elternzeile. Soll vor Korrektur: Elternzeile und vollständiger
+Hinweis lesbar, Suchfeld und Aktion erreichbar, richtiger Fokus und Abbruch ohne
+Sessionanlage bei Mindestbreite und nach Größenwechsel. Standbilder beweisen
+weiterhin keine kontinuierliche Hover-Bewegung.

@@ -1,0 +1,927 @@
+[
+  {
+    "time": "2026-10-26T14:27:00.366686+00:00",
+    "args": [
+      "click",
+      "--at",
+      "235,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:27:04.213477+00:00",
+    "args": [
+      "type",
+      "printf \"BEFORE pid=%s marker=%s cwd=%s\" \"$$\" \"${ZAPLEX139:=native139}\" \"$PWD\"",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "mutation_dispatched": true,
+      "retry_safe": false,
+      "code": "INTERACTION_FAILED",
+      "details": "Typing did not return an accepted outcome.",
+      "hint": "Observe the target before deciding whether to retry typing.",
+      "message": "Typing failed after foreground setup may have changed focus."
+    }
+  },
+  {
+    "time": "2026-10-26T14:27:41.689609+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:28:04.211030+00:00",
+    "args": [
+      "click",
+      "--at",
+      "353,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:28:45.034554+00:00",
+    "args": [
+      "move",
+      "--at",
+      "410,212",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:29:31.655321+00:00",
+    "args": [
+      "press",
+      "esc",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:29:36.460521+00:00",
+    "args": [
+      "window",
+      "resize",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "37",
+      "-w",
+      "200",
+      "--height",
+      "678",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "code": "INTERACTION_FAILED",
+      "hint": "Observe the exact window before retrying.",
+      "mutation_dispatched": true,
+      "retry_safe": false,
+      "details": "commandFailed(\"Window 37 did not reach verified requested bounds (0.0, 30.0, 200.0, 678.0)\")",
+      "message": "The resize window request was accepted, but its exact result could not be verified"
+    }
+  },
+  {
+    "time": "2026-10-26T14:30:19.843680+00:00",
+    "args": [
+      "click",
+      "--at",
+      "304,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:30:54.101369+00:00",
+    "args": [
+      "move",
+      "--at",
+      "360,212",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:32:21.239620+00:00",
+    "args": [
+      "press",
+      "esc",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:32:25.339802+00:00",
+    "args": [
+      "click",
+      "--at",
+      "304,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:32:28.469095+00:00",
+    "args": [
+      "move",
+      "--at",
+      "330,212",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:32:53.238184+00:00",
+    "args": [
+      "press",
+      "esc",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:32:56.114468+00:00",
+    "args": [
+      "window",
+      "resize",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "37",
+      "-w",
+      "1024",
+      "--height",
+      "678",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:33:00.156863+00:00",
+    "args": [
+      "press",
+      "cmd+,",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:33:45.566273+00:00",
+    "args": [
+      "click",
+      "--at",
+      "86,334",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:34:11.354838+00:00",
+    "args": [
+      "click",
+      "--at",
+      "600,225",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:34:55.376645+00:00",
+    "args": [
+      "click",
+      "--at",
+      "90,132",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:34:59.609257+00:00",
+    "args": [
+      "type",
+      "Light",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "mutation_dispatched": true,
+      "details": "Typing did not return an accepted outcome.",
+      "code": "INTERACTION_FAILED",
+      "message": "Typing failed after foreground setup may have changed focus.",
+      "hint": "Observe the target before deciding whether to retry typing.",
+      "retry_safe": false
+    }
+  },
+  {
+    "time": "2026-10-26T14:35:24.349311+00:00",
+    "args": [
+      "click",
+      "--at",
+      "100,216",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:35:53.445944+00:00",
+    "args": [
+      "click",
+      "--at",
+      "223,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:35:56.635876+00:00",
+    "args": [
+      "press",
+      "cmd+w",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:36:00.292897+00:00",
+    "args": [
+      "click",
+      "--at",
+      "353,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:36:22.515452+00:00",
+    "args": [
+      "move",
+      "--at",
+      "410,212",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:36:51.135250+00:00",
+    "args": [
+      "press",
+      "esc",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:36:53.995140+00:00",
+    "args": [
+      "window",
+      "resize",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "37",
+      "-w",
+      "480",
+      "--height",
+      "678",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:36:58.201437+00:00",
+    "args": [
+      "click",
+      "--at",
+      "304,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:37:24.672572+00:00",
+    "args": [
+      "move",
+      "--at",
+      "360,212",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:37:50.352808+00:00",
+    "args": [
+      "press",
+      "esc",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:37:53.195019+00:00",
+    "args": [
+      "window",
+      "resize",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "37",
+      "-w",
+      "1024",
+      "--height",
+      "678",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:37:57.485234+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1006,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:38:51.203717+00:00",
+    "args": [
+      "move",
+      "--at",
+      "1006,83",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:38:54.880810+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1006,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:40:49.068998+00:00",
+    "args": [
+      "click",
+      "--at",
+      "998,57",
+      "--global",
+      "--snapshot",
+      "ps1_c17dd0a1a6e16fb49e3008c087e72958",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:41:18.461250+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1006,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:45:27.468994+00:00",
+    "args": [
+      "click",
+      "--at",
+      "982,57",
+      "--global",
+      "--snapshot",
+      "ps1_3c9ebda51b45ec64492283622d58a674",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:45:50.262846+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1006,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:46:13.830529+00:00",
+    "args": [
+      "click",
+      "--at",
+      "899,85",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:46:41.401950+00:00",
+    "args": [
+      "click",
+      "--at",
+      "500,350",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:46:44.784513+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1006,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:46:48.226980+00:00",
+    "args": [
+      "click",
+      "--at",
+      "899,109",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:47:17.187444+00:00",
+    "args": [
+      "click",
+      "--at",
+      "500,350",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:47:26.511488+00:00",
+    "args": [
+      "hotkey",
+      "--keys",
+      "cmd,shift,p",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "hint": "Use 'peekaboo press'.",
+      "message": "Command 'peekaboo hotkey' was removed in v4.",
+      "code": "INVALID_ARGUMENT"
+    }
+  },
+  {
+    "time": "2026-10-26T14:47:40.702361+00:00",
+    "args": [
+      "press",
+      "cmd+shift+p",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:47:56.009041+00:00",
+    "args": [
+      "type",
+      "Split pane left",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "retry_safe": false,
+      "message": "Typing failed after foreground setup may have changed focus.",
+      "code": "INTERACTION_FAILED",
+      "details": "Typing did not return an accepted outcome.",
+      "hint": "Observe the target before deciding whether to retry typing.",
+      "mutation_dispatched": true
+    }
+  },
+  {
+    "time": "2026-10-26T14:48:16.513856+00:00",
+    "args": [
+      "press",
+      "esc",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:48:20.521538+00:00",
+    "args": [
+      "type",
+      "printf \"AFTER pid=%s marker=%s cwd=%s\" \"$$\" \"$ZAPLEX139\" \"$PWD\"",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "code": "INTERACTION_FAILED",
+      "message": "Typing failed after foreground setup may have changed focus.",
+      "details": "Typing did not return an accepted outcome.",
+      "retry_safe": false,
+      "mutation_dispatched": true,
+      "hint": "Observe the target before deciding whether to retry typing."
+    }
+  },
+  {
+    "time": "2026-10-26T14:48:41.591031+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:48:59.484039+00:00",
+    "args": [
+      "click",
+      "--at",
+      "97,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:49:21.814015+00:00",
+    "args": [
+      "move",
+      "--at",
+      "600,300",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:49:46.714938+00:00",
+    "args": [
+      "click",
+      "--at",
+      "79,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:49:49.846793+00:00",
+    "args": [
+      "move",
+      "--at",
+      "600,300",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:50:09.410678+00:00",
+    "args": [
+      "move",
+      "--at",
+      "51,120",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:50:24.992623+00:00",
+    "args": [
+      "click",
+      "--at",
+      "51,90",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:50:45.056850+00:00",
+    "args": [
+      "press",
+      "esc",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:50:48.692685+00:00",
+    "args": [
+      "click",
+      "--at",
+      "600,630",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T14:50:53.039643+00:00",
+    "args": [
+      "type",
+      "python3 -c 'from pathlib import Path; p=Path(\"/tmp/zaplex-exploration-path\").read_text().strip(); (Path(p)/\"finished\").touch()'",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "details": "Typing did not return an accepted outcome.",
+      "mutation_dispatched": true,
+      "code": "INTERACTION_FAILED",
+      "hint": "Observe the target before deciding whether to retry typing.",
+      "retry_safe": false,
+      "message": "Typing failed after foreground setup may have changed focus."
+    }
+  },
+  {
+    "time": "2026-10-26T14:51:08.377583+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  }
+]
