@@ -13,14 +13,31 @@ auf dem unveränderten 1.2.38-DMG.
 ## CI und bestehende Nachweise
 
 Der ausdrücklich freigegebene [CI-Batch 40318905418](https://github.com/byte5ai/zaplex/actions/runs/40318905418)
-wurde am 26.10.2026 um 11:57 UTC mit Test-DMG `v1.2.39` gestartet. Vorprüfung,
+wurde am 26.10.2026 um 11:57 UTC mit Test-DMG `v1.2.39` gestartet und um
+14:08 UTC erfolgreich abgeschlossen. Vorprüfung,
 Abhängigkeitssicherheit, statische Prüfungen, Linux-Compile und gezielte
 Linux-Keymap-/Settings-/Sitzungsprüfungen sowie macOS-Compile und native
 Layoutprüfungen sind bestanden. Die Linux-Gesamtsuite meldet **4438 bestanden,
 13 übersprungen**; Dokumentationstests **4 bestanden, 4 ignoriert**.
 Übersprungene und ignorierte Fälle werden nicht als ausgeführte Erfolge gezählt.
-Live-SFTP läuft noch. Ein vollständiger CI- oder GUI-Pass ist zu diesem
-Zwischenstand noch nicht belegt.
+Live-SFTP, Phase A, App-/Daemon-Bau und Signieren/Paketieren sind bestanden.
+Die Notarisierung wurde akzeptiert; Anheften und Validieren des Tickets sind
+ebenfalls erfolgreich. Der Lauf dauerte einschließlich der Runner-Warteschlangen
+**2 Stunden 10 Minuten 47 Sekunden**. Insbesondere zwischen fertigem Daemon
+um 13:15 UTC und Beginn der Paketierung um 13:57 UTC lag zusätzliche Wartezeit.
+
+Alle **16/16 installierten GUI-Fälle** sind im ersten Lauf bestanden. Der
+[validierte Nachweis](evidence/candidate-139-native/verified-full-gui.json) prüft
+Testbaum, Zusammenfassung, Prozess-Exit, Version, App-/Testquellstand und
+DMG-Hash gemeinsam gegen den Produktionsvalidator. Keine Fortsetzung war nötig.
+Die Original-JSONs sind daneben gespeichert.
+
+Das unveränderte DMG aus Artefakt `12656692394` hat 195.244.936 Bytes und SHA256
+`7e23137b6df9b6ad7e728bae4649ad1375ad340733f055ea732b88f3a1c75e9e`.
+Das heruntergeladene ZIP stimmt mit dem GitHub-Digest
+`e1c7d2aa420c4f20fbeb7987cb390756e186519adbcbfa10a71383aef8191652` überein.
+Kein Release oder Tag wurde erstellt. Die direkte Produktnachprüfung folgt
+getrennt von diesem vollständigen CI-/GUI-Ergebnis.
 
 Die [lokalen Prüfungen der Korrektur](evidence/menu-711-local.json) sind bereits
 bestanden: Compile-Gate, vier gezielte bestehende Menü-/Tooltiptests, App-Clippy
