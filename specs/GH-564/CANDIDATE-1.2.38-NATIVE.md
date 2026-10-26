@@ -36,8 +36,8 @@ Es wurde kein Release und kein Tag erstellt.
 
 Die neun gezielten lokalen Regressionstests, Compile-Gate und App-Clippy sind
 bereits im [lokalen Nachweis](evidence/focus-709-local.json) dokumentiert und
-werden nicht erneut lokal ausgeführt. Der vorherige F03-Fehler auf 1.2.37 bleibt
-bis zur Prüfung des neu gebauten DMG ein nativer Fehlernachweis.
+werden nicht erneut lokal ausgeführt. Der vorherige F03-Fehler auf 1.2.37 ist
+historisch; die unten genannten nativen Kombinationen bestehen auf 1.2.38.
 
 ## Native Layoutbilder
 
@@ -79,3 +79,46 @@ Schmale Panes und eine zusätzliche deutsche/helle Variante werden geprüft.
 Unabhängige Datei-Hashes vor/nach den nichtdestruktiven Aktionen und frische
 Shell-Nachweise trennen tatsächlich erhaltenen Zustand von historischer Ausgabe.
 Weitere bisher ungeprüfte Varianten der Produktmatrix bleiben offen.
+
+## Direkte Bedienung am installierten DMG
+
+[Exploration 40247974777](https://github.com/byte5ai/zaplex/actions/runs/40247974777)
+verwendete genau das oben geprüfte DMG und denselben App-/Harness-Quellstand.
+Alle **64 Originalaufnahmen** wurden einzeln betrachtet und gegen die archivierten
+CI-Originale gehasht. [Manifest](evidence/candidate-138-native/exploration-40247974777.json),
+[Originalbilder als ZIP](evidence/candidate-138-native/exploration-40247974777-originals.zip),
+[Aktionsfolge](evidence/candidate-138-native/exploration-actions.json) und
+[vorab festgelegte Dateierwartungen](evidence/candidate-138-native/fixture-expectations.json)
+sind dauerhaft gespeichert. Die Bildnummern unten sind ihre Dateipräfixe.
+
+| Kombination | Beobachtung | Originale |
+|---|---|---|
+| F03 EN/Dark, zwei Panes, 1024×678 | Zeilenklick aktiviert die angeklickte Pane; F3 zeigt rechts `same.txt` mit 16 Bytes und links mit 7 Bytes. | 10–14 |
+| Filter → Zeile, EN/Dark | Innerhalb derselben Pane und nach Wechsel zur anderen Pane erreicht F3 das Cursorziel. Die getrennte Markierung von `marked.txt` bleibt erhalten. | 15–18 |
+| Rechtsklick auf inaktive Pane, EN/Dark | Pane wird aktiv, Kontextaktion „Details“ trifft `right/marked.txt` mit 10 Bytes. | 20–21 |
+| EN/Dark, 760×678 | Beide Fokusrichtungen und Rückkehr aus vorherigem Suchfokus bestehen; beide Markierungen bleiben. Globaler Cmd-Klick markiert genau eine Datei. | 22–27 |
+| F03 DE/Light nach vollständigem Neustart, 1024×678 | Frische Shellausgabe belegt neue PID; beide Zeilenklick-/F3-Richtungen zeigen das richtige Ziel. | 45–49 |
+| DE/Light, 760×678 | Beide Fokusrichtungen bestehen; linker Suchfokus und separate Markierung bleiben nach Pane-Wechsel korrekt. | 50–52 |
+| F02 DE/Light | Alle acht Aktionen sind bei 1024 Punkten in zwei und bei 760 Punkten in vier Reihen lesbar. Eine Reihe wurde in dieser Sitzung nicht erreicht. | 48–53 |
+| E04 EN/Dark | `New worktree config` ist im Plusmenü abgeschnitten; auch mit geöffnetem Untermenü fehlt ein vollständiger Titel/Tooltip. Escape schließt die Menüs ohne neue Pane. | 31–35 |
+| E04 DE/Light | `Worktree-Konfig` ist vollständig sichtbar; Untermenü und Escape funktionieren. Keine Konfiguration oder Repository angelegt. | 54–56 |
+| Zustand/Dateien | Frische EN-Ausgaben erhalten PID, nicht exportierten Marker und CWD über den Menürückweg; alle vier Dateien danach unverändert. Frische DE-Ausgaben erhalten die neue PID und CWD über die Dateiaktionen. | 30, 35, 37, 47, 58 |
+
+Die englischen Dateien wurden nach den Interaktionen unabhängig neu gehasht;
+alle vier Größen und SHA256 stimmen mit den vorher festgelegten Werten überein.
+Der nach dem deutschen Durchlauf eingegebene zweite Hashbefehl wurde vor Ablauf
+der VM nicht mehr ausgeführt und zählt ausdrücklich nicht als Nachweis.
+
+Das 30-Minuten-Fenster endete regulär mit `session-expired.txt`; der Operator wurde
+geschlossen und die VM gestoppt. Der Workflow-Erfolg bezeichnet die verfügbare
+Infrastruktur, keine vollständige Produktfreigabe. Eine spät eingeblendete
+macOS-Mitteilung fing die versuchten Pane-Schließen-Klicks ab und öffnete die
+Systemeinstellungen; diese eigene unbeabsichtigte Ansicht wurde geschlossen.
+Darum sind 59/60 kein Beleg für eine einreihige Leiste oder einen Zaplex-Fehler.
+
+Zwei weitere Werkzeugabweichungen sind in der Aktionsfolge getrennt dokumentiert:
+Escape-Sequenzen beim ersten Fixture-Eingabeversuch und ein nicht bestätigter
+Modifier-Klick. Erst korrigierte Eingabe bzw. frische Beobachtung und explizit
+globale Modifier-Koordinaten liefern die oben bewerteten Ergebnisse.
+Bewegung/Reduced Motion, weitere Sprach-/Theme-Kombinationen und die vollständige
+Produktmatrix bleiben ungeprüft.

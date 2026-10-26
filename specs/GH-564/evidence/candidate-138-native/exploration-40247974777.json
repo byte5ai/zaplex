@@ -1,0 +1,2829 @@
+{
+  "run_id": 40247974777,
+  "artifact_id": 12620785476,
+  "artifact_zip_sha256": "sha256:1c28d8459e00845a7b359d64cc788bd59cb0adbf0ea3807ed8628bbf9a5335fa",
+  "app_source_sha": "2434f6cd84ec3db40769c5b351e28279b6010d7c",
+  "harness_source_sha": "2434f6cd84ec3db40769c5b351e28279b6010d7c",
+  "dmg_sha256": "7f5643fa1b24bf52e844417bdc231cc31125ff81b1e0777a021a9ea8be25a05c",
+  "version": "v1.2.38",
+  "macos": "27.0 (26A428)",
+  "operator": "Peekaboo4.9.6",
+  "termination": "30-minute window expired; operator closed and VM stopped; no finished marker",
+  "product_acceptance": "partial; full matrix not complete",
+  "reduced_motion": "not measured; no animation verdict",
+  "images_archive": "exploration-40247974777-originals.zip",
+  "images": [
+    {
+      "path": "00-initial.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_3d4d555dfb07d92e7fc58022c22aa29e",
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · ~"
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "version": 1
+      },
+      "observation": "Initial English dark app."
+    },
+    {
+      "path": "01-setup-input.png",
+      "sha256": "a44ea61988053440f112fb9555bf968ac6d6061df177b87bd1d08e71a93f6132",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_1b9744b7e9be49b2f539be06a1111e0f",
+        "native_scale": 1,
+        "origin": "top_left",
+        "output_scale": 1,
+        "window": {
+          "window_id": 37,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "observation": "Operator interpreted escaped newlines while typing; setup not accepted as valid."
+    },
+    {
+      "path": "02-cleared-input.png",
+      "sha256": "2f97f7076be52d5ae04a64b4bbedaf377cb217ac00e69fd7d631e1a2d5242f5c",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "version": 1,
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "window": {
+          "title": "Local · ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "reference_id": "ps1_ccde815999e766db26e351dfeadbcba9",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1
+      },
+      "observation": "Incomplete shell input cancelled."
+    },
+    {
+      "path": "03-setup-input.png",
+      "sha256": "7d6015434fd0d5fabc634c0b68867a483b1ca3b6af691f8dcc3d9608133d7dbf",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 37
+        },
+        "reference_id": "ps1_c5e963c1ae4f37264689703b6b4a8716",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1
+      },
+      "observation": "Corrected single-line fixture input, before execution."
+    },
+    {
+      "path": "04-fixture-created.png",
+      "sha256": "68207a37dd5a315216148d2264f2a3171e720571daad5818a8c51685b5c39120",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_403f3413fcdf19cea33a23a95e9ff2d7",
+        "native_scale": 1,
+        "output_scale": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · ~"
+        },
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "observation": "All four fixture sizes and hashes printed after creation."
+    },
+    {
+      "path": "05-left-cd-input.png",
+      "sha256": "d24889c1857f5b403df811536f761ddaf08602462723c6e7b79bfd9330a16a46",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_e83746f73d6d49481c6720b208c17342",
+        "window": {
+          "window_id": 37,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left"
+      },
+      "observation": "Left directory command before execution."
+    },
+    {
+      "path": "06-split-menu.png",
+      "sha256": "25da720ad44e53391edb6a3cfe688924a2547890649e7e1e065db26ef1cb95a0",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "reference_id": "ps1_60ce7e885fa83bc327231905ab3667ba",
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "index": 0,
+          "title": "Local · left",
+          "window_id": 37
+        },
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "output_scale": 1
+      },
+      "observation": "Split menu opened."
+    },
+    {
+      "path": "07-split-created.png",
+      "sha256": "7871dc7a904ec0c567c930e112c70dcb651a13d2122d868f71652de31ad035dd",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · /tmp/zaplex138-f03/left · 5426eac0",
+          "index": 0,
+          "window_id": 37
+        },
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_4bece224e1a38bbea98fe260d33f785b",
+        "version": 1
+      },
+      "observation": "Independent right pane created."
+    },
+    {
+      "path": "08-right-cd-input.png",
+      "sha256": "08ddb051be75a21d1c004a14a615abe707d1a206cdab4ab633bfff53a478efaa",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "title": "Local · /tmp/zaplex138-f03/left · 5426eac0",
+          "window_id": 37,
+          "index": 0
+        },
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_0f7364d04cbc87fb8de2b4dc00e941c4",
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ]
+      },
+      "observation": "Right directory command before execution."
+    },
+    {
+      "path": "09-right-files.png",
+      "sha256": "cdc3850747be28cc947bd1456b1fa6416787571836511be659ab9009a53f1460",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Local · right",
+          "index": 0,
+          "window_id": 37
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "reference_id": "ps1_57a247d4cd2b3f27d43e5ec6dc7639d5",
+        "display": {
+          "index": 0
+        }
+      },
+      "observation": "Right browser shows 10-byte marked.txt and 16-byte same.txt."
+    },
+    {
+      "path": "10-both-files.png",
+      "sha256": "995c94c67b33ff7ea2ce549c45a08d3c83495c78a0862b9cb30f33ebcf7d3d2c",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_e682a0adb2ce2a2aa1e9803d7233a9b4",
+        "window": {
+          "window_id": 37,
+          "title": "Local · left",
+          "index": 0
+        },
+        "output_scale": 1
+      },
+      "observation": "Both browsers, left active."
+    },
+    {
+      "path": "11-right-row-click.png",
+      "sha256": "3abb0c4b7b023e939de991be29e3070b09e8a8c4ec48e3a8ac82bb608b9bbe21",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · right",
+          "window_id": 37,
+          "index": 0
+        },
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "reference_id": "ps1_0cb5df2d1b1167433e148fe9bb23147c",
+        "logical_space": "global_display_points"
+      },
+      "observation": "Right row click activates right pane and selects same.txt."
+    },
+    {
+      "path": "12-right-f3.png",
+      "sha256": "f69b07cc498fafb654c007be10adfe3b66d5fcfcc88c13363f263924d2905874",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_d5f52eb26e5665516736b6245a217741",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local · right",
+          "index": 0
+        },
+        "output_scale": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "version": 1
+      },
+      "observation": "Right F3 shows right/same.txt, 16 bytes."
+    },
+    {
+      "path": "13-left-row-click.png",
+      "sha256": "5fd1baba56e58998a5a2a835604029bfd3740824b104275418e8b457501383e5",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "reference_id": "ps1_6749c878257e8c7ac240e60f36cbd4b9",
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "window": {
+          "window_id": 37,
+          "title": "Local · left",
+          "index": 0
+        },
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1
+      },
+      "observation": "Left row click activates left pane and selects same.txt."
+    },
+    {
+      "path": "14-left-f3.png",
+      "sha256": "2732d3db2841ee3db3c589a62b01ee530971530c40571def538c41c79625790b",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "reference_id": "ps1_e9d6754929648d064f751cbe7734b6d2",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "window": {
+          "window_id": 37,
+          "title": "Local · left",
+          "index": 0
+        }
+      },
+      "observation": "Left F3 shows left/same.txt, 7 bytes."
+    },
+    {
+      "path": "15-marked-filter.png",
+      "sha256": "06f90be759bd3738b1defcff7778174fa89edae2afb61a1fecfc453ac7d481fa",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "version": 1,
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "index": 0,
+          "title": "Local · left",
+          "window_id": 37
+        },
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_768ab48f62afd5431f2e9fb567733599"
+      },
+      "observation": "Left filter contains .txt; marked.txt remains marked, count 1 / 9 bytes."
+    },
+    {
+      "path": "16-filter-row-f3.png",
+      "sha256": "b94a2f6038ac6bcd76a70837de12b6aaa8ec58b4fbcba03b5654c1ea71c2fb10",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "native_scale": 1,
+        "reference_id": "ps1_8ebf1a83c3ba7f50a1188b0e4e04f7b8",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · left"
+        },
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "observation": "Same-pane filter-to-row restores F3 for same.txt (7 bytes); other mark remains."
+    },
+    {
+      "path": "17-away-from-left-filter.png",
+      "sha256": "c7715bcef9494a4094a1f8ab5a05d6d0b5f00202a02b2b594feea0b480ba62d6",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "output_scale": 1,
+        "version": 1,
+        "reference_id": "ps1_256e970c8df23849d6bfca1e6646871e",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local · right",
+          "index": 0
+        }
+      },
+      "observation": "Left filter previously focused; right pane now active, left mark remains."
+    },
+    {
+      "path": "18-inactive-filter-row-f3.png",
+      "sha256": "b94a2f6038ac6bcd76a70837de12b6aaa8ec58b4fbcba03b5654c1ea71c2fb10",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_703d85d1ba8f58138602e8629ed7cb29",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local · left"
+        },
+        "version": 1
+      },
+      "observation": "Return click from other pane restores left F3 (7 bytes), preserving mark."
+    },
+    {
+      "path": "19-right-context.png",
+      "sha256": "b3263b8ba83857f30e71837b51b15069ce17c594bcfb776cc12b6a76fc92eec4",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_b9c904c8df056a190446befda96c0295",
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · left"
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1
+      },
+      "observation": "Rejected operator right-button syntax: no context menu, no product verdict."
+    },
+    {
+      "path": "20-right-context-open.png",
+      "sha256": "ff8fc68682cd2f502c5fbb321020ec4e22bc62805f44b67d5bada6c7396b1ef7",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_cdc15978837da0e76b24d57c9aa313aa",
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · right",
+          "index": 0,
+          "window_id": 37
+        }
+      },
+      "observation": "Valid right click activates right pane and opens context on marked.txt."
+    },
+    {
+      "path": "21-context-details.png",
+      "sha256": "e166c7404c9582b6d744507dbc5baf8211e2152f5aa34ba654033f3a825a9578",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "window_id": 37,
+          "title": "Local · right",
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_c0e01cc8f31ed58b08bf5ee0dbbed37e",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "observation": "Context Details shows right/marked.txt, 10 bytes."
+    },
+    {
+      "path": "22-narrow-right-filter.png",
+      "sha256": "6cd62cd9d30dc4a9d50e777e9cb7aa3de773681c0eb04134d87b5340898a3702",
+      "pixels": [
+        760,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "reference_id": "ps1_772dc482b8fb58ed1e3b8195a24dc8eb",
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local · right"
+        },
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            760,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          760,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left"
+      },
+      "observation": "760-point width, right filter focused, four action rows; modifier attempt was rejected before dispatch."
+    },
+    {
+      "path": "23-narrow-cmd-mark.png",
+      "sha256": "102ed7cf70c97e8e2c43d98efc4666c87047577dcb29e19b83487dcc6abb9fe5",
+      "pixels": [
+        760,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "output_scale": 1,
+        "window": {
+          "title": "Local · right",
+          "window_id": 37,
+          "index": 0
+        },
+        "delivered_image_size": [
+          760,
+          678
+        ],
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            760,
+            678
+          ]
+        ],
+        "reference_id": "ps1_1e889de5f2544cb95e082c5b729d0c37",
+        "native_scale": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "observation": "Operator modifier-click cleanup reported indeterminate; no right mark visible."
+    },
+    {
+      "path": "24-cmd-mark-precondition.png",
+      "sha256": "61dffe2868ad838c2357f9f93e8953c13bd34872a0e8629d48ddd136178be42b",
+      "pixels": [
+        760,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            760,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          760,
+          678
+        ],
+        "version": 1,
+        "window": {
+          "window_id": 37,
+          "title": "Local · right",
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "reference_id": "ps1_24fd9167999dd8aad9460d1e3bed8617"
+      },
+      "observation": "Fresh physical hover and snapshot before global modifier click."
+    },
+    {
+      "path": "25-cmd-mark-global.png",
+      "sha256": "c095d013955da36a1dfdaca6d95142faaf3a85cba850b6a5da8120d6db1f2f4a",
+      "pixels": [
+        760,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            760,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "index": 0,
+          "title": "Local · right",
+          "window_id": 37
+        },
+        "reference_id": "ps1_d9edf4c27cd324f02428210115b14370",
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          760,
+          678
+        ],
+        "version": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "observation": "Successful global Cmd-click marks exactly right/marked.txt: 1 file / 10 bytes."
+    },
+    {
+      "path": "26-narrow-left-f3.png",
+      "sha256": "aee13eec9c13854874b312adbd0e0f76b9d8cbeb1d89e40cc792daaea9ca0b0e",
+      "pixels": [
+        760,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          760,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            760,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "reference_id": "ps1_a01eb0a7e63242e4e265531ffea2a508",
+        "window": {
+          "title": "Local · left",
+          "index": 0,
+          "window_id": 37
+        },
+        "origin": "top_left",
+        "version": 1
+      },
+      "observation": "Narrow left row F3 gives 7 bytes; both independent marks retained."
+    },
+    {
+      "path": "27-narrow-right-filter-f3.png",
+      "sha256": "7ce73aaed4fdac40d614006e107a9600da2e5d04a4d07be915637c570382dccc",
+      "pixels": [
+        760,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            760,
+            678
+          ]
+        ],
+        "reference_id": "ps1_69e4eef4e095d7844b521453c5b2986e",
+        "origin": "top_left",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · right"
+        },
+        "delivered_image_size": [
+          760,
+          678
+        ],
+        "native_scale": 1
+      },
+      "observation": "Narrow right row after filter focus gives 16 bytes; both marks retained."
+    },
+    {
+      "path": "28-marker-input.png",
+      "sha256": "3dba153bebca18e3a170ea4f33411cbf3f5dfeab589ef23b45b33214253c5df4",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "version": 1,
+        "reference_id": "ps1_a09a35fa9dd241e3a5698e355e1960bc",
+        "origin": "top_left",
+        "output_scale": 1,
+        "window": {
+          "window_id": 37,
+          "title": "Local · right",
+          "index": 0
+        },
+        "native_scale": 1
+      },
+      "observation": "Non-exported shell marker assignment before execution."
+    },
+    {
+      "path": "29-before-proof-input.png",
+      "sha256": "76674662b03f8449556ccfba61ccdcf517b93251686e8e1184e720b4d249b202",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "index": 0,
+          "title": "Local · right",
+          "window_id": 37
+        },
+        "native_scale": 1,
+        "origin": "top_left",
+        "reference_id": "ps1_f513204a2e3f1be9f57de2d2cbc3dec1",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "observation": "Before-menu shell proof input."
+    },
+    {
+      "path": "30-before-menu-proof.png",
+      "sha256": "8eb1d1e75dc559d6cd1cde429dcd1e20b54bab2e89900a9955336d24a3f0e645",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Local · right",
+          "window_id": 37,
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_e51f68ff2aa5ab3409d25025c98712e3"
+      },
+      "observation": "Fresh shell proof: PID2343, right138 marker, right directory."
+    },
+    {
+      "path": "31-en-plus-menu.png",
+      "sha256": "5783733b7391e159aa77c0a3ea07ce0c4b421a93433db7c6845a07e8478af60d",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · right",
+          "window_id": 37,
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "reference_id": "ps1_6050cf23a46e2af5cbd494a84a01fe80",
+        "delivered_image_size": [
+          1024,
+          678
+        ]
+      },
+      "observation": "English plus menu clips New worktree config."
+    },
+    {
+      "path": "32-en-worktree-hover.png",
+      "sha256": "0b189bdcf4667a07fc6cddc4f47e3c9e8f69263ab1e9ffaa0a0a7da0682faf64",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_3b6154df01bca751848d6db38cb0f3bc",
+        "version": 1,
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · right"
+        }
+      },
+      "observation": "English worktree submenu open on hover; parent caption clipped, no full-label tooltip."
+    },
+    {
+      "path": "33-menu-escape.png",
+      "sha256": "a7c3acc9de0142422d54952ea0c69a4ed01168614ab9f87d9327dcdbb69a99b2",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local · right"
+        },
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "version": 1,
+        "reference_id": "ps1_4b65bc5a1bba16c595a3b0874c5a9eb5",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "origin": "top_left"
+      },
+      "observation": "Escape closes menu and submenu; no pane added."
+    },
+    {
+      "path": "34-after-menu-input.png",
+      "sha256": "7154fb038fb571a8d720ca1cdce969c982e23e5913b868d33037c9662a6dabf7",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "window": {
+          "index": 0,
+          "title": "Local · right",
+          "window_id": 37
+        },
+        "reference_id": "ps1_36aa61576f4482716761c3981a493eac",
+        "origin": "top_left",
+        "native_scale": 1
+      },
+      "observation": "After-menu shell proof input, without extra field click."
+    },
+    {
+      "path": "35-after-menu-proof.png",
+      "sha256": "432e354b7d156422c2ace9b1e1deaac8c7c641fa8073a050c7ef11d559705606",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "window": {
+          "window_id": 37,
+          "title": "Local · right",
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_0c3dc332e47146036e3a52048c3f0e9e",
+        "native_scale": 1,
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left"
+      },
+      "observation": "Fresh after-menu proof matches PID2343, marker and directory."
+    },
+    {
+      "path": "36-hash-input.png",
+      "sha256": "f3da8d295b0a7bad167d1686aa26ed9715d6f2775fcf5c1a3de62f150d6b78b5",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_938cbdeb51ff88cb40d5517019cf8c84",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "title": "Local · right",
+          "index": 0,
+          "window_id": 37
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "version": 1,
+        "native_scale": 1,
+        "output_scale": 1,
+        "origin": "top_left"
+      },
+      "observation": "Read-only independent file hash command before execution."
+    },
+    {
+      "path": "37-file-hashes-after.png",
+      "sha256": "f7c33ea8b64bae397c2d4d6a161a05c5825ef042659173975c978f043a1d733e",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · right"
+        },
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_3a340a82f69eac6499236586a0c5871c",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "version": 1
+      },
+      "observation": "All four hashes and sizes unchanged after English tests."
+    },
+    {
+      "path": "38-settings.png",
+      "sha256": "33f37743901ebf7e7306a9593262aeabf5131b4f6ee9a3af5760f0ff9583b65d",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_d079258b5fa7ea4ca08269ed2de6bdad",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 37
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "observation": "Settings opened."
+    },
+    {
+      "path": "39-appearance.png",
+      "sha256": "314309a6f918b4aaeb6d65f648b8b52f0a30b7ec9df1fd7d6adad6a0c185763c",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 37
+        },
+        "version": 1,
+        "output_scale": 1,
+        "reference_id": "ps1_b9635599ba7d1a379eb8128c1f43fa95",
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "native_scale": 1
+      },
+      "observation": "Appearance language/theme controls."
+    },
+    {
+      "path": "40-language-options.png",
+      "sha256": "a51c5aa606861b5b5d1924619c7b94b60e183e0ea3e11db1a8a4af44fcdbf3cd",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "EN/Dark",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_f0930b842d7c6d747cf37835e362d0db",
+        "native_scale": 1,
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Settings"
+        },
+        "version": 1,
+        "origin": "top_left",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "observation": "Actual language options."
+    },
+    {
+      "path": "41-theme-picker.png",
+      "sha256": "6a3b15ed618c8a88fdb1b1ef226511cabe8c364ad85465efbba163cdb29cc2e2",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "transition",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_620c5a09105b5692f40908f06c623ed2",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "native_scale": 1,
+        "output_scale": 1,
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 37
+        }
+      },
+      "observation": "German language-change restart notice; transition state, not full German proof."
+    },
+    {
+      "path": "42-theme-options.png",
+      "sha256": "6c292da3fc1dcf9d39f4096693647358728afa4b53d45428e2875b2cca23630f",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "transition",
+      "coordinate_context": {
+        "reference_id": "ps1_7a1d2cb610231140786484de6696e15c",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Settings"
+        },
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left"
+      },
+      "observation": "Theme picker after language change, before restart."
+    },
+    {
+      "path": "43-light-search.png",
+      "sha256": "292aa7cb4bc70236a655e0cd8620032cc1d0eafc483daa244b0aa8323f859524",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "transition",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "index": 0,
+          "title": "Settings",
+          "window_id": 37
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "reference_id": "ps1_0f038693c5f495811ca0cdc4dcf98a16",
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1
+      },
+      "observation": "Light theme search results."
+    },
+    {
+      "path": "44-light-before-restart.png",
+      "sha256": "b186e18c9902c8149f8ccc690c6d7fa4f99f7f854eebe609290f050129e705b4",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "transition",
+      "coordinate_context": {
+        "version": 1,
+        "origin": "top_left",
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · right"
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_205ca0980e41238c2dc915476bece4b7",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points"
+      },
+      "observation": "Light theme selected before restart; mixed-locale transition."
+    },
+    {
+      "path": "45-de-restarted.png",
+      "sha256": "dfaf6a7b5af2e02d9e5f2cc9574b39d485cb5bc47e3299291e7eb7fc9b626b21",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "reference_id": "ps1_11abe4b807c4cd7bb90705d861e32a9f",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "window": {
+          "title": "Lokal · right",
+          "index": 0,
+          "window_id": 183
+        }
+      },
+      "observation": "Fresh app window after full restart: German Light."
+    },
+    {
+      "path": "46-de-fresh-input.png",
+      "sha256": "ebe038bcab372b7ffe3419965bf295384d68216d93bf7809aaf7c76ace5669ee",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "reference_id": "ps1_9060ae3750cb99775548e04eb6c20c2d",
+        "window": {
+          "window_id": 183,
+          "title": "Lokal · right",
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        }
+      },
+      "observation": "Fresh German shell proof input, historical output not treated as current."
+    },
+    {
+      "path": "47-de-fresh-proof.png",
+      "sha256": "45ac27d13ce999f99bffcff2e6946078069e503572c43e73448572a934e880d1",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "reference_id": "ps1_cd927caf9f64a54605c5b08ab46332fb",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "window": {
+          "window_id": 183,
+          "title": "Lokal · right",
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "version": 1
+      },
+      "observation": "New shell PID5203 in right directory, previous unexported marker absent as expected after restart."
+    },
+    {
+      "path": "48-de-left-f3.png",
+      "sha256": "2c2a39b0f113099f5f98a21dacd0132b200b78ec39c11fb17244ac96f20ee22e",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "origin": "top_left",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Lokal · left",
+          "window_id": 183,
+          "index": 0
+        },
+        "reference_id": "ps1_42c33e4cf07ec6e495b28a369c46fba1",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "native_scale": 1
+      },
+      "observation": "German Light left row F3 shows left/same.txt, 7 bytes."
+    },
+    {
+      "path": "49-de-right-f3.png",
+      "sha256": "78fa0b7124e1e60ca9db9644b5b727ba05a1a72f1a41ca95887e9f8b963308ad",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "window": {
+          "window_id": 183,
+          "title": "Lokal · right",
+          "index": 0
+        },
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_5d8709f002d86eeb58244102ebfa992e",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left"
+      },
+      "observation": "German Light right row F3 shows right/same.txt, 16 bytes."
+    },
+    {
+      "path": "50-de-narrow-mark-filter.png",
+      "sha256": "700e90ba1d87e82d1d12de14806a9c5bdec9f6fa5cfd159e3d383d0df084685c",
+      "pixels": [
+        760,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "native_scale": 1,
+        "version": 1,
+        "delivered_image_size": [
+          760,
+          678
+        ],
+        "window": {
+          "title": "Lokal · left",
+          "window_id": 183,
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            760,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "reference_id": "ps1_54c22ad64c3e117df75649765ddddfad",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        }
+      },
+      "observation": "German Light at760: four rows, left .txt filter, marked.txt count1/9bytes."
+    },
+    {
+      "path": "51-de-narrow-right-f3.png",
+      "sha256": "25ef9b1afb5ff95ade9474cfe0841437e2970c2b53d6c3a2069127306aae6ba1",
+      "pixels": [
+        760,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "native_scale": 1,
+        "window": {
+          "window_id": 183,
+          "title": "Lokal · right",
+          "index": 0
+        },
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_9c0f755cc7b36674683231251fa6b598",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            760,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          760,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "origin": "top_left",
+        "version": 1
+      },
+      "observation": "German narrow right row F3 shows16bytes, left mark retained."
+    },
+    {
+      "path": "52-de-narrow-filter-left-f3.png",
+      "sha256": "089caae051a3625ab7d5578cb79787d5c878adca00c93f83d0fac95f8ef0b6d8",
+      "pixels": [
+        760,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "output_scale": 1,
+        "reference_id": "ps1_2c7669d63a113ba5a0930a99f0a40f79",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 183,
+          "title": "Lokal · left",
+          "index": 0
+        },
+        "delivered_image_size": [
+          760,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            760,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "native_scale": 1
+      },
+      "observation": "German narrow left row after prior filter focus shows7bytes, other mark retained."
+    },
+    {
+      "path": "53-de-pane-menu.png",
+      "sha256": "1972f8ddf23906d8b42c012332120c205fba12eb9ec0b36e788ce6ca22cc5fd1",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "reference_id": "ps1_ee58cec5cc6cbb715e448d0ff1833a84",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "index": 0,
+          "window_id": 183,
+          "title": "Lokal · left"
+        },
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1
+      },
+      "observation": "German Light two-row toolbar at1024; header right-click did not open menu."
+    },
+    {
+      "path": "54-de-worktree-menu.png",
+      "sha256": "301ce68c236a22271fa825ec5e51f20595ab2278cbcd8191ed1bcd2698a13deb",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_efbf60189a431b77d188345667859b7e",
+        "origin": "top_left",
+        "window": {
+          "window_id": 183,
+          "title": "Lokal · left",
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ]
+      },
+      "observation": "German Worktree-Konfig caption fully visible."
+    },
+    {
+      "path": "55-de-worktree-submenu.png",
+      "sha256": "515770e6ffffa854d6a4d4f450f97a3977eccf1bac9004b0ca1fb68a74571107",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "window": {
+          "window_id": 183,
+          "title": "Lokal · left",
+          "index": 0
+        },
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_70852e4a86dcdd366bb84977af8d94b2",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "observation": "German worktree submenu visible; no repository created."
+    },
+    {
+      "path": "56-right-shell-return.png",
+      "sha256": "3b410b79fb89178abce3b92de0d2a2e1d9779b6bad240c254b1f8cd39c545975",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "reference_id": "ps1_3fced5e89c617f1e903ab4a21f70e834",
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 183,
+          "index": 0,
+          "title": "Lokal · right"
+        },
+        "native_scale": 1,
+        "origin": "top_left",
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "observation": "F10 returns right browser to its shell; screenshot contains historical output."
+    },
+    {
+      "path": "57-de-return-input.png",
+      "sha256": "51a367f8d9ca6e3f6ad63e00ad75911bd8d58e688d460ef3b41c4f8867b4134c",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "window": {
+          "index": 0,
+          "window_id": 183,
+          "title": "Lokal · right"
+        },
+        "version": 1,
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "native_scale": 1,
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_c80199bbe2272780c1d930d51ff6ac16",
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "observation": "Fresh German after-interaction shell proof input."
+    },
+    {
+      "path": "58-de-return-proof.png",
+      "sha256": "168bf53c535dd195fc5d376934f2c93fd0d17c83468404058096781a9a3156ac",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_90f430fa22ea07874fec64661efdd4f1",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "window_id": 183,
+          "title": "Lokal · right",
+          "index": 0
+        },
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1
+      },
+      "observation": "Fresh German proof retains PID5203 and right directory."
+    },
+    {
+      "path": "59-de-one-row.png",
+      "sha256": "ce34c757f25fbb5f179373032f5832d43ad269597811f8b522305869ceb99a4b",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "reference_id": "ps1_49f5ec7d6c45bc38af8d57e588dc50e5",
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Lokal · right",
+          "index": 0,
+          "window_id": 183
+        }
+      },
+      "observation": "Attempted close click did not close pane; not one-row evidence."
+    },
+    {
+      "path": "60-pane-actions.png",
+      "sha256": "de5dc3da7ad795bee3508e5c6b0d840eb9530d735dd1d65d58e591b49ceab911",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "reference_id": "ps1_61a85a516716cbd042f7039ec84dc022",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "native_scale": 1,
+        "window": {
+          "title": "Lokal · right",
+          "window_id": 183,
+          "index": 0
+        }
+      },
+      "observation": "App inactive; further click intercepted by macOS UI."
+    },
+    {
+      "path": "61-desktop-dialog.png",
+      "sha256": "ca2bbdfaae0ea4fcdcbabe5cd2c4817fe3b313cd65f28a293295464fa623efe3",
+      "pixels": [
+        1024,
+        768
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ],
+        "output_scale": 1,
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "display": {
+          "name": "1",
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          768
+        ],
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_86c5adcc6b57b79d43efacb258ad34eb",
+        "origin": "top_left"
+      },
+      "observation": "Desktop proves macOS notification/System Settings obscured target; operator interference, not product failure."
+    },
+    {
+      "path": "62-returned-zaplex.png",
+      "sha256": "ce34c757f25fbb5f179373032f5832d43ad269597811f8b522305869ceb99a4b",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "origin": "top_left",
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Lokal · right",
+          "window_id": 183,
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_e36599797458e4ba0b452fad1e1b4bbe",
+        "logical_space": "global_display_points"
+      },
+      "observation": "Own inadvertently opened System Settings closed, Zaplex foreground again."
+    },
+    {
+      "path": "63-final-hash-input.png",
+      "sha256": "96ad9bd0ef077d93261b548c1445225b5ba6f50a96535ddfa9ded80fa9ad4aeb",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "locale_theme": "DE/Light",
+      "coordinate_context": {
+        "version": 1,
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_9601eba8ea51ee31419b4e2e4b9ec046",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "window": {
+          "window_id": 183,
+          "index": 0,
+          "title": "Lokal · right"
+        },
+        "origin": "top_left"
+      },
+      "observation": "Final hash command entered but not executed before VM expiry; not a completed hash comparison."
+    }
+  ]
+}
