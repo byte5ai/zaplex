@@ -123,8 +123,9 @@ globale Modifier-Koordinaten liefern die oben bewerteten Ergebnisse.
 Bewegung/Reduced Motion, weitere Sprach-/Theme-Kombinationen und die vollständige
 Produktmatrix bleiben ungeprüft.
 
-Die Korrektur für [#711](https://github.com/byte5ai/zaplex/issues/711) wird als
-1.2.39 vorbereitet: vorhandener lokalisierter Tooltip oberhalb der Zeile, damit
+Die Korrektur für [#711](https://github.com/byte5ai/zaplex/issues/711) ist als
+1.2.39 mit [PR #712](https://github.com/byte5ai/zaplex/pull/712) nach `main`
+gemergt (`65bf8e463098367a4a6254a2724f27d390d89492`): vorhandener lokalisierter Tooltip oberhalb der Zeile, damit
 das seitliche Untermenü den vollständigen Titel nicht verdeckt. Dies ist noch
 kein nativer Nachweis der Korrektur.
 
@@ -132,3 +133,30 @@ Die [lokalen Prüfungen für 1.2.39](evidence/menu-711-local.json) sind bestande
 Compile-Gate, vier bestehende Menü-/Tooltip-Regressionen ohne übersprungene Fälle,
 App-Clippy mit `-D warnings` und 13 Phase-A-Prüfungen. Diese Prüfungen ersetzen
 die native Sichtprüfung des neuen Tooltips nicht.
+
+## Ergänzung: deutsche einreihige Leiste
+
+Die gezielte [zweite Exploration 40251477019](https://github.com/byte5ai/zaplex/actions/runs/40251477019)
+verwendete dasselbe unveränderte 1.2.38-DMG und denselben Quellstand. Vorab
+festgelegt waren alle acht lesbaren deutschen Aktionen in einer gleichmäßig
+aufgeteilten Reihe bei 1024 Punkten sowie frische Shell-Ausgaben vor und nach
+dem Dateimanager. Bereits bestandene F03- und GUI-Fälle wurden nicht wiederholt.
+
+Nach Auswahl von Deutsch/Light und vollständigem App-Neustart zeigt Original 11
+bei **1024×678 Punkten** alle acht Zellen in einer Reihe: F2 Benennen, F3 Details,
+F4 Editor, F5 Kopieren, F6 Schieben, F7 Ordner, F8 Löschen und F10 Terminal.
+Keine Beschriftung ist abgeschnitten. F10 führt zurück in die Shell;
+die tatsächlich ausgeführten Ausgaben 10 und 13 zeigen dieselbe PID `2742`
+und dasselbe Arbeitsverzeichnis. **Diese F02-Variante und der Shell-Rückweg bestehen.**
+
+Alle **15 Originalbilder** wurden einzeln betrachtet und bytegenau mit dem
+CI-Artefakt `12621349954` abgeglichen. Das
+[Manifest mit Aktionsfolge](evidence/candidate-138-native/exploration-40251477019.json)
+und die [unveränderten Originale als ZIP](evidence/candidate-138-native/exploration-40251477019-originals.zip)
+sind dauerhaft gesichert. Das heruntergeladene CI-ZIP hat SHA256
+`d9c3f5803c0cc04f76d1fac75e60a11677ad625ef7251e6cfb57d98e22f5bee4`.
+Der ausdrücklich gesetzte `finished`-Marker und `operator/closed` sind im
+erfolgreich abgeschlossenen Lauf archiviert; diese Sitzung lief nicht ab.
+
+Die Ergänzung liefert weder nachträgliche Datei-Hashes der ersten VM noch
+Bewegungsnachweise oder eine native Sichtprüfung des 1.2.39-Tooltips.

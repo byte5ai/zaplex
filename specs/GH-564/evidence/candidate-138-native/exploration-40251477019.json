@@ -1,0 +1,1025 @@
+{
+  "run_id": 40251477019,
+  "artifact_id": 12621349954,
+  "artifact_zip_sha256": "sha256:d9c3f5803c0cc04f76d1fac75e60a11677ad625ef7251e6cfb57d98e22f5bee4",
+  "app_source_sha": "2434f6cd84ec3db40769c5b351e28279b6010d7c",
+  "harness_source_sha": "2434f6cd84ec3db40769c5b351e28279b6010d7c",
+  "dmg_sha256": "7f5643fa1b24bf52e844417bdc231cc31125ff81b1e0777a021a9ea8be25a05c",
+  "version": "1.2.38",
+  "macos": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0\nBuildVersion:\t\t26A428",
+  "operator": "Peekaboo 4.9.6 (HEAD/e08807d08, built: 2026-10-20T21:44:17+00:00)",
+  "scope": "Missing F02 DE/Light one-row toolbar only; no repeated F03 or GUI suite.",
+  "acceptance_criteria": "At 1024 logical points all eight German cells readable in one equal-width row; fresh shell PID and CWD unchanged across file-manager round trip.",
+  "termination": "Explicit finished marker confirmed; operator closed, workflow success.",
+  "product_acceptance": "PASS scoped F02 variant and fresh shell round trip; full product matrix incomplete.",
+  "limitations": [
+    "No animation or Reduced Motion verdict.",
+    "No retrospective file-hash proof for the expired first VM.",
+    "No native verification of 1.2.39 tooltip."
+  ],
+  "images_archive": "exploration-40251477019-originals.zip",
+  "images_archive_sha256": "936f3e6a46c546d958cae8897b6e9043b36d1fb84d1295887ce6cd8e40879bc5",
+  "images": [
+    {
+      "path": "00-initial.png",
+      "archive_path": "operator/00-initial.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_bba2b41ed707d24a54b5c4865522aab1",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "version": 1,
+        "origin": "top_left",
+        "window": {
+          "title": "Local · ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1
+      },
+      "observation": "Initial English dark app, one pane."
+    },
+    {
+      "path": "01-settings.png",
+      "archive_path": "operator/01-settings.png",
+      "sha256": "87fc0c086428abe1099702a4d85c4613612f8b185939596cf8c14923ae6d1485",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_23a711b21306953f8fa3e7e5046e79eb",
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "title": "Settings",
+          "window_id": 37,
+          "index": 0
+        },
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left"
+      },
+      "observation": "Settings open."
+    },
+    {
+      "path": "02-appearance.png",
+      "archive_path": "operator/02-appearance.png",
+      "sha256": "0e64ce2a7e86f3d45b597e6a2909eb5a97e59e0e638fcf429d59c31e586d8cac",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_b2a9998de0266e8a598acb9702b24702",
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Settings"
+        },
+        "output_scale": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "display": {
+          "index": 0
+        }
+      },
+      "observation": "Appearance settings before language change."
+    },
+    {
+      "path": "03-language-options.png",
+      "archive_path": "operator/03-language-options.png",
+      "sha256": "650230c9d052a557f6a607d92e710ee9da7670586ba871dfe1303dc671829f9f",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Settings"
+        },
+        "reference_id": "ps1_e7a50a4004de581fdad49a71c28d11be",
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        }
+      },
+      "observation": "Language choices displayed."
+    },
+    {
+      "path": "04-language-notice.png",
+      "archive_path": "operator/04-language-notice.png",
+      "sha256": "8a6708aa333d8c323a993e672cef748054e49fdb31b69c893ffcfe3639cc7bc2",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "reference_id": "ps1_fb2a0c07b7af9ab3c09498208bb87f34",
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Settings"
+        }
+      },
+      "observation": "German language-change notice requires full restart."
+    },
+    {
+      "path": "05-theme-picker.png",
+      "archive_path": "operator/05-theme-picker.png",
+      "sha256": "1e2fb18bc3bde6cd59bdb7a72c37833e33190b4ba83f42f9737d5652fdd9ff59",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_4bf9570312071f9228dbf0c60b9eaae7",
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Settings"
+        },
+        "origin": "top_left"
+      },
+      "observation": "Theme picker open; settings partly translated before restart."
+    },
+    {
+      "path": "06-light-search.png",
+      "archive_path": "operator/06-light-search.png",
+      "sha256": "40cf7216fb814251d5c3ddfc47772713759bda32c2139d4cbcf45b79f65531ca",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_caccf5814ba40016cc5bdedb1b83a39e",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "origin": "top_left",
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Settings"
+        }
+      },
+      "observation": "Light search entered despite operator typing error; no retry."
+    },
+    {
+      "path": "07-light-selected.png",
+      "archive_path": "operator/07-light-selected.png",
+      "sha256": "429724aa4cfb8a7162bb053ab1ef0d8346eda1bb308c71f581cfe3920e6d98d3",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_34fbdc08d98d9ebf6f681c29a4627fba",
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "output_scale": 1,
+        "native_scale": 1,
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Settings"
+        }
+      },
+      "observation": "Light theme selected."
+    },
+    {
+      "path": "08-de-light-restarted.png",
+      "archive_path": "operator/08-de-light-restarted.png",
+      "sha256": "8438e869262028ea72cda5b94b453d7609d1c706a8d4136034e92ef62f4dbe53",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_ce074a8238d9e310902c742ee0337990",
+        "native_scale": 1,
+        "window": {
+          "window_id": 72,
+          "index": 0,
+          "title": "Lokal · ~"
+        },
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "origin": "top_left",
+        "version": 1
+      },
+      "observation": "Full app restart; German title and light one-pane window."
+    },
+    {
+      "path": "09-before-command.png",
+      "archive_path": "operator/09-before-command.png",
+      "sha256": "b79298b59faeeceff73a17b02821f70187aceeb3d1bbb9012b1d05164172378e",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "reference_id": "ps1_21de3bac12be4ed9f97d18212eef0071",
+        "version": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "index": 0,
+          "title": "Lokal · ~",
+          "window_id": 72
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1
+      },
+      "observation": "Fresh BEFORE shell command entered, not yet executed."
+    },
+    {
+      "path": "10-before-shell-proof.png",
+      "archive_path": "operator/10-before-shell-proof.png",
+      "sha256": "431e59b15dfe82d5dc232f366f8d55b0f032f466a95f8cebc81062937dfa7642",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_d8421e4ab29778e0d41797f99b0affcc",
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "window": {
+          "window_id": 72,
+          "index": 0,
+          "title": "Lokal · ~"
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "observation": "BEFORE output: PID 2742, home CWD."
+    },
+    {
+      "path": "11-de-light-one-row.png",
+      "archive_path": "operator/11-de-light-one-row.png",
+      "sha256": "165625cc89270bbc8b24e132997876775b703697ad14f5b6c3925f5e9f7aaf6e",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "window": {
+          "title": "Lokal · ~",
+          "window_id": 72,
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_1765faef4d0fd8dad2c239b57dafc957",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "version": 1,
+        "origin": "top_left"
+      },
+      "observation": "PASS F02 DE/Light at 1024x678: F2 Benennen, F3 Details, F4 Editor, F5 Kopieren, F6 Schieben, F7 Ordner, F8 Löschen, F10 Terminal visible in one row with equal cell allocation."
+    },
+    {
+      "path": "12-after-command.png",
+      "archive_path": "operator/12-after-command.png",
+      "sha256": "ff771d607f0de534c9a8e6caaaabc4f8f9de205954cbb82bc38e50ec77c65fbd",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "origin": "top_left",
+        "window": {
+          "index": 0,
+          "window_id": 72,
+          "title": "Lokal · ~"
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_6756c614107417e3ebddc7b6b904ff07",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        }
+      },
+      "observation": "F10 returned to terminal; AFTER command entered, not yet executed."
+    },
+    {
+      "path": "13-after-shell-proof.png",
+      "archive_path": "operator/13-after-shell-proof.png",
+      "sha256": "9557588e8261b184f1187c4986ca3b982a825e18f0b5c565ebc61eecf602cbc8",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "index": 0,
+          "title": "Lokal · ~",
+          "window_id": 72
+        },
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_7c3cbc1f38e36b67d754e76a7450f54c"
+      },
+      "observation": "PASS shell round trip: fresh AFTER output PID 2742 and CWD identical to BEFORE."
+    },
+    {
+      "path": "14-finish-command.png",
+      "archive_path": "operator/14-finish-command.png",
+      "sha256": "554bf7300644b8b573f88610495dd8ee009cf7822e051d2e15cf58daab183cd2",
+      "pixels": [
+        1024,
+        678
+      ],
+      "visual_review": "individually reviewed original",
+      "coordinate_context": {
+        "window": {
+          "title": "Lokal · ~",
+          "index": 0,
+          "window_id": 72
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "reference_id": "ps1_bf4cca71a6bde463af971a01dc5b9146",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "observation": "Owned session finish command entered; subsequent Return and archived finished marker confirm execution."
+    }
+  ],
+  "actions": [
+    {
+      "time": "2026-10-26T01:11:41.554180+00:00",
+      "args": [
+        "click",
+        "--at",
+        "96,17",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:11:45.633373+00:00",
+      "args": [
+        "press",
+        "cmd+,",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:12:10.510682+00:00",
+      "args": [
+        "click",
+        "--at",
+        "83,333",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:12:42.810626+00:00",
+      "args": [
+        "click",
+        "--at",
+        "872,391",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:13:08.433737+00:00",
+      "args": [
+        "click",
+        "--at",
+        "804,477",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:16:28.573448+00:00",
+      "args": [
+        "click",
+        "--at",
+        "512,429",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:16:31.563498+00:00",
+      "args": [
+        "click",
+        "--at",
+        "600,225",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:16:50.868557+00:00",
+      "args": [
+        "click",
+        "--at",
+        "95,132",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:16:54.034090+00:00",
+      "args": [
+        "type",
+        "Light",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1,
+      "success": false,
+      "error_code": "INTERACTION_FAILED",
+      "mutation_dispatched": true
+    },
+    {
+      "time": "2026-10-26T01:17:10.708219+00:00",
+      "args": [
+        "click",
+        "--at",
+        "100,216",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:17:24.773067+00:00",
+      "args": [
+        "click",
+        "--at",
+        "223,53",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:17:27.954793+00:00",
+      "args": [
+        "press",
+        "cmd+w",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:17:37.326281+00:00",
+      "args": [
+        "app",
+        "quit",
+        "--app",
+        "Zaplex",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:17:40.298021+00:00",
+      "args": [
+        "app",
+        "launch",
+        "Zaplex",
+        "--foreground",
+        "--wait-ready",
+        "--wait-for-window",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:18:02.282452+00:00",
+      "args": [
+        "type",
+        "printf \"BEFORE pid=%s cwd=%s\" \"$$\" \"$PWD\"",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1,
+      "success": false,
+      "error_code": "INTERACTION_FAILED",
+      "mutation_dispatched": true
+    },
+    {
+      "time": "2026-10-26T01:18:21.179591+00:00",
+      "args": [
+        "press",
+        "return",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:18:33.269087+00:00",
+      "args": [
+        "press",
+        "cmd+shift+e",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:18:50.726747+00:00",
+      "args": [
+        "press",
+        "f10",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:18:54.323183+00:00",
+      "args": [
+        "type",
+        "printf \"AFTER pid=%s cwd=%s\" \"$$\" \"$PWD\"",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1,
+      "success": false,
+      "error_code": "INTERACTION_FAILED",
+      "mutation_dispatched": true
+    },
+    {
+      "time": "2026-10-26T01:19:07.486001+00:00",
+      "args": [
+        "press",
+        "return",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    },
+    {
+      "time": "2026-10-26T01:19:23.947253+00:00",
+      "args": [
+        "type",
+        "python3 -c 'from pathlib import Path; p=Path(\"/tmp/zaplex-exploration-path\").read_text().strip(); (Path(p)/\"finished\").touch()'",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 1,
+      "success": false,
+      "error_code": "INTERACTION_FAILED",
+      "mutation_dispatched": true
+    },
+    {
+      "time": "2026-10-26T01:19:43.996271+00:00",
+      "args": [
+        "press",
+        "return",
+        "--app",
+        "Zaplex",
+        "--foreground",
+        "--json"
+      ],
+      "exit": 0,
+      "success": true,
+      "error_code": null,
+      "mutation_dispatched": null
+    }
+  ]
+}
