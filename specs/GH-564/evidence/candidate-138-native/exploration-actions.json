@@ -1,0 +1,2036 @@
+[
+  {
+    "time": "2026-10-26T00:12:43.608711+00:00",
+    "args": [
+      "click",
+      "--at",
+      "96,17",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:12:55.366367+00:00",
+    "args": [
+      "type",
+      "python3 -c 'exec(\"from pathlib import Path\\nimport hashlib\\nroot=Path('\"'\"'/tmp/zaplex138-f03'\"'\"')\\nroot.mkdir()\\nfor side,content,marked in [('\"'\"'left'\"'\"',b'\"'\"'LEFT138'\"'\"',b'\"'\"'LEFT-MARK'\"'\"'),('\"'\"'right'\"'\"',b'\"'\"'RIGHT138-CONTENT'\"'\"',b'\"'\"'RIGHT-MARK'\"'\"')]:\\n    folder=root/side\\n    folder.mkdir()\\n    for name,data in [('\"'\"'same.txt'\"'\"',content),('\"'\"'marked.txt'\"'\"',marked)]:\\n        path=folder/name\\n        path.write_bytes(data)\\n        print(side,name,path.stat().st_size,hashlib.sha256(path.read_bytes()).hexdigest())\\n\")'",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:13:23.386608+00:00",
+    "args": [
+      "press",
+      "ctrl+c",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:13:51.802921+00:00",
+    "args": [
+      "type",
+      "python3 -c 'from pathlib import Path; import hashlib; root=Path(\"/tmp/zaplex138-f03\"); root.mkdir(); left=root/\"left\"; right=root/\"right\"; left.mkdir(); right.mkdir(); files=[(left/\"same.txt\",b\"LEFT138\"),(left/\"marked.txt\",b\"LEFT-MARK\"),(right/\"same.txt\",b\"RIGHT138-CONTENT\"),(right/\"marked.txt\",b\"RIGHT-MARK\")]; [p.write_bytes(data) for p,data in files]; print([(str(p),p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest()) for p,data in files])'",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:14:09.994842+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:14:38.778177+00:00",
+    "args": [
+      "type",
+      "cd /tmp/zaplex138-f03/left",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:14:57.202964+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:15:00.513952+00:00",
+    "args": [
+      "press",
+      "cmd+d",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:15:21.462022+00:00",
+    "args": [
+      "click",
+      "--at",
+      "70,558",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:15:40.370415+00:00",
+    "args": [
+      "type",
+      "cd /tmp/zaplex138-f03/right",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:16:08.155224+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:16:11.405709+00:00",
+    "args": [
+      "press",
+      "cmd+shift+e",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:16:31.146886+00:00",
+    "args": [
+      "move",
+      "--at",
+      "448,83",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:16:34.752612+00:00",
+    "args": [
+      "click",
+      "--at",
+      "448,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:17:04.167268+00:00",
+    "args": [
+      "move",
+      "--at",
+      "580,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:17:07.754586+00:00",
+    "args": [
+      "click",
+      "--at",
+      "580,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:17:23.724489+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:17:41.871583+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:17:45.202310+00:00",
+    "args": [
+      "move",
+      "--at",
+      "75,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:17:48.465461+00:00",
+    "args": [
+      "click",
+      "--at",
+      "75,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:18:07.449747+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:18:29.576926+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:18:33.118708+00:00",
+    "args": [
+      "click",
+      "--at",
+      "78,225",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:18:36.598605+00:00",
+    "args": [
+      "press",
+      "space",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:18:40.153707+00:00",
+    "args": [
+      "click",
+      "--at",
+      "150,149",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:18:43.296881+00:00",
+    "args": [
+      "type",
+      ".txt",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:19:06.713223+00:00",
+    "args": [
+      "move",
+      "--at",
+      "74,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:19:10.342517+00:00",
+    "args": [
+      "click",
+      "--at",
+      "74,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:19:13.500709+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:19:34.043498+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:19:37.538995+00:00",
+    "args": [
+      "click",
+      "--at",
+      "145,149",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:19:40.635966+00:00",
+    "args": [
+      "move",
+      "--at",
+      "580,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:19:44.352748+00:00",
+    "args": [
+      "click",
+      "--at",
+      "580,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:20:02.263128+00:00",
+    "args": [
+      "move",
+      "--at",
+      "74,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:20:05.914469+00:00",
+    "args": [
+      "click",
+      "--at",
+      "74,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:20:09.134560+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:20:33.024801+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:20:35.841777+00:00",
+    "args": [
+      "move",
+      "--at",
+      "580,255",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:20:38.367765+00:00",
+    "args": [
+      "click",
+      "--at",
+      "580,225",
+      "--button",
+      "right",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INVALID_ARGUMENT",
+    "mutation_dispatched": false
+  },
+  {
+    "time": "2026-10-26T00:21:09.549787+00:00",
+    "args": [
+      "click",
+      "--at",
+      "580,225",
+      "--right",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:21:30.093285+00:00",
+    "args": [
+      "click",
+      "--at",
+      "620,348",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:21:56.454766+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:21:58.883008+00:00",
+    "args": [
+      "click",
+      "--at",
+      "580,225",
+      "--modifiers",
+      "cmd",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "VALIDATION_ERROR",
+    "mutation_dispatched": false
+  },
+  {
+    "time": "2026-10-26T00:22:02.437371+00:00",
+    "args": [
+      "click",
+      "--at",
+      "650,149",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:22:05.651639+00:00",
+    "args": [
+      "type",
+      ".txt",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:22:08.529717+00:00",
+    "args": [
+      "window",
+      "resize",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "37",
+      "-w",
+      "760",
+      "--height",
+      "678",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:22:33.707433+00:00",
+    "args": [
+      "click",
+      "--at",
+      "445,225",
+      "--modifiers",
+      "cmd",
+      "--snapshot",
+      "ps1_772dc482b8fb58ed1e3b8195a24dc8eb",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:23:00.754128+00:00",
+    "args": [
+      "move",
+      "--at",
+      "445,255",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:23:23.464814+00:00",
+    "args": [
+      "click",
+      "--at",
+      "445,255",
+      "--global",
+      "--modifiers",
+      "cmd",
+      "--snapshot",
+      "ps1_24fd9167999dd8aad9460d1e3bed8617",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:23:46.561243+00:00",
+    "args": [
+      "click",
+      "--at",
+      "480,149",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:23:49.972134+00:00",
+    "args": [
+      "move",
+      "--at",
+      "74,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:23:53.691815+00:00",
+    "args": [
+      "click",
+      "--at",
+      "74,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:23:56.859129+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:24:17.399571+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:24:20.725662+00:00",
+    "args": [
+      "move",
+      "--at",
+      "445,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:24:24.420210+00:00",
+    "args": [
+      "click",
+      "--at",
+      "445,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:24:27.572577+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:25:03.694431+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:25:07.038723+00:00",
+    "args": [
+      "press",
+      "f10",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:25:09.978080+00:00",
+    "args": [
+      "window",
+      "resize",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "37",
+      "-w",
+      "1024",
+      "--height",
+      "678",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:25:14.074618+00:00",
+    "args": [
+      "type",
+      "ZAPLEX138_MARKER=right138",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:25:36.527093+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:25:40.368784+00:00",
+    "args": [
+      "type",
+      "print -r -- \"BEFORE-MENU|$$|$ZAPLEX138_MARKER|$PWD\"",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:26:00.631948+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:26:24.616796+00:00",
+    "args": [
+      "click",
+      "--at",
+      "353,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:26:47.758582+00:00",
+    "args": [
+      "move",
+      "--at",
+      "410,212",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:27:07.405764+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:27:28.005766+00:00",
+    "args": [
+      "type",
+      "print -r -- \"AFTER-MENU|$$|$ZAPLEX138_MARKER|$PWD\"",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:27:51.813606+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:28:20.753988+00:00",
+    "args": [
+      "type",
+      "python3 -c 'from pathlib import Path; import hashlib; root=Path(\"/tmp/zaplex138-f03\"); print([(str(p.relative_to(root)),p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(root.glob(\"*/*.txt\"))])'",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:28:43.057348+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:29:05.019122+00:00",
+    "args": [
+      "press",
+      "cmd+,",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:29:29.172783+00:00",
+    "args": [
+      "click",
+      "--at",
+      "83,333",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:29:49.414221+00:00",
+    "args": [
+      "click",
+      "--at",
+      "872,391",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:30:10.804608+00:00",
+    "args": [
+      "click",
+      "--at",
+      "804,477",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:30:15.476541+00:00",
+    "args": [
+      "click",
+      "--at",
+      "600,225",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:30:35.993090+00:00",
+    "args": [
+      "click",
+      "--at",
+      "512,429",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:30:39.511911+00:00",
+    "args": [
+      "click",
+      "--at",
+      "600,225",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:31:00.301620+00:00",
+    "args": [
+      "type",
+      "Light",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:31:23.873092+00:00",
+    "args": [
+      "click",
+      "--at",
+      "100,216",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:31:27.906999+00:00",
+    "args": [
+      "click",
+      "--at",
+      "223,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:31:31.128187+00:00",
+    "args": [
+      "press",
+      "cmd+w",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:31:51.638595+00:00",
+    "args": [
+      "app",
+      "quit",
+      "--app",
+      "Zaplex",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:31:55.552501+00:00",
+    "args": [
+      "app",
+      "launch",
+      "Zaplex",
+      "--foreground",
+      "--wait-ready",
+      "--wait-for-window",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:32:23.639035+00:00",
+    "args": [
+      "type",
+      "print -r -- \"DE-FRESH|$$|$ZAPLEX138_MARKER|$PWD\"",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:32:45.762939+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:33:07.232521+00:00",
+    "args": [
+      "press",
+      "cmd+shift+e",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:33:10.555435+00:00",
+    "args": [
+      "move",
+      "--at",
+      "75,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:33:14.322619+00:00",
+    "args": [
+      "click",
+      "--at",
+      "75,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:33:17.561796+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:33:40.119602+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:33:43.464102+00:00",
+    "args": [
+      "move",
+      "--at",
+      "580,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:33:47.196982+00:00",
+    "args": [
+      "click",
+      "--at",
+      "580,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:33:50.410677+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:34:30.161293+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:34:33.032492+00:00",
+    "args": [
+      "window",
+      "resize",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "183",
+      "-w",
+      "760",
+      "--height",
+      "678",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:34:36.915225+00:00",
+    "args": [
+      "move",
+      "--at",
+      "70,255",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:34:40.546262+00:00",
+    "args": [
+      "click",
+      "--at",
+      "70,225",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:34:44.072764+00:00",
+    "args": [
+      "press",
+      "space",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:34:47.711592+00:00",
+    "args": [
+      "click",
+      "--at",
+      "150,149",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:34:50.872225+00:00",
+    "args": [
+      "type",
+      ".txt",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:35:10.559132+00:00",
+    "args": [
+      "move",
+      "--at",
+      "445,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:35:14.280147+00:00",
+    "args": [
+      "click",
+      "--at",
+      "445,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:35:17.465866+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:35:40.191020+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:35:43.534779+00:00",
+    "args": [
+      "move",
+      "--at",
+      "75,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:35:47.280542+00:00",
+    "args": [
+      "click",
+      "--at",
+      "75,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:35:50.467525+00:00",
+    "args": [
+      "press",
+      "f3",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:36:52.783252+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:36:55.648620+00:00",
+    "args": [
+      "window",
+      "resize",
+      "--app",
+      "Zaplex",
+      "--window-id",
+      "183",
+      "-w",
+      "1024",
+      "--height",
+      "678",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:36:59.519122+00:00",
+    "args": [
+      "move",
+      "--at",
+      "190,83",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:37:03.246350+00:00",
+    "args": [
+      "click",
+      "--at",
+      "190,53",
+      "--right",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:37:31.236197+00:00",
+    "args": [
+      "click",
+      "--at",
+      "353,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:37:34.288203+00:00",
+    "args": [
+      "move",
+      "--at",
+      "410,212",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:37:59.070736+00:00",
+    "args": [
+      "move",
+      "--at",
+      "410,226",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:38:22.814641+00:00",
+    "args": [
+      "press",
+      "escape",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:38:26.204797+00:00",
+    "args": [
+      "move",
+      "--at",
+      "580,279",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:38:29.906316+00:00",
+    "args": [
+      "click",
+      "--at",
+      "580,249",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:38:33.096829+00:00",
+    "args": [
+      "press",
+      "f10",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:38:56.908012+00:00",
+    "args": [
+      "type",
+      "print -r -- \"DE-AFTER|$$|$PWD\"",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:39:18.266846+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:39:42.819436+00:00",
+    "args": [
+      "move",
+      "--at",
+      "1007,83",
+      "--global",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:39:46.534158+00:00",
+    "args": [
+      "click",
+      "--at",
+      "1007,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:40:19.457297+00:00",
+    "args": [
+      "click",
+      "--at",
+      "983,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:41:17.401338+00:00",
+    "args": [
+      "app",
+      "quit",
+      "--app",
+      "System Settings",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:41:20.751455+00:00",
+    "args": [
+      "app",
+      "launch",
+      "Zaplex",
+      "--foreground",
+      "--wait-ready",
+      "--wait-for-window",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error_code": null,
+    "mutation_dispatched": null
+  },
+  {
+    "time": "2026-10-26T00:41:51.103505+00:00",
+    "args": [
+      "type",
+      "python3 -c 'from pathlib import Path; import hashlib; root=Path(\"/tmp/zaplex138-f03\"); print([(str(p.relative_to(root)),p.stat().st_size,hashlib.sha256(p.read_bytes()).hexdigest()) for p in sorted(root.glob(\"*/*.txt\"))])'",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error_code": "INTERACTION_FAILED",
+    "mutation_dispatched": true
+  },
+  {
+    "time": "2026-10-26T00:42:12.386826+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 3,
+    "success": null,
+    "error_code": null,
+    "mutation_dispatched": null
+  }
+]

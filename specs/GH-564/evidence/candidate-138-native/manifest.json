@@ -1,0 +1,568 @@
+{
+  "app_source_sha": "2434f6cd84ec3db40769c5b351e28279b6010d7c",
+  "test_source_sha": "2434f6cd84ec3db40769c5b351e28279b6010d7c",
+  "run_id": 40242122433,
+  "scope": "Native fixture render/event evidence; not installed-DMG acceptance or complete product matrix.",
+  "images": [
+    {
+      "artifact_group": "native-agent",
+      "path": "test_subscription_agent_conversation_layout_evidence/2026-10-25T22-58-58/subscription-agent-narrow-540x670.png",
+      "sha256": "d9f876408870939670df630cad7de5483312017056436aa5b30be24687c28159",
+      "pixels": [
+        540,
+        670
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Ended session: New conversation and Back to shell visible; status truncated.",
+      "repository_archive": "native-agent.zip"
+    },
+    {
+      "artifact_group": "native-agent",
+      "path": "test_subscription_agent_conversation_layout_evidence/2026-10-25T22-58-58/subscription-agent-normal-1180x640.png",
+      "sha256": "7180c924673424e7a126f1cf9d478ab1f9bd489acf71efc849f0899ba4fc53be",
+      "pixels": [
+        1180,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_subscription_agent_conversation_layout_evidence/2026-10-24T23-01-47/subscription-agent-normal-1180x640.png",
+      "observation": "Approval controls visible with labelled identity metadata; long values truncated.",
+      "repository_archive": "native-agent.zip"
+    },
+    {
+      "artifact_group": "native-agent",
+      "path": "test_subscription_agent_conversation_layout_evidence/2026-10-25T22-58-58/subscription-agent-recoverable-error-540x670.png",
+      "sha256": "25266875274f481b0a78e1e5d6404c2a0d77b3980ffb89479df971539c2b0acf",
+      "pixels": [
+        540,
+        670
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Recovery actions wrap in narrow pane; directory input and both directory choices visible. Long identities truncated.",
+      "repository_archive": "native-agent.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_file_manager_header_entry/2026-10-25T22-59-42/file-manager-header-after.png",
+      "sha256": "2a49f1ab510057efce6553e9463ad06b1b15417dfd5415e2bed37bc18e842754",
+      "pixels": [
+        1024,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Before/after: header entry opens original left directory beside unchanged sibling directory; active pane changes to left. Not a file-row click proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_file_manager_header_entry/2026-10-25T22-59-42/file-manager-header-before.png",
+      "sha256": "9dfb811a83a864d088840f9efac2b3d37d2994f15e171b3a9b8911a03df91b5f",
+      "pixels": [
+        1024,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Before/after: header entry opens original left directory beside unchanged sibling directory; active pane changes to left. Not a file-row click proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_connections_evidence/2026-10-25T22-59-15/native-connections-dark-250.png",
+      "sha256": "00c91ff51fcf2f963900ba997a8f6a577d296db5f44bd6b0d01c78f133874e05",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_connections_evidence/2026-10-24T23-02-04/native-connections-dark-250.png",
+      "observation": "Registry identity and fixed action slots visible; long identity tooltip visible in the sampled hover state; fixture sessions are synthetic.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_connections_evidence/2026-10-25T22-59-15/native-connections-dark-320.png",
+      "sha256": "530ed325f1bc977525008a1b79612d8228c1875b0acd639436cf02d0b670abc5",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Long host identity has a full tooltip; fixed action slots and session rows remain within the sidebar.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_connections_evidence/2026-10-25T22-59-15/native-connections-dark-480.png",
+      "sha256": "d35a37e1247aabeca0c837cc46a42096baaff23a67536444b2941b0f103bf8a5",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Long host identity has a full tooltip; fixed action slots and session rows remain within the sidebar.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_connections_evidence/2026-10-25T22-59-15/native-connections-light-250.png",
+      "sha256": "4117971c8b1ceadd198c1f5aad1b1b1a9a82bc6db79e456175a966741591227b",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_connections_evidence/2026-10-24T23-02-04/native-connections-light-250.png",
+      "observation": "Registry identity and fixed action slots visible; long identity tooltip visible in the sampled hover state; fixture sessions are synthetic.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_connections_evidence/2026-10-25T22-59-15/native-connections-light-320.png",
+      "sha256": "5e35102878800962ed82272754ed1972bac64b6d2eb1f94e45eed9baacb3948e",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_connections_evidence/2026-10-24T23-02-04/native-connections-light-320.png",
+      "observation": "Registry identity and fixed action slots visible; long identity tooltip visible in the sampled hover state; fixture sessions are synthetic.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_connections_evidence/2026-10-25T22-59-15/native-connections-light-480.png",
+      "sha256": "d4f55637ef0e07e21982edefd661f586eb0201b2afcc3d16123d235bfc013287",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_connections_evidence/2026-10-24T23-02-04/native-connections-light-480.png",
+      "observation": "Registry identity and fixed action slots visible; long identity tooltip visible in the sampled hover state; fixture sessions are synthetic.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_connections_evidence/2026-10-25T22-59-15/native-favorite-flyout.png",
+      "sha256": "12ffa784c10b9465e23caa8c8d222e18a505ece50b0412cd553da622032f490a",
+      "pixels": [
+        900,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_connections_evidence/2026-10-24T23-02-04/native-favorite-flyout.png",
+      "observation": "Registry identity and fixed action slots visible; long identity tooltip visible in the sampled hover state; fixture sessions are synthetic.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_evidence/2026-10-25T22-59-19/native-empty-connections-dark-250.png",
+      "sha256": "31312a497d1c136c2ed3d7a512d22e14291fba6e8cad1bd755387ad703137bd4",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_evidence/2026-10-24T23-02-08/native-empty-connections-dark-250.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_evidence/2026-10-25T22-59-19/native-empty-connections-dark-320.png",
+      "sha256": "66e389e1f91960e78af03825b618a18395a7e727a4f575a407793120b767a82c",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_evidence/2026-10-24T23-02-08/native-empty-connections-dark-320.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_evidence/2026-10-25T22-59-19/native-empty-connections-dark-480.png",
+      "sha256": "23c0f85cab531e2afb94ebcf69e53acdd62c7423297edfcd8206e8ea32be3f6b",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_evidence/2026-10-24T23-02-08/native-empty-connections-dark-480.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_evidence/2026-10-25T22-59-19/native-empty-connections-light-250.png",
+      "sha256": "d72da94c6da3408054cbdfa01497bfdbadedf4f41c17eeafa9b1fbb12b091c87",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Folder and plus guidance visible and wrapped within the narrow sidebar.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_evidence/2026-10-25T22-59-19/native-empty-connections-light-320.png",
+      "sha256": "4d45094b2a42d5f8485b3fff2e439421dc2c7dadc9cf41e24e98c79a82a87cb3",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Folder and plus guidance visible and wrapped within the narrow sidebar.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_evidence/2026-10-25T22-59-19/native-empty-connections-light-480.png",
+      "sha256": "1c78f09dd125b17165e1d3e7b659b638bb3f59744157e792220809f29183a96d",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Folder and plus guidance visible and wrapped within the narrow sidebar.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_evidence/2026-10-25T22-59-19/native-empty-favorites-dark.png",
+      "sha256": "4228cdd040846b7db32907c1bef121610d5f09fe1aecc9a49b78004a026d0cbb",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Favorites guidance visible and wrapped. New worktree configuration entry is visibly truncated; inspect its real-menu interaction during exploration (E04).",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_evidence/2026-10-25T22-59-19/native-empty-favorites-light.png",
+      "sha256": "917fef975e0f28d06559dfabdc3535ca981f2c638deccc3c45e5a27782c440d7",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_evidence/2026-10-24T23-02-08/native-empty-favorites-light.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-25T22-59-24/native-empty-connections-dark-250.png",
+      "sha256": "44fbbc4ef2927b7a6e2ae10d580a793a96f91fe3fc90ff90a2bb86d088548251",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_german_evidence/2026-10-24T23-02-11/native-empty-connections-dark-250.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-25T22-59-24/native-empty-connections-dark-320.png",
+      "sha256": "81dcd934928c836909611efb290127722d155340d8e806a0719556f89c6e5c6c",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_german_evidence/2026-10-24T23-02-11/native-empty-connections-dark-320.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-25T22-59-24/native-empty-connections-dark-480.png",
+      "sha256": "9971b27408cc238c50a8061abe4eb05e0c8ff2b0a615ed0da51c216bef0c98ea",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_german_evidence/2026-10-24T23-02-11/native-empty-connections-dark-480.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-25T22-59-24/native-empty-connections-light-250.png",
+      "sha256": "7a628252670e239f16c2de53f962dcb58f1d337d13f50ef8cacf01992083a510",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Folder and plus guidance visible and wrapped within the narrow sidebar.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-25T22-59-24/native-empty-connections-light-320.png",
+      "sha256": "3e3d4db241f83bee7adff473f5b960c107f0288a3b19763add1835cbd2b43f49",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_german_evidence/2026-10-24T23-02-11/native-empty-connections-light-320.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-25T22-59-24/native-empty-connections-light-480.png",
+      "sha256": "5b55c75c678434883d26c482b2268dfa36bb1a79350727c0a5b1dae76eca41bd",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_german_evidence/2026-10-24T23-02-11/native-empty-connections-light-480.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-25T22-59-24/native-empty-favorites-dark.png",
+      "sha256": "c5d40e68dba6de7066e5414202fd2565045c51b6ff0d0595dea4213e60e4ee9d",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_german_evidence/2026-10-24T23-02-11/native-empty-favorites-dark.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_empty_states_german_evidence/2026-10-25T22-59-24/native-empty-favorites-light.png",
+      "sha256": "2105ff210f0de04f5cc7d502f658ea139163e0c772b0d67991930720842b41ca",
+      "pixels": [
+        1440,
+        640
+      ],
+      "visual_review": "byte-identical to individually reviewed 1.2.37 original",
+      "previous_path": "test_native_workspace_empty_states_german_evidence/2026-10-24T23-02-11/native-empty-favorites-light.png",
+      "observation": "Empty-state connection or favorites instructions fully visible in the recorded locale/theme/width; obscured background text behind menus is not evaluated.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_evidence/2026-10-25T22-59-28/native-file-manager-focused-action.png",
+      "sha256": "7a8623841b0c16353a44a440f1bb6683a33215543271979486f5fadc5894a487",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "New Folder dialog in left active pane; input and Create/Cancel visible; sibling remains inactive.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_evidence/2026-10-25T22-59-28/native-file-manager-full-name.png",
+      "sha256": "2879f64d9d24e2372034865ed0158f770876a0fe5731dd25d7e4f7b4fd25eb1d",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Full filename tooltip visible in the inactive left pane; active right pane and function labels remain distinct.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_evidence/2026-10-25T22-59-28/native-file-managers-narrow-light.png",
+      "sha256": "8b97f8db19433fc31ff73305b86c6161eaee89f76bfc0d4ed3d9199846cb8eac",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "All eight localized file actions visible in equal-width cells: two rows at normal width, four rows at narrow width. Active/inactive panes distinct; both themes legible. No one-row or file-row event proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_evidence/2026-10-25T22-59-28/native-file-managers-narrow.png",
+      "sha256": "ba7d97dc6ee441f3a4fe905b2699ac06c96bf2ebc88eba4e52af112ea9d98ee9",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "All eight localized file actions visible in equal-width cells: two rows at normal width, four rows at narrow width. Active/inactive panes distinct; both themes legible. No one-row or file-row event proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_evidence/2026-10-25T22-59-28/native-file-managers-normal-light.png",
+      "sha256": "e25a95bb0466e8a40ab9cd91bc2e22ca2456202e50c3933988d573f1251b087c",
+      "pixels": [
+        1180,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "All eight localized file actions visible in equal-width cells: two rows at normal width, four rows at narrow width. Active/inactive panes distinct; both themes legible. No one-row or file-row event proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_evidence/2026-10-25T22-59-28/native-file-managers-normal.png",
+      "sha256": "07eada9a9b977978ddd6f37d6c8e694aa6a6b2f05788fa462a56d722d0944471",
+      "pixels": [
+        1180,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "All eight localized file actions visible in equal-width cells: two rows at normal width, four rows at narrow width. Active/inactive panes distinct; both themes legible. No one-row or file-row event proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_evidence/2026-10-25T22-59-28/native-file-managers-restored-terminals.png",
+      "sha256": "24987ee853ebaa4e25c7dd9157ca9aeb9b9823f3f559b9a8270ecf29b7429617",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Both terminals restored; unsubmitted file-manager-draft remains visible in right terminal. No live shell identity proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-25T22-59-33/native-file-manager-focused-action.png",
+      "sha256": "e9bd3987fa1c8c58a985319024b81c824fba4e0b4101aa59017361cd0087d142",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "New Folder dialog in left active pane; input and Create/Cancel visible; sibling remains inactive.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-25T22-59-33/native-file-manager-full-name.png",
+      "sha256": "7e35fc4ff3d1a3c6dfebf20131252d084cb0e02e71b8940e245916265dce9383",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Full filename tooltip visible in the inactive left pane; active right pane and function labels remain distinct.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-25T22-59-33/native-file-managers-narrow-light.png",
+      "sha256": "d502fda394459a98c69c99bf4be511745be7f5307bbbe0fe2811a44fafb7dd9d",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "All eight localized file actions visible in equal-width cells: two rows at normal width, four rows at narrow width. Active/inactive panes distinct; both themes legible. No one-row or file-row event proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-25T22-59-33/native-file-managers-narrow.png",
+      "sha256": "aa8f9683dc1480d2321daa953add94d9799acdef961398bb5d2bb17cf1704239",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "All eight localized file actions visible in equal-width cells: two rows at normal width, four rows at narrow width. Active/inactive panes distinct; both themes legible. No one-row or file-row event proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-25T22-59-33/native-file-managers-normal-light.png",
+      "sha256": "17338fe05fe2ce7145e441b3524f78f083436741cef8a55bcc72a641020bb9b2",
+      "pixels": [
+        1180,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "All eight localized file actions visible in equal-width cells: two rows at normal width, four rows at narrow width. Active/inactive panes distinct; both themes legible. No one-row or file-row event proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-25T22-59-33/native-file-managers-normal.png",
+      "sha256": "ebc9106c9c420435e8104546a11ac6a19b3fd23b2c080547dcd2efa53b8706e5",
+      "pixels": [
+        1180,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "All eight localized file actions visible in equal-width cells: two rows at normal width, four rows at narrow width. Active/inactive panes distinct; both themes legible. No one-row or file-row event proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_file_managers_german_evidence/2026-10-25T22-59-33/native-file-managers-restored-terminals.png",
+      "sha256": "c420c723cd9a334e929caa410e5b3cc133de1e468d6517cea56e7e6a45bf7436",
+      "pixels": [
+        760,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Both terminals restored; unsubmitted file-manager-draft remains visible in right terminal. No live shell identity proof.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_panes_evidence/2026-10-25T22-59-37/native-panes-after-drag.png",
+      "sha256": "b341e4fc0324bfe569def3ee45b20592eb786711e79cda3fe52c2be9fd2ac99a",
+      "pixels": [
+        1180,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Same labeled panes shown side by side and then stacked; retained draft visible. Still images do not establish drag motion.",
+      "repository_archive": "native-workspace.zip"
+    },
+    {
+      "artifact_group": "native-workspace",
+      "path": "test_native_workspace_panes_evidence/2026-10-25T22-59-37/native-panes-side-by-side.png",
+      "sha256": "6dcc6177ad6fd9a4cee569dff7f65702a67275de147aa954d1a11c150848870e",
+      "pixels": [
+        1180,
+        640
+      ],
+      "visual_review": "individually reviewed",
+      "observation": "Same labeled panes shown side by side and then stacked; retained draft visible. Still images do not establish drag motion.",
+      "repository_archive": "native-workspace.zip"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 12616319756,
+      "name": "subscription-agent-layout-evidence",
+      "digest": "sha256:3e967da8923dcb960f546a2e4d1987c0327fbb765cae51f999d6fbbcdf5fee43",
+      "size_in_bytes": 208698
+    },
+    {
+      "id": 12618025035,
+      "name": "native-workspace-evidence-2434f6cd84ec3db40769c5b351e28279b6010d7c",
+      "digest": "sha256:1f280ddfac6dee62a48b939b99842925611d0f7924906741b8d6e3eae59f802d",
+      "size_in_bytes": 4019939
+    }
+  ],
+  "previous_visual_reference": "../candidate-137-native/manifest.json"
+}

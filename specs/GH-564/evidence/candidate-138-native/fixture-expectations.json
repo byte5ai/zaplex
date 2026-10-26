@@ -1,0 +1,31 @@
+{
+  "filename": "same.txt",
+  "root": "/tmp/zaplex138-f03",
+  "files": {
+    "left": {
+      "text": "LEFT138",
+      "bytes": 7,
+      "sha256": "484088f489c2098d44c46aae5aaae1ed146ebf90884e61c1251bdee66b0e1d41"
+    },
+    "right": {
+      "text": "RIGHT138-CONTENT",
+      "bytes": 16,
+      "sha256": "0832e5850ff8c3655ba01cc132bd3d6932184a3e0fcbeb127301d93a61b509c4"
+    }
+  },
+  "mark_target": {
+    "filename": "marked.txt",
+    "files": {
+      "left": {
+        "text": "LEFT-MARK",
+        "bytes": 9,
+        "sha256": "49baeecbbfffbc9ff965cf45968b97fd00feb343812019fbfeae1c2155bf459d"
+      },
+      "right": {
+        "text": "RIGHT-MARK",
+        "bytes": 10,
+        "sha256": "9a89f094fb1aef488631012484b6075cb8e1495ffb4096fa4ab6a5f80b8cd1d1"
+      }
+    }
+  }
+}

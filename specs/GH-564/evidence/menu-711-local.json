@@ -1,0 +1,83 @@
+{
+  "issue": 711,
+  "version": "1.2.39",
+  "check": {
+    "exit": 0,
+    "seconds": 260.1400351524353,
+    "command": [
+      "cargo",
+      "check",
+      "--locked",
+      "-p",
+      "warp"
+    ]
+  },
+  "tests": {
+    "result": {
+      "exit": 0,
+      "seconds": 527.1886229515076,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--",
+        "test_unified_new_session_menu_",
+        "test_toggle_tab_configs_menu_does_not_change_vertical_tabs_panel_in_horizontal_mode",
+        "test_split_submenu_tooltip_paints_above_flyout_without_stealing_pointer",
+        "--nocapture"
+      ]
+    },
+    "passed": [
+      "menu::tooltip_tests::test_split_submenu_tooltip_paints_above_flyout_without_stealing_pointer",
+      "workspace::view::tests::test_unified_new_session_menu_uses_new_worktree_config_label_and_order",
+      "workspace::view::tests::test_toggle_tab_configs_menu_does_not_change_vertical_tabs_panel_in_horizontal_mode",
+      "workspace::view::tests::test_unified_new_session_menu_includes_reopen_closed_session"
+    ],
+    "failed": 0,
+    "ignored": 0
+  },
+  "phase_a": {
+    "exit": 0,
+    "seconds": 7.313745737075806
+  },
+  "phase_a_passes": 13,
+  "clippy": {
+    "exit": 0,
+    "seconds": 307.59244418144226,
+    "command": [
+      "cargo",
+      "clippy",
+      "--locked",
+      "-p",
+      "warp",
+      "--bin",
+      "zaplex",
+      "--no-deps",
+      "--",
+      "-D",
+      "warnings"
+    ]
+  },
+  "native_fix_verification": "pending new DMG; 1.2.38 reproduces the issue",
+  "changed_source_sha256": {
+    "app/src/workspace/view.rs": "d474e21bf24d24d7bf04d4c81eafcaa9ed7e4432867bd3e7c568febfd77facc8"
+  },
+  "local_log_sha256": {
+    "check.log": "ceda86f6733e0a6cd652ccf3c4e13b168d0f2236df698670f06ac2ab0d860d48",
+    "tests.log": "dc176c382b074dac8c459178444046e623c0dba24a2a209c8a1d44de0aee06e1",
+    "clippy.log": "a1d4e9f07c281506fa52289d3fee3dfc414c195b8e4242d4d1b97df31da99f66",
+    "phase-a.log": "9e6a3178957ea1782776dc1288c1383f5d45e939f0b9b89a52ac4aa14a111325"
+  },
+  "workflow_validation": {
+    "changed_workflows": [
+      ".github/workflows/release_configurations.json",
+      ".github/workflows/test-dmg.yml",
+      ".github/workflows/zap_release.yml"
+    ],
+    "validation": "exactly existing contents with 1.2.38 -> 1.2.39 version literals; no structure or command change"
+  },
+  "formatting": "Changed Rust block conforms to rustfmt; unrelated baseline formatting was preserved."
+}
