@@ -567,6 +567,28 @@ const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_
 /// Shared position ID for the new-session sidecar overlay. Used for both the
 /// `SavePosition` wrapper and the safe-zone rect lookup.
 const NEW_SESSION_SIDECAR_POSITION_ID: &str = "new_session_sidecar";
+
+#[derive(Debug)]
+struct NewSessionSidecarLayout {
+    opens_left: bool,
+    width: f32,
+}
+
+fn new_session_sidecar_layout(
+    anchor: RectF,
+    window_width: f32,
+    preferred_width: f32,
+) -> NewSessionSidecarLayout {
+    let left = (anchor.min_x() - 4.).max(0.);
+    let right = (window_width - anchor.max_x() - 4.).max(0.);
+    // When neither side fits, use the larger free region and constrain the child.
+    // Clamping a full-width child to the window would cover its own parent row.
+    let opens_left = right < preferred_width && left > right;
+    NewSessionSidecarLayout {
+        opens_left,
+        width: preferred_width.min(if opens_left { left } else { right }),
+    }
+}
 const NEW_SESSION_SIDECAR_WIDTH: f32 = 300.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HEIGHT: f32 = 32.;
 const NEW_SESSION_SIDECAR_SEARCH_BOX_HORIZONTAL_PADDING: f32 = 12.;
@@ -17963,33 +17985,24 @@ impl Workspace {
         });
     }
 
-    /// Returns `true` when a sidecar of the given width should render on the left
-    /// of the menu (because it would overflow the window on the right).
-    fn should_render_sidecar_left(
+    fn new_session_sidecar_layout(
         &self,
         anchor_label: &str,
-        sidecar_width: f32,
+        preferred_width: f32,
         app: &AppContext,
-    ) -> bool {
+    ) -> NewSessionSidecarLayout {
+        let fallback = NewSessionSidecarLayout {
+            opens_left: false,
+            width: preferred_width,
+        };
         let Some(window) = app.windows().platform_window(self.window_id) else {
-            return false;
+            return fallback;
         };
-        let Some(anchor_rect) =
-            app.element_position_by_id_at_last_frame(self.window_id, anchor_label)
+        let Some(anchor) = app.element_position_by_id_at_last_frame(self.window_id, anchor_label)
         else {
-            return false;
+            return fallback;
         };
-
-        let gap = 4.0;
-
-        let would_overflow_right = anchor_rect.max_x() + gap + sidecar_width >= window.size().x();
-        let would_overflow_left = anchor_rect.min_x() - gap - sidecar_width < 0.0;
-
-        match (would_overflow_left, would_overflow_right) {
-            (true, false) => false, // Only right fits
-            (false, true) => true,  // Only left fits
-            _ => false,             // Default to right
-        }
+        new_session_sidecar_layout(anchor, window.size().x(), preferred_width)
     }
 
     fn refresh_worktree_sidecar_if_active(&mut self, ctx: &mut ViewContext<Self>) {
@@ -32656,12 +32669,12 @@ impl View for Workspace {
                     )
                     .finish();
 
-                    let render_left = self.should_render_sidecar_left(
+                    let layout = self.new_session_sidecar_layout(
                         &anchor_label,
                         NEW_SESSION_SIDECAR_WIDTH,
                         app,
                     );
-                    let (offset, parent_anchor, child_anchor) = if render_left {
+                    let (offset, parent_anchor, child_anchor) = if layout.opens_left {
                         (
                             vec2f(-4., 0.),
                             PositionedElementAnchor::TopLeft,
@@ -32676,7 +32689,9 @@ impl View for Workspace {
                     };
 
                     stack.add_positioned_overlay_child(
-                        sidecar_element,
+                        ConstrainedBox::new(sidecar_element)
+                            .with_max_width(layout.width)
+                            .finish(),
                         OffsetPositioning::offset_from_save_position_element(
                             anchor_label,
                             offset,
@@ -32733,12 +32748,12 @@ impl View for Workspace {
                         SavePosition::new(sidecar_content, NEW_SESSION_SIDECAR_POSITION_ID)
                             .finish();
 
-                    let render_left = self.should_render_sidecar_left(
+                    let layout = self.new_session_sidecar_layout(
                         &anchor_label,
                         crate::tab_configs::action_sidecar::SIDECAR_WIDTH,
                         app,
                     );
-                    let (offset, parent_anchor, child_anchor) = if render_left {
+                    let (offset, parent_anchor, child_anchor) = if layout.opens_left {
                         (
                             vec2f(-4., 0.),
                             PositionedElementAnchor::TopLeft,
@@ -32753,7 +32768,9 @@ impl View for Workspace {
                     };
 
                     stack.add_positioned_overlay_child(
-                        sidecar_element,
+                        ConstrainedBox::new(sidecar_element)
+                            .with_max_width(layout.width)
+                            .finish(),
                         OffsetPositioning::offset_from_save_position_element(
                             anchor_label,
                             offset,

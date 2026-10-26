@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "suite": "full",
+  "selected_tests": "pass",
+  "local_gui": "pass",
+  "remote_and_providers": "not-run",
+  "visual_reference_comparison": "not-run",
+  "exploratory_agent": "not-run",
+  "product_acceptance": "not-run",
+  "counts": {
+    "passedTests": 16,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  "test_process_exit": 0,
+  "required_cases": [
+    "NavigationTests/testCancelSplitKeepsOriginalShell",
+    "NavigationTests/testClosingTabPreservesOriginalShell",
+    "NavigationTests/testSettingsReturnToOriginalShell",
+    "NavigationTests/testSplitDown",
+    "NavigationTests/testSplitLeft",
+    "NavigationTests/testSplitRight",
+    "NavigationTests/testSplitUp",
+    "NavigationTests/testTabsKeepIndependentShells",
+    "SmokeTests/testNativeCloseButtonClosesWindow",
+    "SmokeTests/testNewWindowRunsItsOwnShell",
+    "SmokeTests/testRelaunchAcceptsTerminalInput",
+    "SmokeTests/testTerminalExecutesAndRendersOutput",
+    "SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+    "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell",
+    "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible",
+    "SurfaceTests/testWindowMinimumSizePreservesOriginalShell"
+  ],
+  "executed_cases_match": true,
+  "dmg_sha256": "7e23137b6df9b6ad7e728bae4649ad1375ad340733f055ea732b88f3a1c75e9e",
+  "test_source_sha": "8a569cc4844a1b3b04668d727d184b294e07b310",
+  "app_source_sha": "8a569cc4844a1b3b04668d727d184b294e07b310"
+}

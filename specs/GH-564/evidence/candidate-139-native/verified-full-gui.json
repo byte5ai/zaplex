@@ -1,0 +1,37 @@
+{
+  "run_id": 40318905418,
+  "app_source_sha": "8a569cc4844a1b3b04668d727d184b294e07b310",
+  "test_source_sha": "8a569cc4844a1b3b04668d727d184b294e07b310",
+  "version": "v1.2.39",
+  "dmg_sha256": "7e23137b6df9b6ad7e728bae4649ad1375ad340733f055ea732b88f3a1c75e9e",
+  "cases": {
+    "NavigationTests/testCancelSplitKeepsOriginalShell": "Passed",
+    "NavigationTests/testClosingTabPreservesOriginalShell": "Passed",
+    "NavigationTests/testSettingsReturnToOriginalShell": "Passed",
+    "NavigationTests/testSplitDown": "Passed",
+    "NavigationTests/testSplitLeft": "Passed",
+    "NavigationTests/testSplitRight": "Passed",
+    "NavigationTests/testSplitUp": "Passed",
+    "NavigationTests/testTabsKeepIndependentShells": "Passed",
+    "SmokeTests/testNativeCloseButtonClosesWindow": "Passed",
+    "SmokeTests/testNewWindowRunsItsOwnShell": "Passed",
+    "SmokeTests/testRelaunchAcceptsTerminalInput": "Passed",
+    "SmokeTests/testTerminalExecutesAndRendersOutput": "Passed",
+    "SurfaceTests/testConnectionsPanelKeepsTerminalUsable": "Passed",
+    "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell": "Passed",
+    "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible": "Passed",
+    "SurfaceTests/testWindowMinimumSizePreservesOriginalShell": "Passed"
+  },
+  "evidence_artifacts": [
+    {
+      "id": 12656692394,
+      "name": "zap-test-dmg-aarch64",
+      "zip_sha256": "e1c7d2aa420c4f20fbeb7987cb390756e186519adbcbfa10a71383aef8191652"
+    },
+    {
+      "id": 12656638756,
+      "name": "macos-gui-evidence-40318905418-1",
+      "zip_sha256": "7a96283f1f503d3f1f0c0c2887c82ae192eec24b7febc218e54a8b57aab5168b"
+    }
+  ]
+}

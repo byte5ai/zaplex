@@ -1,0 +1,1557 @@
+{
+  "run_id": 40338712200,
+  "source_sha": "8a569cc4844a1b3b04668d727d184b294e07b310",
+  "dmg_sha256": "7e23137b6df9b6ad7e728bae4649ad1375ad340733f055ea732b88f3a1c75e9e",
+  "artifact_id": 12660361804,
+  "artifact_zip_digest": "sha256:49e8c86a62ed4b9452e44474fb30526202c9f12568a1b0b84001572a573d2701",
+  "finished": true,
+  "operator_closed": true,
+  "images": [
+    {
+      "file": "00-initial.png",
+      "sha256": "bb17c5b7bb51b90ac64d60d99b9c1f5cc94c6fd6bdc26c22369364bd116aab38",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Initial EN/Dark window; conversation sidebar open.",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_84fde489b62b00b3f92629c671338eb6",
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      }
+    },
+    {
+      "file": "01-before-command.png",
+      "sha256": "786f7c827be87995c70993cbd80246976cf75dd92fe46b64aafb3f1a5c1bc9d1",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "BEFORE command entered; sidebar closed.",
+      "coordinate_context": {
+        "native_scale": 1,
+        "reference_id": "ps1_d8ce309871f04fd6d289d4068578124f",
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local \u00b7 ~"
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      }
+    },
+    {
+      "file": "02-before-shell-proof.png",
+      "sha256": "abbcc4726faeb0ab6038bf419fff19f2977edbfc29231da9c25653c241e41d12",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "BEFORE executed: PID1279, non-exported marker native139, CWD /Users/admin.",
+      "coordinate_context": {
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "reference_id": "ps1_d721c171f1fd9fa4be8e8f861e0e06a3",
+        "display": {
+          "index": 0
+        }
+      }
+    },
+    {
+      "file": "03-plus-menu-dark.png",
+      "sha256": "e2ca8a9a2f5e112fd8b83cca15832fa340c09398512ef0cf06227fa77581f80d",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "EN/Dark plus menu at1024; worktree row caption clipped.",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "window": {
+          "window_id": 37,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "reference_id": "ps1_e7e8561d8daa57783a5f0312774ecf9c",
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1
+      }
+    },
+    {
+      "file": "04-worktree-tooltip-dark.png",
+      "sha256": "7c7846ce58e500b503d7f2fe2287f41d7bd0b4b197ef0df03f27149660f5798f",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "EN/Dark1024: full New worktree config tooltip above row; right submenu stays visible.",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_9520877498bd8d3367a94f7369982177",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        }
+      }
+    },
+    {
+      "file": "05-minimum-width.png",
+      "sha256": "1ac9379444eb3b1c74a6dc6f27de9a4d3cfb56e5a8cdea7282ea88ef25152bf0",
+      "width": 480,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Requested width200 is clamped to actual minimum480; resize verification error is not an app failure.",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "reference_id": "ps1_a0b907f0367f289f68cb9506843e0e0b",
+        "origin": "top_left",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "native_scale": 1
+      }
+    },
+    {
+      "file": "06-minimum-menu-dark.png",
+      "sha256": "c4cbfb85e57c7e78896bb5d6323ea125eae4ab725f500096ab0caef272e6cc6d",
+      "width": 480,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "EN/Dark480: plus menu before worktree hover.",
+      "coordinate_context": {
+        "reference_id": "ps1_f3a0e4ce9316b7f40650de941cccae6a",
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "window": {
+          "title": "Local \u00b7 ~",
+          "index": 0,
+          "window_id": 37
+        },
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ]
+      }
+    },
+    {
+      "file": "07-minimum-tooltip-dark.png",
+      "sha256": "5c5f070106c9759153c249d68b43c3d04801dce43fc1e89fc29d0c75fbec6f46",
+      "width": 480,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "EN/Dark480: submenu overlaps parent worktree row; complete caption/tooltip unavailable.",
+      "coordinate_context": {
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "version": 1,
+        "native_scale": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_2eed50aa6f57180575c8dbd9128dc1db",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local \u00b7 ~",
+          "index": 0,
+          "window_id": 37
+        }
+      }
+    },
+    {
+      "file": "08-minimum-overlap-repeat.png",
+      "sha256": "5c5f070106c9759153c249d68b43c3d04801dce43fc1e89fc29d0c75fbec6f46",
+      "width": 480,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "EN/Dark480: overlap reproduced after Escape/reopening and a different hover point.",
+      "coordinate_context": {
+        "output_scale": 1,
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "version": 1,
+        "reference_id": "ps1_4b33976a62b5f791286cd00dec71db61",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        }
+      }
+    },
+    {
+      "file": "09-settings-for-light.png",
+      "sha256": "e5236bd72b54e41eadfb5626eb9cdc04fa655beba8d3455daef555a7dfaeb005",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Settings opened on Agent page; not a no-account acceptance case.",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "native_scale": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_2d1b972bed927b851b87172d1010a9cd",
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Settings"
+        },
+        "display": {
+          "index": 0
+        }
+      }
+    },
+    {
+      "file": "10-appearance.png",
+      "sha256": "e2fbf5ff4bb48fb0ff245598ff307cf796d6d221f5cf9175a79868a0953731a0",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Appearance settings, dark theme.",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "window": {
+          "index": 0,
+          "title": "Settings",
+          "window_id": 37
+        },
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_adfdebebde7b181862b6261488e8a2b4",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1
+      }
+    },
+    {
+      "file": "11-theme-picker.png",
+      "sha256": "1fe7bd1c4ed3885e1547e165074a92f75886d0f3b04365d94e0134185698ca20",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Theme picker opened.",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Settings"
+        },
+        "native_scale": 1,
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_dadcb5d8e9545ee815f56390d203fb6c",
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "version": 1,
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      }
+    },
+    {
+      "file": "12-light-search.png",
+      "sha256": "362bb15999e338a0c418180edbf0ea64d13785851f12a6605cf8be29091d58d5",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Light search arrived despite operator typing error.",
+      "coordinate_context": {
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_df0d20bd246347092dccda900f16afcb",
+        "native_scale": 1,
+        "version": 1,
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 37
+        },
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      }
+    },
+    {
+      "file": "13-light-selected.png",
+      "sha256": "9530246bf7ab1eeb0b22d7bddd62c6dec62773d6a03ee3d017866bfcebb29123",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Light theme selected.",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 37
+        },
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "reference_id": "ps1_8da99174c29c637b5ae97d7c41bd28c3",
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      }
+    },
+    {
+      "file": "14-plus-menu-light.png",
+      "sha256": "dd8a04d444c82cac65732fd5fe08699c3983dd6c29c6f37c1393726d917a93ef",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "EN/Light1024 plus menu.",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "origin": "top_left",
+        "reference_id": "ps1_d27a1d424f615aab0fed333095b05f1e",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "index": 0,
+          "title": "Local \u00b7 ~",
+          "window_id": 37
+        },
+        "version": 1
+      }
+    },
+    {
+      "file": "15-worktree-tooltip-light.png",
+      "sha256": "7c134110408ed427e91be778ca918b15f84e8eec55378ef2f5b47a7036aa754c",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "EN/Light1024: full worktree tooltip above row and right submenu visible.",
+      "coordinate_context": {
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_bfe3a9f7c32ea1e2a4818c062e9220f3",
+        "native_scale": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        }
+      }
+    },
+    {
+      "file": "16-minimum-menu-light.png",
+      "sha256": "01cf9175dc3588704595a5e8ae13e6f3660aa69434593b6a13411acfa87d4303",
+      "width": 480,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "EN/Light480 plus menu before hover.",
+      "coordinate_context": {
+        "window": {
+          "title": "Local \u00b7 ~",
+          "index": 0,
+          "window_id": 37
+        },
+        "logical_space": "global_display_points",
+        "version": 1,
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "reference_id": "ps1_32acc5ee7bf62260a05b6cacf0c06b9c",
+        "origin": "top_left",
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        }
+      }
+    },
+    {
+      "file": "17-minimum-overlap-light.png",
+      "sha256": "063322d05e633b0e237fe7d02973f8646b79120dfa68984d360ad90fdcd2f6dc",
+      "width": 480,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "EN/Light480: submenu overlaps parent row, search caret visible; full caption unavailable.",
+      "coordinate_context": {
+        "reference_id": "ps1_6dfd552d12189250d4d5f0db94add09d",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "origin": "top_left",
+        "native_scale": 1,
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        }
+      }
+    },
+    {
+      "file": "18-pane-menu.png",
+      "sha256": "33a24852d059a9950a9e06a327916ae658222ebba208c35f7b3f9e74370898ce",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Pane ellipse click did not open menu; later desktop capture reveals OS notification interception.",
+      "coordinate_context": {
+        "native_scale": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_581b9ba8d4bdc077d3adc18115ea6344",
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      }
+    },
+    {
+      "file": "19-pane-menu-after-move.png",
+      "sha256": "be12459ed2d06664bf5759782f533e87534600a610b0926a4b191f7f99546ee5",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Physical move and pane click still intercepted by OS notifications.",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_5accc753d586fe3219afe84f84922437",
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local \u00b7 ~"
+        }
+      }
+    },
+    {
+      "file": "20-desktop-pane-menu.png",
+      "sha256": "4468da6a66f990ff2c4440935f8fd3ead2d08388704f150b60bc0e7d716ac768",
+      "width": 1024,
+      "height": 768,
+      "review": "original individually viewed",
+      "observation": "Desktop original shows macOS login-item notifications over pane ellipse.",
+      "coordinate_context": {
+        "reference_id": "ps1_c17dd0a1a6e16fb49e3008c087e72958",
+        "display": {
+          "index": 0,
+          "name": "1"
+        },
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          768
+        ],
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ],
+        "version": 1
+      }
+    },
+    {
+      "file": "21-notifications-dismissed.png",
+      "sha256": "b61caecbf8a5c54f1139a7494b7d9fda510890679f35448a963907ad02b67075",
+      "width": 1024,
+      "height": 768,
+      "review": "original individually viewed",
+      "observation": "Notification group expanded; first dismissal attempt had not cleared it.",
+      "coordinate_context": {
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          768
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ],
+        "reference_id": "ps1_3c9ebda51b45ec64492283622d58a674",
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0,
+          "name": "1"
+        },
+        "version": 1,
+        "origin": "top_left"
+      }
+    },
+    {
+      "file": "22-pane-menu-unobstructed.png",
+      "sha256": "be12459ed2d06664bf5759782f533e87534600a610b0926a4b191f7f99546ee5",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "App capture still has no pane menu; OS notifications were not yet cleared.",
+      "coordinate_context": {
+        "reference_id": "ps1_9eb097adf8f5bd6abca68d8364263935",
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "window": {
+          "title": "Local \u00b7 ~",
+          "index": 0,
+          "window_id": 37
+        }
+      }
+    },
+    {
+      "file": "23-notifications-cleared.png",
+      "sha256": "ea9fd92afb7b0830c4b507a8b0727e68a1938ac6bbf23e6a4b3abf12093a72f0",
+      "width": 1024,
+      "height": 768,
+      "review": "original individually viewed",
+      "observation": "Desktop after Clear: OS notification group absent.",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          768
+        ],
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "name": "1",
+          "index": 0
+        },
+        "reference_id": "ps1_ff660f3fac466c7e507df849d903109f",
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ],
+        "version": 1,
+        "origin": "top_left"
+      }
+    },
+    {
+      "file": "24-pane-menu.png",
+      "sha256": "3ed710b50cbeaa0b5b718ac87f26926b5f69c9e1dcb1be9bd3614364546e8bef",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Unobstructed pane menu opens: Split pane right and Split pane down.",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "window": {
+          "title": "Local \u00b7 ~",
+          "index": 0,
+          "window_id": 37
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_38d11d64d96aac745ef513e871d41bcb",
+        "logical_space": "global_display_points"
+      }
+    },
+    {
+      "file": "25-split-right.png",
+      "sha256": "bf1a3c5e3500077481dedb6a8ac8b9a115545d17f4ec26a024d9e0db4ab7ca87",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Right split launch menu: Terminal, New agent, Favorites and empty-favorites guidance; no tab-only entries.",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local \u00b7 ~",
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_ec05f4a25c70f17baf83acf3d01b4a6d",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      }
+    },
+    {
+      "file": "26-split-down.png",
+      "sha256": "bf1a3c5e3500077481dedb6a8ac8b9a115545d17f4ec26a024d9e0db4ab7ca87",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "After outside-click cancellation of right: down split launch menu shows the same entries; no pane added.",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "version": 1,
+        "reference_id": "ps1_0ea0f689870441c40372402381afd910",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        }
+      }
+    },
+    {
+      "file": "27-command-palette.png",
+      "sha256": "11d945e9df6453547b3b922275851f072fd15c12bb703cc654531e17e20d82d2",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Removed operator hotkey command did nothing; ordinary shell remains.",
+      "coordinate_context": {
+        "version": 1,
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_99337af140c8c4247c386713cce9291b",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "native_scale": 1
+      }
+    },
+    {
+      "file": "28-command-palette.png",
+      "sha256": "a17669b11040827d212ddde4877eb904657e1cb2fd67ec900553da9400129f42",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "cmd+shift+p opens sessions search, not the action palette.",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_391bf42dd34a38f3368577a23a16c6d5",
+        "output_scale": 1
+      }
+    },
+    {
+      "file": "29-search-left.png",
+      "sha256": "bf919493f78c52aaf84b5547781e00bfa73e8acf09f2ba59f90cd072b651d047",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Sessions search contains Split pane left and no results; left/up not exercised.",
+      "coordinate_context": {
+        "origin": "top_left",
+        "version": 1,
+        "reference_id": "ps1_5859677fb6e357af4ee48a8404a1ad19",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local \u00b7 ~"
+        },
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ]
+      }
+    },
+    {
+      "file": "30-after-command.png",
+      "sha256": "6c09ad070a4e019afd217511200fa7b2e5d37eb3da2b54769a7ddcfdf1be437f",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Fresh AFTER command entered after outside-click cancellation of down and closing sessions search.",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local \u00b7 ~"
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_d8ce685bfc910a6b527af0e649d61afc",
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1
+      }
+    },
+    {
+      "file": "31-after-shell-proof.png",
+      "sha256": "2ac989fe298b3067f67fd42261ba1a09d253f10775ef01e1a25e8d01a39d5f77",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Fresh AFTER executed: same PID1279, non-exported marker native139 and CWD /Users/admin; one pane.",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_6300e367b71495525ee92953246f1d96",
+        "origin": "top_left",
+        "output_scale": 1
+      }
+    },
+    {
+      "file": "32-sidebar.png",
+      "sha256": "1cb5759c8331359c960dc1461972766f7319d4cb051eef10ffba988e776c81b8",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Tools panel reopened on empty conversations.",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local \u00b7 ~"
+        },
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_40ad651f4b811c4bdadf9820230afae0",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1
+      }
+    },
+    {
+      "file": "33-sidebar-pointer-away.png",
+      "sha256": "7241ab9108e9c0a5bc478f926d3a0eff5171fe7934b59666530abdf09ff78b6e",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Pointer away: sidebar tools visible.",
+      "coordinate_context": {
+        "reference_id": "ps1_a868e6c92b0a428f25a69634d2d9fa80",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local \u00b7 ~"
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1
+      }
+    },
+    {
+      "file": "34-connections-empty.png",
+      "sha256": "59663fa82c94ca5677080a37b1947075766d95f512f1df1e4d513783efad65e0",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Empty Connections EN/Light1024: folder and plus icons visible with pointer away.",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "window": {
+          "title": "Local \u00b7 ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "version": 1,
+        "origin": "top_left",
+        "reference_id": "ps1_bac8555cbf49ae8cb1728746dc463fb0",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      }
+    },
+    {
+      "file": "35-connections-add-hover.png",
+      "sha256": "2cbe51e3f170f5821145df3c4fc316cb203346a01430332ee889b89a93b2bb3c",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Plus hover: complete New SSH server tooltip and stable button positions.",
+      "coordinate_context": {
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local \u00b7 ~"
+        },
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "reference_id": "ps1_abfe735bfab267fc31577a0faa6dfb97",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "origin": "top_left"
+      }
+    },
+    {
+      "file": "36-connections-add-dialog.png",
+      "sha256": "066bfa4177f05efa5c8ec5b47ce8638bb0eecfbc9a48f62e7cfad721de02e12c",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Plus opens Add a host choices; no host created. Some SSH-config explanatory text clipped; not investigated.",
+      "coordinate_context": {
+        "origin": "top_left",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_a55c87a576480fed6a145baf47927abf",
+        "output_scale": 1,
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Local \u00b7 ~"
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points"
+      }
+    },
+    {
+      "file": "37-finish-command.png",
+      "sha256": "c408f27a2c182f6c66c560b15f91a157a67aba4993fe32e7309cba3ee52ac8c0",
+      "width": 1024,
+      "height": 678,
+      "review": "original individually viewed",
+      "observation": "Explicit finish-marker command entered; Return subsequently dispatched; artifact confirms finished and operator/closed.",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_436910b581dd0a6f886780da8eeae009",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "version": 1,
+        "output_scale": 1,
+        "window": {
+          "index": 0,
+          "title": "Local \u00b7 ~",
+          "window_id": 37
+        }
+      }
+    }
+  ]
+}

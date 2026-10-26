@@ -1,0 +1,9 @@
+{
+  "checked_out_sha": "8a569cc4844a1b3b04668d727d184b294e07b310",
+  "sources": {
+    "docs/ui/README.md": "8f73544ef3ac27cf1c9e4637f21dace8416dbd004460f4c2c05280a432693737",
+    "docs/ui/pane-launch-and-tab-join.html": "31432899513b7f195bb5499f6375e06d49f41ddd5874f2a7ae5792072bce9758",
+    "docs/ui/premium-workspace-flyout.png": "33a5cfc959648fb8f8e3f5566373b128fde708e57c214fed16db73266f201d9c"
+  },
+  "review": "Read normative menu L1-L6 and inspected original flyout design. Native app must retain visible parent menu; plus-only tab entries are excluded from split menus. Browser sample data are not native evidence."
+}

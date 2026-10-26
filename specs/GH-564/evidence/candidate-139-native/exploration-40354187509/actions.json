@@ -1,0 +1,355 @@
+[
+  {
+    "time": "2026-10-26T15:59:51.250359+00:00",
+    "args": [
+      "click",
+      "--at",
+      "97,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T15:59:55.161561+00:00",
+    "args": [
+      "type",
+      "printf \"BEFORE pid=%s marker=%s cwd=%s\" \"$$\" \"${ZAPLEX139B:=native139b}\" \"$PWD\"",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "details": "Typing did not return an accepted outcome.",
+      "retry_safe": false,
+      "hint": "Observe the target before deciding whether to retry typing.",
+      "mutation_dispatched": true,
+      "code": "INTERACTION_FAILED",
+      "message": "Typing failed after foreground setup may have changed focus."
+    }
+  },
+  {
+    "time": "2026-10-26T16:00:09.957879+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:00:27.201821+00:00",
+    "args": [
+      "press",
+      "cmd+,",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:00:42.813641+00:00",
+    "args": [
+      "click",
+      "--at",
+      "78,334",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:00:59.380905+00:00",
+    "args": [
+      "click",
+      "--at",
+      "825,237",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:01:16.349789+00:00",
+    "args": [
+      "type",
+      "Light",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "hint": "Observe the target before deciding whether to retry typing.",
+      "retry_safe": false,
+      "message": "Typing failed after foreground setup may have changed focus.",
+      "details": "Typing did not return an accepted outcome.",
+      "mutation_dispatched": true,
+      "code": "INTERACTION_FAILED"
+    }
+  },
+  {
+    "time": "2026-10-26T16:01:33.769616+00:00",
+    "args": [
+      "click",
+      "--at",
+      "111,223",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:01:53.128645+00:00",
+    "args": [
+      "click",
+      "--at",
+      "223,53",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:01:56.255314+00:00",
+    "args": [
+      "press",
+      "cmd+w",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:02:12.168974+00:00",
+    "args": [
+      "click",
+      "--at",
+      "261,13",
+      "--global",
+      "--snapshot",
+      "ps1_23246647995c31052b1fb6e615e68416",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:02:36.313072+00:00",
+    "args": [
+      "click",
+      "--at",
+      "314,107",
+      "--global",
+      "--snapshot",
+      "ps1_ea34fa0775f2a9ff80e05e04368a771b",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:02:52.491451+00:00",
+    "args": [
+      "click",
+      "--at",
+      "500,350",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:03:09.227743+00:00",
+    "args": [
+      "click",
+      "--at",
+      "261,13",
+      "--global",
+      "--snapshot",
+      "ps1_44d5d1408c0f390e515289c9fb7421fc",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:03:26.365558+00:00",
+    "args": [
+      "click",
+      "--at",
+      "311,155",
+      "--global",
+      "--snapshot",
+      "ps1_9bc3232474c7d44712fb484394e7f3e4",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:03:44.820715+00:00",
+    "args": [
+      "click",
+      "--at",
+      "500,350",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:03:48.643653+00:00",
+    "args": [
+      "type",
+      "printf \"AFTER pid=%s marker=%s cwd=%s\" \"$$\" \"$ZAPLEX139B\" \"$PWD\"",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "message": "Typing failed after foreground setup may have changed focus.",
+      "mutation_dispatched": true,
+      "hint": "Observe the target before deciding whether to retry typing.",
+      "retry_safe": false,
+      "details": "Typing did not return an accepted outcome.",
+      "code": "INTERACTION_FAILED"
+    }
+  },
+  {
+    "time": "2026-10-26T16:04:07.883603+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:04:28.008972+00:00",
+    "args": [
+      "click",
+      "--at",
+      "353,18",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:04:43.970999+00:00",
+    "args": [
+      "click",
+      "--at",
+      "417,81",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  },
+  {
+    "time": "2026-10-26T16:09:50.955235+00:00",
+    "args": [
+      "type",
+      "python3 -c 'from pathlib import Path; p=Path(\"/tmp/zaplex-exploration-path\").read_text().strip(); (Path(p)/\"finished\").touch()'",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 1,
+    "success": false,
+    "error": {
+      "details": "Typing did not return an accepted outcome.",
+      "retry_safe": false,
+      "code": "INTERACTION_FAILED",
+      "mutation_dispatched": true,
+      "hint": "Observe the target before deciding whether to retry typing.",
+      "message": "Typing failed after foreground setup may have changed focus."
+    }
+  },
+  {
+    "time": "2026-10-26T16:10:26.903304+00:00",
+    "args": [
+      "press",
+      "return",
+      "--app",
+      "Zaplex",
+      "--foreground",
+      "--json"
+    ],
+    "exit": 0,
+    "success": true,
+    "error": null
+  }
+]
