@@ -1,0 +1,279 @@
+{
+  "target_receipt" : {
+    "pid" : 1212,
+    "process_start_identity_decimal" : "1793212342178716",
+    "window_id" : 37,
+    "process_start_identity" : 1793212342178716
+  },
+  "debug_logs" : [
+    "[2026-10-28T18:39:29.957Z] DEBUG: Runtime host: remote onDemand via \/Users\/admin\/Library\/Application Support\/Peekaboo\/daemon-9a5853f7ce0d2e0c.sock (build 4.9.6 (4.9.6))",
+    "[2026-10-28T18:39:29.957Z] VERBOSE [Operation]: Starting operation {annotate=false, app=Zaplex, mode=auto, menubar=false, hasAnalyzePrompt=false, operation=see_command}",
+    "[2026-10-28T18:39:29.957Z] VERBOSE [Performance]: Starting timer 'see_command'",
+    "[2026-10-28T18:39:29.961Z] VERBOSE [Capture]: Starting capture and detection phase",
+    "[2026-10-28T18:39:29.961Z] VERBOSE [Capture]: Using desktop observation pipeline {target=app:Zaplex}",
+    "[2026-10-28T18:39:29.961Z] VERBOSE [Operation]: Starting operation {operation=capture_phase, mode=window}",
+    "[2026-10-28T18:39:29.961Z] VERBOSE [Performance]: Starting timer 'capture_phase'",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Operation]: Operation completed {operation=capture_phase, mode=window, success=true}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Performance]: Timer 'capture_phase' completed {duration_ms=173}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Performance]: Desktop observation span {duration_ms=8, span=state.snapshot}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Performance]: Desktop observation span {duration_ms=1, span=target.resolve}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Performance]: Desktop observation span {duration_ms=41, span=capture.window}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Performance]: Desktop observation span {duration_ms=5, span=detection.ax}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Performance]: Desktop observation span {duration_ms=3, span=output.write}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Performance]: Desktop observation span {duration_ms=3, span=output.raw.write}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Performance]: Desktop observation span {duration_ms=1, span=snapshot.write}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Performance]: Desktop observation span {duration_ms=161, span=desktop.observe}",
+    "[2026-10-28T18:39:30.135Z] VERBOSE [Capture]: Capture completed successfully {snapshotId=ps1_9bbde767caad9eedd6b1ddc68781d202, observedFocus=rawTrue=2 rawFalse=4 rawUnknown=0 rawFocusedTypes=[other:1,textField:1] rawResolver=multipleFocusedElements cached=false partial=false truncated=false attached=true, elementCount=6, screenshotSize=139545}"
+  ],
+  "data" : {
+    "is_dialog" : false,
+    "ui_map" : "",
+    "focused_element" : {
+      "windowID" : 37,
+      "processIdentifier" : 1212,
+      "frame" : [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "role" : "AXTextArea"
+    },
+    "ui_elements" : [
+      {
+        "is_actionable" : true,
+        "is_enabled" : true,
+        "bounds" : {
+          "width" : 16,
+          "height" : 16,
+          "x" : 11,
+          "y" : 40
+        },
+        "ax_role" : "AXButton",
+        "id" : "elem_2",
+        "role" : "button",
+        "label" : "close button",
+        "role_description" : "close button"
+      },
+      {
+        "is_actionable" : true,
+        "is_enabled" : true,
+        "bounds" : {
+          "width" : 16,
+          "height" : 16,
+          "x" : 51,
+          "y" : 40
+        },
+        "ax_role" : "AXButton",
+        "id" : "elem_3",
+        "role" : "button",
+        "label" : "full screen button",
+        "role_description" : "full screen button",
+        "help" : "this button also has an action to zoom the window"
+      },
+      {
+        "is_actionable" : true,
+        "is_enabled" : true,
+        "bounds" : {
+          "width" : 16,
+          "height" : 16,
+          "x" : 31,
+          "y" : 40
+        },
+        "ax_role" : "AXButton",
+        "id" : "elem_5",
+        "role" : "button",
+        "label" : "minimize button",
+        "role_description" : "minimize button"
+      },
+      {
+        "value" : "",
+        "is_actionable" : true,
+        "bounds" : {
+          "width" : 1024,
+          "height" : 678,
+          "x" : 0,
+          "y" : 30
+        },
+        "ax_role" : "AXTextArea",
+        "id" : "elem_1",
+        "role" : "textField",
+        "label" : "text entry area",
+        "role_description" : "text entry area",
+        "is_value_settable" : false
+      },
+      {
+        "is_actionable" : false,
+        "bounds" : {
+          "width" : 14,
+          "height" : 14,
+          "x" : 52,
+          "y" : 41
+        },
+        "ax_role" : "AXGroup",
+        "id" : "elem_4",
+        "role" : "group",
+        "label" : "group",
+        "role_description" : "group"
+      },
+      {
+        "value" : "Command Input.",
+        "title" : "Settings",
+        "description" : "Input your shell command, press enter to execute. Press cmd-up to navigate to output of previously executed commands. Press cmd-l to re-focus command input.",
+        "is_actionable" : false,
+        "bounds" : {
+          "height" : 678,
+          "width" : 1024,
+          "y" : 30,
+          "x" : -0
+        },
+        "ax_role" : "AXWindow",
+        "id" : "elem_0",
+        "role" : "other",
+        "label" : "Settings",
+        "role_description" : "standard window"
+      }
+    ],
+    "capture_mode" : "window",
+    "window_title" : "Settings",
+    "element_count" : 6,
+    "coordinate_context" : {
+      "native_scale" : 1,
+      "version" : 1,
+      "output_scale" : 1,
+      "window" : {
+        "title" : "Settings",
+        "window_id" : 37,
+        "index" : 0
+      },
+      "reference_id" : "ps1_9bbde767caad9eedd6b1ddc68781d202",
+      "logical_bounds" : [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "origin" : "top_left",
+      "requested_scale" : {
+        "logical1x" : {
+
+        }
+      },
+      "display" : {
+        "index" : 0
+      },
+      "delivered_image_size" : [
+        1024,
+        678
+      ],
+      "logical_space" : "global_display_points"
+    },
+    "application_name" : "Zaplex",
+    "mutation_targeting_available" : true,
+    "screenshot_annotated" : "",
+    "observation" : {
+      "target" : {
+        "resolved_kind" : "window-id",
+        "open_if_needed" : false,
+        "hints" : [
+
+        ],
+        "source" : "window-id",
+        "bounds" : [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_kind" : "app",
+        "window_id" : 37
+      },
+      "warnings" : [
+
+      ],
+      "spans" : [
+        {
+          "name" : "state.snapshot",
+          "metadata" : {
+
+          },
+          "duration_ms" : 7.950125
+        },
+        {
+          "name" : "target.resolve",
+          "metadata" : {
+
+          },
+          "duration_ms" : 0.7995
+        },
+        {
+          "name" : "capture.window",
+          "metadata" : {
+            "engine" : "CGWindowList"
+          },
+          "duration_ms" : 41.43025
+        },
+        {
+          "name" : "detection.ax",
+          "metadata" : {
+
+          },
+          "duration_ms" : 4.970708
+        },
+        {
+          "name" : "output.write",
+          "metadata" : {
+
+          },
+          "duration_ms" : 3.428458
+        },
+        {
+          "name" : "output.raw.write",
+          "metadata" : {
+
+          },
+          "duration_ms" : 2.8545
+        },
+        {
+          "name" : "snapshot.write",
+          "metadata" : {
+
+          },
+          "duration_ms" : 0.570292
+        },
+        {
+          "name" : "desktop.observe",
+          "metadata" : {
+
+          },
+          "duration_ms" : 161.1685
+        }
+      ],
+      "state_snapshot" : {
+        "window_count" : 0,
+        "running_application_count" : 42,
+        "display_count" : 0
+      }
+    },
+    "execution_time" : 0.17773497104644775,
+    "semantic_scope" : "exact_or_requested",
+    "used_cache" : false,
+    "snapshot_id" : "ps1_9bbde767caad9eedd6b1ddc68781d202",
+    "screenshot_raw" : "\/tmp\/macrunner-operator\/13-settings.png",
+    "interactable_count" : 4,
+    "snapshot_reusable" : true
+  },
+  "success" : true
+}

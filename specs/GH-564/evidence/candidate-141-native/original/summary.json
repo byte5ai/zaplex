@@ -1,0 +1,52 @@
+{
+  "devicesAndConfigurations" : [
+    {
+      "device" : {
+        "architecture" : "arm64e",
+        "deviceId" : "dd4746e5894060cf84366288a0bfbf366da16a44",
+        "deviceName" : "My Mac",
+        "modelName" : "Virtual Machine",
+        "osBuildNumber" : "26A428",
+        "osVersion" : "27.0",
+        "platform" : "macOS"
+      },
+      "expectedFailures" : 0,
+      "failedTests" : 1,
+      "passedTests" : 15,
+      "skippedTests" : 0,
+      "testPlanConfiguration" : {
+        "configurationId" : "1",
+        "configurationName" : "Test Scheme Action"
+      }
+    }
+  ],
+  "environmentDescription" : "ZaplexGUI · Built with macOS 27.0",
+  "expectedFailures" : 0,
+  "failedTests" : 1,
+  "finishTime" : 1793209837.092,
+  "passedTests" : 15,
+  "result" : "Failed",
+  "runtimeWarnings" : [
+
+  ],
+  "skippedTests" : 0,
+  "startTime" : 1793209507.978,
+  "statistics" : [
+
+  ],
+  "testFailures" : [
+    {
+      "failureText" : "failed - Expected rendered text: ZQA 490663 963",
+      "targetName" : "ZaplexUITests",
+      "testIdentifier" : 8,
+      "testIdentifierString" : "NavigationTests/testTabsKeepIndependentShells()",
+      "testIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testTabsKeepIndependentShells",
+      "testName" : "testTabsKeepIndependentShells()"
+    }
+  ],
+  "title" : "Test - ZaplexGUI",
+  "topInsights" : [
+
+  ],
+  "totalTestCount" : 16
+}

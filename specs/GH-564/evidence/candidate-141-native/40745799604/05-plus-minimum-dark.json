@@ -1,0 +1,279 @@
+{
+  "success" : true,
+  "data" : {
+    "interactable_count" : 4,
+    "snapshot_reusable" : true,
+    "focused_element" : {
+      "processIdentifier" : 1212,
+      "frame" : [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          678
+        ]
+      ],
+      "role" : "AXTextArea",
+      "windowID" : 37
+    },
+    "execution_time" : 0.2096480131149292,
+    "mutation_targeting_available" : true,
+    "application_name" : "Zaplex",
+    "window_title" : "Local · ~",
+    "screenshot_raw" : "\/tmp\/macrunner-operator\/05-plus-minimum-dark.png",
+    "ui_map" : "",
+    "semantic_scope" : "exact_or_requested",
+    "ui_elements" : [
+      {
+        "is_actionable" : true,
+        "role_description" : "close button",
+        "ax_role" : "AXButton",
+        "label" : "close button",
+        "bounds" : {
+          "width" : 16,
+          "height" : 16,
+          "y" : 40,
+          "x" : 11
+        },
+        "id" : "elem_2",
+        "role" : "button",
+        "is_enabled" : true
+      },
+      {
+        "is_actionable" : true,
+        "role_description" : "full screen button",
+        "help" : "this button also has an action to zoom the window",
+        "ax_role" : "AXButton",
+        "label" : "full screen button",
+        "bounds" : {
+          "width" : 16,
+          "height" : 16,
+          "y" : 40,
+          "x" : 51
+        },
+        "id" : "elem_3",
+        "role" : "button",
+        "is_enabled" : true
+      },
+      {
+        "is_actionable" : true,
+        "role_description" : "minimize button",
+        "ax_role" : "AXButton",
+        "label" : "minimize button",
+        "bounds" : {
+          "width" : 16,
+          "height" : 16,
+          "y" : 40,
+          "x" : 31
+        },
+        "id" : "elem_5",
+        "role" : "button",
+        "is_enabled" : true
+      },
+      {
+        "value" : "",
+        "role_description" : "text entry area",
+        "ax_role" : "AXTextArea",
+        "is_actionable" : true,
+        "label" : "text entry area",
+        "bounds" : {
+          "width" : 480,
+          "height" : 678,
+          "y" : 30,
+          "x" : 0
+        },
+        "id" : "elem_1",
+        "role" : "textField",
+        "is_value_settable" : false
+      },
+      {
+        "is_actionable" : false,
+        "role_description" : "group",
+        "ax_role" : "AXGroup",
+        "label" : "group",
+        "bounds" : {
+          "width" : 14,
+          "height" : 14,
+          "y" : 41,
+          "x" : 52
+        },
+        "id" : "elem_4",
+        "role" : "group"
+      },
+      {
+        "title" : "Local · ~",
+        "value" : "Command Input.",
+        "ax_role" : "AXWindow",
+        "role_description" : "standard window",
+        "is_actionable" : false,
+        "label" : "Local · ~",
+        "description" : "Input your shell command, press enter to execute. Press cmd-up to navigate to output of previously executed commands. Press cmd-l to re-focus command input.",
+        "bounds" : {
+          "y" : 30,
+          "x" : -0,
+          "width" : 480,
+          "height" : 678
+        },
+        "id" : "elem_0",
+        "role" : "other"
+      }
+    ],
+    "coordinate_context" : {
+      "logical_bounds" : [
+        [
+          0,
+          30
+        ],
+        [
+          480,
+          678
+        ]
+      ],
+      "origin" : "top_left",
+      "delivered_image_size" : [
+        480,
+        678
+      ],
+      "requested_scale" : {
+        "logical1x" : {
+
+        }
+      },
+      "logical_space" : "global_display_points",
+      "reference_id" : "ps1_5f630f914546000d417bc611c5ccd03f",
+      "native_scale" : 1,
+      "output_scale" : 1,
+      "display" : {
+        "index" : 0
+      },
+      "window" : {
+        "title" : "Local · ~",
+        "index" : 0,
+        "window_id" : 37
+      },
+      "version" : 1
+    },
+    "is_dialog" : false,
+    "screenshot_annotated" : "",
+    "observation" : {
+      "state_snapshot" : {
+        "running_application_count" : 40,
+        "window_count" : 0,
+        "display_count" : 0
+      },
+      "spans" : [
+        {
+          "metadata" : {
+
+          },
+          "name" : "state.snapshot",
+          "duration_ms" : 7.517084
+        },
+        {
+          "metadata" : {
+
+          },
+          "name" : "target.resolve",
+          "duration_ms" : 0.815917
+        },
+        {
+          "metadata" : {
+            "engine" : "CGWindowList"
+          },
+          "name" : "capture.window",
+          "duration_ms" : 35.902541
+        },
+        {
+          "metadata" : {
+
+          },
+          "name" : "detection.ax",
+          "duration_ms" : 7.580708
+        },
+        {
+          "metadata" : {
+
+          },
+          "name" : "output.write",
+          "duration_ms" : 0.938542
+        },
+        {
+          "metadata" : {
+
+          },
+          "name" : "output.raw.write",
+          "duration_ms" : 0.623
+        },
+        {
+          "metadata" : {
+
+          },
+          "name" : "snapshot.write",
+          "duration_ms" : 0.312167
+        },
+        {
+          "metadata" : {
+
+          },
+          "name" : "desktop.observe",
+          "duration_ms" : 190.96025
+        }
+      ],
+      "target" : {
+        "open_if_needed" : false,
+        "bounds" : [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "resolved_kind" : "window-id",
+        "window_id" : 37,
+        "hints" : [
+
+        ],
+        "requested_kind" : "app",
+        "source" : "window-id"
+      },
+      "warnings" : [
+
+      ]
+    },
+    "used_cache" : false,
+    "capture_mode" : "window",
+    "element_count" : 6,
+    "snapshot_id" : "ps1_5f630f914546000d417bc611c5ccd03f"
+  },
+  "debug_logs" : [
+    "[2026-10-28T18:36:00.454Z] DEBUG: Runtime host: remote onDemand via \/Users\/admin\/Library\/Application Support\/Peekaboo\/daemon-9a5853f7ce0d2e0c.sock (build 4.9.6 (4.9.6))",
+    "[2026-10-28T18:36:00.454Z] VERBOSE [Operation]: Starting operation {annotate=false, app=Zaplex, mode=auto, menubar=false, hasAnalyzePrompt=false, operation=see_command}",
+    "[2026-10-28T18:36:00.454Z] VERBOSE [Performance]: Starting timer 'see_command'",
+    "[2026-10-28T18:36:00.458Z] VERBOSE [Capture]: Starting capture and detection phase",
+    "[2026-10-28T18:36:00.458Z] VERBOSE [Capture]: Using desktop observation pipeline {target=app:Zaplex}",
+    "[2026-10-28T18:36:00.458Z] VERBOSE [Operation]: Starting operation {mode=window, operation=capture_phase}",
+    "[2026-10-28T18:36:00.458Z] VERBOSE [Performance]: Starting timer 'capture_phase'",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Operation]: Operation completed {operation=capture_phase, mode=window, success=true}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Performance]: Timer 'capture_phase' completed {duration_ms=205}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Performance]: Desktop observation span {duration_ms=8, span=state.snapshot}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Performance]: Desktop observation span {duration_ms=1, span=target.resolve}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Performance]: Desktop observation span {duration_ms=36, span=capture.window}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Performance]: Desktop observation span {duration_ms=8, span=detection.ax}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Performance]: Desktop observation span {duration_ms=1, span=output.write}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Performance]: Desktop observation span {duration_ms=1, span=output.raw.write}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Performance]: Desktop observation span {duration_ms=0, span=snapshot.write}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Performance]: Desktop observation span {duration_ms=191, span=desktop.observe}",
+    "[2026-10-28T18:36:00.663Z] VERBOSE [Capture]: Capture completed successfully {screenshotSize=62119, snapshotId=ps1_5f630f914546000d417bc611c5ccd03f, observedFocus=rawTrue=2 rawFalse=4 rawUnknown=0 rawFocusedTypes=[other:1,textField:1] rawResolver=multipleFocusedElements cached=false partial=false truncated=false attached=true, elementCount=6}"
+  ],
+  "target_receipt" : {
+    "process_start_identity" : 1793212342178716,
+    "pid" : 1212,
+    "window_id" : 37,
+    "process_start_identity_decimal" : "1793212342178716"
+  }
+}

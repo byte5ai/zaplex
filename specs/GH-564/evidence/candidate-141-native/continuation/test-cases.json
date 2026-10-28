@@ -1,0 +1,53 @@
+{
+  "devices" : [
+    {
+      "architecture" : "arm64e",
+      "deviceId" : "dd4746e5894060cf84366288a0bfbf366da16a44",
+      "deviceName" : "My Mac",
+      "modelName" : "Virtual Machine",
+      "osBuildNumber" : "26A428",
+      "osVersion" : "27.0",
+      "platform" : "macOS"
+    }
+  ],
+  "testNodes" : [
+    {
+      "children" : [
+        {
+          "children" : [
+            {
+              "children" : [
+                {
+                  "duration" : "35s",
+                  "durationInSeconds" : 35.87267196178436,
+                  "name" : "testTabsKeepIndependentShells()",
+                  "nodeIdentifier" : "NavigationTests/testTabsKeepIndependentShells()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testTabsKeepIndependentShells",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                }
+              ],
+              "name" : "NavigationTests",
+              "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests",
+              "nodeType" : "Test Suite",
+              "result" : "Passed"
+            }
+          ],
+          "name" : "ZaplexUITests",
+          "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests",
+          "nodeType" : "UI test bundle",
+          "result" : "Passed"
+        }
+      ],
+      "name" : "ZaplexGUI",
+      "nodeType" : "Test Plan",
+      "result" : "Passed"
+    }
+  ],
+  "testPlanConfigurations" : [
+    {
+      "configurationId" : "1",
+      "configurationName" : "Test Scheme Action"
+    }
+  ]
+}

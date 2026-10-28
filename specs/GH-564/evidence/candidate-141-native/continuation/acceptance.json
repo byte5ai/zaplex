@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "suite": "selected",
+  "selected_tests": "pass",
+  "local_gui": "not-run",
+  "remote_and_providers": "not-run",
+  "visual_reference_comparison": "not-run",
+  "exploratory_agent": "not-run",
+  "product_acceptance": "not-run",
+  "counts": {
+    "passedTests": 1,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  "test_process_exit": 0,
+  "required_cases": [
+    "NavigationTests/testTabsKeepIndependentShells"
+  ],
+  "executed_cases_match": true,
+  "dmg_sha256": "4abf08c30dfbf393a79044a4198ebaa3745637550425497473013f7d0d55c5b2",
+  "test_source_sha": "a973f67804df2933ff66eba203f075f15d39bf6b",
+  "app_source_sha": "0d7f5b1c1d2d4de18115508e8c66442786f98101"
+}

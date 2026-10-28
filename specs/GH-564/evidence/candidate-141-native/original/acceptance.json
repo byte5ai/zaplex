@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "suite": "full",
+  "selected_tests": "fail",
+  "local_gui": "fail",
+  "remote_and_providers": "not-run",
+  "visual_reference_comparison": "not-run",
+  "exploratory_agent": "not-run",
+  "product_acceptance": "fail",
+  "counts": {
+    "passedTests": 15,
+    "failedTests": 1,
+    "skippedTests": 0
+  },
+  "test_process_exit": 65,
+  "required_cases": [
+    "NavigationTests/testCancelSplitKeepsOriginalShell",
+    "NavigationTests/testClosingTabPreservesOriginalShell",
+    "NavigationTests/testSettingsReturnToOriginalShell",
+    "NavigationTests/testSplitDown",
+    "NavigationTests/testSplitLeft",
+    "NavigationTests/testSplitRight",
+    "NavigationTests/testSplitUp",
+    "NavigationTests/testTabsKeepIndependentShells",
+    "SmokeTests/testNativeCloseButtonClosesWindow",
+    "SmokeTests/testNewWindowRunsItsOwnShell",
+    "SmokeTests/testRelaunchAcceptsTerminalInput",
+    "SmokeTests/testTerminalExecutesAndRendersOutput",
+    "SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+    "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell",
+    "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible",
+    "SurfaceTests/testWindowMinimumSizePreservesOriginalShell"
+  ],
+  "executed_cases_match": false,
+  "dmg_sha256": "4abf08c30dfbf393a79044a4198ebaa3745637550425497473013f7d0d55c5b2",
+  "test_source_sha": "0d7f5b1c1d2d4de18115508e8c66442786f98101",
+  "app_source_sha": "0d7f5b1c1d2d4de18115508e8c66442786f98101",
+  "error": "Missing artifact identity, incomplete test set or failing test cases"
+}
