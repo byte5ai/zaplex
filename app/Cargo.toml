@@ -5,7 +5,7 @@ description = "The terminal cockpit for AI coding agents on remote machines"
 edition = "2021"
 autobins = false
 name = "warp"
-version = "1.2.40"
+version = "1.2.41"
 publish.workspace = true
 license.workspace = true
 
@@ -284,7 +284,7 @@ is_executable = "1.0.1"
 gethostname = "1.1.0"
 watcher.workspace = true
 warp_files.workspace = true
-tantivy = "0.26.0"
+tantivy = "0.27.0"
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 console_error_panic_hook = { version = "0.1.6" }

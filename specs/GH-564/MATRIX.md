@@ -124,6 +124,14 @@ und die erreichbare Plus-Aktion. Die Ergänzung für links/oben sichert weitere
 Agent-Interaktion ohne Konto ist nicht abschließend geprüft. Bewegungsnachweise
 bleiben getrennt.
 
+Der [Nachtbatch für 1.2.40](https://github.com/byte5ai/zaplex/actions/runs/40618329642)
+startete am 28.10.2026 um 03:00 Uhr MEZ, scheiterte aber an vier neu veröffentlichten
+Zstd-Sicherheitsmeldungen vor Compile, Tests und DMG-Erstellung. Die Korrektur
+in 1.2.41 aktualisiert Tantivy samt Zstd-Abhängigkeiten. Lokal bestehen die
+Sicherheitsprüfung und 88 Suchtests; ein bereits zuvor ignorierter Fuzzy-Test
+wird nicht als bestanden gezählt. Der [Prüfnachweis](evidence/zstd-security-local.json)
+ersetzt keinen neuen macOS-Batch und keine native Nachprüfung von #714.
+
 ## Referenzen und Bewertung
 
 - **C**: [Cockpit-Spezifikation](../../docs/ui/cockpit-sidebar-connections.html#spec),
