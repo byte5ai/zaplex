@@ -2,11 +2,15 @@ use super::*;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use pathfinder_geometry::vector::vec2f;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warp_core::ui::theme::{mock_terminal_colors, Details, WarpTheme};
 use warpui::elements::{ChildView, Empty, Stack};
+use warpui::fonts::{platform_font_cache_for_tests, Cache};
 use warpui::platform::WindowStyle;
 use warpui::{App, Event as WindowEvent, Presenter, WindowId, WindowInvalidation};
 
+use crate::ai::subscription_agent::ModelEffort;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 
@@ -410,7 +414,7 @@ fn provider(installed: bool) -> ProviderOptions {
             description: None,
             resolved_model: Some(id.to_string()),
             is_default: false,
-            supported_efforts: vec![crate::ai::subscription_agent::ModelEffort {
+            supported_efforts: vec![ModelEffort {
                 id: "high".to_string(),
                 display_name: "High".to_string(),
             }],
@@ -497,6 +501,7 @@ fn remote_claude_card(
         launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     }
@@ -642,6 +647,7 @@ fn antigravity_launch_uses_cli_defaults_without_provider_metadata() {
         launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -700,6 +706,7 @@ fn confirm_payload_carries_local_selection() {
         // no editor view to construct — remote-dir prefill/read is exercised
         // at the Confirm site, not here.
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -765,6 +772,7 @@ fn confirm_payload_routes_remote_launch_to_node_id() {
         // no editor view to construct — remote-dir prefill/read is exercised
         // at the Confirm site, not here.
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -1074,6 +1082,7 @@ fn degraded_remote_inventory_never_drives_auto_routing() {
         launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -1116,6 +1125,7 @@ fn confirm_payload_none_when_nothing_installed() {
         // no editor view to construct — remote-dir prefill/read is exercised
         // at the Confirm site, not here.
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -1165,6 +1175,7 @@ fn relative_remote_launch_directory_is_rejected() {
         launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -1290,6 +1301,7 @@ fn effort_payload_matches_cli_capability() {
         launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -1335,6 +1347,7 @@ fn claude_spawn_card_exposes_only_cli_default_effort() {
         launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -1374,6 +1387,7 @@ fn absolute_remote_launch_directory_reaches_request_unchanged() {
         launch_generation: 0,
         prompt: None,
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -1416,6 +1430,7 @@ fn managed_launch_is_explicit_exact_and_does_not_claim_unsupported_settings() {
         launch_generation: 0,
         prompt: Some("must not be sent".to_string()),
         remote_dir_editor: None,
+        scroll_state: Default::default(),
         chip_states: Default::default(),
         close_button: None,
     };
@@ -1597,5 +1612,373 @@ fn native_directory_picker_rejects_reconfigured_or_other_cards() {
             );
             assert!(card.project.is_none());
         });
+    });
+}
+
+fn initialize_spawn_layout(app: &mut App) {
+    let locale =
+        std::env::var("ZAPLEX_SPAWN_LAYOUT_TEST_LOCALE").unwrap_or_else(|_| "en".to_string());
+    assert!(matches!(locale.as_str(), "en" | "de"));
+    crate::i18n::init(Some(&locale));
+    assert_eq!(
+        crate::i18n::current_languages()[0].to_string(),
+        locale,
+        "run each locale in its own test process"
+    );
+    initialize_settings_for_tests(app);
+    let fonts = Cache::handle(app);
+    let family = fonts.update(app, |cache, _| {
+        *cache = platform_font_cache_for_tests();
+        let font_bytes = ["Roboto-Regular.ttf", "Roboto-Bold.ttf", "Roboto-Italic.ttf"]
+            .into_iter()
+            .map(|file| {
+                std::fs::read(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("assets/bundled/fonts/roboto")
+                        .join(file),
+                )
+                .expect("bundled Roboto font")
+            })
+            .collect();
+        cache
+            .load_family_from_bytes("Roboto", font_bytes)
+            .expect("real text metrics")
+    });
+    let appearance = app.add_singleton_model(|_| Appearance::mock());
+    appearance.update(app, |appearance, ctx| {
+        appearance.set_ui_font_family(family, ctx);
+        appearance.set_monospace_font_family(family, ctx);
+    });
+    app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+}
+
+#[test]
+fn spawn_card_long_model_options_stay_inside_the_window() {
+    App::test((), |mut app| async move {
+        initialize_spawn_layout(&mut app);
+        let (window, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            ModalBackdropTestRoot::new(ctx.add_typed_action_view(SpawnCard::new))
+        });
+        let card = root.read(&app, |root, _| root.child.clone());
+        card.update(&mut app, |card, ctx| {
+            card.cfg.claude = provider(true);
+            let mut models = Vec::new();
+            for index in 0..6 {
+                let mut model = provider(true).models.remove(0);
+                model.id = format!("model-{index}");
+                model.display_name = format!("Model {index} with a long independently chosen descriptive name and full context details");
+                model.supported_efforts = (0..4).map(|effort| ModelEffort {
+                    id: format!("effort-{effort}"),
+                    display_name: format!("Thinking effort {effort} with an independently chosen long description"),
+                }).collect();
+                model.default_effort = Some("effort-0".to_string());
+                models.push(model);
+            }
+            card.cfg.claude.models = models;
+            ctx.notify();
+        });
+        let presenter = Rc::new(RefCell::new(Presenter::new(window)));
+        let appearance = Appearance::handle(&app);
+        let dark = appearance.read(&app, |appearance, _| appearance.theme().clone());
+        let light = WarpTheme::new(
+            ColorU::white().into(),
+            ColorU::black(),
+            ColorU::new(18, 123, 156, 255).into(),
+            None,
+            Some(Details::Lighter),
+            mock_terminal_colors(),
+            None,
+            Some("Light".to_string()),
+            None,
+        );
+        for theme in [dark, light] {
+            appearance.update(&mut app, |appearance, ctx| appearance.set_theme(theme, ctx));
+            for size in [vec2f(1024., 678.), vec2f(480., 320.), vec2f(1024., 678.)] {
+                card.update(&mut app, |card, ctx| {
+                    card.scroll_state.scroll_to(Pixels::zero());
+                    ctx.notify();
+                });
+                render_spawn_at_size(&mut app, window, &presenter, size);
+                let position = |id: &str| {
+                    presenter
+                        .borrow()
+                        .position_cache()
+                        .get_position(id)
+                        .expect(id)
+                };
+                let bounds = position("spawn-card");
+                assert!(
+                    bounds.width() <= 480.,
+                    "card must stay within its supported width: {bounds:?}"
+                );
+                assert!(
+                    bounds.min_x() >= 0. && bounds.max_x() <= size.x(),
+                    "{bounds:?}"
+                );
+                assert!(
+                    bounds.min_y() >= 0. && bounds.max_y() <= size.y(),
+                    "{bounds:?}"
+                );
+                let first = position("spawn-chip-model-model-0");
+                let second = position("spawn-chip-model-model-1");
+                assert!(
+                    second.min_y() > first.min_y(),
+                    "long model options must wrap into separate rows"
+                );
+                for index in 0..6 {
+                    let id = format!("spawn-chip-model-model-{index}");
+                    let chip =
+                        scroll_spawn_option_into_view(&mut app, window, &presenter, size, &id);
+                    assert!(
+                        chip.height() > 30.,
+                        "the full long model identity must wrap: {chip:?}"
+                    );
+                    click_spawn_at(&mut app, window, &presenter, chip.center());
+                    assert_eq!(
+                        card.read(&app, |card, _| card.model.clone()),
+                        format!("model-{index}")
+                    );
+                    render_spawn_at_size(&mut app, window, &presenter, size);
+                }
+                for effort in 0..4 {
+                    let id = format!("spawn-chip-effort-effort-{effort}");
+                    let chip =
+                        scroll_spawn_option_into_view(&mut app, window, &presenter, size, &id);
+                    click_spawn_at(&mut app, window, &presenter, chip.center());
+                    assert_eq!(
+                        card.read(&app, |card, _| card.effort.clone()),
+                        format!("effort-{effort}")
+                    );
+                    render_spawn_at_size(&mut app, window, &presenter, size);
+                }
+            }
+        }
+    });
+}
+
+fn render_spawn_at_size(
+    app: &mut App,
+    window: WindowId,
+    presenter: &Rc<RefCell<Presenter>>,
+    size: Vector2F,
+) {
+    let updated = app.read(|ctx| ctx.view_ids_for_window(window).into_iter().collect());
+    app.update(|ctx| {
+        ctx.update_window_bounds(window, RectF::new(vec2f(0., 0.), size));
+        let mut presenter = presenter.borrow_mut();
+        presenter.invalidate(
+            WindowInvalidation {
+                updated,
+                ..Default::default()
+            },
+            ctx,
+        );
+        presenter.build_scene(size, 1., None, ctx);
+    });
+}
+
+fn click_spawn_at(
+    app: &mut App,
+    window: WindowId,
+    presenter: &Rc<RefCell<Presenter>>,
+    point: Vector2F,
+) {
+    app.update(|ctx| {
+        ctx.simulate_window_event(
+            WindowEvent::LeftMouseDown {
+                position: point,
+                modifiers: Default::default(),
+                click_count: 1,
+                is_first_mouse: false,
+            },
+            window,
+            presenter.clone(),
+        );
+        ctx.simulate_window_event(
+            WindowEvent::LeftMouseUp {
+                position: point,
+                modifiers: Default::default(),
+            },
+            window,
+            presenter.clone(),
+        );
+    });
+}
+
+fn scroll_spawn_option_into_view(
+    app: &mut App,
+    window: WindowId,
+    presenter: &Rc<RefCell<Presenter>>,
+    size: Vector2F,
+    id: &str,
+) -> RectF {
+    let position = |id: &str| {
+        presenter
+            .borrow()
+            .position_cache()
+            .get_position(id)
+            .expect(id)
+    };
+    let bounds = position("spawn-card");
+    let mut option = position(id);
+    assert!(
+        option.min_x() >= bounds.min_x() && option.max_x() <= bounds.max_x(),
+        "{id}: {option:?} outside {bounds:?}"
+    );
+    // Reach options through real wheel events, including those initially below the viewport.
+    for _ in 0..40 {
+        if option.min_y() >= bounds.min_y() + 25. && option.max_y() <= bounds.max_y() - 25. {
+            break;
+        }
+        let delta = if option.max_y() > bounds.max_y() - 25. {
+            -60.
+        } else {
+            60.
+        };
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                WindowEvent::ScrollWheel {
+                    position: bounds.center(),
+                    delta: vec2f(0., delta),
+                    precise: true,
+                    modifiers: Default::default(),
+                },
+                window,
+                presenter.clone(),
+            )
+        });
+        render_spawn_at_size(app, window, presenter, size);
+        option = position(id);
+    }
+    assert!(
+        option.min_y() >= bounds.min_y() + 25. && option.max_y() <= bounds.max_y() - 25.,
+        "{id} must be fully reachable: {option:?} in {bounds:?}"
+    );
+    option
+}
+
+#[test]
+fn spawn_card_errors_wrap_and_cancel_remains_reachable_after_resize() {
+    App::test((), |mut app| async move {
+        initialize_spawn_layout(&mut app);
+        let (window, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let child = ctx.add_typed_action_view(SpawnCard::new);
+            ctx.subscribe_to_view(
+                &child,
+                |root: &mut ModalBackdropTestRoot<SpawnCard>, _, event, ctx| {
+                    if matches!(event, SpawnCardEvent::Close) {
+                        root.visible = false;
+                        ctx.notify();
+                    }
+                },
+            );
+            ModalBackdropTestRoot::new(child)
+        });
+        let card = root.read(&app, |root, _| root.child.clone());
+        let presenter = Rc::new(RefCell::new(Presenter::new(window)));
+        let appearance = Appearance::handle(&app);
+        let dark = appearance.read(&app, |appearance, _| appearance.theme().clone());
+        let light = WarpTheme::new(
+            ColorU::white().into(),
+            ColorU::black(),
+            ColorU::new(18, 123, 156, 255).into(),
+            None,
+            Some(Details::Lighter),
+            mock_terminal_colors(),
+            None,
+            Some("Light".to_string()),
+            None,
+        );
+        for theme in [dark, light] {
+            appearance.update(&mut app, |appearance, ctx| appearance.set_theme(theme, ctx));
+            card.update(&mut app, |card, ctx| {
+                    card.cfg.codex = provider(true);
+                    card.agent = CLIAgent::Codex;
+                    card.cfg.codex.model_discovery = ModelDiscoveryState::Error(ModelDiscoveryFailure::Failed {
+                        agent: CLIAgent::Codex, host: "Local".to_string(),
+                        detail: "Account authentication is required before model discovery can complete. Sign in with the selected CLI account and retry the discovery to choose a supported model.".to_string(),
+                    });
+                    ctx.notify();
+                });
+            for size in [vec2f(1024., 678.), vec2f(480., 320.), vec2f(1024., 678.)] {
+                root.update(&mut app, |root, ctx| {
+                    root.visible = true;
+                    ctx.notify();
+                });
+                card.update(&mut app, |card, ctx| {
+                    card.scroll_state.scroll_to(Pixels::zero());
+                    ctx.notify();
+                });
+                render_spawn_at_size(&mut app, window, &presenter, size);
+                let position = |id: &str| {
+                    presenter
+                        .borrow()
+                        .position_cache()
+                        .get_position(id)
+                        .expect(id)
+                };
+                let bounds = position("spawn-card");
+                assert!(
+                    bounds.min_x() >= 0. && bounds.max_x() <= size.x(),
+                    "{bounds:?}"
+                );
+                assert!(
+                    bounds.min_y() >= 0. && bounds.max_y() <= size.y(),
+                    "{bounds:?}"
+                );
+                let error = position("spawn-model-error");
+                assert!(
+                    error.min_x() >= bounds.min_x() && error.max_x() <= bounds.max_x(),
+                    "{error:?}"
+                );
+                assert!(
+                    error.height() > 36.,
+                    "the complete long error must occupy several lines: {error:?}"
+                );
+                assert!(
+                    !card.read(&app, |card, ctx| card.can_launch(ctx)),
+                    "discovery failure must keep launch disabled"
+                );
+                assert!(
+                    presenter
+                        .borrow()
+                        .position_cache()
+                        .get_position("spawn-chip-confirm")
+                        .is_none(),
+                    "the error state must not render an active launch button"
+                );
+                scroll_spawn_option_into_view(
+                    &mut app,
+                    window,
+                    &presenter,
+                    size,
+                    "spawn-model-error",
+                );
+                // Exercise the real wheel route, not only the scroll-state setter.
+                app.update(|ctx| {
+                    ctx.simulate_window_event(
+                        WindowEvent::ScrollWheel {
+                            position: bounds.center(),
+                            delta: vec2f(0., -10000.),
+                            precise: true,
+                            modifiers: Default::default(),
+                        },
+                        window,
+                        presenter.clone(),
+                    )
+                });
+                render_spawn_at_size(&mut app, window, &presenter, size);
+                let cancel = position("spawn-chip-cancel");
+                assert!(
+                    cancel.min_y() >= bounds.min_y() && cancel.max_y() <= bounds.max_y(),
+                    "Cancel must be reachable after scrolling: {cancel:?} in {bounds:?}"
+                );
+                click_spawn_at(&mut app, window, &presenter, cancel.center());
+                assert!(
+                    !root.read(&app, |root, _| root.visible),
+                    "Cancel must still dispatch after resizing and scrolling"
+                );
+            }
+        }
     });
 }
