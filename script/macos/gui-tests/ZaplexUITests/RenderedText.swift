@@ -8,7 +8,7 @@ enum RenderedText {
         let scale: Int
         let interpolation: CGInterpolationQuality
         let pageSegmentation: Int
-        static let standard = Configuration(scale: 2, interpolation: .none, pageSegmentation: 11)
+        static let standard = Configuration(scale: 2, interpolation: .high, pageSegmentation: 11)
     }
 
     struct Word {
@@ -43,8 +43,8 @@ enum RenderedText {
             throw NSError(domain: "ZaplexOCR", code: 1)
         }
         // Small terminal glyphs are only about ten pixels high on the runner.
-        // Replicate pixels at an integer scale so interpolation cannot blur the
-        // distinctions between digits. Keep recognition and comparison exact.
+        // Resample twofold with the fixed interpolation verified against saved
+        // positive and negative images. Recognition and comparison remain exact.
         let width = bitmap.pixelsWide * configuration.scale
         let height = bitmap.pixelsHigh * configuration.scale
         guard let context = CGContext(data: nil, width: width, height: height,

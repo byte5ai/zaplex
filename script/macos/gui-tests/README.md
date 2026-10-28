@@ -120,8 +120,8 @@ verlorener Eingabe zu unterscheiden. Der alte Lauf belegt diese Ursache noch nic
 ## OCR-Auflösung und gespeicherte Gegenproben
 
 Die Navigationserkennung vergrößert den Fenster-Screenshot im Testprozess auf
-jeweils die doppelte Pixelzahl pro Achse durch reine Pixelwiederholung. So verwischt
-keine Interpolation die kleinen Ziffern. Die App-Schriftgröße bleibt unverändert;
+jeweils die doppelte Pixelzahl pro Achse mit hochwertiger Interpolation. Die
+feste Einstellung ist an den gespeicherten Gegenproben geprüft. Die App-Schriftgröße bleibt unverändert;
 die TSV-Positionen werden auf die tatsächliche Fenstergröße zurückgerechnet.
 Der Vergleich von Nonce, Shellzustand und Menütext bleibt exakt. Das folgt der
 [Tesseract-Empfehlung zur Bildauflösung](https://tesseract-ocr.github.io/tessdoc/ImproveQuality.html#rescaling).
@@ -162,6 +162,17 @@ Der [erweiterte native Vergleich 40146026138](https://github.com/byte5ai/zaplex/
 erfasst 144 Lesungen auf neun Bildern. Der bisherige Modus für einen einheitlichen
 Textblock (`--psm 6`) reproduziert beide neuen Fehler. Zweifache Vergrößerung mit
 Sparse-Text-Segmentierung (`--psm 11`) besteht alle neun Bilder einschließlich
-der Gegenproben und Koordinaten. Der feste Standard kombiniert deshalb zweifache
+der Gegenproben und Koordinaten. Der damalige Standard kombinierte deshalb zweifache
 Pixelwiederholung mit Modus 11. Exakte Textvergleiche bleiben unverändert;
 Ergebnisse unterschiedlicher Konfigurationen werden nicht zusammengeführt.
+
+Der [native Vergleich40743849365](https://github.com/byte5ai/zaplex/actions/runs/40743849365)
+ergänzt die zwei unveränderten Tab-Setup-Bilder aus1.2.41. Die bisherige zweifache
+Pixelwiederholung liest die sichtbare Nonce `490663` dort als `499663`.
+Zweifache Vergrößerung mit `CGInterpolationQuality.high` und Sparse-Text-Modus11
+besteht die exakten positiven und negativen Textprüfungen aller elf Bilder.
+Diese feste Einstellung ersetzt die Pixelwiederholung; es gibt weder
+Zeichenersetzungen noch einen vom erwarteten Text gesteuerten OCR-Fallback.
+`provenance-141.json` dokumentiert Herkunft, Originalhashes und AX-Ausschnitt;
+die Gegenprobe prüft zusätzlich den falschen Shellzustand und die unabhängig
+gemessenen Ausgabekoordinaten. Unabgeschickte Eingabe bleibt ausdrücklich negativ.
