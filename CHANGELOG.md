@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.42] — 2026-10-28
+
+- Die Agenten-Startkarte bricht lange Modell- und Effort-Optionen sowie Erkennungsfehler vollständig um; bei geringer Fensterhöhe bleiben Auswahl und Abbrechen durch Scrollen erreichbar (#720).
+
 ## [1.2.41] — 2026-10-28
 
 - Sicherheit: Suchbibliothek Tantivy und ihre Zstd-Abhängigkeiten aktualisiert; behebt RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403 und RUSTSEC-2026-0410.
