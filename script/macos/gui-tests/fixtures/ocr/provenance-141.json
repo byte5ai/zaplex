@@ -1,0 +1,35 @@
+{
+  "source_run": 40732407949,
+  "artifact_id": 12838477056,
+  "artifact_sha256": "d37f69b7ce3d63c00a12bffc1d4365f328c85716398ce222c91932e557040c93",
+  "app_source_sha": "0d7f5b1c1d2d4de18115508e8c66442786f98101",
+  "transformation": "Stored originals unchanged. Native fixture loader crops to paired AX main-window bounds without resampling or color changes.",
+  "images": [
+    {
+      "name": "tab-setup-screen.png",
+      "original": "EDA0DAEF-EE1D-406B-A6BE-5F0362D8C1FE.png",
+      "sha256": "d7c734503f5323fd503c37e14d489549c3c7e32444d63c91a58943d9e3337536",
+      "window_crop_xyxy": [
+        0,
+        30,
+        1024,
+        708
+      ],
+      "visible_output": [
+        "ZQA 490663 963"
+      ]
+    },
+    {
+      "name": "tab-setup-before-screen.png",
+      "original": "7D84E1C2-A948-4C17-A1FA-FB8DAE8ADB0E.png",
+      "sha256": "933dea28f1b51f3f628968ec77aeecf434869f404cc02e5eb09d0edd3cccfd8f",
+      "window_crop_xyxy": [
+        0,
+        30,
+        1024,
+        708
+      ],
+      "visible_output": []
+    }
+  ]
+}

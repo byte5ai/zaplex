@@ -12,6 +12,8 @@ let images: [(String, CGSize)] = [
     ("close-tab-screen.png", CGSize(width: 1024, height: 678)),
     ("close-tab-before-screen.png", CGSize(width: 1024, height: 678)),
     ("settings-screen.png", CGSize(width: 1024, height: 678)),
+    ("tab-setup-screen.png", CGSize(width: 1024, height: 678)),
+    ("tab-setup-before-screen.png", CGSize(width: 1024, height: 678)),
 ]
 for scale in [2, 3, 4, 6] {
     for (name, interpolation) in [("nearest", CGInterpolationQuality.none), ("high", .high)] {
