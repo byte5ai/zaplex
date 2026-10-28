@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.41] — 2026-10-28
+
+- Sicherheit: Suchbibliothek Tantivy und ihre Zstd-Abhängigkeiten aktualisiert; behebt RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403 und RUSTSEC-2026-0410.
+
 ## [1.2.40] — 2026-10-26
 
 - Startmenü: Worktree- und Aktionsuntermenüs nutzen die freie Seite und passen ihre Breite an, damit die Elternzeile bei schmalen Fenstern sichtbar bleibt (#714).

@@ -1,0 +1,115 @@
+{
+  "version": "1.2.41",
+  "failed_ci_run": 40618329642,
+  "failed_ci_source": "3548812a57eb29c1d8158596bbdebe26b4608445",
+  "advisories": [
+    "RUSTSEC-2026-0391",
+    "RUSTSEC-2026-0398",
+    "RUSTSEC-2026-0403",
+    "RUSTSEC-2026-0410"
+  ],
+  "fixed_packages": {
+    "tantivy": "0.27.0",
+    "tantivy-sstable": "0.27.0",
+    "zstd": "0.14.3",
+    "zstd-safe": "8.2.0",
+    "zstd-sys": "2.1.2+zstd.1.5.7"
+  },
+  "cargo_deny_version": "0.20.2",
+  "advisory_database_revision": "40f5be6fb12ed93fc591bf4ab23b7d793b3f2239",
+  "checks": {
+    "advisories": {
+      "command": [
+        "target/crypto-668/cargo-deny",
+        "--locked",
+        "check",
+        "advisories"
+      ],
+      "exit": 0,
+      "seconds": 16.55094623565674
+    },
+    "baseline": {
+      "command": [
+        "python3",
+        "script/dependency-security-baseline-tests"
+      ],
+      "exit": 0,
+      "seconds": 0.16667628288269043
+    },
+    "tests": {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "search::",
+        "--",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 662.925270318985
+    },
+    "check": {
+      "command": [
+        "cargo",
+        "check",
+        "--locked",
+        "-p",
+        "warp"
+      ],
+      "exit": 0,
+      "seconds": 293.4119665622711
+    },
+    "clippy": {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "warp",
+        "--bin",
+        "zaplex",
+        "--no-deps",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0,
+      "seconds": 295.9081552028656
+    },
+    "phase-a": {
+      "command": [
+        "python3",
+        "script/check-v1-release-readiness",
+        "--phase-a"
+      ],
+      "exit": 0,
+      "seconds": 11.2144615650177
+    }
+  },
+  "search_tests_passed": 88,
+  "search_tests_failed": 0,
+  "search_tests_ignored": 1,
+  "preexisting_ignored_test": "search::workflows::fuzzy_match::tests::test_exact_title_before_fuzzy_command",
+  "ignored_reason": "Weighting doesn't prioritize this case well; unchanged from base and not counted as passed.",
+  "phase_a_passes": 13,
+  "advisory_exceptions_unchanged": true,
+  "changed_input_sha256": {
+    "Cargo.lock": "050cb2e341f95fde4beda8f6cfbecd9282bc1e48cd431295798d1392c841b384",
+    "app/Cargo.toml": "6a285ea08ce8946a5718d48a8a594cd10516b094598c22307b15ec919e31fcfb",
+    "deny.toml": "c422a27efbdaed85e49774ff1023977b1409e19d35ec9e7a61e63307e3459eef",
+    "VERSION": "d78a0c08feeaca8914156a4d300f0e17eb1bc22b93a0fc1dddef33f78730ed93"
+  },
+  "local_log_sha256": {
+    "advisories.log": "dc89bfb55e4129bcbad591c2655ee895a8d4a571e3231372f504e071b73760b2",
+    "baseline.log": "9843c2158a385e923e75c41201c39a77c6195a2054f5ac307199928e043fd56c",
+    "tests.log": "d54fade20812e3453f13118203422d6d979d626c097bcfb9334ca0243c2c3e3e",
+    "check.log": "000a7278a999052c0e3a6506e1ca72c19081c9b739367a24e23f5d0650fc1b20",
+    "clippy.log": "33ddee6de6d43529e90c583967b72868796bb2e3415e336146088068b3bfd808",
+    "phase-a.log": "9e6a3178957ea1782776dc1288c1383f5d45e939f0b9b89a52ac4aa14a111325"
+  },
+  "workflow_validation": "Only existing 1.2.40 version literals changed to 1.2.41.",
+  "native_validation": "Pending a new macOS batch/test DMG. Prior 1.2.39 UI evidence is not evidence for the changed binary."
+}
