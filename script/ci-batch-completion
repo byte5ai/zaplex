@@ -10,16 +10,17 @@ def validate(needs, artifacts):
     if needs.get("preflight", {}).get("result") != "success":
         raise ValueError("Batch preflight did not succeed")
     outputs = needs["preflight"].get("outputs", {})
+    all_checks = outputs.get("reuse_all_checks") == "true"
     package = outputs.get("reuse_checks") == "true"
     linux = outputs.get("reuse_linux_checks") == "true"
     tail = outputs.get("reuse_pre_sftp_checks") == "true"
-    if sum((package, linux, tail)) > 1:
+    if sum((package, linux, tail, all_checks)) > 1:
         raise ValueError("Conflicting reuse modes")
     reused = {
-        "dependency_security": package or linux or tail,
-        "compile_checks": package or tail,
-        "tests": tail,
-        "live_sftp": package,
+        "dependency_security": package or linux or tail or all_checks,
+        "compile_checks": package or tail or all_checks,
+        "tests": tail or all_checks,
+        "live_sftp": package or all_checks,
     }
     for job, reuse in reused.items():
         result = needs.get(job, {}).get("result")

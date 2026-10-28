@@ -131,8 +131,9 @@ def main():
             or not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag)):
         raise ValueError("Exact run IDs, app commit and stable release version required")
     build, gui = (api(f"actions/runs/{run_id}") for run_id in (build_id, gui_id))
-    validate_runs(build, pages(f"actions/runs/{build_id}/jobs", "jobs"),
-                  pages(f"actions/runs/{build_id}/artifacts", "artifacts"),
+    build_artifacts = pages(f"actions/runs/{build_id}/artifacts", "artifacts")
+    build_jobs = batch["checked_jobs"](build, pages(f"actions/runs/{build_id}/jobs", "jobs"), build_artifacts)
+    validate_runs(build, build_jobs, build_artifacts,
                   gui, pages(f"actions/runs/{gui_id}/jobs", "jobs"), source)
     command("git", "fetch", "--no-tags", "origin", "main", source, gui["head_sha"])
     for revision in (source, gui["head_sha"]):
