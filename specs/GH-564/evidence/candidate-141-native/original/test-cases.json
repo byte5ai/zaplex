@@ -1,0 +1,214 @@
+{
+  "devices" : [
+    {
+      "architecture" : "arm64e",
+      "deviceId" : "dd4746e5894060cf84366288a0bfbf366da16a44",
+      "deviceName" : "My Mac",
+      "modelName" : "Virtual Machine",
+      "osBuildNumber" : "26A428",
+      "osVersion" : "27.0",
+      "platform" : "macOS"
+    }
+  ],
+  "testNodes" : [
+    {
+      "children" : [
+        {
+          "children" : [
+            {
+              "children" : [
+                {
+                  "duration" : "23s",
+                  "durationInSeconds" : 23.53474497795105,
+                  "name" : "testCancelSplitKeepsOriginalShell()",
+                  "nodeIdentifier" : "NavigationTests/testCancelSplitKeepsOriginalShell()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testCancelSplitKeepsOriginalShell",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "21s",
+                  "durationInSeconds" : 21.93047297000885,
+                  "name" : "testClosingTabPreservesOriginalShell()",
+                  "nodeIdentifier" : "NavigationTests/testClosingTabPreservesOriginalShell()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testClosingTabPreservesOriginalShell",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "17s",
+                  "durationInSeconds" : 17.38702702522278,
+                  "name" : "testSettingsReturnToOriginalShell()",
+                  "nodeIdentifier" : "NavigationTests/testSettingsReturnToOriginalShell()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testSettingsReturnToOriginalShell",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "27s",
+                  "durationInSeconds" : 27.145142912864685,
+                  "name" : "testSplitDown()",
+                  "nodeIdentifier" : "NavigationTests/testSplitDown()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testSplitDown",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "28s",
+                  "durationInSeconds" : 28.612149953842163,
+                  "name" : "testSplitLeft()",
+                  "nodeIdentifier" : "NavigationTests/testSplitLeft()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testSplitLeft",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "28s",
+                  "durationInSeconds" : 28.92331099510193,
+                  "name" : "testSplitRight()",
+                  "nodeIdentifier" : "NavigationTests/testSplitRight()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testSplitRight",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "29s",
+                  "durationInSeconds" : 29.212039947509766,
+                  "name" : "testSplitUp()",
+                  "nodeIdentifier" : "NavigationTests/testSplitUp()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testSplitUp",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "children" : [
+                    {
+                      "name" : "failed - Expected rendered text: ZQA 490663 963",
+                      "nodeType" : "Failure Message",
+                      "sourceLocation" : {
+                        "filePath" : "/var/folders/yt/jkgjjlb55fvbjsx8t5xw72280000gn/T/tmp.hM3XSGhLM1/ZaplexUITests/NavigationTests.swift",
+                        "lineNumber" : 57
+                      }
+                    }
+                  ],
+                  "duration" : "23s",
+                  "durationInSeconds" : 23.900004982948303,
+                  "name" : "testTabsKeepIndependentShells()",
+                  "nodeIdentifier" : "NavigationTests/testTabsKeepIndependentShells()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests/testTabsKeepIndependentShells",
+                  "nodeType" : "Test Case",
+                  "result" : "Failed"
+                }
+              ],
+              "name" : "NavigationTests",
+              "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/NavigationTests",
+              "nodeType" : "Test Suite",
+              "result" : "Failed"
+            },
+            {
+              "children" : [
+                {
+                  "duration" : "6s",
+                  "durationInSeconds" : 6.602345108985901,
+                  "name" : "testNativeCloseButtonClosesWindow()",
+                  "nodeIdentifier" : "SmokeTests/testNativeCloseButtonClosesWindow()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SmokeTests/testNativeCloseButtonClosesWindow",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "6s",
+                  "durationInSeconds" : 6.852342009544373,
+                  "name" : "testNewWindowRunsItsOwnShell()",
+                  "nodeIdentifier" : "SmokeTests/testNewWindowRunsItsOwnShell()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SmokeTests/testNewWindowRunsItsOwnShell",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "9s",
+                  "durationInSeconds" : 9.227678060531616,
+                  "name" : "testRelaunchAcceptsTerminalInput()",
+                  "nodeIdentifier" : "SmokeTests/testRelaunchAcceptsTerminalInput()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SmokeTests/testRelaunchAcceptsTerminalInput",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "5s",
+                  "durationInSeconds" : 5.799278974533081,
+                  "name" : "testTerminalExecutesAndRendersOutput()",
+                  "nodeIdentifier" : "SmokeTests/testTerminalExecutesAndRendersOutput()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SmokeTests/testTerminalExecutesAndRendersOutput",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                }
+              ],
+              "name" : "SmokeTests",
+              "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SmokeTests",
+              "nodeType" : "Test Suite",
+              "result" : "Passed"
+            },
+            {
+              "children" : [
+                {
+                  "duration" : "15s",
+                  "durationInSeconds" : 15.749353051185608,
+                  "name" : "testConnectionsPanelKeepsTerminalUsable()",
+                  "nodeIdentifier" : "SurfaceTests/testConnectionsPanelKeepsTerminalUsable()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "25s",
+                  "durationInSeconds" : 25.475775003433228,
+                  "name" : "testFileManagerUsesPaneDirectoryAndReturnsToShell()",
+                  "nodeIdentifier" : "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "24s",
+                  "durationInSeconds" : 24.29060208797455,
+                  "name" : "testNarrowFileManagerKeepsAllActionsVisible()",
+                  "nodeIdentifier" : "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                },
+                {
+                  "duration" : "29s",
+                  "durationInSeconds" : 29.882694959640503,
+                  "name" : "testWindowMinimumSizePreservesOriginalShell()",
+                  "nodeIdentifier" : "SurfaceTests/testWindowMinimumSizePreservesOriginalShell()",
+                  "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SurfaceTests/testWindowMinimumSizePreservesOriginalShell",
+                  "nodeType" : "Test Case",
+                  "result" : "Passed"
+                }
+              ],
+              "name" : "SurfaceTests",
+              "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests/SurfaceTests",
+              "nodeType" : "Test Suite",
+              "result" : "Passed"
+            }
+          ],
+          "name" : "ZaplexUITests",
+          "nodeIdentifierURL" : "test://com.apple.xcode/ZaplexGUI/ZaplexUITests",
+          "nodeType" : "UI test bundle",
+          "result" : "Failed"
+        }
+      ],
+      "name" : "ZaplexGUI",
+      "nodeType" : "Test Plan",
+      "result" : "Failed"
+    }
+  ],
+  "testPlanConfigurations" : [
+    {
+      "configurationId" : "1",
+      "configurationName" : "Test Scheme Action"
+    }
+  ]
+}

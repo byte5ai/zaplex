@@ -1,0 +1,814 @@
+{
+  "run_id": "40745799604",
+  "url": "https://github.com/byte5ai/zaplex/actions/runs/40745799604",
+  "finished": true,
+  "operator_closed": true,
+  "screenshots": [
+    {
+      "file": "00-initial.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "coordinate_context": {
+        "version": 1,
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 37
+        },
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_d2be16b62f716d462821e519ca4b67f5",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "01-before-return.png",
+      "sha256": "95953ec47e9174ed408c7f028e6633b3cebf29f10ff88f26afc81758688cf7c8",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "window": {
+          "window_id": 37,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_2a6e6c5ca0276bf159da4ae1b7644692"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "02-baseline-command.png",
+      "sha256": "b220703ac935cddadd085a72256dac11ae4c6e83f7e77258939d161b59789207",
+      "coordinate_context": {
+        "origin": "top_left",
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_d57f10c1c0894218e6fdd898000eda5a",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · ~"
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "03-baseline.png",
+      "sha256": "5d84369bb8b4fc7a18ca70053f3c0233737ec6c2bb91fe93a7ca46256a5d185e",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "index": 0,
+          "title": "Local · ~",
+          "window_id": 37
+        },
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "reference_id": "ps1_72d045fec6900a678588489d787391d4",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "native_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "04-minimum-dark.png",
+      "sha256": "54135e78ee1ee01fdc12b5f1386572dc3a5ad028ba99a2428406110e5d4329dd",
+      "coordinate_context": {
+        "output_scale": 1,
+        "window": {
+          "title": "Local · ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_c091809b78f5efbbdb1ac64902181153",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "version": 1,
+        "native_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "05-plus-minimum-dark.png",
+      "sha256": "1cf5d10f96d8994c3f07afd99e680e406edcb12c884a3c3b965a47ba889bd331",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_5f630f914546000d417bc611c5ccd03f",
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 37
+        },
+        "version": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "06-worktree-minimum-dark.png",
+      "sha256": "98b48d624236b77895a98354e8069ec467859ec218a57382598b7c0a0565cb17",
+      "coordinate_context": {
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "reference_id": "ps1_6bd8e456378dc78677319cb529b5efa8",
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 37
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "native_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "07-worktree-search-dark.png",
+      "sha256": "ccd8388f5180b3f6886a3d0881b498813e25e2d38970dda08c9286b1d3bb9804",
+      "coordinate_context": {
+        "reference_id": "ps1_0c12157a5199ae76674b602d1e086d3a",
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · ~"
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "08-resize-wide-dark.png",
+      "sha256": "a342beb153bcf90f4238e83d216546304efdf1d3b3c4472bc1a37254147a8f78",
+      "coordinate_context": {
+        "reference_id": "ps1_15c4d20a019870c0e6a0fc2afe454b88",
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "window_id": 37,
+          "title": "Local · ~",
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "09-resize-minimum-dark.png",
+      "sha256": "ccd8388f5180b3f6886a3d0881b498813e25e2d38970dda08c9286b1d3bb9804",
+      "coordinate_context": {
+        "reference_id": "ps1_95587f71c05ad099f785938fb70b9a3d",
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "title": "Local · ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "version": 1,
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ]
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "10-escape-dark.png",
+      "sha256": "bc2b05aab9ae56215979a1ab953a2f0b4806b439ad15f269af399fdacd9bfbd8",
+      "coordinate_context": {
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_e9cb500a6daf199dc911c20202c33a9c",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "version": 1,
+        "native_scale": 1,
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · ~",
+          "window_id": 37,
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "11-worktree-wide-dark.png",
+      "sha256": "68ed7444a181637b21e3ff136ea5c54839f8c5fa8dfeae8af8d68a3c468dc0c4",
+      "coordinate_context": {
+        "reference_id": "ps1_0544a8cff6509ae8eb412c1d90d2e80d",
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · ~"
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "12-add-repo-dialog.png",
+      "sha256": "8619066811f1c1bac14903fd73c4148f38c4d1de28547505fe274702df21bb85",
+      "coordinate_context": {
+        "native_scale": 1,
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "index": 0,
+          "window_id": 37,
+          "title": "Local · ~"
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_3fcfce0627e9394422470198ba999540",
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "13-settings.png",
+      "sha256": "3eea0315d7fb873b48e6b0ea3d1866c1b50b554722e846dd3ec5352c8fc9a0b6",
+      "coordinate_context": {
+        "native_scale": 1,
+        "version": 1,
+        "output_scale": 1,
+        "window": {
+          "title": "Settings",
+          "window_id": 37,
+          "index": 0
+        },
+        "reference_id": "ps1_9bbde767caad9eedd6b1ddc68781d202",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "14-appearance.png",
+      "sha256": "f3b93eb388d1d46150cd32d5918efec0e69052b1c666c0b3d4f74390c8427e35",
+      "coordinate_context": {
+        "reference_id": "ps1_6195ffb132f4bc5accd2f8641d315509",
+        "version": 1,
+        "output_scale": 1,
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 37
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "15-theme-picker.png",
+      "sha256": "eb5ac91dddf7c4f367838f9b8f2638b4c7a31d828855e81aa6bf37f8894d08e1",
+      "coordinate_context": {
+        "origin": "top_left",
+        "reference_id": "ps1_e76f52f9d8c1478a2c188f2ed7b07398",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "output_scale": 1,
+        "window": {
+          "window_id": 37,
+          "index": 0,
+          "title": "Settings"
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "16-return-terminal.png",
+      "sha256": "30bcbfe2933e98f350a9101222fb455acdcda3015a41c05d9dcbb260be512e8a",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "window_id": 37,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "reference_id": "ps1_da1b7ce0a9f0e99e0075ee51556524da"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "17-after-before-return.png",
+      "sha256": "f56097454a4f55287378a23965ecda124e8b7b362b6b55ab1cc353a3dce4741e",
+      "coordinate_context": {
+        "reference_id": "ps1_3b3e8ce6476f54286af356aacdde6f34",
+        "origin": "top_left",
+        "window": {
+          "window_id": 37,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "18-after-output.png",
+      "sha256": "4ca39e35cd7a0903e6d5ad22ee9a29069128e306f1c2679cf29e9788e42b5987",
+      "coordinate_context": {
+        "window": {
+          "index": 0,
+          "title": "Local · ~",
+          "window_id": 37
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_b1a318df039fb9aae0525def4f88b0d7",
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "19-finish-before-return.png",
+      "sha256": "384e62a120a1e6989bcf0d507704d70f1f6f0dd993d1bdff679e9c638734a216",
+      "coordinate_context": {
+        "reference_id": "ps1_681492b4a7525e83607058712d709056",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "title": "Local · ~",
+          "window_id": 37,
+          "index": 0
+        },
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    }
+  ],
+  "app_version": "1.2.41",
+  "app_source": "0d7f5b1c1d2d4de18115508e8c66442786f98101",
+  "harness_source": "a973f67804df2933ff66eba203f075f15d39bf6b",
+  "dmg_sha256": "4abf08c30dfbf393a79044a4198ebaa3745637550425497473013f7d0d55c5b2",
+  "reduced_motion": "not-measured",
+  "action_log": "Infrastructure VM identity omitted; original log retained locally."
+}

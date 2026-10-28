@@ -1,0 +1,19 @@
+{
+  "debug_logs" : [
+    "[2026-10-28T18:55:52.576Z] DEBUG: Runtime host: remote onDemand via \/Users\/admin\/Library\/Application Support\/Peekaboo\/daemon-9a5853f7ce0d2e0c.sock (build 4.9.6 (4.9.6))",
+    "[2026-10-28T18:55:52.576Z] VERBOSE [Operation]: Starting operation {app=Zaplex, mode=auto, menubar=false, annotate=false, operation=see_command, hasAnalyzePrompt=false}",
+    "[2026-10-28T18:55:52.576Z] VERBOSE [Performance]: Starting timer 'see_command'",
+    "[2026-10-28T18:55:52.580Z] VERBOSE [Capture]: Starting capture and detection phase",
+    "[2026-10-28T18:55:52.580Z] VERBOSE [Capture]: Using desktop observation pipeline {target=app:Zaplex}",
+    "[2026-10-28T18:55:52.580Z] VERBOSE [Operation]: Starting operation {operation=capture_phase, mode=window}",
+    "[2026-10-28T18:55:52.580Z] VERBOSE [Performance]: Starting timer 'capture_phase'",
+    "[2026-10-28T18:55:52.736Z] VERBOSE [Operation]: Operation completed {operation=see_command, error=Window not found, success=false}",
+    "[2026-10-28T18:55:52.736Z] VERBOSE [Performance]: Timer 'see_command' completed {duration_ms=159}"
+  ],
+  "data" : null,
+  "error" : {
+    "message" : "Window not found",
+    "code" : "INTERACTION_FAILED"
+  },
+  "success" : false
+}

@@ -1,0 +1,279 @@
+{
+  "target_receipt" : {
+    "process_start_identity_decimal" : "1793213771621266",
+    "process_start_identity" : 1793213771621266,
+    "pid" : 2994,
+    "window_id" : 130
+  },
+  "success" : true,
+  "debug_logs" : [
+    "[2026-10-28T18:58:48.314Z] DEBUG: Runtime host: remote onDemand via \/Users\/admin\/Library\/Application Support\/Peekaboo\/daemon-9a5853f7ce0d2e0c.sock (build 4.9.6 (4.9.6))",
+    "[2026-10-28T18:58:48.314Z] VERBOSE [Operation]: Starting operation {menubar=false, operation=see_command, hasAnalyzePrompt=false, app=Zaplex, annotate=false, mode=auto}",
+    "[2026-10-28T18:58:48.314Z] VERBOSE [Performance]: Starting timer 'see_command'",
+    "[2026-10-28T18:58:48.318Z] VERBOSE [Capture]: Starting capture and detection phase",
+    "[2026-10-28T18:58:48.318Z] VERBOSE [Capture]: Using desktop observation pipeline {target=app:Zaplex}",
+    "[2026-10-28T18:58:48.318Z] VERBOSE [Operation]: Starting operation {operation=capture_phase, mode=window}",
+    "[2026-10-28T18:58:48.318Z] VERBOSE [Performance]: Starting timer 'capture_phase'",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Operation]: Operation completed {operation=capture_phase, mode=window, success=true}",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Performance]: Timer 'capture_phase' completed {duration_ms=187}",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Performance]: Desktop observation span {duration_ms=12, span=state.snapshot}",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Performance]: Desktop observation span {duration_ms=1, span=target.resolve}",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Performance]: Desktop observation span {duration_ms=40, span=capture.window}",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Performance]: Desktop observation span {duration_ms=7, span=detection.ax}",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Performance]: Desktop observation span {duration_ms=1, span=output.write}",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Performance]: Desktop observation span {duration_ms=1, span=output.raw.write}",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Performance]: Desktop observation span {duration_ms=0, span=snapshot.write}",
+    "[2026-10-28T18:58:48.505Z] VERBOSE [Performance]: Desktop observation span {duration_ms=174, span=desktop.observe}",
+    "[2026-10-28T18:58:48.506Z] VERBOSE [Capture]: Capture completed successfully {elementCount=6, screenshotSize=96977, snapshotId=ps1_a98454513d47cbe97f06d1d9f733f0e3, observedFocus=rawTrue=2 rawFalse=4 rawUnknown=0 rawFocusedTypes=[other:1,textField:1] rawResolver=multipleFocusedElements cached=false partial=false truncated=false attached=true}"
+  ],
+  "data" : {
+    "ui_elements" : [
+      {
+        "is_enabled" : true,
+        "is_actionable" : true,
+        "ax_role" : "AXButton",
+        "role" : "button",
+        "role_description" : "close button",
+        "label" : "close button",
+        "bounds" : {
+          "y" : 40,
+          "width" : 16,
+          "x" : 11,
+          "height" : 16
+        },
+        "id" : "elem_2"
+      },
+      {
+        "is_enabled" : true,
+        "is_actionable" : true,
+        "ax_role" : "AXButton",
+        "role" : "button",
+        "help" : "this button also has an action to zoom the window",
+        "role_description" : "full screen button",
+        "label" : "full screen button",
+        "bounds" : {
+          "y" : 40,
+          "width" : 16,
+          "x" : 51,
+          "height" : 16
+        },
+        "id" : "elem_3"
+      },
+      {
+        "is_enabled" : true,
+        "is_actionable" : true,
+        "ax_role" : "AXButton",
+        "role" : "button",
+        "role_description" : "minimize button",
+        "label" : "minimize button",
+        "bounds" : {
+          "y" : 40,
+          "width" : 16,
+          "x" : 31,
+          "height" : 16
+        },
+        "id" : "elem_5"
+      },
+      {
+        "is_actionable" : true,
+        "ax_role" : "AXTextArea",
+        "role" : "textField",
+        "role_description" : "text entry area",
+        "value" : "",
+        "label" : "text entry area",
+        "bounds" : {
+          "y" : 30,
+          "width" : 1024,
+          "x" : 0,
+          "height" : 678
+        },
+        "id" : "elem_1",
+        "is_value_settable" : false
+      },
+      {
+        "is_actionable" : false,
+        "ax_role" : "AXGroup",
+        "role" : "group",
+        "role_description" : "group",
+        "label" : "group",
+        "bounds" : {
+          "y" : 41,
+          "width" : 14,
+          "x" : 52,
+          "height" : 14
+        },
+        "id" : "elem_4"
+      },
+      {
+        "is_actionable" : false,
+        "ax_role" : "AXWindow",
+        "role" : "other",
+        "role_description" : "standard window",
+        "value" : "Theme chooser. Unfortunately, theme chooser window isn't compatible with screen readers yet.",
+        "title" : "Einstellungen",
+        "label" : "Einstellungen",
+        "description" : "Press escape to close.",
+        "bounds" : {
+          "x" : -0,
+          "height" : 678,
+          "width" : 1024,
+          "y" : 30
+        },
+        "id" : "elem_0"
+      }
+    ],
+    "is_dialog" : false,
+    "semantic_scope" : "exact_or_requested",
+    "used_cache" : false,
+    "snapshot_reusable" : true,
+    "screenshot_raw" : "\/tmp\/macrunner-operator\/45-de-dark-search.png",
+    "focused_element" : {
+      "frame" : [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "windowID" : 130,
+      "processIdentifier" : 2994,
+      "role" : "AXTextArea"
+    },
+    "snapshot_id" : "ps1_a98454513d47cbe97f06d1d9f733f0e3",
+    "mutation_targeting_available" : true,
+    "execution_time" : 0.19190895557403564,
+    "application_name" : "Zaplex",
+    "coordinate_context" : {
+      "logical_bounds" : [
+        [
+          0,
+          30
+        ],
+        [
+          1024,
+          678
+        ]
+      ],
+      "display" : {
+        "index" : 0
+      },
+      "logical_space" : "global_display_points",
+      "version" : 1,
+      "origin" : "top_left",
+      "requested_scale" : {
+        "logical1x" : {
+
+        }
+      },
+      "delivered_image_size" : [
+        1024,
+        678
+      ],
+      "output_scale" : 1,
+      "native_scale" : 1,
+      "reference_id" : "ps1_a98454513d47cbe97f06d1d9f733f0e3",
+      "window" : {
+        "title" : "Einstellungen",
+        "index" : 0,
+        "window_id" : 130
+      }
+    },
+    "observation" : {
+      "target" : {
+        "open_if_needed" : false,
+        "resolved_kind" : "window-id",
+        "source" : "window-id",
+        "bounds" : [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "hints" : [
+
+        ],
+        "requested_kind" : "app",
+        "window_id" : 130
+      },
+      "spans" : [
+        {
+          "metadata" : {
+
+          },
+          "duration_ms" : 11.522958,
+          "name" : "state.snapshot"
+        },
+        {
+          "metadata" : {
+
+          },
+          "duration_ms" : 0.916625,
+          "name" : "target.resolve"
+        },
+        {
+          "metadata" : {
+            "engine" : "CGWindowList"
+          },
+          "duration_ms" : 40.431792,
+          "name" : "capture.window"
+        },
+        {
+          "metadata" : {
+
+          },
+          "duration_ms" : 6.884875,
+          "name" : "detection.ax"
+        },
+        {
+          "metadata" : {
+
+          },
+          "duration_ms" : 1.09925,
+          "name" : "output.write"
+        },
+        {
+          "metadata" : {
+
+          },
+          "duration_ms" : 0.754959,
+          "name" : "output.raw.write"
+        },
+        {
+          "metadata" : {
+
+          },
+          "duration_ms" : 0.341417,
+          "name" : "snapshot.write"
+        },
+        {
+          "metadata" : {
+
+          },
+          "duration_ms" : 173.760292,
+          "name" : "desktop.observe"
+        }
+      ],
+      "state_snapshot" : {
+        "running_application_count" : 53,
+        "display_count" : 0,
+        "window_count" : 0
+      },
+      "warnings" : [
+
+      ]
+    },
+    "screenshot_annotated" : "",
+    "interactable_count" : 4,
+    "capture_mode" : "window",
+    "element_count" : 6,
+    "window_title" : "Einstellungen",
+    "ui_map" : ""
+  }
+}

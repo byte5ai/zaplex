@@ -1,0 +1,2090 @@
+{
+  "run_id": "40748184338",
+  "url": "https://github.com/byte5ai/zaplex/actions/runs/40748184338",
+  "finished": true,
+  "operator_closed": true,
+  "screenshots": [
+    {
+      "file": "00-initial.png",
+      "sha256": "6853d91b9940a4ce41a272ff6f3276c2f19c00ae6b8922b0d187d49e6eed5573",
+      "coordinate_context": {
+        "version": 1,
+        "reference_id": "ps1_98a2c79d48eed1230f86ff67d2e13a1a",
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "window": {
+          "window_id": 38,
+          "index": 0,
+          "title": "Local · ~"
+        },
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "01-baseline-command.png",
+      "sha256": "93cb41be8ba7d5b66e023ec4b31ddaef0637fae0e664f22d206d6cb565a1f7bf",
+      "coordinate_context": {
+        "reference_id": "ps1_ae6bf5072d17144950ba8e8c425c26f7",
+        "logical_space": "global_display_points",
+        "version": 1,
+        "output_scale": 1,
+        "native_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Local · ~",
+          "window_id": 38,
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "02-baseline.png",
+      "sha256": "81467acc36d709380f36fe9b7e5e36c59d11846c9461f1e4f795b8d53092a02f",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "reference_id": "ps1_574f1245f43932326795c8d49e22cd26",
+        "origin": "top_left",
+        "window": {
+          "title": "Local · ~",
+          "window_id": 38,
+          "index": 0
+        },
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "native_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "03-settings.png",
+      "sha256": "548ee5a165f4122e4045bed1f8056ec610bffbe2a906c9baf1216494b2845f45",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 38
+        },
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "reference_id": "ps1_e2add7d229c76c8ab103d2846862ad96",
+        "logical_space": "global_display_points",
+        "output_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "04-appearance.png",
+      "sha256": "912a4a9e645a59ea7e4b0f860784e2a14d9452646ce2bd827ccde4a6868616fc",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "version": 1,
+        "output_scale": 1,
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 38
+        },
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_9ec4f2cc5afbfe23c343f19d6f81d285",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ]
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "05-theme-picker.png",
+      "sha256": "d8251e0cef43f7415aecd7e8c40e3d223e467f19d292ab45df105731c04e3729",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_805fb0d0096eb89797bdcb80f15d599b",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "window": {
+          "title": "Settings",
+          "index": 0,
+          "window_id": 38
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "06-light-search.png",
+      "sha256": "d6d201675dbaafc0b293781e848aa39d0dde45392d4203ff28f3a7b7c4f9989e",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 38,
+          "title": "Settings",
+          "index": 0
+        },
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "output_scale": 1,
+        "reference_id": "ps1_337ae7f781a0c1bb7b57c1780cc40a87",
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "07-light-selected.png",
+      "sha256": "dca54b6ea41c07c6f4795649f0a631dcaf899f905fb65875b7cc7503b71dacd4",
+      "coordinate_context": {
+        "native_scale": 1,
+        "version": 1,
+        "origin": "top_left",
+        "window": {
+          "index": 0,
+          "window_id": 38,
+          "title": "Settings"
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_08a3cb7f22c573ae2f658872dc5f454d",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "08-light-minimum.png",
+      "sha256": "4199f7156dc648224308945afd73825de358440a2ccd0ab929a512b90d3de56a",
+      "coordinate_context": {
+        "reference_id": "ps1_30f3011ee47467a93b0ae4d2a88c480e",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "version": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "window_id": 38,
+          "index": 0,
+          "title": "Local · ~"
+        },
+        "native_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "09-light-plus.png",
+      "sha256": "16c9c25bd101d816904d0bb4537fd56d30f2ef9d109ba0fee63339098094bb80",
+      "coordinate_context": {
+        "version": 1,
+        "reference_id": "ps1_2abbf8dcc8856c87247a009b5b71b160",
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 38
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "10-light-worktree.png",
+      "sha256": "b4e2112412dc04e7d397a94d055359e46c145bdc8c4f2327d5d33155888f1650",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "window": {
+          "window_id": 38,
+          "index": 0,
+          "title": "Local · ~"
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_1e69882cff192516afdbd56a8ff6abaa"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "11-light-query.png",
+      "sha256": "a89264515f994e03c6e8bce494eee1a12c3f6b7abebdb064ec9ee33d6189ee26",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "window": {
+          "window_id": 38,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "reference_id": "ps1_a2495ca84f19d88a9845e8cc6eb0066f",
+        "native_scale": 1,
+        "version": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "12-light-resize-wide.png",
+      "sha256": "594adf0d10c7ae03366cba0870388df6405af13ac1bdb8685ae23803ac801b15",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · ~",
+          "window_id": 38,
+          "index": 0
+        },
+        "reference_id": "ps1_19f33149ac3ce7bd7cd7e941be527c6c",
+        "version": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "native_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "13-light-reopen.png",
+      "sha256": "a954bb43f377e062006f76d71272c957990a15c8f9fd89ff2ea696a8505486ae",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "window": {
+          "window_id": 38,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "reference_id": "ps1_0a7264b7ba06d998aa5cfcaceb76b34e"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "14-light-query-direct.png",
+      "sha256": "fc8e0e469567dcb54777e47f1e16ae0c639ae2a121583b27da2ff9180fcb60b5",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 38,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "output_scale": 1,
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_4e55d65db166e41b6937e03838acf59d",
+        "origin": "top_left",
+        "version": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "15-light-open-wide.png",
+      "sha256": "b40d7c1c9fa38bc966bfdd8dd0f0292e00209cfdc797ee453388f96267ef230e",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 38
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_94b0d42305b29675c693ceedac375c85",
+        "version": 1,
+        "output_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "16-light-open-minimum.png",
+      "sha256": "fc8e0e469567dcb54777e47f1e16ae0c639ae2a121583b27da2ff9180fcb60b5",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_ea18a08a8c74a654e370e36424f30fcf",
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "native_scale": 1,
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "window": {
+          "window_id": 38,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "output_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "17-light-outside.png",
+      "sha256": "fbf5b536160c687118184c61fa4bb8a37be66c8bdc8911feba0e309a0a6e6fd0",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 38,
+          "index": 0,
+          "title": "Local · ~"
+        },
+        "native_scale": 1,
+        "origin": "top_left",
+        "output_scale": 1,
+        "reference_id": "ps1_ea714b999c2f85f8f73f765fdc40e38e",
+        "version": 1,
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "18-new-agent-entry.png",
+      "sha256": "204bf910fd3a8261c944abbd44021a742f00f6ff445e0e43ea03fa9aba54635d",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · ~",
+          "window_id": 38,
+          "index": 0
+        },
+        "version": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "reference_id": "ps1_38eec6ea006b77ef7e0aa2404b164397"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "19-new-agent-result.png",
+      "sha256": "49ad6403be923ed099c20e8f7fb8c2abb5dc559865f2109059f0ce97fb941908",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_0490b7a08f71fe50309af85fd37de110",
+        "logical_space": "global_display_points",
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 38
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "20-desktop.png",
+      "sha256": "f756759457bee40e2429f4ba00f0b6b1f30ef98435bac70f605cfbf8a576c544",
+      "coordinate_context": {
+        "display": {
+          "index": 0,
+          "name": "1"
+        },
+        "delivered_image_size": [
+          1024,
+          768
+        ],
+        "version": 1,
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            0
+          ],
+          [
+            1024,
+            768
+          ]
+        ],
+        "origin": "top_left",
+        "native_scale": 1,
+        "reference_id": "ps1_5870580a5239bf8d4441b8c60a1272ac",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "21-new-agent-hover.png",
+      "sha256": "44235f8eca4f2952af737a227aa0b97f3a11d711573f3d6f8f00000a0c786e5e",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "origin": "top_left",
+        "reference_id": "ps1_e9d977ec1afa6bcf0e04ad9d00572f6f",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "window": {
+          "index": 0,
+          "window_id": 38,
+          "title": "Local · ~"
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "22-new-agent-keyboard.png",
+      "sha256": "c6997f0b0769b497ab0a48cbd8fb17e7bde92de41860a5c92ed6e6d41b7174fd",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "native_scale": 1,
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "version": 1,
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 38
+        },
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_5a7311883f7ceeb378a4ec8315f13a44",
+        "origin": "top_left"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "23-codex-card.png",
+      "sha256": "9f309698b10e9767b14fbf9e0cd269221d44c16ec84b9c31fd5e6d803385bb2f",
+      "coordinate_context": {
+        "window": {
+          "window_id": 38,
+          "title": "Local · ~",
+          "index": 0
+        },
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "reference_id": "ps1_1128bd94d2c880433c4b8295af56afd9",
+        "native_scale": 1,
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "24-codex-card-minimum.png",
+      "sha256": "fff2c2e5ac2488615eb8ae5980a8416546252d0e1a24d959a7493979fe952294",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "version": 1,
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 38
+        },
+        "reference_id": "ps1_d1b38ee3e39f5ac6878138f8aef5f3d7",
+        "display": {
+          "index": 0
+        },
+        "native_scale": 1,
+        "output_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "25-card-escape.png",
+      "sha256": "fbf5b536160c687118184c61fa4bb8a37be66c8bdc8911feba0e309a0a6e6fd0",
+      "coordinate_context": {
+        "version": 1,
+        "output_scale": 1,
+        "native_scale": 1,
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_ce8e60778d0cc11f4ca29db329934064",
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "window": {
+          "index": 0,
+          "window_id": 38,
+          "title": "Local · ~"
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ]
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "26-after-command.png",
+      "sha256": "95e445648f9c22a92fe5dc66c8444c96e0b2b51c72d2172912f6a91783bf32fe",
+      "coordinate_context": {
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "native_scale": 1,
+        "version": 1,
+        "reference_id": "ps1_49c9dd84e0c231df4d449ef9d064fe3c",
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 38,
+          "index": 0,
+          "title": "Local · ~"
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "27-after-output.png",
+      "sha256": "dc15b78e1f21d423f98ea89d11d3340f64b1f04fc272419f3613e8da1f2a5b1b",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Local · ~",
+          "index": 0,
+          "window_id": 38
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_3279dcd8432c9eb73cb87c980e4297d5",
+        "version": 1,
+        "output_scale": 1,
+        "origin": "top_left",
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "28-settings-language.png",
+      "sha256": "bdc611a16835613a24cfaf23252ec08764cc23d89ac34f630ad6470c2054e6a9",
+      "coordinate_context": {
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "version": 1,
+        "window": {
+          "window_id": 38,
+          "title": "Settings",
+          "index": 0
+        },
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_2bf0e75f6a75364c9af9e8c3eaf06b64"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "29-appearance.png",
+      "sha256": "1203277ffb2b758daab63647dfac59db277514b340a6e8d4cb8459ffdeae6505",
+      "coordinate_context": {
+        "native_scale": 1,
+        "window": {
+          "window_id": 38,
+          "index": 0,
+          "title": "Settings"
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "version": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "reference_id": "ps1_eb57bdd731f52b09d3ace87674db381e",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "30-language-options.png",
+      "sha256": "f31717eb5b868c2d59a6e91b017d615f88971f8ecb1cf986def3ab079c66ac58",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "output_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_38c2a9b7f8e54fd7cca40d1dceddaec6",
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 38,
+          "title": "Settings",
+          "index": 0
+        },
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "en",
+      "theme": "Light"
+    },
+    {
+      "file": "31-german-selected.png",
+      "sha256": "df6883f1c0ff99ea631075a4599215686b68801bb6a3a9bb6c6c83c3edc211e5",
+      "coordinate_context": {
+        "native_scale": 1,
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_bd21cc2dc2397af3d44f1a0225db262c",
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "window": {
+          "index": 0,
+          "title": "Settings",
+          "window_id": 38
+        },
+        "output_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "transition-to-de",
+      "theme": "Light"
+    },
+    {
+      "file": "33-german-restarted.png",
+      "sha256": "f9ca842a99e959a32cb9eeafcdfcac4bbbec23a45f8f917eb22fc4fb1e6ed0ee",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_1bdb08891ddd10b9016a7e28b40e5f52",
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "output_scale": 1,
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Lokal · ~",
+          "index": 0,
+          "window_id": 130
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ]
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "34-de-base-command.png",
+      "sha256": "612c506e139375254b460540d6c9f4ab23fbae8f75affcd14daf2da8b1276bb0",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_e1c8f5cf3f6478d8df956e88cab7c2a7",
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "version": 1,
+        "logical_space": "global_display_points",
+        "window": {
+          "window_id": 130,
+          "title": "Lokal · ~",
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "35-de-base.png",
+      "sha256": "3e9a7e98170d05ea48a71d139e9dbc58138f17e336a091efd8693077e5f76110",
+      "coordinate_context": {
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_0a5b783d7d8b297168b1586e02e90e84",
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "window": {
+          "title": "Lokal · ~",
+          "window_id": 130,
+          "index": 0
+        },
+        "origin": "top_left",
+        "version": 1
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "36-de-plus.png",
+      "sha256": "8cb7a6aa420ff9b8c0703e8d3fdd7d94cad03de954861462eef8dd8266a2b4f6",
+      "coordinate_context": {
+        "native_scale": 1,
+        "output_scale": 1,
+        "version": 1,
+        "window": {
+          "window_id": 130,
+          "title": "Lokal · ~",
+          "index": 0
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "reference_id": "ps1_ffc46e0007b0e97c5492afcf3f2fe8e4",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ]
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "37-de-worktree.png",
+      "sha256": "3f5fc431138ba101749ac7a7d5c14f5518109df28449ea64ea47bc5ef77e55bc",
+      "coordinate_context": {
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "origin": "top_left",
+        "reference_id": "ps1_f2dd88ce509fafd71639ce39c6bbac51",
+        "version": 1,
+        "window": {
+          "title": "Lokal · ~",
+          "window_id": 130,
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          480,
+          678
+        ]
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "38-de-query.png",
+      "sha256": "ba7b1ba5b8ae49961d787446767b557916597f0f8f6aa46225d5c1ed2cb0d507",
+      "coordinate_context": {
+        "output_scale": 1,
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Lokal · ~",
+          "index": 0,
+          "window_id": 130
+        },
+        "native_scale": 1,
+        "reference_id": "ps1_5e95c03500a1a6f812fc9dadb1734066",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "39-de-resize-wide.png",
+      "sha256": "7fe571e2f92160f39c56231a20bf66c2f8be402fd9a8702c40db55d26300c257",
+      "coordinate_context": {
+        "version": 1,
+        "origin": "top_left",
+        "display": {
+          "index": 0
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "reference_id": "ps1_6445493c7f31ec76ce871ede4cef1213",
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "window": {
+          "title": "Lokal · ~",
+          "window_id": 130,
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "40-de-resize-minimum.png",
+      "sha256": "be2075cbeafcfd37fb52ccd29da1013cddccd052e128fafb40dedbafe9d6c68c",
+      "coordinate_context": {
+        "version": 1,
+        "native_scale": 1,
+        "logical_space": "global_display_points",
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_dfee445eddc54548a0298ac7d61900e1",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "window": {
+          "title": "Lokal · ~",
+          "index": 0,
+          "window_id": 130
+        },
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "41-de-escape.png",
+      "sha256": "dc8d093da5023f023f28b7de79dc6c08d2158ed338cb4bdafbb88bb3b1b65c91",
+      "coordinate_context": {
+        "reference_id": "ps1_9798fc9d8c314025f2f3de1ec147d264",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 130,
+          "index": 0,
+          "title": "Lokal · ~"
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "version": 1,
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "42-de-settings.png",
+      "sha256": "daf5664ce4f3b28687729efe16b65b7d3bdf29bf509313ee74b9c8a736f26f79",
+      "coordinate_context": {
+        "output_scale": 1,
+        "origin": "top_left",
+        "reference_id": "ps1_c438b3ba48df2db82641c5acfc9e5c84",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "version": 1,
+        "window": {
+          "index": 0,
+          "title": "Einstellungen",
+          "window_id": 130
+        },
+        "display": {
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "43-de-appearance.png",
+      "sha256": "afe19ea63e971cae87c3c0d43eaf711e4c34f46a71068887e116b794368cee93",
+      "coordinate_context": {
+        "version": 1,
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "origin": "top_left",
+        "reference_id": "ps1_fdce3e9e6e91744e54c7c1e997070e55",
+        "window": {
+          "window_id": 130,
+          "title": "Einstellungen",
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "logical_space": "global_display_points"
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "44-de-theme-picker.png",
+      "sha256": "3ffa564070113371c0807c5c0495d207410364feb543cb9f49e44909bb204bac",
+      "coordinate_context": {
+        "version": 1,
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "reference_id": "ps1_ec7af3cdf1d40cca1f21e881ecc85dcc",
+        "output_scale": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "title": "Einstellungen",
+          "window_id": 130,
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "45-de-dark-search.png",
+      "sha256": "2df3212b18fa3918ad78700dcfe54e06e3b12ba028676b07093777146608bbf1",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "display": {
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "version": 1,
+        "origin": "top_left",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "output_scale": 1,
+        "native_scale": 1,
+        "reference_id": "ps1_a98454513d47cbe97f06d1d9f733f0e3",
+        "window": {
+          "title": "Einstellungen",
+          "index": 0,
+          "window_id": 130
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Light"
+    },
+    {
+      "file": "46-de-dark-selected.png",
+      "sha256": "7da62882608a5cfa37cc8d94b3b8e0ad09666f478607b556cb3d0031678bcb58",
+      "coordinate_context": {
+        "output_scale": 1,
+        "version": 1,
+        "origin": "top_left",
+        "window": {
+          "window_id": 130,
+          "title": "Einstellungen",
+          "index": 0
+        },
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "native_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "reference_id": "ps1_24c2a38835205b393825707f36458738"
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "47-de-dark-menu.png",
+      "sha256": "c2abd6904c49afc164831bb4803b5db32b3d623ad25561cc4d635dd813ffc6d3",
+      "coordinate_context": {
+        "reference_id": "ps1_ddf56d0eae035839ea7e3b40aa4e54ef",
+        "native_scale": 1,
+        "window": {
+          "index": 0,
+          "title": "Lokal · ~",
+          "window_id": 130
+        },
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "display": {
+          "index": 0
+        },
+        "output_scale": 1,
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "origin": "top_left",
+        "version": 1,
+        "logical_space": "global_display_points",
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "48-de-dark-query.png",
+      "sha256": "85ee2f1cf816c49fdb9e24462a819bf3f3279a170bcae29e04e3e1f3d7cfd45c",
+      "coordinate_context": {
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "version": 1,
+        "native_scale": 1,
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "origin": "top_left",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "logical_space": "global_display_points",
+        "window": {
+          "index": 0,
+          "window_id": 130,
+          "title": "Lokal · ~"
+        },
+        "reference_id": "ps1_30af12479948d6de97aad84782cb0e40"
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "49-de-dark-outside.png",
+      "sha256": "77a483c653a193130a24ca3938252881cb6e8558a649e1ce26960b63880e6085",
+      "coordinate_context": {
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_dba36d2450afcaa388c43a756c3a0acd",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "output_scale": 1,
+        "logical_space": "global_display_points",
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "title": "Lokal · ~",
+          "index": 0,
+          "window_id": 130
+        },
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "50-de-after-command.png",
+      "sha256": "cc8f35e6b1927bea41aa3d2239d3099d8669dcd9060e29e8daa7a5c8132746e9",
+      "coordinate_context": {
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "logical_space": "global_display_points",
+        "version": 1,
+        "native_scale": 1,
+        "reference_id": "ps1_1dea59d994dad918616775fe7fed7bb4",
+        "origin": "top_left",
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "output_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "window": {
+          "window_id": 130,
+          "title": "Lokal · ~",
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "51-de-after-output.png",
+      "sha256": "26dc2fd75af3330cf53b79e42c9380b62ed85555fd6e491772dc32878ce0899b",
+      "coordinate_context": {
+        "delivered_image_size": [
+          480,
+          678
+        ],
+        "origin": "top_left",
+        "reference_id": "ps1_9553aabc7f2953c6915999682e176d33",
+        "window": {
+          "window_id": 130,
+          "index": 0,
+          "title": "Lokal · ~"
+        },
+        "logical_space": "global_display_points",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            480,
+            678
+          ]
+        ],
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "native_scale": 1,
+        "output_scale": 1,
+        "version": 1,
+        "display": {
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Zaplex Dark"
+    },
+    {
+      "file": "52-finish-command.png",
+      "sha256": "c5b7629ec90e0949d1fab5429c70a2fea710226c698b9cb2c96b67ffc6fee0db",
+      "coordinate_context": {
+        "logical_space": "global_display_points",
+        "origin": "top_left",
+        "reference_id": "ps1_ceea3c0ed6b3a19df01f71293871ef5c",
+        "logical_bounds": [
+          [
+            0,
+            30
+          ],
+          [
+            1024,
+            678
+          ]
+        ],
+        "version": 1,
+        "requested_scale": {
+          "logical1x": {}
+        },
+        "output_scale": 1,
+        "native_scale": 1,
+        "display": {
+          "index": 0
+        },
+        "delivered_image_size": [
+          1024,
+          678
+        ],
+        "window": {
+          "window_id": 130,
+          "title": "Lokal · ~",
+          "index": 0
+        }
+      },
+      "visually_reviewed": true,
+      "locale": "de",
+      "theme": "Zaplex Dark"
+    }
+  ],
+  "app_version": "1.2.41",
+  "app_source": "0d7f5b1c1d2d4de18115508e8c66442786f98101",
+  "harness_source": "a973f67804df2933ff66eba203f075f15d39bf6b",
+  "dmg_sha256": "4abf08c30dfbf393a79044a4198ebaa3745637550425497473013f7d0d55c5b2",
+  "reduced_motion": "not-measured",
+  "action_log": "Infrastructure VM identity omitted; original log retained locally."
+}

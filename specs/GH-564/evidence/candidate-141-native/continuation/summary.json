@@ -1,0 +1,45 @@
+{
+  "devicesAndConfigurations" : [
+    {
+      "device" : {
+        "architecture" : "arm64e",
+        "deviceId" : "dd4746e5894060cf84366288a0bfbf366da16a44",
+        "deviceName" : "My Mac",
+        "modelName" : "Virtual Machine",
+        "osBuildNumber" : "26A428",
+        "osVersion" : "27.0",
+        "platform" : "macOS"
+      },
+      "expectedFailures" : 0,
+      "failedTests" : 0,
+      "passedTests" : 1,
+      "skippedTests" : 0,
+      "testPlanConfiguration" : {
+        "configurationId" : "1",
+        "configurationName" : "Test Scheme Action"
+      }
+    }
+  ],
+  "environmentDescription" : "ZaplexGUI · Built with macOS 27.0",
+  "expectedFailures" : 0,
+  "failedTests" : 0,
+  "finishTime" : 1793212068.215,
+  "passedTests" : 1,
+  "result" : "Passed",
+  "runtimeWarnings" : [
+
+  ],
+  "skippedTests" : 0,
+  "startTime" : 1793212030.682,
+  "statistics" : [
+
+  ],
+  "testFailures" : [
+
+  ],
+  "title" : "Test - ZaplexGUI",
+  "topInsights" : [
+
+  ],
+  "totalTestCount" : 1
+}
