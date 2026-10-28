@@ -5,8 +5,10 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
+import tempfile
 
 REPO = "byte5ai/zaplex"
 PASSED = {
@@ -74,6 +76,16 @@ def pages(path, key):
     return [item for page in result for item in page[key]]
 
 
+def checked_jobs(run, jobs, artifacts):
+    checks = runpy.run_path(str(Path(__file__).with_name("ci-batch-checks")))
+    def receipt():
+        with tempfile.TemporaryDirectory(prefix="zaplex-checks-") as directory:
+            command("gh", "run", "download", str(run["id"]), "--repo", REPO,
+                    "--name", "ci-checks-provenance", "--dir", directory)
+            return json.loads((Path(directory) / "ci-checks-provenance.json").read_text())
+    return checks["restore"](run, jobs, artifacts, receipt)
+
+
 def validate_profile(batch, version, tag, fast):
     # ci-batch pins the acceptance profile and its readiness gate verifies VERSION.
     match = re.search(r"(?ms)^  test_dmg:\n.*?(?=^  \w+:|\Z)", batch)
@@ -93,6 +105,7 @@ def main():
     source = run.get("head_sha", "")
     jobs = pages(f"actions/runs/{run_id}/jobs", "jobs")
     artifacts = pages(f"actions/runs/{run_id}/artifacts", "artifacts")
+    jobs = checked_jobs(run, jobs, artifacts)
     validate(run, jobs, artifacts, [])
     command("git", "fetch", "--no-tags", "origin", source)
     command("git", "merge-base", "--is-ancestor", source, "HEAD")

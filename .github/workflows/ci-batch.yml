@@ -22,6 +22,10 @@ on:
         description: With coverage, also attribute executed functions to each test and measure coverage without the pruning candidates (#472)
         type: boolean
         default: false
+      checks_run_id:
+        description: Successful checks-only main batch at this exact commit; build artifacts without repeating checks
+        type: string
+        default: ''
       resume_run_id:
         description: Failed main batch; reuse verified unchanged Linux or compile/SFTP/doc gates
         type: string
@@ -37,7 +41,7 @@ permissions:
 
 concurrency:
   group: ci-batch-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   preflight:
@@ -46,6 +50,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       dmg_tag: ${{ steps.inputs.outputs.dmg_tag }}
+      reuse_all_checks: ${{ steps.checks.outputs.reuse_all_checks }}
       reuse_checks: ${{ steps.resume.outputs.reuse_checks }}
       reuse_linux_checks: ${{ steps.resume.outputs.reuse_linux_checks }}
       reuse_pre_sftp_checks: ${{ steps.resume.outputs.reuse_pre_sftp_checks }}
@@ -92,15 +97,37 @@ jobs:
           python3 script/ci-batch-resume-tests
           python3 script/ci-batch-resume
 
+      - name: Verify completed checks-only batch
+        id: checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECKS_RUN_ID: ${{ inputs.checks_run_id }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          RESUME_BASE_RUN_ID: ${{ inputs.resume_base_run_id }}
+          COVERAGE: ${{ inputs.coverage }}
+          PER_TEST_COVERAGE: ${{ inputs.per_test_coverage }}
+          ARTIFACTS: ${{ inputs.artifacts }}
+        run: |
+          python3 script/ci-batch-checks-tests
+          python3 script/ci-batch-checks
+      - name: Preserve checks provenance
+        if: steps.checks.outputs.reuse_all_checks == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-checks-provenance
+          path: ci-checks-provenance.json
+          if-no-files-found: error
+          retention-days: 7
+
   dependency_security:
     needs: preflight
-    if: needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_linux_checks != 'true' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true'
+    if: needs.preflight.outputs.reuse_all_checks != 'true' && needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_linux_checks != 'true' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true'
     uses: ./.github/workflows/dependency-security.yml
 
   compile_checks:
     needs: [preflight, dependency_security]
     if: >
-      !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true' &&
+      !cancelled() && needs.preflight.outputs.reuse_all_checks != 'true' && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true' &&
       (needs.dependency_security.result == 'success' || needs.preflight.outputs.reuse_linux_checks == 'true')
     uses: ./.github/workflows/pr-check.yml
     with:
@@ -110,7 +137,7 @@ jobs:
   tests:
     needs: [preflight, compile_checks]
     if: >
-      !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true' &&
+      !cancelled() && needs.preflight.outputs.reuse_all_checks != 'true' && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true' &&
       (needs.compile_checks.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
     uses: ./.github/workflows/test-dispatch.yml
     with:
@@ -122,7 +149,7 @@ jobs:
   live_sftp:
     needs: [preflight, compile_checks]
     if: >
-      !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_checks != 'true' &&
+      !cancelled() && needs.preflight.outputs.reuse_all_checks != 'true' && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_checks != 'true' &&
       (needs.compile_checks.result == 'success' || needs.preflight.outputs.reuse_pre_sftp_checks == 'true')
     uses: ./.github/workflows/live-sftp-safety.yml
     secrets: inherit
@@ -131,8 +158,8 @@ jobs:
     needs: [preflight, tests, live_sftp]
     if: >
       !cancelled() && inputs.artifacts == 'test-dmg' && needs.preflight.result == 'success' &&
-      (needs.tests.result == 'success' || needs.preflight.outputs.reuse_pre_sftp_checks == 'true') &&
-      (needs.live_sftp.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
+      (needs.preflight.outputs.reuse_all_checks == 'true' || needs.tests.result == 'success' || needs.preflight.outputs.reuse_pre_sftp_checks == 'true') &&
+      (needs.preflight.outputs.reuse_all_checks == 'true' || needs.live_sftp.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
     uses: ./.github/workflows/test-dmg.yml
     with:
       dmg_tag: ${{ needs.preflight.outputs.dmg_tag }}
@@ -143,8 +170,8 @@ jobs:
     needs: [preflight, tests, live_sftp]
     if: >
       !cancelled() && inputs.artifacts == 'remote-server' && needs.preflight.result == 'success' &&
-      (needs.tests.result == 'success' || needs.preflight.outputs.reuse_pre_sftp_checks == 'true') &&
-      (needs.live_sftp.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
+      (needs.preflight.outputs.reuse_all_checks == 'true' || needs.tests.result == 'success' || needs.preflight.outputs.reuse_pre_sftp_checks == 'true') &&
+      (needs.preflight.outputs.reuse_all_checks == 'true' || needs.live_sftp.result == 'success' || needs.preflight.outputs.reuse_checks == 'true')
     uses: ./.github/workflows/build-remote-server.yml
     with:
       dmg_tag: ${{ needs.preflight.outputs.dmg_tag }}

@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Reject missing, mismatched or already consumed checks-only evidence."""
+
+import copy
+from pathlib import Path
+import runpy
+import unittest
+
+module = runpy.run_path(str(Path(__file__).with_name("ci-batch-checks")))
+validate = module["validate"]
+
+
+class ChecksTests(unittest.TestCase):
+    def setUp(self):
+        self.source = "a" * 40
+        self.run = dict(status="completed", conclusion="success", event="workflow_dispatch",
+                        head_branch="main", path=".github/workflows/ci-batch.yml", head_sha=self.source,
+                        head_repository={"full_name": "byte5ai/zaplex"})
+        self.jobs = [dict(name=name, conclusion="success") for name in module["GATES"] | {
+            "Validate main batch", "Verify all selected batch stages"}]
+        self.jobs += [dict(name=name, conclusion="skipped") for name in ("test_dmg", "remote_server")]
+        next(j for j in self.jobs if j["name"] == "tests / cargo test (Linux)")["steps"] = [
+            dict(name="Isolated package tests", conclusion="success"),
+            dict(name="Package documentation tests", conclusion="success"),
+            dict(name="Rust workspace coverage tests", conclusion="skipped")]
+
+    def test_complete_checks_are_reusable(self):
+        validate(self.run, self.jobs, self.source)
+
+    def test_identity_and_completed_success_are_required(self):
+        for key, value in (("head_sha", "b" * 40), ("head_branch", "feature"),
+                           ("status", "in_progress"), ("conclusion", "failure"),
+                           ("event", "pull_request"), ("path", ".github/workflows/test-dmg.yml"),
+                           ("head_repository", {"full_name": "other/repo"})):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                validate({**self.run, key: value}, self.jobs, self.source)
+
+    def test_missing_failed_cancelled_or_skipped_checks_are_rejected(self):
+        for index, job in enumerate(self.jobs):
+            if job["conclusion"] != "success":
+                continue
+            with self.subTest(missing=job["name"]), self.assertRaises(ValueError):
+                validate(self.run, self.jobs[:index] + self.jobs[index + 1:], self.source)
+            for result in ("failure", "cancelled", "skipped"):
+                changed = copy.deepcopy(self.jobs)
+                changed[index]["conclusion"] = result
+                with self.subTest(job=job["name"], result=result), self.assertRaises(ValueError):
+                    validate(self.run, changed, self.source)
+
+    def test_test_scope_and_duplicate_jobs_are_rejected(self):
+        for step in range(3):
+            changed = copy.deepcopy(self.jobs)
+            tests = next(j for j in changed if j["name"] == "tests / cargo test (Linux)")
+            del tests["steps"][step]
+            with self.assertRaises(ValueError):
+                validate(self.run, changed, self.source)
+        with self.assertRaises(ValueError):
+            validate(self.run, self.jobs + [self.jobs[0]], self.source)
+
+    def test_existing_artifact_build_is_not_repeated(self):
+        for prefix in ("test_dmg", "remote_server"):
+            changed = copy.deepcopy(self.jobs)
+            next(j for j in changed if j["name"] == prefix)["conclusion"] = "success"
+            with self.assertRaises(ValueError):
+                validate(self.run, changed, self.source)
+            with self.assertRaises(ValueError):
+                validate(self.run, self.jobs + [dict(name=prefix + " / build", conclusion="success")], self.source)
+
+    def test_inherited_gates_are_independently_resolved(self):
+        jobs = [dict(name="Validate main batch", conclusion="success")]
+        jobs += [dict(name=name, conclusion="skipped") for name in
+                 ("dependency_security", "compile_checks", "tests", "live_sftp")]
+        artifacts = [dict(name="ci-checks-provenance", expired=False)]
+        receipt = dict(checks_run_id="123", source_sha=self.source)
+        calls = []
+        def read(run_id, source):
+            calls.append((run_id, source))
+            validate(self.run, self.jobs, source)
+            return self.jobs
+        result = module["restore"](self.run, jobs, artifacts, lambda: receipt, read)
+        self.assertEqual(calls, [("123", self.source)])
+        self.assertTrue(module["GATES"].issubset({job["name"] for job in result}))
+        for changed in ([dict(name="ci-checks-provenance", expired=True)], artifacts * 2):
+            with self.assertRaises(ValueError):
+                module["restore"](self.run, jobs, changed, lambda: receipt, read)
+        with self.assertRaises(ValueError):
+            module["restore"](self.run, jobs, artifacts, lambda: {**receipt, "source_sha": "b" * 40}, read)
+        self.jobs[0]["conclusion"] = "failure"
+        with self.assertRaises(ValueError):
+            module["restore"](self.run, jobs, artifacts, lambda: receipt, read)
+
+
+if __name__ == "__main__":
+    unittest.main()

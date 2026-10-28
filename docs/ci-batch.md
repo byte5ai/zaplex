@@ -19,7 +19,7 @@ denselben Commit des Dispatchs; weitere Merges verändern diesen Lauf nicht.
 | `release-tag-guard` / `zap_release` | Bestehende Tag-/Release-Auslösung unverändert; keine Release-Freigabe durch diese Umstellung. |
 
 Es gibt keine zeitgesteuerten Workflows mehr. Ein neuer Batch auf demselben Ref
-bricht einen noch laufenden Batch ab. Eine Auslösung auf einem anderen Branch
+wartet auf einen noch laufenden Batch. Eine Auslösung auf einem anderen Branch
 scheitert vor den schweren Jobs.
 
 ### Geprüftes DMG unverändert veröffentlichen
@@ -43,6 +43,27 @@ fortsetzen; abweichende Dateien oder bereits veröffentlichte Releases werden
 nicht überschrieben. Prüfbelege bleiben getrennt von den Installern erhalten.
 Das Workflow-Token löst durch die Tag-Erzeugung keinen zusätzlichen Build aus.
 Die konkrete Release-Freigabe bleibt Voraussetzung für diesen manuellen Dispatch.
+
+### Prüfungen und Artefakt-Build zeitlich trennen
+
+Ein Batch mit `artifacts=none` führt alle Sicherheits-, Compile-, Test- und
+Live-SFTP-Prüfungen aus, ohne App oder DMG zu bauen. Er enthält nur einen
+macrunner-Job (macOS-Compile und native Regressionen); die übrigen Jobs laufen
+auf Linux. Nach seinem Ende bleibt der Mac bis zum nächsten Dispatch frei.
+
+Ein späterer Batch mit `artifacts=test-dmg` und `checks_run_id=<Prüflauf>`
+übernimmt ausschließlich einen erfolgreichen Prüf-Batch auf **exakt demselben
+Commit**. Die Vorprüfung kontrolliert jeden erforderlichen Job sowie Paket- und
+Dokumentationstests, verweigert Coverage-/gemischte Fortsetzungsmodi und bereits
+begonnene Artefakt-Builds. Danach laufen nur die Artefaktstufen. Der Abschluss
+verlangt weiterhin alle ausgewählten Ergebnisse; übersprungene Prüfungen zählen
+nur mit dieser validierten Herkunft. App-Build, Paketierung und GUI-Abnahme
+bleiben getrennte Jobs. Die Trennung garantiert keine maximale Compilezeit.
+
+`ci-checks-provenance` bindet den Prüflauf an den Quellcommit. App-Fortsetzung
+und spätere Veröffentlichung prüfen den ursprünglichen Lauf erneut unabhängig,
+statt einen übersprungenen Job pauschal als bestanden zu behandeln. Der Beleg
+bleibt sieben Tage verfügbar; ohne ihn wird die Übernahme verweigert.
 
 ### Nach einem Runnerfehler bei den Pakettests fortsetzen
 
