@@ -1,0 +1,188 @@
+{
+  "run_id": 40743849365,
+  "source_sha": "8560bffba9ac776921bcbe1465d7ba0b486e3acd",
+  "readings_sha256": "653dba099bf49074caf5753a7160fd3e61a0d4a79d35c679e397ec91647a9f61",
+  "readings": 176,
+  "images": 11,
+  "configurations": 16,
+  "matrix": [
+    {
+      "scale": 2,
+      "interpolation": "nearest",
+      "psm": 6,
+      "images": 11,
+      "failures": [
+        "close-tab-screen.png missing ZQA 799030 963",
+        "close-tab-screen.png false ZQA 7990308 963",
+        "settings-screen.png missing Keyboard shortcuts"
+      ]
+    },
+    {
+      "scale": 2,
+      "interpolation": "nearest",
+      "psm": 11,
+      "images": 11,
+      "failures": [
+        "tab-setup-screen.png missing ZQA 490663 963",
+        "tab-setup-screen.png false ZQA 499663 963"
+      ]
+    },
+    {
+      "scale": 2,
+      "interpolation": "high",
+      "psm": 6,
+      "images": 11,
+      "failures": [
+        "settings-screen.png missing Keyboard shortcuts"
+      ]
+    },
+    {
+      "scale": 2,
+      "interpolation": "high",
+      "psm": 11,
+      "images": 11,
+      "failures": []
+    },
+    {
+      "scale": 3,
+      "interpolation": "nearest",
+      "psm": 6,
+      "images": 11,
+      "failures": [
+        "narrow-rendered-output.png missing ZQA 967960 963",
+        "narrow-rendered-output.png false ZQA 967968 963",
+        "close-tab-screen.png missing ZQA 799030 963",
+        "tab-setup-screen.png missing ZQA 490663 963"
+      ]
+    },
+    {
+      "scale": 3,
+      "interpolation": "nearest",
+      "psm": 11,
+      "images": 11,
+      "failures": [
+        "rendered-output.png missing ZQA 149060 963",
+        "selected-file-row.png missing SAMPLE",
+        "close-tab-screen.png missing ZQA 799030 963"
+      ]
+    },
+    {
+      "scale": 3,
+      "interpolation": "high",
+      "psm": 6,
+      "images": 11,
+      "failures": [
+        "settings-screen.png missing Keyboard shortcuts"
+      ]
+    },
+    {
+      "scale": 3,
+      "interpolation": "high",
+      "psm": 11,
+      "images": 11,
+      "failures": [
+        "selected-file-row.png missing SAMPLE",
+        "narrow-rendered-output.png missing ZQA 967960 963",
+        "narrow-rendered-output.png false ZQA 967968 963"
+      ]
+    },
+    {
+      "scale": 4,
+      "interpolation": "nearest",
+      "psm": 6,
+      "images": 11,
+      "failures": [
+        "rendered-output.png missing ZQA 149060 963",
+        "narrow-rendered-output.png missing ZQA 967960 963",
+        "split-right-output.png missing ZQA 221710 963",
+        "close-tab-screen.png missing ZQA 799030 963",
+        "tab-setup-screen.png missing ZQA 490663 963"
+      ]
+    },
+    {
+      "scale": 4,
+      "interpolation": "nearest",
+      "psm": 11,
+      "images": 11,
+      "failures": [
+        "selected-file-row.png missing SAMPLE"
+      ]
+    },
+    {
+      "scale": 4,
+      "interpolation": "high",
+      "psm": 6,
+      "images": 11,
+      "failures": [
+        "rendered-output.png missing ZQA 149060 963",
+        "narrow-rendered-output.png missing ZQA 967960 963",
+        "narrow-rendered-output.png false ZQA 967968 963",
+        "settings-screen.png missing Keyboard shortcuts"
+      ]
+    },
+    {
+      "scale": 4,
+      "interpolation": "high",
+      "psm": 11,
+      "images": 11,
+      "failures": [
+        "rendered-output.png missing ZQA 149060 963",
+        "selected-file-row.png missing SAMPLE",
+        "narrow-rendered-output.png missing ZQA 967960 963",
+        "narrow-rendered-output.png false ZQA 967968 963",
+        "close-tab-screen.png missing ZQA 799030 963"
+      ]
+    },
+    {
+      "scale": 6,
+      "interpolation": "nearest",
+      "psm": 6,
+      "images": 11,
+      "failures": [
+        "rendered-output.png missing ZQA 149060 963",
+        "narrow-rendered-output.png missing ZQA 967960 963",
+        "split-right-output.png missing ZQA 285052 741",
+        "split-right-output.png missing ZQA 221710 963",
+        "close-tab-screen.png missing ZQA 799030 963",
+        "tab-setup-screen.png missing ZQA 490663 963"
+      ]
+    },
+    {
+      "scale": 6,
+      "interpolation": "nearest",
+      "psm": 11,
+      "images": 11,
+      "failures": [
+        "rendered-output.png missing ZQA 149060 963",
+        "selected-file-row.png missing SAMPLE",
+        "narrow-rendered-output.png missing ZQA 967960 963",
+        "split-right-output.png missing ZQA 285052 741",
+        "split-right-output.png missing ZQA 221710 963",
+        "close-tab-screen.png missing ZQA 799030 963",
+        "settings-screen.png missing Keyboard shortcuts",
+        "tab-setup-screen.png missing ZQA 490663 963"
+      ]
+    },
+    {
+      "scale": 6,
+      "interpolation": "high",
+      "psm": 6,
+      "images": 11,
+      "failures": [
+        "rendered-output.png missing ZQA 149060 963",
+        "narrow-rendered-output.png missing ZQA 967960 963",
+        "split-right-output.png missing ZQA 221710 963",
+        "settings-screen.png missing Keyboard shortcuts"
+      ]
+    },
+    {
+      "scale": 6,
+      "interpolation": "high",
+      "psm": 11,
+      "images": 11,
+      "failures": [
+        "selected-file-row.png missing SAMPLE"
+      ]
+    }
+  ]
+}

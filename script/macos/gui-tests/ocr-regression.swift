@@ -81,4 +81,17 @@ guard let shortcuts = settings.rect(for: "Keyboard shortcuts") else {
 precondition(settings.rect(for: "Keyboard shortcut") == nil, "A partial label must fail")
 // Measured in the original screen image, subtracting its recorded AX origin.
 precondition(shortcuts.minX >= 30 && shortcuts.maxX <= 140 && shortcuts.minY >= 386 && shortcuts.maxY <= 405)
+let tabSetup = try RenderedText.read(fixtureImage(fixtures, "tab-setup-screen.png"), displaySize: wideSize)
+FileHandle.standardOutput.write(Data(tabSetup.tsv.utf8))
+guard let tabOutput = tabSetup.rect(for: "ZQA 490663 963") else {
+    fatalError("The tab setup's rendered nonce must be recognized exactly")
+}
+precondition(tabSetup.rect(for: "ZQA 499663 963") == nil, "The observed zero/nine confusion must fail")
+precondition(tabSetup.rect(for: "ZQA 490663 741") == nil, "A different tab shell state must fail")
+// Bounds measured in the unchanged full-screen image, minus its AX window origin.
+precondition(abs(tabOutput.minX - 17) < 4 && abs(tabOutput.minY - 546) < 4)
+precondition(abs(tabOutput.maxX - 128) < 4 && abs(tabOutput.maxY - 558) < 4)
+let tabBefore = try RenderedText.read(fixtureImage(fixtures, "tab-setup-before-screen.png"),
+                                     displaySize: wideSize)
+precondition(tabBefore.rect(for: "ZQA 490663 963") == nil, "Tab setup input is not executed output")
 print("OCR regression: exact output, settings navigation, selected filename, split panes, negative controls and window coordinates passed")
