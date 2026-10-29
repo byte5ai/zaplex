@@ -31,6 +31,8 @@ RESUME_PATHS = {
     "script/ci-batch-resume",
     "script/ci-batch-resume-tests",
     "docs/ci-batch.md",
+    "script/ci-package-cases-resume", "script/ci-package-cases-resume-tests",
+    "script/ci-batch-checks", "script/ci-batch-checks-tests",
 }
 MACOS_RESUME_PATHS = {
     ".github/workflows/ci-batch.yml",
@@ -305,6 +307,8 @@ def read_run(run_id):
 
 
 def validate_test_inputs(previous, current):
+    case_helpers = runpy.run_path(str(Path(__file__).with_name("ci-package-cases-resume")))
+    previous, current = (case_helpers["normalize_dispatch"](text) for text in (previous, current))
     # The skipped doc tests must retain their package, feature environment and
     # command. Runner selection and the new skip condition are not build inputs.
     patterns = [r"(?ms)^env:\n.*?(?=^jobs:)"]
@@ -373,7 +377,11 @@ def main():
         )
         mode = "tail"
     else:
-        mode = validate(run, jobs, changed)
+        case_helpers = runpy.run_path(str(Path(__file__).with_name("ci-package-cases-resume")))
+        if case_helpers["FIXTURE"] in changed:
+            path = case_helpers["FIXTURE"]
+            case_helpers["validate_fixture"](command("git", "show", f"{source}:{path}"), Path(path).read_text())
+        mode = validate(run, jobs, [p for p in changed if p != case_helpers["FIXTURE"]])
     if mode == "regressions":
         native = runpy.run_path(str(Path(__file__).with_name("ci-native-checks-resume")))
         paths = (native["WORKFLOW"], native["PLAN"])
@@ -418,9 +426,14 @@ def main():
     elif mode == "package":
         workflow = ".github/workflows/test-dispatch.yml"
         validate_test_inputs(command("git", "show", f"{source}:{workflow}"), Path(workflow).read_text())
+        case_helpers = runpy.run_path(str(Path(__file__).with_name("ci-package-cases-resume")))
+        receipt = case_helpers["qualify"](run, jobs, source, os.environ["GITHUB_SHA"], globals())
+        Path("ci-package-cases-provenance.json").write_text(json.dumps(receipt) + "\n")
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+            output.write(f"package_cases={json.dumps([key[1] for key in receipt['failed_keys']])}\n")
         output_name = "reuse_checks"
-        evidence = "dependency, compile, SFTP and doc-test"
-        remaining = "package tests and the requested artifact stages"
+        evidence = "dependency, compile, Linux, SFTP, doc-test and individually passed package-case"
+        remaining = "exact failed package cases and the requested artifact stages"
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
         output.write(f"{output_name}=true\n")
     with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:

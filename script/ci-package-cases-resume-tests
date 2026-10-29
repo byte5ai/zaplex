@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Negative controls for retaining real package-case coverage across a fixture fix."""
+import copy
+import hashlib
+import io
+import json
+from pathlib import Path
+import runpy
+import unittest
+from unittest.mock import patch
+import zipfile
+
+ROOT = Path(__file__).resolve().parent.parent
+M = runpy.run_path(str(ROOT / 'script/ci-package-cases-resume'))
+H = runpy.run_path(str(ROOT / 'script/ci-batch-resume'))
+A, B = 'a' * 40, 'b' * 40
+
+
+def xml(cases):
+    from xml.etree.ElementTree import Element, SubElement, tostring
+    root = Element('testsuites', tests=str(len(cases)), skipped='0',
+                   failures=str(sum(failed for _, _, failed in cases)), errors='0')
+    suite = SubElement(root, 'testsuite', name='warp')
+    for binary, name, failed in cases:
+        case = SubElement(suite, 'testcase', classname=binary, name=name)
+        if failed: SubElement(case, 'failure', type='test timeout')
+    return tostring(root)
+
+
+class PackageCases(unittest.TestCase):
+    def setUp(self):
+        self.run = dict(id=101, head_sha=A, status='completed', conclusion='failure',
+                        head_branch='main', event='workflow_dispatch', path='.github/workflows/ci-batch.yml',
+                        head_repository={'full_name': M['REPO']})
+        self.jobs = [dict(name=name, conclusion='success') for name in H['PASSED_JOBS']]
+        self.jobs += [dict(name='Validate main batch', conclusion='success'),
+                      dict(name=M['MAC'], labels=['macrunner'], conclusion='failure', steps=[
+                          dict(name='Isolated package tests', conclusion='failure'),
+                          dict(name='Package documentation tests', conclusion='success')])]
+        self.changed = [M['FIXTURE'], 'script/ci-package-cases-resume']
+        before = ('#[test]\n' + M['SEED_PREFIX'] + M['OLD_SEED'] +
+                  '\n    drop(journal.try_lock("prune-trigger").unwrap());\n'
+                  '    assert_eq!(record_count, MAX_TERMINAL_JOURNAL_RECORDS);\n}\n')
+        after = before.replace(M['OLD_SEED'], M['NEW_SEED'])
+        dispatch = (ROOT / M['WORKFLOW']).read_text()
+        batch = (ROOT / '.github/workflows/ci-batch.yml').read_text()
+        self.files = {
+            (A, M['FIXTURE']): before, (B, M['FIXTURE']): after,
+            (A, M['WORKFLOW']): M['normalize_dispatch'](dispatch), (B, M['WORKFLOW']): dispatch,
+            (A, '.github/workflows/ci-batch.yml'): batch.replace(
+                "      package_cases: ${{ needs.preflight.outputs.package_cases || '[]' }}\n", ''),
+            (B, '.github/workflows/ci-batch.yml'): batch,
+            (B, 'app/src/remote_server/safe_file.rs'): '#[cfg(test)]\n#[path = "safe_file_tests.rs"]\nmod tests;',
+        }
+        self.payload = xml([('warp', M['CASE'], True), ('warp', 'other::case', False),
+                            ('warp::build_git_tests', 'build::case', False)])
+        self.helpers = {**H, 'command': self.command}
+
+    def command(self, *args):
+        if args[:3] == ('git', 'diff', '--name-only'): return '\n'.join(self.changed)
+        if args[:2] == ('git', 'show'):
+            source, path = args[2].split(':', 1)
+            return self.files[source, path]
+        self.fail(f'Unexpected command {args}')
+
+    def qualify(self):
+        return M['qualify'](self.run, self.jobs, A, B, self.helpers,
+                            lambda *_: [], lambda *_: self.payload)
+
+    def test_exact_fixture_fix_retains_positive_cases_and_only_retries_failure(self):
+        receipt = self.qualify()
+        self.assertEqual(receipt['passed_cases'], 2)
+        self.assertEqual(receipt['executed_cases'], 3)
+        self.assertEqual(receipt['failed_keys'], [['warp', M['CASE']]])
+        self.assertEqual(M['validate_fresh'](receipt, xml([('warp', M['CASE'], False)])), 3)
+
+    def test_unchanged_test_sources_can_continue_only_failed_cases(self):
+        self.changed.remove(M['FIXTURE'])
+        self.files[B, M['FIXTURE']] = self.files[A, M['FIXTURE']]
+        self.assertEqual(self.qualify()['passed_cases'], 2)
+
+    def test_production_or_toolchain_changes_are_rejected(self):
+        for path in ('Cargo.lock', 'app/src/remote_server/safe_file.rs', '.config/nextest.toml',
+                     '.github/actions/prepare_environment/action.yml'):
+            with self.subTest(path=path):
+                self.changed.append(path)
+                with self.assertRaises(ValueError): self.qualify()
+                self.changed.pop()
+
+    def test_assertion_threshold_or_other_test_changes_are_rejected(self):
+        original = self.files[B, M['FIXTURE']]
+        for text in (original.replace('assert_eq!(record_count, MAX_TERMINAL_JOURNAL_RECORDS);', ''),
+                     original.replace('0..=MAX_TERMINAL_JOURNAL_RECORDS', '0..MAX_TERMINAL_JOURNAL_RECORDS'),
+                     original + '\nfn another_case() {}\n'):
+            self.files[B, M['FIXTURE']] = text
+            with self.assertRaises(ValueError): self.qualify()
+
+    def test_identical_seed_text_in_a_different_function_is_not_inheritable(self):
+        old = self.files[A, M['FIXTURE']].replace('fn terminal_journal_records_are_capped()', 'fn other_test()')
+        new = old.replace(M['OLD_SEED'], M['NEW_SEED'])
+        with self.assertRaises(ValueError): M['validate_fixture'](old, new)
+
+    def test_fixture_exception_cannot_mask_a_different_failure(self):
+        self.payload = xml([('warp', 'other::failure', True), ('warp', 'positive', False)])
+        with self.assertRaises(ValueError): self.qualify()
+
+    def test_missing_positive_or_failed_executions_are_rejected(self):
+        for cases in ([], [('warp', M['CASE'], True)], [('warp', 'positive', False)]):
+            self.payload = xml(cases)
+            with self.subTest(cases=cases), self.assertRaises(ValueError): self.qualify()
+
+    def test_only_failed_names_must_be_unambiguous_across_test_binaries(self):
+        self.payload = xml([('warp', M['CASE'], True), ('one', 'shared', False), ('two', 'shared', False)])
+        self.assertEqual(self.qualify()['passed_cases'], 2)
+        self.payload = xml([('warp', M['CASE'], True), ('other', M['CASE'], False)])
+        with self.assertRaises(ValueError): self.qualify()
+
+    def test_foreign_run_or_incomplete_native_prerequisites_are_rejected(self):
+        for field, value in (('head_branch', 'feature'), ('event', 'pull_request'),
+                             ('head_sha', B), ('status', 'in_progress')):
+            old = self.run[field]; self.run[field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError): self.qualify()
+            self.run[field] = old
+        self.jobs[0]['conclusion'] = 'failure'
+        with self.assertRaises(ValueError): self.qualify()
+
+    def test_wrong_runner_or_missing_documentation_pass_is_rejected(self):
+        mac = next(j for j in self.jobs if j['name'] == M['MAC'])
+        mac['labels'] = ['ubuntu-22.04']
+        with self.assertRaises(ValueError): self.qualify()
+        mac['labels'] = ['macrunner']; mac['steps'][1]['conclusion'] = 'skipped'
+        with self.assertRaises(ValueError): self.qualify()
+
+    def test_changed_commands_environment_runner_or_batch_inputs_are_rejected(self):
+        path = M['WORKFLOW']; original = self.files[B, path]
+        for before, after in (('cargo nextest run', 'cargo nextest run --test-threads 1'),
+                              ("CARGO_BUILD_JOBS: '4'", "CARGO_BUILD_JOBS: '2'"),
+                              ('runs-on: macrunner', 'runs-on: ubuntu-22.04'),
+                              ('default: true', 'default: false')):
+            self.files[B, path] = original.replace(before, after)
+            with self.subTest(before=before), self.assertRaises(ValueError): self.qualify()
+        self.files[B, path] = original
+        path = '.github/workflows/ci-batch.yml'
+        self.files[B, path] = self.files[B, path].replace('coverage: ${{ inputs.coverage }}', 'coverage: true')
+        with self.assertRaises(ValueError): self.qualify()
+
+    def test_missing_case_forwarding_is_rejected_before_running_a_full_suite(self):
+        path = '.github/workflows/ci-batch.yml'
+        original = self.files[B, path]
+        for line in ("      package_cases: ${{ steps.resume.outputs.package_cases }}\n",
+                     "      package_cases: ${{ needs.preflight.outputs.package_cases || '[]' }}\n"):
+            self.files[B, path] = original.replace(line, '')
+            with self.subTest(line=line), self.assertRaises(ValueError): self.qualify()
+
+    def test_retention_fixture_must_remain_test_only(self):
+        self.files[B, 'app/src/remote_server/safe_file.rs'] = 'mod tests;'
+        with self.assertRaises(ValueError): self.qualify()
+
+    def test_duplicate_or_skipped_cases_and_inconsistent_totals_are_rejected(self):
+        good = xml([('warp', 'positive', False)])
+        for payload in (xml([('warp', 'duplicate', False), ('warp', 'duplicate', False)]),
+                        good.replace(b'tests="1"', b'tests="2"'),
+                        good.replace(b' />', b'><skipped /></testcase>')):
+            with self.subTest(payload=payload), self.assertRaises((ValueError, M['ET'].ParseError)):
+                M['junit'](payload)
+
+    def test_fresh_success_must_cover_exact_original_failure_keys(self):
+        receipt = self.qualify()
+        for cases in ([], [('warp', M['CASE'], True)], [('warp', 'other', False)],
+                      [('wrong-binary', M['CASE'], False)],
+                      [('warp', M['CASE'], False), ('warp', 'extra', False)]):
+            with self.subTest(cases=cases), self.assertRaises(ValueError):
+                M['validate_fresh'](receipt, xml(cases))
+
+    def test_empty_duplicate_or_injected_selectors_are_rejected(self):
+        for names in ([], ['a', 'a'], ['a) | all('], ['a b'], ['--all'], [None], [['nested']]):
+            with self.subTest(names=names), self.assertRaises(ValueError):
+                M['expression'](json.dumps(names))
+        self.assertEqual(M['expression']('["a::b"]'), 'test(=a::b)')
+
+    def test_artifact_requires_matching_digest_run_and_single_expected_file(self):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w') as archive: archive.writestr('junit.xml', self.payload)
+        payload = stream.getvalue()
+        row = dict(name='native', id=9, expired=False, workflow_run={'id': 101},
+                   digest='sha256:' + hashlib.sha256(payload).hexdigest())
+        fn = M['artifact_file']
+        with patch.dict(fn.__globals__, {'subprocess': unittest.mock.Mock()}):
+            fn.__globals__['subprocess'].check_output.return_value = payload
+            self.assertEqual(fn('101', [row], 'native', 'junit.xml'), self.payload)
+            for update in ({'expired': True}, {'digest': 'sha256:wrong'}, {'workflow_run': {'id': 102}}):
+                with self.subTest(update=update), self.assertRaises(ValueError):
+                    fn('101', [{**row, **update}], 'native', 'junit.xml')
+            with self.assertRaises(ValueError): fn('101', [row, row], 'native', 'junit.xml')
+
+    def test_restoration_requires_actual_fresh_native_pass_and_inherited_docs(self):
+        receipt = self.qualify()
+        run = {**self.run, 'id': 202, 'head_sha': B, 'conclusion': 'success'}
+        jobs = [dict(name=name, conclusion='skipped') for name in
+                ('dependency_security', 'compile_checks', 'live_sftp', 'tests / Linux daemon regressions')]
+        jobs += [dict(name='Validate main batch', conclusion='success'),
+                 dict(name=M['MAC'], labels=['macrunner'], conclusion='success', steps=[
+                     dict(name='Isolated package tests', conclusion='success'),
+                     dict(name='Verify complete package case coverage', conclusion='success'),
+                     dict(name='Package documentation tests', conclusion='skipped')])]
+        proofs = [dict(name=M['PROOF'], expired=False)]
+        restore = M['restore']
+        with patch.dict(restore.__globals__, {
+            'receipt_for_current': lambda *_: (receipt, self.jobs, []),
+            'artifact_file': lambda *_: xml([('warp', M['CASE'], False)]),
+        }):
+            rows = restore(run, jobs, proofs, self.helpers)
+            self.assertTrue(all(next(j for j in rows if j['name'] == n)['conclusion'] == 'success'
+                                for n in H['PASSED_JOBS']))
+            mac = next(j for j in rows if j['name'] == M['MAC'])
+            self.assertEqual(next(s for s in mac['steps'] if s['name'] == 'Package documentation tests')['conclusion'], 'success')
+            for index in (0, 1, 2):
+                modified = copy.deepcopy(jobs); modified[-1]['steps'][index]['conclusion'] = 'failure'
+                with self.subTest(index=index), self.assertRaises(ValueError): restore(run, modified, proofs, self.helpers)
+            with self.assertRaises(ValueError):
+                restore(run, jobs, proofs + [dict(name='ci-checks-provenance', expired=False)], self.helpers)
+
+
+if __name__ == '__main__':
+    unittest.main()

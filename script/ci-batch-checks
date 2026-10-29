@@ -11,6 +11,7 @@ import sys
 
 helpers = runpy.run_path(str(Path(__file__).with_name("ci-batch-resume")))
 native_helpers = runpy.run_path(str(Path(__file__).with_name("ci-native-checks-resume")))
+case_helpers = runpy.run_path(str(Path(__file__).with_name("ci-package-cases-resume")))
 REPO = helpers["REPO"]
 GATES = helpers["PASSED_JOBS"] | {"tests / cargo test (macOS)"}
 
@@ -51,6 +52,7 @@ def read(run_id, source):
     pages = json.loads(helpers["command"]("gh", "api", "--paginate", "--slurp",
         f"repos/{REPO}/actions/runs/{run_id}/artifacts?per_page=100"))
     artifacts = [item for page in pages for item in page["artifacts"]]
+    jobs = case_helpers["restore"](run, jobs, artifacts, helpers)
     jobs = native_helpers["restore"](run, jobs, artifacts, helpers)
     jobs = helpers["restore_pre_policy"](run, jobs, artifacts)
     validate(run, jobs, source)
@@ -59,6 +61,7 @@ def read(run_id, source):
 
 def restore(run, jobs, artifacts, load_receipt, read_checks=read):
     """Resolve inherited gates independently for later artifact/release validators."""
+    jobs = case_helpers["restore"](run, jobs, artifacts, helpers)
     jobs = native_helpers["restore"](run, jobs, artifacts, helpers)
     jobs = helpers["restore_pre_policy"](run, jobs, artifacts)
     proofs = [item for item in artifacts if item["name"] == "ci-checks-provenance"]

@@ -1335,18 +1335,22 @@ fn terminal_journal_records_are_capped() {
     let directory = tempfile::tempdir().unwrap();
     let journal = Journal::new_at(directory.path().join("journal")).unwrap();
     for index in 0..=MAX_TERMINAL_JOURNAL_RECORDS {
-        journal
-            .save(&JournalRecord {
-                operation_id: format!("rejected-{index:04}"),
-                state: JournalState::Rejected,
-                operation: JournalOperation::Create {
-                    path: format!("/unused/{index}"),
-                    identity: None,
-                },
-                recovery_paths: Vec::new(),
-                failure: Some("expected test rejection".to_string()),
-            })
-            .unwrap();
+        let record = JournalRecord {
+            operation_id: format!("rejected-{index:04}"),
+            state: JournalState::Rejected,
+            operation: JournalOperation::Create {
+                path: format!("/unused/{index}"),
+                identity: None,
+            },
+            recovery_paths: Vec::new(),
+            failure: Some("expected test rejection".to_string()),
+        };
+        // Seed retention input directly; durable save is not exercised by this test.
+        fs::write(
+            journal.record_path(&record.operation_id).unwrap(),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
     }
     drop(journal.try_lock("prune-trigger").unwrap());
     let record_count = fs::read_dir(&journal.directory)

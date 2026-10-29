@@ -77,10 +77,27 @@ sind zulässig; geänderte App-, Cargo-, Toolchain- oder andere Prüfeingaben ve
 die Wiederverwendung. Paketwahl, Testumgebung und Dokumentationstest-Kommando
 müssen ebenfalls gleich bleiben.
 
-Danach laufen nur die Pakettests und die angeforderten Artefaktstufen. Die bereits
-erfolgreichen Jobs und Dokumentationstests werden übernommen; Quellcommit und
-Ursprungslauf stehen im Job-Summary. Ohne `resume_run_id` bleibt der vollständige
-Ablauf erhalten. Coverage-Läufe unterstützen diese begrenzte Fortsetzung nicht.
+Danach laufen exakt die fehlgeschlagenen Paketfälle und die angeforderten
+Artefaktstufen. Das originale JUnit-Artefakt liefert die vollständig ausgeführte
+Fallmenge, positive Ergebnisse und konkrete Fehler. ZIP-Hash, Run, Quellstand,
+Runner und unveränderte Kommandos/Umgebung werden unabhängig geprüft. Der neue
+native Lauf muss genau die Fehlerfälle bestehen; fehlende, zusätzliche,
+doppelte oder übersprungene Fälle sperren die Übernahme. Ein eigener Prüfschritt
+bindet diesen Nachweis vor dem Artefaktbau. `ci-package-cases-provenance` bleibt
+14 Tage verfügbar und wird auch von späteren DMG-/GUI-/Release-Prüfungen erneut
+gegen Original und Fortsetzung aufgelöst.
+
+Eine eng begrenzte Testdatenkorrektur ist dabei abbildbar: Der Journal-Cap-Test
+legt seine 1.025 identischen JSON-Datensätze unmittelbar an, statt für jeden
+Fixture-Datensatz die dauerhafte Produktionsspeicherung auszuführen. Die
+Begrenzungsprüfung, Datensatzanzahl, Assertions und der Timeout bleiben erhalten.
+Die Vorprüfung akzeptiert ausschließlich diese konkrete Ersetzung im Testmodul,
+keine anderen Rust-, Assertion-, Cargo- oder Toolchain-Änderungen. Produktcode
+und dessen dauerhafte Speicherung bleiben unverändert.
+
+Bereits erfolgreiche Jobs und Dokumentationstests werden übernommen; Quellcommit
+und Ursprungslauf stehen im Job-Summary. Ohne `resume_run_id` bleibt der
+vollständige Ablauf erhalten. Coverage-Läufe unterstützen diese Fortsetzung nicht.
 
 ### Nach einem macOS-Setupfehler fortsetzen
 
