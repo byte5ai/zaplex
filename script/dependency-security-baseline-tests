@@ -9,7 +9,7 @@ import sys
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DENY_ACTION = "EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25"
+DENY_ACTION = "uses: ./.github/actions/cargo-deny-native"
 
 
 def fail(message: str) -> None:
@@ -270,8 +270,7 @@ for command, description in required_policy_checks.items():
         fail(f"the required cargo_check job must enforce the {description}")
 if (
     DENY_ACTION not in cargo_check
-    or "arguments: --all-features --locked" not in cargo_check
-    or "command: check advisories bans licenses sources" not in cargo_check
+    or "checks: advisories bans licenses sources" not in cargo_check
 ):
     fail("the build-relevant cargo_check job must enforce the complete cargo-deny policy")
 if "install_release_deps: true" not in cargo_check:
@@ -295,4 +294,9 @@ batch = (REPO_ROOT / ".github" / "workflows" / "ci-batch.yml").read_text()
 if "uses: ./.github/workflows/dependency-security.yml" not in job_block(batch, "dependency_security"):
     fail("the batch must include the dependency advisory check")
 
+native_action = (REPO_ROOT / ".github/actions/cargo-deny-native/action.yml").read_text()
+if '"$RUNNER_TEMP/cargo-deny/bin/cargo-deny" --all-features --locked check "${checks[@]}"' not in native_action:
+    fail("native dependency policy must retain locked all-feature checks")
+if "script/install-cargo-deny" not in native_action:
+    fail("native dependency policy must use the verified binary installer")
 print("dependency security baseline: ok")

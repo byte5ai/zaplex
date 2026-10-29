@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.45] — 2026-10-29
+
+- Sicherheit: libz-sys auf 1.1.31 aktualisiert; verhindert die Ausgabe von Build-Umgebungsvariablen in Cargo-Buildverzeichnisse (RUSTSEC-2026-0418).
+
 ## [1.2.44] — 2026-10-29
 
 - SSH-Ersteinrichtung ordnet Befehlsabschlüsse korrekt zu und wartet auf Erweiterungswahl und Installation. Abbrechen entfernt die Verbindung vollständig; die Auswahl bleibt lesbar und die Session-Einrichtung führt bei fehlender Schlüssel-Anmeldung zu den Host-Einstellungen (#725).

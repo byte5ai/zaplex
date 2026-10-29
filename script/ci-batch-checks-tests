@@ -19,10 +19,9 @@ class ChecksTests(unittest.TestCase):
         self.jobs = [dict(name=name, conclusion="success") for name in module["GATES"] | {
             "Validate main batch", "Verify all selected batch stages"}]
         self.jobs += [dict(name=name, conclusion="skipped") for name in ("test_dmg", "remote_server")]
-        next(j for j in self.jobs if j["name"] == "tests / cargo test (Linux)")["steps"] = [
+        next(j for j in self.jobs if j["name"] == "tests / cargo test (macOS)")["steps"] = [
             dict(name="Isolated package tests", conclusion="success"),
-            dict(name="Package documentation tests", conclusion="success"),
-            dict(name="Rust workspace coverage tests", conclusion="skipped")]
+            dict(name="Package documentation tests", conclusion="success")]
 
     def test_complete_checks_are_reusable(self):
         validate(self.run, self.jobs, self.source)
@@ -48,12 +47,17 @@ class ChecksTests(unittest.TestCase):
                     validate(self.run, changed, self.source)
 
     def test_test_scope_and_duplicate_jobs_are_rejected(self):
-        for step in range(3):
+        for step in range(2):
             changed = copy.deepcopy(self.jobs)
-            tests = next(j for j in changed if j["name"] == "tests / cargo test (Linux)")
+            tests = next(j for j in changed if j["name"] == "tests / cargo test (macOS)")
             del tests["steps"][step]
             with self.assertRaises(ValueError):
                 validate(self.run, changed, self.source)
+        changed = copy.deepcopy(self.jobs)
+        native = next(j for j in changed if j["name"] == "tests / cargo test (macOS)")
+        native["steps"].append(dict(name="Rust workspace coverage tests", conclusion="success"))
+        with self.assertRaises(ValueError):
+            validate(self.run, changed, self.source)
         with self.assertRaises(ValueError):
             validate(self.run, self.jobs + [self.jobs[0]], self.source)
 

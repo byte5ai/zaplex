@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Keep general project work native and Linux-only system jobs on Linux."""
+from pathlib import Path
+import re
+import unittest
+
+ROOT = Path(__file__).resolve().parent.parent
+LINUX_JOBS = {
+    ("build-remote-server.yml", "build_remote_server"),
+    ("live-sftp-safety.yml", "live_sftp_safety"),
+    ("test-dispatch.yml", "test_linux"),
+    ("test-dmg.yml", "build_remote_server"),
+    ("zap_release.yml", "build_remote_server"),
+    ("zap_release.yml", "release_linux"),
+}
+
+
+def validate(text, filename):
+    for match in re.finditer(r"(?ms)^  ([a-zA-Z0-9_]+):\n(.*?)(?=^  [a-zA-Z0-9_]+:|\Z)", text):
+        job, body = match.groups()
+        runner = re.search(r"(?m)^    runs-on: (.+)$", body)
+        if runner is None:
+            continue
+        label = runner[1]
+        if (filename, job) in LINUX_JOBS:
+            if label not in {"ubuntu-22.04", "ubuntu-24.04", "${{ inputs.runs_on }}"}:
+                raise ValueError(f"Linux job {filename}/{job} has runner {label}")
+        elif label not in {"macrunner", "${{ matrix.runner }}", "windows-2025"}:
+            raise ValueError(f"General project job {filename}/{job} must use macrunner")
+        if label == "windows-2025" and "vars.ENABLE_WINDOWS_RELEASE == 'true'" not in body:
+            raise ValueError("Unshipped Windows job must remain gated off")
+        if label == "macrunner" and "cargo-deny-action@" in body:
+            raise ValueError("Docker-only cargo-deny action cannot run natively")
+
+
+class RunnerPolicy(unittest.TestCase):
+    def test_live_workflows_respect_platform_boundary(self):
+        for workflow in (ROOT / ".github/workflows").glob("*.yml"):
+            with self.subTest(workflow=workflow.name):
+                validate(workflow.read_text(), workflow.name)
+
+    def test_general_checks_cannot_drift_back_to_linux_or_paid_runner(self):
+        for label in ("ubuntu-24.04", "blacksmith-16vcpu-ubuntu-2404"):
+            with self.subTest(runner=label), self.assertRaises(ValueError):
+                validate(f"jobs:\n  check:\n    runs-on: {label}\n", "ci-batch.yml")
+
+    def test_linux_daemon_cannot_be_moved_to_mac(self):
+        with self.assertRaises(ValueError):
+            validate("jobs:\n  build_remote_server:\n    runs-on: macrunner\n", "test-dmg.yml")
+
+    def test_docker_action_is_rejected_on_native_runner(self):
+        with self.assertRaises(ValueError):
+            validate("jobs:\n  check:\n    runs-on: macrunner\n    steps:\n      - uses: EmbarkStudios/cargo-deny-action@hash\n", "ci-batch.yml")
+
+
+if __name__ == "__main__":
+    unittest.main()

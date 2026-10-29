@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Install the upstream native binary, verified against the release digest.
+set -euo pipefail
+[[ $(uname -s) == Darwin && $(uname -m) == arm64 ]] || {
+  echo 'cargo-deny policy requires the native Apple Silicon runner.' >&2
+  exit 2
+}
+version=0.20.2
+digest=fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3
+root="${RUNNER_TEMP:?}/cargo-deny"
+mkdir -p "$root/bin"
+archive="$root/cargo-deny.tar.gz"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output "$archive" \
+  "https://github.com/EmbarkStudios/cargo-deny/releases/download/$version/cargo-deny-$version-aarch64-apple-darwin.tar.gz"
+printf '%s  %s\n' "$digest" "$archive" | shasum -a 256 --check --strict -
+tar -xzf "$archive" -C "$root/bin" --strip-components=1 \
+  "cargo-deny-$version-aarch64-apple-darwin/cargo-deny"
+"$root/bin/cargo-deny" --version

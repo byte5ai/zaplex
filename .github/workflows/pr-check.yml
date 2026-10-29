@@ -1,5 +1,5 @@
-# Batch validation: Linux Clippy, macOS cargo check and targeted regression tests.
-# Called after several merges; the Linux cargo-check status is not a PR requirement.
+# Native batch validation: dependency policy, Clippy, compile and app regressions.
+# Called after several merges; compilation is not a per-PR requirement.
 name: PR Check
 
 # Called only by the approved post-merge batch on main.
@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       reuse_linux_checks:
-        description: Reuse Linux gates validated by the batch preflight
+        description: Reuse earlier native policy gates validated by the batch preflight
         type: boolean
         default: false
 
@@ -19,6 +19,7 @@ permissions:
   contents: read
 
 env:
+  CARGO_BUILD_JOBS: '4'
   CARGO_TERM_COLOR: always
   # Kept consistent with zap_release.yml — only the oss channel can
   # cargo build/check without the private warp-channel-config repo.
@@ -27,11 +28,14 @@ env:
 jobs:
   changes:
     name: detect build-relevant changes
-    runs-on: ubuntu-22.04
+    runs-on: macrunner
     timeout-minutes: 5
     outputs:
       needs_build: ${{ steps.detect.outputs.needs_build }}
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -55,12 +59,11 @@ jobs:
         shell: bash
 
   cargo_check:
-    name: cargo check (Linux x86_64)
+    name: cargo policy (macOS Apple Silicon)
     needs: changes
     if: always() && (needs.changes.result != 'success' || needs.changes.outputs.needs_build != 'false') && !inputs.reuse_linux_checks
-    # Same runner as release_linux, glibc 2.35, to avoid deps differences that
-    # only appear on ubuntu-latest.
-    runs-on: ubuntu-22.04
+    # General application policy belongs on the native client platform.
+    runs-on: macrunner
     timeout-minutes: 60
     steps:
       # Only a successful, explicit docs-only decision may skip this required check.
@@ -77,6 +80,9 @@ jobs:
             exit 1
           }
 
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -96,7 +102,7 @@ jobs:
         run: script/pr-check-clippy-gate-tests
         shell: bash
 
-      # These policy checks must fail the required Linux context. Keeping them
+      # These policy checks must fail the native policy context. Keeping them
       # in `changes` would turn this job into a passing skipped check on failure.
       - name: Verify license policy configuration
         run: script/check_license_config_sync
@@ -127,21 +133,20 @@ jobs:
         shell: bash
 
       - name: cargo deny check dependency policy
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        uses: ./.github/actions/cargo-deny-native
         with:
-          arguments: --all-features --locked
-          command: check advisories bans licenses sources
+          checks: advisories bans licenses sources
 
       - uses: ./.github/actions/prepare_environment
         with:
-          target_os: linux
+          target_os: macos
           is_self_hosted: false
           # cargo-about validates the exact third-party attribution that ships
           # in release bundles, while build deps provide protoc / libdbus etc.
           install_release_deps: true
 
       - name: Ensure rust target is installed
-        run: rustup target add x86_64-unknown-linux-gnu
+        run: rustup target add aarch64-apple-darwin
         shell: bash
 
       - name: Generate third-party license attribution
@@ -153,19 +158,24 @@ jobs:
       - name: cargo clippy (default = zaplex bin)
         # `cargo clippy --workspace` would pull in wasm/preview channel-gated
         # targets; lint only the default oss bin + its dependency graph, matching
-        # the release_linux compile target. Cargo.lock is committed, so run --locked
+        # the shipped native client target. Cargo.lock is committed, so run --locked
         # for a deterministic graph and deny the complete warning baseline.
         run: cargo clippy --locked --bin zaplex -- -D warnings
         shell: bash
 
   cargo_check_macos:
     name: cargo check (macOS Apple Silicon)
-    needs: changes
-    if: needs.changes.outputs.needs_build == 'true'
+    needs: [changes, cargo_check]
+    if: >
+      !cancelled() && needs.changes.outputs.needs_build == 'true' &&
+      (needs.cargo_check.result == 'success' || inputs.reuse_linux_checks)
     # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
     runs-on: macrunner
     timeout-minutes: 90
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -278,14 +288,16 @@ jobs:
           retention-days: 14
 
   keymap_smoke_test:
-    name: keymap validation (Linux x86_64)
-    needs: changes
+    name: app regressions (macOS Apple Silicon)
+    needs: [changes, cargo_check_macos]
     if: needs.changes.outputs.needs_build == 'true' && !inputs.reuse_linux_checks
-    # Runs in parallel with cargo_check so it does not delay compile feedback.
-    # Same runner as cargo_check for consistent glibc/deps.
-    runs-on: ubuntu-22.04
+    # Serialize compiling macOS jobs on the shared runner.
+    runs-on: macrunner
     timeout-minutes: 60
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -296,12 +308,12 @@ jobs:
 
       - uses: ./.github/actions/prepare_environment
         with:
-          target_os: linux
+          target_os: macos
           is_self_hosted: false
           install_release_deps: false
 
       - name: Ensure rust target is installed
-        run: rustup target add x86_64-unknown-linux-gnu
+        run: rustup target add aarch64-apple-darwin
         shell: bash
 
       - name: cargo check (app and regression test targets)
@@ -310,7 +322,7 @@ jobs:
 
       # Fast mechanism check (small crate, seconds to compile): proves that a
       # malformed platform-specific keybinding is rejected on ANY OS — including
-      # this Linux runner — not only on the platform that actually uses it.
+      # every supported platform, including the native macOS runner.
       # `OperatingSystem::get()` is resolved at compile time, so without the
       # cross-platform validation in warpui_core::keymap a bad Mac binding
       # (`cmd-shift-o`) would slip past a Linux run entirely.

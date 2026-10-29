@@ -22,12 +22,13 @@ class ResumeTests(unittest.TestCase):
         self.jobs = [{"name": name, "conclusion": "success"} for name in (
             "dependency_security / cargo deny check advisories",
             "compile_checks / detect build-relevant changes",
-            "compile_checks / cargo check (Linux x86_64)",
+            "compile_checks / cargo policy (macOS Apple Silicon)",
             "compile_checks / cargo check (macOS Apple Silicon)",
-            "compile_checks / keymap validation (Linux x86_64)",
+            "compile_checks / app regressions (macOS Apple Silicon)",
             "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+            "tests / Linux daemon regressions",
         )]
-        self.jobs.append({"name": "tests / cargo test (Linux)", "conclusion": "failure", "steps": [
+        self.jobs.append({"name": "tests / cargo test (macOS)", "conclusion": "failure", "steps": [
             {"name": "Isolated package tests", "conclusion": "failure"},
             {"name": "Package documentation tests", "conclusion": "success"},
             {"name": "Rust workspace coverage tests", "conclusion": "skipped"},
@@ -37,7 +38,7 @@ class ResumeTests(unittest.TestCase):
         validate(self.run, self.jobs, ["script/run-shell-ssh-fixtures", "specs/GH-564/evidence/image.png"])
 
     def test_missing_or_failed_gates_are_not_reused(self):
-        for index in range(6):
+        for index in range(7):
             with self.subTest(index=index):
                 missing = copy.deepcopy(self.jobs)
                 del missing[index]
@@ -83,7 +84,7 @@ env:
   CHANNEL: oss
 jobs:
   test:
-    name: cargo test (Linux)
+    name: cargo test (macOS)
     steps:
       - name: Isolated package tests
         run: cargo nextest run --locked -p warp
@@ -101,15 +102,15 @@ jobs:
 
 
     def macos_jobs(self):
-        jobs = copy.deepcopy(self.jobs[:5])
+        jobs = copy.deepcopy(self.jobs[:4])
         jobs[3]["conclusion"] = "failure"
         return jobs
 
     def test_macos_failure_reuses_only_proven_linux_gates(self):
         self.assertEqual(validate(self.run, self.macos_jobs(), [
-            "script/prepare-macos-rust", ".github/actions/prepare_environment/action.yml",
+            ".github/workflows/pr-check.yml",
         ]), "linux")
-        for index in (0, 1, 2, 4):
+        for index in (0, 1, 2):
             for result in ("failure", "skipped", None):
                 jobs = self.macos_jobs()
                 jobs[index]["conclusion"] = result
@@ -120,10 +121,11 @@ jobs:
 
     def test_macos_resume_rejects_app_changes_and_executed_downstream(self):
         for path in ("Cargo.lock", "Cargo.toml", "rust-toolchain.toml", "app/src/main.rs",
-                     ".github/workflows/dependency-security.yml", ".github/workflows/test-dispatch.yml"):
+                     ".github/workflows/dependency-security.yml", ".github/workflows/test-dispatch.yml",
+                     "script/prepare-macos-rust", ".github/actions/prepare_environment/action.yml"):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 validate(self.run, self.macos_jobs(), [path])
-        for stage in ("tests / cargo test (Linux)", "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+        for stage in ("tests / cargo test (macOS)", "live_sftp / OpenSSH/SFTP commit-boundary recovery",
                       "test_dmg / build", "remote_server / build"):
             with self.subTest(stage=stage), self.assertRaises(ValueError):
                 validate(self.run, self.macos_jobs() + [{"name": stage, "conclusion": "success"}], [])
@@ -147,7 +149,6 @@ jobs:
         current = dict(previous)
         current[compile_path] = current[compile_path].replace("  workflow_call:\n", "  workflow_call:\n" + module["LINUX_INPUT"])
         current[compile_path] = current[compile_path].replace("always() && ", "always() && !inputs.reuse_linux_checks && ")
-        current[action] = current[action].replace("Install rustup (macOS runners without Rust)", "Prepare macOS Rust tools").replace("old-installer", "bash script/prepare-macos-rust")
         current[batch] = current[batch].replace("if: old-condition", "if: >\n      new-condition")
         current[batch] += "    with:\n      reuse_linux_checks: ${{ needs.preflight.outputs.reuse_linux_checks == 'true' }}\n"
         verify = module["validate_linux_inputs"]
@@ -156,6 +157,7 @@ jobs:
             (compile_path, "CHANNEL: oss", "CHANNEL: stable"),
             (compile_path, "--bin zaplex", "--bin zaplex --all-features"),
             (action, "key: unchanged", "key: changed"),
+            (action, "old-installer", "bash script/prepare-macos-rust"),
             (action, "inputs.target_os == 'macos'", "inputs.target_os == 'linux'"),
             (batch, "dependency-security.yml", "another-security.yml"),
             (batch, "jobs:", "env:\n  RUSTFLAGS: changed\njobs:"),

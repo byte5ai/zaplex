@@ -32,7 +32,7 @@ on:
       dmg_tag:
         description: Must match the original source VERSION
         type: string
-        default: v1.2.44
+        default: v1.2.45
       fast:
         description: Resume requires the original release profile (false)
         type: boolean
@@ -45,7 +45,7 @@ on:
       dmg_tag:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
         type: string
-        default: v1.2.44
+        default: v1.2.45
       fast:
         description: "Debug-Profil für Mac-App und Linux-Daemon. Nur für schnelle Entwicklerprüfung; für Abnahme-DMGs ausgeschaltet lassen."
         type: boolean
@@ -68,11 +68,14 @@ jobs:
     permissions:
       contents: read
       actions: read
-    runs-on: ubuntu-24.04
+    runs-on: macrunner
     timeout-minutes: 5
     outputs:
       source_sha: ${{ steps.resolve-source-sha.outputs.sha }}
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -134,6 +137,9 @@ jobs:
     needs: readiness
     timeout-minutes: 10
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -263,6 +269,9 @@ jobs:
     timeout-minutes: 360
     needs: [readiness, signing_preflight]
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -360,6 +369,9 @@ jobs:
     env:
       APP_PATH: target/aarch64-apple-darwin/${{ inputs.fast && 'debug' || 'release-lto' }}/bundle/osx/Zaplex.app
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
