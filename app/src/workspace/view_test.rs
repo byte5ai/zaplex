@@ -7977,3 +7977,70 @@ fn new_session_sidecar_render_constrains_search_and_footer_beside_parent() {
         }
     });
 }
+
+#[test]
+fn cockpit_opens_in_its_own_tab_and_refocuses_without_splitting_the_shell() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let original = workspace.active_tab_pane_group().clone();
+            let original_panes = original.as_ref(ctx).visible_pane_ids();
+            let count = workspace.tab_count();
+            workspace.open_cockpit_pane_for(Some("test-account".to_string()), ctx);
+            assert_eq!(workspace.tab_count(), count + 1);
+            assert_eq!(
+                workspace
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .visible_pane_ids()
+                    .len(),
+                1
+            );
+            assert_eq!(original.as_ref(ctx).visible_pane_ids(), original_panes);
+            let cockpit = workspace.active_tab_pane_group().id();
+            workspace.activate_tab(0, ctx);
+            workspace.open_cockpit_pane_for(Some("test-account".to_string()), ctx);
+            assert_eq!(workspace.active_tab_pane_group().id(), cockpit);
+            assert_eq!(workspace.tab_count(), count + 1);
+            workspace.open_cockpit_pane_for(None, ctx);
+            assert_eq!(workspace.tab_count(), count + 2);
+            assert_eq!(original.as_ref(ctx).visible_pane_ids(), original_panes);
+        });
+    });
+}
+
+#[test]
+fn new_agent_tab_titles_distinguish_same_project_launches_without_renaming_tabs() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.active_tab_pane_group().update(ctx, |group, ctx| {
+                group.set_title("Claude Code · project", ctx)
+            });
+            let title = workspace.next_agent_tab_title(
+                CLIAgent::Claude,
+                Some(Path::new("/work/project")),
+                ctx,
+            );
+            assert_eq!(title, "Claude Code · project (2)");
+            assert_eq!(
+                workspace.next_agent_tab_title(
+                    CLIAgent::Codex,
+                    Some(Path::new("/work/project")),
+                    ctx
+                ),
+                "Codex · project"
+            );
+            assert_eq!(
+                workspace
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .custom_title(ctx)
+                    .as_deref(),
+                Some("Claude Code · project")
+            );
+        });
+    });
+}

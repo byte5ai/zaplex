@@ -7091,3 +7091,114 @@ fn unavailable_remote_file_links_never_open_same_named_local_files() {
         assert!(rx.try_recv().is_err());
     });
 }
+
+/// Supply the same session metadata to the view, input, and terminal model.
+fn finish_routed_launch_test_bootstrap(
+    view: &mut TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) {
+    let session_id = SessionId::from(123u64);
+    view.model
+        .lock()
+        .block_list_mut()
+        .active_block_for_test()
+        .set_session_id(session_id);
+    view.active_block_metadata = Some(BlockMetadata::new(Some(session_id), None));
+    view.input.update(ctx, |input, ctx| {
+        input.set_active_block_metadata(BlockMetadata::new(Some(session_id), None), false, ctx);
+    });
+}
+
+#[test]
+fn routed_agent_launch_waits_for_the_new_shell_without_losing_the_request() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let mut history = History::handle(&app);
+        History::initialized_sessions(&mut history, &mut app, vec![SessionId::from(123u64)])
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("fixture history should initialize");
+        let input = terminal.read(&app, |view, _| view.input.clone());
+        let (tx, rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let InputEvent::ExecuteCommand(event) = event {
+                    tx.try_send(event.command.clone()).unwrap();
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            assert!(view.active_session_shell_type(ctx).is_none());
+            view.restore_input_draft("untouched".to_string(), ctx);
+            let launch = CLIAgent::Codex.routed_launch(None, Some("test-model"), None);
+            assert!(view.execute_routed_agent_launch_or_set_pending(&launch, ctx));
+            view.execute_pending_command((), ctx);
+            assert_eq!(view.input_draft(ctx), "untouched");
+            assert!(rx.is_empty());
+            finish_routed_launch_test_bootstrap(view, ctx);
+            view.execute_pending_command((), ctx);
+            view.execute_pending_command((), ctx);
+            assert_eq!(view.input_draft(ctx), "untouched");
+        });
+        let command = rx
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("queued launch must execute after shell bootstrap")
+            .unwrap();
+        assert!(command.contains("codex"));
+        assert!(command.contains("test-model"));
+        assert!(!command.contains("untouched"));
+        assert!(
+            rx.try_recv().is_err(),
+            "bootstrap retries must not execute twice"
+        );
+    });
+}
+
+#[test]
+fn routed_agent_fork_waits_for_shell_and_preserves_worktree_setup_order() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let mut history = History::handle(&app);
+        History::initialized_sessions(&mut history, &mut app, vec![SessionId::from(123u64)])
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("fixture history should initialize");
+        let input = terminal.read(&app, |view, _| view.input.clone());
+        let (tx, rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if let InputEvent::ExecuteCommand(event) = event {
+                    tx.try_send(event.command.clone()).unwrap();
+                }
+            });
+        });
+        terminal.update(&mut app, |view, ctx| {
+            assert!(view.active_session_shell_type(ctx).is_none());
+            view.set_pending_command("git worktree add ../isolated", ctx);
+            let launch = CLIAgent::Claude.routed_launch(None, Some("test-model"), None);
+            assert!(view.append_routed_agent_launch_to_pending(&launch, ctx));
+            assert_eq!(view.input_draft(ctx), "git worktree add ../isolated");
+            assert!(rx.is_empty());
+            finish_routed_launch_test_bootstrap(view, ctx);
+            view.execute_pending_command((), ctx);
+            view.execute_pending_command((), ctx);
+        });
+        let command = rx
+            .recv()
+            .with_timeout(Duration::from_secs(5))
+            .await
+            .expect("queued worktree fork must execute after shell bootstrap")
+            .unwrap();
+        assert!(command.starts_with("git worktree add ../isolated && "));
+        assert!(command.contains("claude"));
+        assert!(command.contains("test-model"));
+        assert!(
+            rx.try_recv().is_err(),
+            "bootstrap retries must not execute twice"
+        );
+    });
+}

@@ -1,5 +1,13 @@
 use chrono::Utc;
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::vec2f;
 use std::collections::BTreeMap;
+use std::path::Path;
+use warp_core::ui::appearance::Appearance;
+use warpui::elements::{Element, ParentElement, SizeConstraintCondition, SizeConstraintSwitch, Stack};
+use warpui::fonts::{platform_font_cache_for_tests, Cache};
+use warpui::platform::WindowStyle;
+use warpui::{App, Presenter, SingletonEntity, WindowInvalidation};
 #[cfg(not(target_family = "wasm"))]
 use zaplex_cockpit::{AgentInventoryStatus, FleetTree, HostAvailability, HostNode, ProjectNode};
 use zaplex_cockpit::{CostFigure, Provider, SessionSnapshot, SessionState, WindowTotals};
@@ -401,4 +409,151 @@ fn first_status_sort_places_waiting_before_working_and_idle() {
             SessionState::Idle
         ]
     );
+}
+
+#[test]
+fn compact_session_metadata_preserves_full_model_host_and_worktree() {
+    crate::i18n::init(Some("en"));
+    let mut entry = session(None, None);
+    entry.model = "long-model-for-a-complex-review".to_string();
+    entry.worktree = Some("very-long-worktree-name-with-details".to_string());
+    entry.ctx_tokens = 12500;
+    let text = super::compact_session_details(&entry, Some("remote-example"), None);
+    assert!(text.contains("remote-example"));
+    assert!(text.contains("very-long-worktree-name-with-details"));
+    assert!(text.contains("long-model-for-a-complex-review"));
+    assert!(text.contains("—"));
+    assert!(!text.contains("$0.00"));
+}
+
+struct CompactTableTestView {
+    pane: warpui::ViewHandle<super::CockpitPaneView>,
+    usage: zaplex_cockpit::AccountUsage,
+}
+
+impl warpui::Entity for CompactTableTestView {
+    type Event = ();
+}
+impl warpui::TypedActionView for CompactTableTestView {
+    type Action = ();
+    fn handle_action(&mut self, _: &(), _: &mut warpui::ViewContext<Self>) {}
+}
+impl warpui::View for CompactTableTestView {
+    fn ui_name() -> &'static str {
+        "CompactTableTestView"
+    }
+    fn render(&self, app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+        let appearance = warp_core::ui::appearance::Appearance::as_ref(app);
+        let pane = self.pane.as_ref(app);
+        let tree = FleetTree::default();
+        let table = SizeConstraintSwitch::new(
+            pane.render_sessions_table(&self.usage, &tree, app, appearance, false),
+            vec![(
+                SizeConstraintCondition::WidthLessThan(900.0),
+                pane.render_sessions_table(&self.usage, &tree, app, appearance, true),
+            )],
+        )
+        .finish();
+        // Position probes require the same caching scope supplied by the real pane.
+        Stack::new().with_child(table).finish()
+    }
+}
+
+#[test]
+fn compact_cockpit_rows_wrap_real_text_when_resized() {
+    App::test((), |mut app| async move {
+        let locale =
+            std::env::var("ZAPLEX_COCKPIT_LAYOUT_TEST_LOCALE").unwrap_or_else(|_| "en".to_string());
+        crate::i18n::init(Some(&locale));
+        assert_eq!(crate::i18n::current_languages()[0].to_string(), locale);
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(crate::remote_server::manager::RemoteServerManager::new);
+        app.add_singleton_model(super::CockpitModel::new);
+        let family = Cache::handle(&app).update(&mut app, |cache, _| {
+            *cache = platform_font_cache_for_tests();
+            let font = std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets/bundled/fonts/roboto/Roboto-Regular.ttf"),
+            )
+            .unwrap();
+            cache.load_family_from_bytes("Roboto", vec![font]).unwrap()
+        });
+        Appearance::handle(&app).update(&mut app, |appearance, ctx| {
+            appearance.set_ui_font_family(family, ctx)
+        });
+        let account = zaplex_cockpit::Account {
+            provider: Provider::Claude,
+            key: "layout-test".into(),
+            config_dir: "/test/account".into(),
+            label: "Example".into(),
+            provider_account_id: None,
+            email: None,
+            org: None,
+            role: None,
+            plan_tier: None,
+            is_default: true,
+        };
+        let mut usage = zaplex_cockpit::build_account_usage(
+            account,
+            vec![],
+            Utc::now(),
+            0,
+            0,
+            &Default::default(),
+        );
+        let mut item = session(None, None);
+        item.name = "A long independently chosen session name that must remain readable when the dashboard becomes narrow".into();
+        item.model = "long-review-model".into();
+        item.worktree = Some("feature-with-a-descriptive-name".into());
+        usage.idle_sessions.push(item);
+        let (window, root) =
+            app.add_window(WindowStyle::NotStealFocus, |ctx| CompactTableTestView {
+                pane: ctx.add_typed_action_view(super::CockpitPaneView::new),
+                usage,
+            });
+        let mut presenter = Presenter::new(window);
+        for theme in [
+            crate::themes::default_themes::dark_theme(),
+            crate::themes::default_themes::light_theme(),
+        ] {
+            Appearance::handle(&app)
+                .update(&mut app, |appearance, ctx| appearance.set_theme(theme, ctx));
+            for width in [480.0, 1000.0, 320.0, 480.0] {
+                app.update(|ctx| {
+                    ctx.update_window_bounds(
+                        window,
+                        RectF::new(vec2f(0.0, 0.0), vec2f(width, 400.0)),
+                    );
+                    presenter.invalidate(
+                        WindowInvalidation {
+                            updated: ctx.view_ids_for_window(window).into_iter().collect(),
+                            ..Default::default()
+                        },
+                        ctx,
+                    );
+                    presenter.build_scene(vec2f(width, 400.0), 1.0, None, ctx);
+                });
+                if width < 900.0 {
+                    let row = presenter
+                        .position_cache()
+                        .get_position("cockpit-compact-row-1")
+                        .unwrap_or_else(|| panic!("visible compact session at width {width}"));
+                    assert!(
+                        row.width() <= width - 24.0,
+                        "identity must leave space for its menu: {row:?}"
+                    );
+                    assert!(
+                    row.height() > 60.0,
+                    "real text must wrap instead of being clipped into a one-line table: {row:?}"
+                );
+                } else {
+                    assert!(presenter
+                        .position_cache()
+                        .get_position("cockpit-compact-row-1")
+                        .is_none());
+                }
+            }
+        }
+        drop(root);
+    });
 }

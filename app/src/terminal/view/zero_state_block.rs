@@ -2,6 +2,7 @@
 use warpui::elements::SavePosition;
 
 use settings::Setting;
+use warp_core::ui::color::{contrast::MinimumAllowedContrast, ContrastingColor};
 use warp_core::{report_if_error, ui::Icon};
 use warpui::{
     elements::{
@@ -147,6 +148,13 @@ impl View for TerminalViewZeroStateBlock {
         let appearance = Appearance::handle(app).as_ref(app);
         let theme = appearance.theme();
 
+        let text_color = theme
+            .sub_text_color(theme.background())
+            .on_background(theme.background(), MinimumAllowedContrast::Text)
+            .into_solid();
+        let render_hint = |message: Message, app: &AppContext| {
+            render_wrapping_message(message.with_text_color(text_color), app)
+        };
         let title_font_size = appearance.monospace_font_size() + 6.;
         let title_text = crate::t!("terminal-zero-state-title");
         let title_label = Text::new(
@@ -191,7 +199,7 @@ impl View for TerminalViewZeroStateBlock {
             );
 
         let mut items = vec![
-            render_wrapping_message(
+            render_hint(
                 Message::new(vec![MessageItem::clickable(
                     vec![
                         MessageItem::keystroke(ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone()),
@@ -204,7 +212,7 @@ impl View for TerminalViewZeroStateBlock {
                 )]),
                 app,
             ),
-            render_wrapping_message(
+            render_hint(
                 Message::new(vec![MessageItem::clickable(
                     vec![
                         MessageItem::keystroke(Keystroke {
@@ -226,7 +234,7 @@ impl View for TerminalViewZeroStateBlock {
             if let Some(keystroke) =
                 keybinding_name_to_keystroke(TOGGLE_RIGHT_PANEL_BINDING_NAME, app)
             {
-                items.push(render_wrapping_message(
+                items.push(render_hint(
                     Message::new(vec![MessageItem::clickable(
                         vec![
                             MessageItem::keystroke(keystroke),
@@ -268,7 +276,7 @@ impl View for TerminalViewZeroStateBlock {
                     .with_child(
                         Shrinkable::new(
                             1.,
-                            render_wrapping_message(
+                            render_hint(
                                 Message::from_text(crate::t!(
                                     "terminal-zero-state-autodetect-prompts"
                                 )),
@@ -283,16 +291,20 @@ impl View for TerminalViewZeroStateBlock {
 
         let dismiss_button = Hoverable::new(self.state_handles.dismiss_button.clone(), |state| {
             let color = if state.is_hovered() {
-                theme.sub_text_color(theme.background())
+                theme.main_text_color(theme.background())
             } else {
-                theme.disabled_text_color(theme.background())
+                theme.sub_text_color(theme.background())
             };
             Text::new(
                 crate::t!("terminal-zero-state-dismiss"),
                 appearance.ui_font_family(),
-                appearance.monospace_font_size() - 4.,
+                appearance.ui_font_body(),
             )
-            .with_color(color.into_solid())
+            .with_color(
+                color
+                    .on_background(theme.background(), MinimumAllowedContrast::Text)
+                    .into_solid(),
+            )
             .finish()
         })
         .on_click(|ctx, _, _| {

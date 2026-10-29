@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.43] — 2026-10-29
+
+- Agent-Starts warten auf die tatsächliche Shell; Remote-Sessionfehler bieten direkte Einrichtung. Cockpit öffnet im eigenen Tab und zeigt schmale Sessionlisten lesbar mit vollständigen Metadaten. Agent-Tabs erhalten eindeutige Titel, Startfehler sind lokalisiert.
+
 ## [1.2.42] — 2026-10-28
 
 - Die Agenten-Startkarte bricht lange Modell- und Effort-Optionen sowie Erkennungsfehler vollständig um; bei geringer Fensterhöhe bleiben Auswahl und Abbrechen durch Scrollen erreichbar (#720).
