@@ -179,7 +179,8 @@ fn repository_org_filter_rejects_roots_missing_from_snapshot() {
 #[test]
 fn resolve_with_full_path_skips_directory_precedence() -> Result<()> {
     let temp_dir = tempfile::TempDir::new().context("Failed to create temp dir")?;
-    let root = temp_dir.path();
+    let root = temp_dir.path().canonicalize()?;
+    let root = root.as_path();
 
     // Create a skill in .claude/skills directory
     let claude_skill = root.join(".claude/skills/my-skill/SKILL.md");

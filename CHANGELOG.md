@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.49] — 2026-10-29
+
+- Sichere Symlink-Operationen öffnen unter macOS den Link selbst; native Pfadprüfungen verwenden kanonische Testverzeichnisse und Linux-Daemon-Systemtests laufen auf Linux.
+
 ## [1.2.48] — 2026-10-29
 
 - Dock-Signal und Hinweiston laufen über das aktive Plattform-Backend; UI-Test- und Hintergrund-Backends erzeugen keine native AppKit-Anwendung.
