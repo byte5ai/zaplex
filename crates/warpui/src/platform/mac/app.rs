@@ -2,7 +2,7 @@ use cocoa::appkit::NSApp;
 use cocoa::foundation::{NSUInteger, NSURL};
 use cocoa::{
     base::{id, nil},
-    foundation::{NSArray, NSAutoreleasePool, NSData, NSString},
+    foundation::{NSArray, NSAutoreleasePool, NSData},
 };
 use futures_util::future::LocalBoxFuture;
 use objc::{

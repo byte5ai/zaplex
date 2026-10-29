@@ -7,7 +7,7 @@ use super::{
 };
 use anyhow::{anyhow, Result};
 use cocoa::appkit::{NSWindowButton, NSWindowStyleMask};
-use cocoa::foundation::{NSArray, NSPoint, NSRange, NSString, NSUInteger};
+use cocoa::foundation::{NSArray, NSPoint, NSRange, NSUInteger};
 use cocoa::{
     appkit::{NSApp, NSView, NSWindow},
     base::{id, nil},
