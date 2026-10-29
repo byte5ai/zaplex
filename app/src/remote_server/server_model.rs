@@ -36,6 +36,8 @@ use warp_util::file::FileId;
 
 #[cfg(unix)]
 use super::managed_fleet::{detached_retention, DetachedRetention, ForegroundAgent, KeepReason};
+#[cfg(target_os = "linux")]
+use super::proto::ManagedSessionLifecycleAction;
 use super::proto::{
     client_message, delete_file_response, run_command_response, server_message,
     write_file_response, Abort, AgentModelCapability, AgentModelDiscoveryResponse,
@@ -53,11 +55,10 @@ use super::proto::{
 #[cfg(unix)]
 use super::proto::{
     AttachSession, BindAgentPty, CloseSession, DetachSession, ManagedLaunch,
-    ManagedSessionExitInfo, ManagedSessionInfo, ManagedSessionLifecycleAction,
-    ManagedSessionLifecycleRequest, MemoryMeasurement, MemoryMeasurementStatus, OpenSession,
-    ResizeSession, SessionAttached, SessionExited, SessionInfo, SessionInput, SessionKeepReason,
-    SessionList, SessionNotice, SessionOpened, SessionOutput, SessionRetention, SessionSize,
-    SetBootstrapPreamble, UnbindAgentPty,
+    ManagedSessionExitInfo, ManagedSessionInfo, ManagedSessionLifecycleRequest, MemoryMeasurement,
+    MemoryMeasurementStatus, OpenSession, ResizeSession, SessionAttached, SessionExited,
+    SessionInfo, SessionInput, SessionKeepReason, SessionList, SessionNotice, SessionOpened,
+    SessionOutput, SessionRetention, SessionSize, SetBootstrapPreamble, UnbindAgentPty,
 };
 #[cfg(target_os = "linux")]
 use super::session_live::{read_session_live_state, RealPtyProcfs};

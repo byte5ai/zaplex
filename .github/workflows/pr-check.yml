@@ -150,6 +150,8 @@ jobs:
         with:
           target_os: macos
           is_self_hosted: false
+          # Keep validated dependency artifacts when strict native lint finds a source error.
+          cache_on_failure: true
           # cargo-about validates the exact third-party attribution that ships
           # in release bundles, while build deps provide protoc / libdbus etc.
           install_release_deps: true
