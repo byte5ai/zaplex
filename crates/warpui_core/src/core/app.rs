@@ -4445,6 +4445,14 @@ impl AppContext {
         self.platform_delegate.system_theme()
     }
 
+    pub fn set_application_badge_label(&self, label: &str) {
+        self.platform_delegate.set_application_badge_label(label);
+    }
+
+    pub fn play_system_alert(&self) {
+        self.platform_delegate.play_system_alert();
+    }
+
     pub fn is_headless(&self) -> bool {
         self.platform_delegate.is_headless()
     }

@@ -196,6 +196,12 @@ pub trait Delegate: 'static {
 
     fn request_user_attention(&self, window_id: WindowId);
 
+    /// Sets the application's passive OS badge. Backends without an OS surface do nothing.
+    fn set_application_badge_label(&self, _: &str) {}
+
+    /// Plays the platform's standard alert sound. Non-native backends do nothing.
+    fn play_system_alert(&self) {}
+
     fn clipboard(&mut self) -> &mut dyn Clipboard;
 
     fn system_theme(&self) -> SystemTheme;

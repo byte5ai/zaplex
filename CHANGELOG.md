@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.48] — 2026-10-29
+
+- Dock-Signal und Hinweiston laufen über das aktive Plattform-Backend; UI-Test- und Hintergrund-Backends erzeugen keine native AppKit-Anwendung.
+
 ## [1.2.47] — 2026-10-29
 
 - Headless-Cockpit aktualisiert den Aufmerksamkeitszustand ohne Dock- oder Toneffekte; lokale CLI-Fixtures verwenden portable kanonische Testpfade.
