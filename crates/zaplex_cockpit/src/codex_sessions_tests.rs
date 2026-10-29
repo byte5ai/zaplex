@@ -288,7 +288,7 @@ fn unreadable_rollout_subtree_marks_session_scan_incomplete() {
     let unreadable = tmp.path().join("sessions/2026/08");
     fs::create_dir_all(&unreadable).unwrap();
     let original_permissions = fs::metadata(&unreadable).unwrap().permissions();
-    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o0)).unwrap();
 
     let scan = scan_sessions(tmp.path(), Utc::now(), Duration::zero(), 0);
 
@@ -327,7 +327,7 @@ fn unreadable_rollout_file_marks_session_scan_incomplete() {
         ],
     );
     let original_permissions = fs::metadata(&path).unwrap().permissions();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o0)).unwrap();
 
     let scan = scan_sessions(tmp.path(), Utc::now(), Duration::zero(), 0);
 
