@@ -271,7 +271,7 @@ pub fn send_verified_process_signal(
     {
         validate_signal_request(pid, expected)?;
         let _ = signal;
-        return Err(ProcessSignalError::UnsupportedPlatform);
+        Err(ProcessSignalError::UnsupportedPlatform)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
@@ -298,6 +298,7 @@ fn validate_signal_request(pid: u32, expected: &str) -> Result<(), ProcessSignal
 /// `acquire` returns an identity-bound target together with the fingerprint
 /// observed while acquiring it. On Linux that target is a pidfd; tests inject
 /// a harmless token and a spy dispatcher to prove every rejection fails closed.
+#[cfg(any(target_os = "linux", test))]
 fn send_verified_process_signal_with<T>(
     pid: u32,
     expected: &str,
@@ -458,6 +459,7 @@ fn registration_is_from_current_boot(started_at_millis: i64, boot_time: u64) -> 
     started_at_millis > 0 && i128::from(started_at_millis) >= i128::from(boot_time) * 1_000
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_linux_proc_start(stat: &str) -> Option<u64> {
     // `/proc/<pid>/stat` is `pid (comm) state ...`; `comm` may itself contain
     // spaces or `)`, so split after its final closing delimiter. Field 22 is
