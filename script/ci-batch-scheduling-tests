@@ -47,9 +47,11 @@ def state(mode="normal", artifact="test-dmg"):
         "reuse_linux_checks": "true" if mode == "linux" else "",
         "reuse_pre_sftp_checks": "true" if mode == "tail" else "",
         "reuse_pre_policy_checks": "true" if mode == "pre-policy" else "",
+        "reuse_native_checks": "true" if mode == "regressions" else "",
     }
     skipped = {
         "artifacts": ["dependency_security", "compile_checks", "tests", "live_sftp"],
+        "regressions": ["dependency_security"],
         "normal": [], "linux": ["dependency_security"], "pre-policy": ["dependency_security"],
         "package": ["dependency_security", "compile_checks", "live_sftp"],
         "tail": ["dependency_security", "compile_checks", "tests"],
@@ -66,7 +68,7 @@ class SchedulingTests(unittest.TestCase):
         expected = {
             "artifacts": (False, False, False, False),
             "normal": (True, True, True, True), "linux": (False, True, True, True),
-            "pre-policy": (False, True, True, True),
+            "pre-policy": (False, True, True, True), "regressions": (False, True, True, True),
             "package": (False, False, True, False), "tail": (False, False, False, True),
         }
         for mode, outcomes in expected.items():
@@ -75,7 +77,7 @@ class SchedulingTests(unittest.TestCase):
                     self.assertEqual(condition(job, state(mode), inherited_success=mode == "normal"), outcome)
 
     def test_artifacts_run_after_success_despite_inherited_skips(self):
-        for mode in ("normal", "linux", "package", "tail", "artifacts", "pre-policy"):
+        for mode in ("normal", "linux", "package", "tail", "artifacts", "pre-policy", "regressions"):
             for artifact in ("none", "test-dmg", "remote-server"):
                 for job, selection in (("test_dmg", "test-dmg"), ("remote_server", "remote-server")):
                     with self.subTest(mode=mode, artifact=artifact, job=job):
@@ -84,7 +86,7 @@ class SchedulingTests(unittest.TestCase):
                                          artifact == selection)
 
     def test_preflight_failure_and_cancellation_block_execution(self):
-        for mode in ("normal", "linux", "package", "tail", "artifacts", "pre-policy"):
+        for mode in ("normal", "linux", "package", "tail", "artifacts", "pre-policy", "regressions"):
             for job in JOBS[1:]:
                 needs = state(mode)
                 needs["preflight"]["result"] = "failure"
@@ -93,7 +95,7 @@ class SchedulingTests(unittest.TestCase):
                     self.assertFalse(condition(job, state(mode), cancelled=True))
 
     def test_failed_compile_never_starts_sftp_or_tests(self):
-        for mode in ("normal", "linux"):
+        for mode in ("normal", "linux", "regressions"):
             for result in ("failure", "skipped", "cancelled"):
                 needs = state(mode)
                 needs["compile_checks"]["result"] = result
@@ -102,13 +104,13 @@ class SchedulingTests(unittest.TestCase):
                         self.assertFalse(condition(job, needs, inherited_success=False))
 
     def test_missing_sftp_blocks_artifacts(self):
-        for mode in ("normal", "linux", "tail"):
+        for mode in ("normal", "linux", "tail", "regressions"):
             needs = state(mode)
             needs["live_sftp"]["result"] = "skipped"
             self.assertFalse(condition("test_dmg", needs, inherited_success=False))
 
     def test_completion_requires_all_selected_stages(self):
-        for mode in ("normal", "linux", "package", "tail", "artifacts", "pre-policy"):
+        for mode in ("normal", "linux", "package", "tail", "artifacts", "pre-policy", "regressions"):
             for artifact in ("none", "test-dmg", "remote-server"):
                 needs = state(mode, artifact)
                 validate(needs, artifact)

@@ -6,6 +6,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -184,6 +185,11 @@ def validate(run, jobs, changed_paths):
     by_name = {job["name"]: job for job in jobs}
     if len(by_name) != len(jobs):
         raise ValueError("Ambiguous duplicate job names")
+    if (by_name.get("compile_checks / app regressions (macOS Apple Silicon)", {}).get("conclusion") == "failure"
+            and by_name.get(MACOS_GATE, {}).get("conclusion") == "success"):
+        native = runpy.run_path(str(Path(__file__).with_name("ci-native-checks-resume")))
+        native["validate_run"](run, jobs, changed_paths)
+        return "regressions"
     policy = "compile_checks / cargo policy (macOS Apple Silicon)"
     if (by_name.get(policy, {}).get("conclusion") == "failure"
             and by_name.get(MACOS_GATE, {}).get("conclusion") == "skipped"):
@@ -362,7 +368,25 @@ def main():
         mode = "tail"
     else:
         mode = validate(run, jobs, changed)
-    if mode == "pre-policy":
+    if mode == "regressions":
+        native = runpy.run_path(str(Path(__file__).with_name("ci-native-checks-resume")))
+        paths = (native["WORKFLOW"], native["PLAN"])
+        passed = native["validate_inputs"](
+            {path: command("git", "show", f"{source}:{path}") for path in paths},
+            {path: Path(path).read_text() for path in paths}, jobs, validate_pre_policy_plan,
+        )
+        counts = native["read_test_counts"](run_id, jobs)
+        native["validate_test_counts"](passed, counts)
+        Path("ci-native-checks-provenance.json").write_text(json.dumps({
+            "run_id": run_id, "source_sha": source, "qualified_sha": os.environ["GITHUB_SHA"],
+            "passed_regression_steps": passed, "passed_test_counts": counts,
+        }) + "\n")
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+            output.write(f"passed_regression_steps={json.dumps(passed)}\n")
+        output_name = "reuse_native_checks"
+        evidence = "native security/static/policy/compile and unchanged successful regression-step"
+        remaining = "failed/unexecuted regressions, Linux-only minidumps and downstream stages"
+    elif mode == "pre-policy":
         workflow = ".github/workflows/pr-check.yml"
         validate_pre_policy_inputs(command("git", "show", f"{source}:{workflow}"), Path(workflow).read_text())
         plan = "script/test-suite-nonrust-plan.json"

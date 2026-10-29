@@ -15,10 +15,11 @@ def validate(needs, artifacts):
     linux = outputs.get("reuse_linux_checks") == "true"
     tail = outputs.get("reuse_pre_sftp_checks") == "true"
     pre_policy = outputs.get("reuse_pre_policy_checks") == "true"
-    if sum((package, linux, tail, all_checks, pre_policy)) > 1:
+    native = outputs.get("reuse_native_checks") == "true"
+    if sum((package, linux, tail, all_checks, pre_policy, native)) > 1:
         raise ValueError("Conflicting reuse modes")
     reused = {
-        "dependency_security": package or linux or tail or all_checks or pre_policy,
+        "dependency_security": package or linux or tail or all_checks or pre_policy or native,
         "compile_checks": package or tail or all_checks,
         "tests": tail or all_checks,
         "live_sftp": package or all_checks,

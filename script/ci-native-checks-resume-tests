@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Independent source, step and provenance controls for native CI continuation."""
+
+import copy
+import hashlib
+import io
+import json
+from pathlib import Path
+import re
+import runpy
+from types import SimpleNamespace
+import unittest
+import zipfile
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parent.parent
+M = runpy.run_path(str(ROOT / "script/ci-native-checks-resume"))
+H = runpy.run_path(str(ROOT / "script/ci-batch-resume"))
+
+
+class NativeResumeTests(unittest.TestCase):
+    def setUp(self):
+        self.origin = dict(id=10, head_sha="a" * 40, status="completed", conclusion="failure",
+                           event="workflow_dispatch", head_branch="main",
+                           path=".github/workflows/ci-batch.yml",
+                           head_repository=dict(full_name="byte5ai/zaplex"))
+        self.jobs = [dict(name=n, conclusion="success", labels=["macrunner"])
+                     for n in M["GATES"]]
+        self.jobs.append(dict(name="Validate main batch", conclusion="success"))
+        self.passed = ["Enforce compact sidebar row actions", "cargo check (app and regression test targets)",
+                       "cargo test (first behavior)"]
+        self.pending = "cargo test (remaining behavior)"
+        step_results = [dict(name=n, conclusion="success") for n in self.passed]
+        step_results += [dict(name="cargo test (native minidump lifecycle)", conclusion="success"),
+                         dict(name="Native minidump smoke test", conclusion="failure"),
+                         dict(name=self.pending, conclusion="skipped")]
+        self.jobs.append(dict(name=M["APP_JOB"], conclusion="failure", labels=["macrunner"], steps=step_results))
+        self.jobs += [dict(name=n, conclusion="skipped") for n in ("tests", "live_sftp", "test_dmg", "remote_server")]
+        workflow = "env:\n  CHANNEL: oss\njobs:\n"
+        for job in ("changes", "cargo_check", "cargo_check_macos"):
+            workflow += f"  {job}:\n    runs-on: macrunner\n    steps:\n      - name: gate\n        run: check-{job}\n"
+        workflow += "  keymap_smoke_test:\n    runs-on: macrunner\n    steps:\n      - uses: setup@immutable\n"
+        for i, name in enumerate(self.passed + ["cargo test (native minidump lifecycle)", "Native minidump smoke test", self.pending]):
+            workflow += f"      - name: {name}\n        run: independent-command-{i}\n"
+        plan = {"inventory_source_hashes": {M["WORKFLOW"]: hashlib.sha256(workflow.encode()).hexdigest()},
+                "suites": [dict(id="immutable-nonrust-case")]}
+        self.old = {M["WORKFLOW"]: workflow, M["PLAN"]: json.dumps(plan)}
+        current = workflow
+        for i, name in enumerate(("cargo test (native minidump lifecycle)", "Native minidump smoke test"), 3):
+            current = current.replace(f"      - name: {name}\n        run: independent-command-{i}\n", "")
+        current = current.replace("    runs-on: macrunner", "    if: reuse-scheduling\n    runs-on: macrunner")
+        for name in self.passed + [self.pending]:
+            current = current.replace(f"      - name: {name}\n", f"      - name: {name}\n        if: step-proof-scheduling\n")
+        plan["inventory_source_hashes"][M["WORKFLOW"]] = hashlib.sha256(current.encode()).hexdigest()
+        self.new = {M["WORKFLOW"]: current, M["PLAN"]: json.dumps(plan)}
+        self.run = {**self.origin, "id": 20, "head_sha": "b" * 40, "conclusion": "success"}
+        self.counts = {"cargo test (first behavior)": [8, 2]}
+        self.receipt = dict(run_id="10", source_sha="a" * 40, qualified_sha="b" * 40,
+                            passed_regression_steps=self.passed, passed_test_counts=self.counts)
+        self.resumed = [dict(name=n, conclusion="skipped") for n in M["GATES"] if n.startswith("compile_checks /")]
+        self.resumed += [dict(name="dependency_security", conclusion="skipped"),
+                         dict(name="Validate main batch", conclusion="success"),
+                         dict(name=M["APP_JOB"], conclusion="success", labels=["macrunner"],
+                              steps=[dict(name=n, conclusion="skipped") for n in self.passed]
+                              + [dict(name=self.pending, conclusion="success")])]
+        self.artifacts = [dict(name="ci-native-checks-provenance", expired=False)]
+
+    def verify(self, new=None):
+        return M["validate_inputs"](self.old, new or self.new, self.jobs, H["validate_pre_policy_plan"])
+
+    def restore(self):
+        def command(*args):
+            if args[:3] == ("gh", "run", "download"):
+                (Path(args[-1]) / "ci-native-checks-provenance.json").write_text(json.dumps(self.receipt))
+                return ""
+            if args[:3] == ("git", "diff", "--name-only"):
+                return M["WORKFLOW"] + "\n" + M["PLAN"]
+            if args[:2] == ("git", "show"):
+                sha, path = args[2].split(":", 1)
+                return (self.old if sha == "a" * 40 else self.new)[path]
+            self.fail(f"Unexpected provenance command: {args}")
+        helpers = {**H, "command": command, "read_run": lambda _: (self.origin, self.jobs, "a" * 40),
+                   "read_native_test_counts": lambda *_: self.counts}
+        return M["restore"](self.run, self.resumed, self.artifacts, helpers)
+
+    def test_exact_successful_steps_are_reused_without_zero_test_minidump(self):
+        M["validate_run"](self.origin, self.jobs, [M["WORKFLOW"]])
+        self.assertEqual(self.verify(), self.passed)
+        self.assertFalse(any("minidump" in name for name in self.verify()))
+
+    def test_wrong_run_context_or_preflight_is_rejected(self):
+        for key, value in (("status", "in_progress"), ("head_branch", "feature"),
+                           ("event", "pull_request"), ("conclusion", "success"),
+                           ("head_repository", {"full_name": "other/repo"})):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                M["validate_run"]({**self.origin, key: value}, self.jobs, [])
+        self.jobs[4]["conclusion"] = "failure"
+        with self.assertRaises(ValueError):
+            M["validate_run"](self.origin, self.jobs, [])
+
+    def test_unproven_wrong_platform_and_duplicate_jobs_are_rejected(self):
+        for index in range(4):
+            for field, value in (("conclusion", "failure"), ("labels", ["ubuntu-24.04"])):
+                jobs = copy.deepcopy(self.jobs); jobs[index][field] = value
+                with self.subTest(index=index, field=field), self.assertRaises(ValueError):
+                    M["validate_run"](self.origin, jobs, [])
+        with self.assertRaises(ValueError):
+            M["validate_run"](self.origin, self.jobs + [self.jobs[0]], [])
+
+    def test_changed_sources_dependencies_and_tools_are_rejected(self):
+        for path in ("app/src/lib.rs", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
+                     ".github/actions/prepare_environment/action.yml", "script/install-cargo-deny"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                M["validate_run"](self.origin, self.jobs, [path])
+
+    def test_previously_executed_downstream_is_rejected(self):
+        self.jobs[-1]["conclusion"] = "success"
+        with self.assertRaises(ValueError):
+            M["validate_run"](self.origin, self.jobs, [])
+
+    def test_changed_or_removed_commands_runner_and_environment_are_rejected(self):
+        for old, new in (("CHANNEL: oss", "CHANNEL: other"), ("runs-on: macrunner", "runs-on: ubuntu-24.04"),
+                         ("setup@immutable", "setup@other"), ("independent-command-0", "changed-command"),
+                         ("independent-command-5", "changed-remaining-command"),
+                         (f"      - name: {self.pending}\n        if: step-proof-scheduling\n        run: independent-command-5\n", "")):
+            changed = copy.deepcopy(self.new)
+            changed[M["WORKFLOW"]] = changed[M["WORKFLOW"]].replace(old, new)
+            # Keep the inventory hash honest; the command comparison must reject independently.
+            plan = json.loads(changed[M["PLAN"]]); plan["inventory_source_hashes"][M["WORKFLOW"]] = hashlib.sha256(changed[M["WORKFLOW"]].encode()).hexdigest()
+            changed[M["PLAN"]] = json.dumps(plan)
+            with self.subTest(old=old), self.assertRaises(ValueError):
+                self.verify(changed)
+
+    def test_real_restore_combines_original_gates_and_fresh_remaining_results(self):
+        restored = self.restore()
+        by_name = {j["name"]: j for j in restored}
+        self.assertEqual(len(restored), len(by_name))
+        self.assertTrue(all(by_name[n]["conclusion"] == "success" for n in M["GATES"]))
+        self.assertEqual(by_name[M["APP_JOB"]]["conclusion"], "success")
+
+    def test_forged_source_origin_steps_and_expired_proofs_are_rejected(self):
+        for field, value in (("qualified_sha", "c" * 40), ("source_sha", "c" * 40),
+                             ("passed_regression_steps", self.passed + [self.pending]),
+                             ("passed_regression_steps", self.passed + ["cargo test (native minidump lifecycle)"])):
+            original = copy.deepcopy(self.receipt); self.receipt[field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError): self.restore()
+            self.receipt = original
+        self.artifacts[0]["expired"] = True
+        with self.assertRaises(ValueError): self.restore()
+
+    def test_failed_skipped_or_missing_remaining_steps_are_never_success(self):
+        for conclusion in ("skipped", "failure", None):
+            self.resumed[-1]["steps"][-1]["conclusion"] = conclusion
+            with self.subTest(conclusion=conclusion), self.assertRaises(ValueError): self.restore()
+
+    def test_inherited_steps_cannot_silently_rerun_or_lose_evidence(self):
+        self.resumed[-1]["steps"][0]["conclusion"] = "success"
+        with self.assertRaises(ValueError): self.restore()
+
+    def test_missing_proof_never_invents_original_gates(self):
+        self.assertIs(M["restore"](self.run, self.resumed, [], {}), self.resumed)
+
+    def test_archive_requires_real_positive_test_summaries(self):
+        app = next(j for j in self.jobs if j["name"] == M["APP_JOB"])
+        for number, step in enumerate(app["steps"], 1):
+            step["number"] = number
+        target = next(s for s in app["steps"] if s["name"] == "cargo test (first behavior)")
+        path = f"{M['APP_JOB'].replace('/', '_')}/{target['number']}_{target['name']}.txt"
+        for summaries, accepted in (("test result: ok. 8 passed; 0 failed; 0 ignored;\n"
+                                    "test result: ok. 2 passed; 0 failed; 0 ignored;", True),
+                                   ("test result: ok. 0 passed; 0 failed; 0 ignored;", False),
+                                   ("test result: ok. 8 passed; 1 failed; 0 ignored;", False),
+                                   ("Process completed with exit code 0", False)):
+            payload = io.BytesIO()
+            with zipfile.ZipFile(payload, "w") as archive:
+                archive.writestr(path, summaries)
+            with self.subTest(summaries=summaries):
+                if accepted:
+                    self.assertEqual(M["parse_test_counts"](payload.getvalue(), self.jobs), self.counts)
+                else:
+                    with self.assertRaises(ValueError): M["parse_test_counts"](payload.getvalue(), self.jobs)
+
+    def test_receipt_cannot_replace_positive_original_counts(self):
+        self.receipt["passed_test_counts"] = {"cargo test (first behavior)": [999]}
+        with self.assertRaises(ValueError): self.restore()
+        for counts in ({}, {"cargo test (first behavior)": [0]}, {"cargo test (first behavior)": [True]}):
+            with self.subTest(counts=counts), self.assertRaises(ValueError):
+                M["validate_test_counts"](self.passed, counts)
+
+    def test_actual_workflow_runs_remaining_steps_despite_inherited_skips(self):
+        text = (ROOT / M["WORKFLOW"]).read_text()
+        inputs = SimpleNamespace(reuse_native_checks=True, reuse_static_checks=True,
+                                 reuse_linux_checks=False, passed_regression_steps=json.dumps(self.passed))
+        needs = SimpleNamespace(changes=SimpleNamespace(result="skipped", outputs=SimpleNamespace(needs_build="")),
+                                cargo_check=SimpleNamespace(result="skipped"),
+                                cargo_check_macos=SimpleNamespace(result="skipped"))
+
+        def evaluate(expression, cancelled=False):
+            expression = expression.strip().removeprefix("${{").removesuffix("}}")
+            expression = re.sub(r"!(?!=)", " not ", expression).replace("&&", " and ").replace("||", " or ")
+            return bool(eval(" ".join(expression.split()), {"__builtins__": {}}, {
+                "needs": needs, "inputs": inputs, "always": lambda: True,
+                "cancelled": lambda: cancelled, "contains": lambda items, item: item in items,
+                "fromJSON": json.loads,
+            }))
+
+        def job_condition(job):
+            match = re.search(r"(?m)^    if: (.*)\n((?:^      .*\n)*)", M["block"](text, job))
+            return match[2].strip() if match[1] == ">" else match[1]
+
+        self.assertFalse(evaluate(job_condition("cargo_check")))
+        self.assertFalse(evaluate(job_condition("cargo_check_macos")))
+        self.assertTrue(evaluate(job_condition("keymap_smoke_test")))
+        self.assertFalse(evaluate(job_condition("keymap_smoke_test"), cancelled=True))
+        for name, step in M["steps"](M["block"](text, "keymap_smoke_test")).items():
+            if not M["eligible"](name):
+                continue
+            condition = re.search(r"(?m)^        if: (.*)$", step)[1]
+            with self.subTest(step=name):
+                self.assertEqual(evaluate(condition), name not in self.passed)
+                self.assertFalse(evaluate(condition, cancelled=True))
+
+
+if __name__ == "__main__":
+    unittest.main()

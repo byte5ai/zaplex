@@ -55,6 +55,8 @@ jobs:
       reuse_linux_checks: ${{ steps.resume.outputs.reuse_linux_checks }}
       reuse_pre_sftp_checks: ${{ steps.resume.outputs.reuse_pre_sftp_checks }}
       reuse_pre_policy_checks: ${{ steps.resume.outputs.reuse_pre_policy_checks }}
+      reuse_native_checks: ${{ steps.resume.outputs.reuse_native_checks }}
+      passed_regression_steps: ${{ steps.resume.outputs.passed_regression_steps }}
     steps:
       - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
         with:
@@ -100,6 +102,7 @@ jobs:
           python3 script/ci-runner-policy-tests
           python3 script/ci-batch-scheduling-tests
           python3 script/ci-batch-resume-tests
+          python3 script/ci-native-checks-resume-tests
           python3 script/ci-batch-resume
 
       - name: Preserve pre-policy provenance
@@ -108,6 +111,15 @@ jobs:
         with:
           name: ci-pre-policy-provenance
           path: ci-pre-policy-provenance.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Preserve native gate and step provenance
+        if: steps.resume.outputs.reuse_native_checks == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-native-checks-provenance
+          path: ci-native-checks-provenance.json
           if-no-files-found: error
           retention-days: 7
 
@@ -135,17 +147,19 @@ jobs:
 
   dependency_security:
     needs: preflight
-    if: needs.preflight.outputs.reuse_all_checks != 'true' && needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_linux_checks != 'true' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true' && needs.preflight.outputs.reuse_pre_policy_checks != 'true'
+    if: needs.preflight.outputs.reuse_all_checks != 'true' && needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_linux_checks != 'true' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true' && needs.preflight.outputs.reuse_pre_policy_checks != 'true' && needs.preflight.outputs.reuse_native_checks != 'true'
     uses: ./.github/workflows/dependency-security.yml
 
   compile_checks:
     needs: [preflight, dependency_security]
     if: >
       !cancelled() && needs.preflight.outputs.reuse_all_checks != 'true' && needs.preflight.result == 'success' && needs.preflight.outputs.reuse_checks != 'true' && needs.preflight.outputs.reuse_pre_sftp_checks != 'true' &&
-      (needs.dependency_security.result == 'success' || needs.preflight.outputs.reuse_linux_checks == 'true' || needs.preflight.outputs.reuse_pre_policy_checks == 'true')
+      (needs.dependency_security.result == 'success' || needs.preflight.outputs.reuse_linux_checks == 'true' || needs.preflight.outputs.reuse_pre_policy_checks == 'true' || needs.preflight.outputs.reuse_native_checks == 'true')
     uses: ./.github/workflows/pr-check.yml
     with:
-      reuse_static_checks: ${{ needs.preflight.outputs.reuse_pre_policy_checks == 'true' }}
+      reuse_static_checks: ${{ needs.preflight.outputs.reuse_pre_policy_checks == 'true' || needs.preflight.outputs.reuse_native_checks == 'true' }}
+      reuse_native_checks: ${{ needs.preflight.outputs.reuse_native_checks == 'true' }}
+      passed_regression_steps: ${{ needs.preflight.outputs.passed_regression_steps || '[]' }}
       reuse_linux_checks: ${{ needs.preflight.outputs.reuse_linux_checks == 'true' }}
     secrets: inherit
 

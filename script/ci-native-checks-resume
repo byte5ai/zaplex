@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Bind native gate/step reuse to original successful commands and source inputs."""
+
+import json
+import io
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import zipfile
+
+REPO = "byte5ai/zaplex"
+WORKFLOW = ".github/workflows/pr-check.yml"
+PLAN = "script/test-suite-nonrust-plan.json"
+APP_JOB = "compile_checks / app regressions (macOS Apple Silicon)"
+GATES = {
+    "dependency_security / cargo deny check advisories": None,
+    "compile_checks / detect build-relevant changes": "changes",
+    "compile_checks / cargo policy (macOS Apple Silicon)": "cargo_check",
+    "compile_checks / cargo check (macOS Apple Silicon)": "cargo_check_macos",
+}
+PATHS = {
+    WORKFLOW, PLAN, ".github/workflows/ci-batch.yml", ".github/workflows/test-dispatch.yml",
+    "script/ci-native-checks-resume", "script/ci-native-checks-resume-tests",
+    "script/ci-batch-resume", "script/ci-batch-resume-tests",
+    "script/ci-batch-checks", "script/ci-batch-checks-tests",
+    "script/ci-batch-completion", "script/ci-batch-scheduling-tests", "script/ci-runner-policy-tests", "docs/ci-batch.md",
+}
+# The old macOS filter matched zero tests; it is never inheritable evidence.
+LINUX_ONLY = {"cargo test (native minidump lifecycle)", "Native minidump smoke test"}
+
+
+def block(text, job):
+    match = re.search(rf"(?ms)^  {job}:\n.*?(?=^  \w+:|\Z)", text)
+    if match is None:
+        raise ValueError(f"Missing native job: {job}")
+    return match.group()
+
+
+def steps(text):
+    result = {}
+    for match in re.finditer(r"(?ms)^      - (?:name: ([^\n]+)|uses: [^\n]+)\n.*?(?=^      - |\Z)", text):
+        if match[1]:
+            if match[1] in result:
+                raise ValueError("Duplicate named native step")
+            result[match[1]] = match.group()
+    return result
+
+
+def eligible(name):
+    return name not in LINUX_ONLY and (
+        name.startswith(("cargo check (", "cargo test ("))
+        or name == "Enforce compact sidebar row actions"
+    )
+
+
+def parse_test_counts(payload, jobs):
+    app = next(j for j in jobs if j["name"] == APP_JOB)
+    counts = {}
+    with zipfile.ZipFile(io.BytesIO(payload)) as logs:
+        for step in app.get("steps", []):
+            name = step["name"]
+            if not eligible(name) or not name.startswith("cargo test (") or step.get("conclusion") != "success":
+                continue
+            path = f"{APP_JOB.replace('/', '_')}/{step['number']}_{name}.txt"
+            if logs.namelist().count(path) != 1:
+                raise ValueError(f"Missing or ambiguous original test log: {name}")
+            summaries = re.findall(r"test result: ok\. (\d+) passed; (\d+) failed; (\d+) ignored;",
+                                   logs.read(path).decode("utf-8", errors="replace"))
+            if not summaries or any(int(passed) == 0 or int(failed) != 0 for passed, failed, _ in summaries):
+                raise ValueError(f"Original test step has no positive successful case evidence: {name}")
+            counts[name] = [int(passed) for passed, _, _ in summaries]
+    return counts
+
+
+def read_test_counts(run_id, jobs):
+    payload = subprocess.check_output(
+        ["gh", "api", f"repos/{REPO}/actions/runs/{run_id}/logs", "--allow-escape-sequences"],
+        timeout=60,
+    )
+    return parse_test_counts(payload, jobs)
+
+
+def validate_test_counts(passed, counts):
+    if set(counts) != {name for name in passed if name.startswith("cargo test (")}:
+        raise ValueError("Original positive test counts do not cover the inherited steps")
+    if any(not rows or any(type(n) is not int or n <= 0 for n in rows) for rows in counts.values()):
+        raise ValueError("Inherited test steps require positive executed case counts")
+
+
+def normalize(text):
+    # Scheduling changes cannot change the commands, tool versions or environment.
+    return re.sub(r"(?m)^ {4,8}if:.*\n(?:^      [^ -].*\n)*", "", text).replace(
+        "          cache_on_failure: true\n", "")
+
+
+def validate_run(run, jobs, changed):
+    expected = dict(status="completed", conclusion="failure", event="workflow_dispatch",
+                    head_branch="main", path=".github/workflows/ci-batch.yml")
+    if (any(run.get(k) != v for k, v in expected.items())
+            or run.get("head_repository", {}).get("full_name") != REPO):
+        raise ValueError("Native step reuse needs a completed failed main batch")
+    by_name = {j["name"]: j for j in jobs}
+    if len(by_name) != len(jobs):
+        raise ValueError("Ambiguous native jobs")
+    if by_name.get("Validate main batch", {}).get("conclusion") != "success":
+        raise ValueError("Original preflight did not pass")
+    for name in GATES:
+        gate = by_name.get(name, {})
+        if gate.get("conclusion") != "success" or gate.get("labels") != ["macrunner"]:
+            raise ValueError(f"Missing successful native gate: {name}")
+    app = by_name.get(APP_JOB, {})
+    if app.get("conclusion") != "failure" or app.get("labels") != ["macrunner"]:
+        raise ValueError("Original native regression block must have failed")
+    for name, job in by_name.items():
+        if name in ("tests", "live_sftp", "test_dmg", "remote_server") or name.startswith(
+                ("tests /", "live_sftp /", "test_dmg /", "remote_server /")):
+            if job.get("conclusion") != "skipped":
+                raise ValueError("Downstream stages already executed")
+    if any(path not in PATHS for path in changed):
+        raise ValueError("Native source or dependency inputs changed")
+
+
+def validate_inputs(old, new, original_jobs, verify_plan):
+    def env(text):
+        match = re.search(r"(?ms)^env:\n.*?(?=^jobs:)", text)
+        return match.group() if match else ""
+    if env(old[WORKFLOW]) != env(new[WORKFLOW]):
+        raise ValueError("Native global environment changed")
+    for job in filter(None, GATES.values()):
+        if normalize(block(old[WORKFLOW], job)) != normalize(block(new[WORKFLOW], job)):
+            raise ValueError(f"Passed native gate inputs changed: {job}")
+    verify_plan(json.loads(old[PLAN]), json.loads(new[PLAN]), old[WORKFLOW], new[WORKFLOW])
+    before, after = (block(tree[WORKFLOW], "keymap_smoke_test") for tree in (old, new))
+    # The entire setup remains identical, except the explicit post-failure cache save.
+    prefix = lambda text: normalize(text[:text.index("      - name: cargo check (")])
+    # The compact-action guard gains only its source-bound step scheduling condition.
+    if prefix(before) != prefix(after):
+        raise ValueError("Native test setup changed")
+    previous_steps, current_steps = steps(before), steps(after)
+    app = next(j for j in original_jobs if j["name"] == APP_JOB)
+    outcomes = {s["name"]: s.get("conclusion") for s in app.get("steps", [])}
+    if len(outcomes) != len(app.get("steps", [])):
+        raise ValueError("Ambiguous original step results")
+    required = {name for name in previous_steps if eligible(name)}
+    if required != {name for name in current_steps if eligible(name)}:
+        raise ValueError("Regression coverage changed")
+    for name in required:
+        if normalize(previous_steps[name]) != normalize(current_steps[name]):
+            raise ValueError(f"Regression command changed: {name}")
+    passed = []
+    for name, text in previous_steps.items():
+        if not eligible(name) or outcomes.get(name) != "success":
+            continue
+        if name not in current_steps or normalize(text) != normalize(current_steps[name]):
+            raise ValueError(f"Passed regression command changed: {name}")
+        passed.append(name)
+    if not passed:
+        raise ValueError("No unchanged successful regression steps to reuse")
+    return passed
+
+
+def restore(run, jobs, artifacts, helpers):
+    proofs = [a for a in artifacts if a["name"] == "ci-native-checks-provenance"]
+    if not proofs:
+        return jobs
+    if (any(a["name"] in ("ci-pre-policy-provenance", "ci-checks-provenance") for a in artifacts)
+            or len(proofs) != 1 or proofs[0].get("expired") is not False
+            or run.get("status") != "completed" or run.get("conclusion") not in ("success", "failure")
+            or run.get("event") != "workflow_dispatch" or run.get("head_branch") != "main"
+            or run.get("path") != ".github/workflows/ci-batch.yml"
+            or run.get("head_repository", {}).get("full_name") != REPO):
+        raise ValueError("Invalid native checks provenance context")
+    command = helpers["command"]
+    with tempfile.TemporaryDirectory(prefix="zaplex-native-checks-") as directory:
+        command("gh", "run", "download", str(run["id"]), "--repo", REPO,
+                "--name", "ci-native-checks-provenance", "--dir", directory)
+        receipt = json.loads((Path(directory) / "ci-native-checks-provenance.json").read_text())
+    if receipt.get("qualified_sha") != run.get("head_sha"):
+        raise ValueError("Native checks provenance source mismatch")
+    origin, original_jobs, source = helpers["read_run"](str(receipt["run_id"]))
+    if source != receipt.get("source_sha"):
+        raise ValueError("Native checks provenance origin mismatch")
+    changed = command("git", "diff", "--name-only", source, run["head_sha"]).splitlines()
+    validate_run(origin, original_jobs, changed)
+    trees = [{p: command("git", "show", f"{sha}:{p}") for p in (WORKFLOW, PLAN)}
+             for sha in (source, run["head_sha"])]
+    passed = validate_inputs(*trees, original_jobs, helpers["validate_pre_policy_plan"])
+    if receipt.get("passed_regression_steps") != passed:
+        raise ValueError("Native checks provenance step set differs")
+    counts = helpers.get("read_native_test_counts", read_test_counts)(str(receipt["run_id"]), original_jobs)
+    validate_test_counts(passed, counts)
+    if receipt.get("passed_test_counts") != counts:
+        raise ValueError("Native checks provenance test counts differ")
+    by_name = {j["name"]: j for j in jobs}
+    if len(by_name) != len(jobs) or by_name.get("Validate main batch", {}).get("conclusion") != "success":
+        raise ValueError("Native checks reuse requires successful qualification")
+    for name in ("dependency_security", *[name for name in GATES if name.startswith("compile_checks /")]):
+        if by_name.get(name, {}).get("conclusion") != "skipped":
+            raise ValueError(f"Expected inherited native gate: {name}")
+    app = by_name.get(APP_JOB, {})
+    if app.get("labels") != ["macrunner"] or app.get("conclusion") != "success":
+        raise ValueError("Remaining native regressions did not pass")
+    outcomes = {s["name"]: s.get("conclusion") for s in app.get("steps", [])}
+    if len(outcomes) != len(app.get("steps", [])):
+        raise ValueError("Ambiguous resumed step results")
+    for name in steps(block(trees[1][WORKFLOW], "keymap_smoke_test")):
+        if eligible(name) and outcomes.get(name) != ("skipped" if name in passed else "success"):
+            raise ValueError(f"Missing or unexpected regression step: {name}")
+    restored = [j for j in jobs if j["name"] not in GATES]
+    restored.extend(j for j in original_jobs if j["name"] in GATES)
+    if len({j["name"] for j in restored}) != len(restored):
+        raise ValueError("Duplicate restored native check")
+    return restored
