@@ -23,6 +23,10 @@
 //! platform gets a typechecking no-op so the driver logic below is
 //! platform-agnostic.
 
+#[cfg(target_os = "macos")]
+use objc::{class, msg_send, runtime::Object, sel, sel_impl};
+#[cfg(target_os = "macos")]
+use warpui::platform::mac::{make_nsstring, AutoreleasePoolGuard};
 use warpui::{Entity, ModelContext, SingletonEntity};
 use zaplex_cockpit::{AgentInventoryStatus, FleetTree, HostAvailability, ScanHealth};
 
@@ -34,29 +38,21 @@ use crate::cockpit::settings::CockpitSettings;
 /// non-macOS platforms.
 #[cfg(target_os = "macos")]
 pub fn set_attention(count: usize) {
-    #[allow(deprecated)]
-    use cocoa::{
-        appkit::NSApp,
-        base::{id, nil},
-    };
-    use objc::{msg_send, sel, sel_impl};
-    use warpui::platform::mac::{make_nsstring, AutoreleasePoolGuard};
-
     // `AutoreleasePoolGuard` drains on `Drop`, covering every exit path — same
     // idiom as `appearance::set_app_icon`.
     unsafe {
         let _pool = AutoreleasePoolGuard::new();
-        let app: id = NSApp();
-        if app == nil {
+        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        if app.is_null() {
             return;
         }
-        let tile: id = msg_send![app, dockTile];
-        if tile == nil {
+        let tile: *mut Object = msg_send![app, dockTile];
+        if tile.is_null() {
             return;
         }
         // An empty label clears the badge; the count otherwise. The dock tile
         // copies the string, so the autoreleased `NSString` is safe to pass.
-        let label: id = if count > 0 {
+        let label: *mut Object = if count > 0 {
             make_nsstring(count.to_string())
         } else {
             make_nsstring("")
