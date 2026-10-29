@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       baseline_sha:
-        description: Merged failing main commit for the isolated headless boot comparison
+        description: Merged failing main commit for the original parallel app-smoke comparison
         type: string
         required: true
 
@@ -54,7 +54,7 @@ jobs:
           RUST_BACKTRACE: '1'
         run: |
           python3 - <<'PYTHON'
-          import json, os, re, subprocess
+          import json, os, re, subprocess, time
           from pathlib import Path
 
           source = os.environ["GITHUB_SHA"]
@@ -63,47 +63,82 @@ jobs:
           artifact = Path(os.environ["RUNNER_TEMP"]) / "native-regression-diagnosis"
           artifact.mkdir()
           boot = "workspace::view::tests::test_boot_registers_all_keybindings_without_panicking"
-          cases = [boot,
-              "ai::subscription_agent::process::lifecycle_tests::local_fake_claude_covers_account_cwd_events_approval_and_completion",
-              "ai::subscription_agent::process::lifecycle_tests::local_fake_codex_uses_local_cwd_account_and_scrubbed_environment"]
 
-          def test(names, logfile):
+          def smoke_command():
+              text = Path(".github/workflows/pr-check.yml").read_text()
+              name = "cargo test (app dependency + UI smoke gates)"
+              step = re.search(r"(?ms)^      - name: " + re.escape(name) + r"\n.*?(?=^      - |\Z)", text).group()
+              body = re.search(r"(?ms)^        run: >\n(.*?)(?=^        shell:)", step)[1]
+              return " ".join(line.strip() for line in body.splitlines())
+
+          def execute(command, logfile):
               with logfile.open("w") as log:
-                  result = subprocess.run(["cargo", "test", "--locked", "-p", "warp", "--lib", "--",
-                      *names, "--exact", "--test-threads=1"], stdin=subprocess.DEVNULL,
-                      stdout=log, stderr=subprocess.STDOUT, timeout=1200)
+                  result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", command],
+                      stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, timeout=1200)
               text = logfile.read_text()
               for line in text.splitlines():
-                  if line.startswith(("running ", "test ", "error:", "Caused by:")) or "SIGABRT" in line:
+                  if line.startswith(("running ", "test result:", "error:", "Caused by:")) or "SIGABRT" in line:
                       print(line[:2000], flush=True)
               return result.returncode, text
+
+          def selection(command, logfile):
+              status, text = execute(command + " --list", logfile)
+              assert status == 0, "The app-smoke test selection must compile"
+              names = set(re.findall(r"^(\S+): test$", text, re.MULTILINE))
+              assert len(names) == 113 and boot in names, "All 113 original app-smoke cases must be present"
+              return names
+
+          def crash_symbols(since):
+              # Only public code symbols are exported, never raw OS reports or host metadata.
+              reports = Path.home() / "Library/Logs/DiagnosticReports"
+              for report in sorted(reports.glob("warp*.ips"), key=lambda p: p.stat().st_mtime, reverse=True):
+                  if report.stat().st_mtime < since:
+                      continue
+                  try:
+                      rest = report.read_text()
+                      decoder = json.JSONDecoder()
+                      while rest.strip():
+                          document, end = decoder.raw_decode(rest.lstrip())
+                          rest = rest.lstrip()[end:]
+                          if not isinstance(document, dict) or "threads" not in document:
+                              continue
+                          threads = document["threads"]
+                          thread = next((t for t in threads if t.get("triggered")), None)
+                          if thread is None and isinstance(document.get("faultingThread"), int):
+                              thread = threads[document["faultingThread"]]
+                          return [frame["symbol"] for frame in (thread or {}).get("frames", [])
+                                  if isinstance(frame.get("symbol"), str)][:40]
+                  except (OSError, ValueError, IndexError, KeyError, TypeError):
+                      continue
+              return []
 
           subprocess.run(["git", "fetch", "--no-tags", "--depth=1", "origin", baseline], check=True, timeout=60)
           try:
               subprocess.run(["git", "checkout", "--detach", baseline], check=True, timeout=60)
-              old_status, old_log = test([boot], artifact / "baseline-boot.log")
+              original_command = smoke_command()
+              original_cases = selection(original_command, artifact / "baseline-selection.txt")
+              started = time.time()
+              old_status, old_log = execute(original_command, artifact / "baseline-smoke.log")
+              time.sleep(3)
+              symbols = crash_symbols(started)
           finally:
               subprocess.run(["git", "checkout", "--detach", source], check=True, timeout=60)
-          selection_log = artifact / "selected-cases.txt"
-          with selection_log.open("w") as selection:
-              subprocess.run(["cargo", "test", "--locked", "-p", "warp", "--lib", "--",
-                  *cases, "--exact", "--list"], stdin=subprocess.DEVNULL, stdout=selection,
-                  stderr=subprocess.STDOUT, check=True, timeout=1200)
-          selected = set(re.findall(r"^(\S+): test$", selection_log.read_text(), re.MULTILINE))
-          assert selected == set(cases), "The exact three native cases must exist before execution"
-          status, log = test(cases, artifact / "corrected-cases.log")
-          old_abort = old_status == 101 and "running 1 test" in old_log and "SIGABRT" in old_log
-          passed = set(re.findall(r"^test (\S+) \.\.\. ok$", log, re.MULTILINE))
-          complete = status == 0 and "test result: ok. 3 passed; 0 failed; 0 ignored;" in log
+          command = smoke_command()
+          assert command == original_command, "The original parallel smoke command must remain unchanged"
+          selected = selection(command, artifact / "corrected-selection.txt")
+          assert selected == original_cases, "Both revisions must execute the identical case set"
+          status, log = execute(command, artifact / "corrected-smoke.log")
+          old_abort = old_status == 101 and "running 113 tests" in old_log and "SIGABRT" in old_log
+          complete = status == 0 and "test result: ok. 113 passed; 0 failed; 0 ignored;" in log
           report = {"source_sha": source, "baseline_sha": baseline,
-              "baseline_boot_abort_reproduced": old_abort,
-              "corrected_cases": sorted(selected if complete else passed),
-              "all_three_corrected_cases_passed": complete,
-              "scope": "Isolated native regression diagnosis; no installed-DMG or product acceptance"}
+              "baseline_parallel_smoke_abort_reproduced": old_abort,
+              "selected_case_count": len(selected), "corrected_parallel_smoke_passed": complete,
+              "baseline_crash_symbols": symbols,
+              "scope": "Original failed parallel app-smoke group only; no installed-DMG or product acceptance"}
           (artifact / "result.json").write_text(json.dumps(report, indent=2) + "\n")
           print(json.dumps(report), flush=True)
-          assert old_abort, "The isolated baseline did not reproduce the original boot abort"
-          assert complete, "All three corrected cases must execute and pass"
+          assert old_abort, "The original parallel group did not reproduce its abort"
+          assert complete, "All 113 corrected app-smoke cases must execute and pass"
           PYTHON
       - name: Preserve comparison evidence
         if: always()
