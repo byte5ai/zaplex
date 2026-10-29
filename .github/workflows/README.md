@@ -1,5 +1,14 @@
 # Release Configurations
 
+## Runner-Zuordnung
+
+Die native macOS-App, Signierung, DMG-Verpackung und GUI-Prüfungen laufen auf
+`macrunner`. Linux-Compile, Linux-/OpenSSH-Tests und der ausgelieferte Linux-Daemon
+laufen auf kostenlosen GitHub-hosted Runnern. Die GNU-Linux-Prüfungen behalten
+Ubuntu 22.04; der statische musl-Daemon und kurze Linux-Prüfungen verwenden
+Ubuntu 24.04. Die große Paket-Testsuite aktiviert 12 GB Swap für Linkerspitzen.
+Es gibt keine voreingestellte Blacksmith-Zuordnung.
+
 ## Gezielte native Layoutprüfung
 
 `native-layout.yml` prüft auf `main` die Agent-, Connections-/Favoriten- und

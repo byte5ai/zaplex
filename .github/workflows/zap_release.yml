@@ -50,7 +50,7 @@ env:
 jobs:
   prepare_metadata:
     name: Prepare metadata
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
       release_tag: ${{ steps.compute_tag.outputs.tag }}
@@ -326,7 +326,7 @@ jobs:
 
   build_remote_server:
     name: Build bundled remote-server (Linux musl x86_64)
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     needs:
       - prepare_metadata
       - signing_preflight
@@ -605,7 +605,7 @@ jobs:
   release_linux:
     name: Build Release (Linux x86_64)
     if: vars.ENABLE_LINUX_RELEASE == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2204
+    runs-on: ubuntu-22.04
     needs:
       - prepare_metadata
       - signing_preflight
@@ -795,7 +795,7 @@ jobs:
   publish_release:
     name: Publish GitHub Release
     # ci-lint: allow-CI005  This Linux job only publishes already-built artifacts.
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write
