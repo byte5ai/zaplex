@@ -26,7 +26,7 @@ on:
         type: string
         default: "ubuntu-22.04"
       add_swap:
-        description: "Add a 12 GB swapfile for peak package-test linker memory."
+        description: "Ensure at least 12 GB usable swap for peak package-test linker memory."
         type: boolean
         required: false
         default: true
@@ -181,14 +181,9 @@ jobs:
           install_release_deps: false
           install_test_deps: true
 
-      - name: Add swap for package-test linker memory
+      - name: Ensure package-test linker swap capacity
         if: ${{ inputs.add_swap }}
-        run: |
-          sudo fallocate -l 12G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
+        run: python3 script/linux/test-swap prepare
 
       - name: Ensure rust target is installed
         run: rustup target add x86_64-unknown-linux-gnu
@@ -418,3 +413,7 @@ jobs:
             cargo nextest run --locked -p warp --profile ci --no-fail-fast \
             -E 'test(remote_server::) | test(terminal::local_tty::) | test(ai::subscription_agent::process) | test(sftp_manager::sftp_backend::)'
         shell: bash
+
+      - name: Stop job-owned swap
+        if: ${{ always() && inputs.add_swap }}
+        run: python3 script/linux/test-swap cleanup

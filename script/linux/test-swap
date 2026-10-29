@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Ensure CI swap capacity without changing the runner's existing swap files."""
+
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+GIB = 1024 ** 3
+MIB = 1024 ** 2
+TARGET = 12 * GIB
+
+
+def read_swaps():
+    entries = {}
+    for line in Path("/proc/swaps").read_text().splitlines()[1:]:
+        fields = line.split()
+        path = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[0])
+        entries[path] = int(fields[2]) * 1024
+    return entries
+
+
+def additional_bytes(existing):
+    missing = max(0, TARGET - sum(existing.values()))
+    # mkswap reserves a header page; keep the usable capacity above the target.
+    return ((missing + MIB - 1) // MIB + 1) * MIB if missing else 0
+
+
+def execute(*args):
+    subprocess.run(args, check=True, stdin=subprocess.DEVNULL, timeout=120)
+
+
+def context(env):
+    if (sys.platform != "linux" or env.get("GITHUB_ACTIONS") != "true"
+            or env.get("GITHUB_REPOSITORY") != "byte5ai/zaplex"
+            or not env.get("GITHUB_RUN_ID", "").isdecimal() or not env.get("GITHUB_JOB")):
+        raise ValueError("Swap management requires this repository's Linux CI job")
+    root = Path(env["RUNNER_TEMP"]).resolve(strict=True)
+    return root, env["GITHUB_RUN_ID"], env["GITHUB_JOB"]
+
+
+def prepare(env, swaps=read_swaps, run=execute, free_bytes=None):
+    root, run_id, job = context(env)
+    existing = swaps()
+    amount = additional_bytes(existing)
+    if not amount:
+        return {"existing_mib": sum(existing.values()) // MIB, "added_mib": 0}
+    available = shutil.disk_usage(root).free if free_bytes is None else free_bytes
+    if available < amount:
+        raise ValueError("Insufficient job disk space for the required swap capacity")
+    fd, filename = tempfile.mkstemp(prefix=f"zaplex-swap-{run_id}-", dir=root)
+    os.close(fd)
+    path = Path(filename)
+    stat = path.stat()
+    lease = path.with_name(path.name + ".json")
+    lease.write_text(json.dumps({"path": str(path), "run_id": run_id, "job": job,
+                                 "device": stat.st_dev, "inode": stat.st_ino}))
+    lease.chmod(0o600)
+    with Path(env["GITHUB_ENV"]).open("a") as output:
+        output.write(f"ZAPLEX_TEST_SWAP_LEASE={lease}\n")
+    # Ownership is recorded before allocation, so even a failed setup can be cleaned up.
+    run("sudo", "chown", "root:root", str(path))
+    run("sudo", "chmod", "600", str(path))
+    run("sudo", "fallocate", "-l", str(amount), str(path))
+    run("sudo", "mkswap", str(path))
+    run("sudo", "swapon", str(path))
+    total = sum(swaps().values())
+    if total < TARGET:
+        raise ValueError("Required usable swap capacity was not activated")
+    return {"existing_mib": sum(existing.values()) // MIB,
+            "added_mib": amount // MIB, "total_mib": total // MIB}
+
+
+def cleanup(env, swaps=read_swaps, run=execute):
+    root, run_id, job = context(env)
+    filename = env.get("ZAPLEX_TEST_SWAP_LEASE")
+    if not filename:
+        return {"cleanup": "nothing-created"}
+    lease = Path(filename)
+    if lease.is_symlink() or lease.parent.resolve() != root:
+        raise ValueError("Refusing a redirected or foreign swap lease")
+    record = json.loads(lease.read_text())
+    path = Path(record["path"])
+    if (record.get("run_id") != run_id or record.get("job") != job
+            or path.parent.resolve() != root or path.is_symlink()
+            or not path.name.startswith(f"zaplex-swap-{run_id}-")
+            or lease != path.with_name(path.name + ".json")):
+        raise ValueError("Swap file does not belong to this job")
+    stat = path.stat()
+    if (stat.st_dev, stat.st_ino) != (record.get("device"), record.get("inode")):
+        raise ValueError("Owned swap file identity changed")
+    if str(path) in swaps():
+        run("sudo", "swapoff", str(path))
+    if str(path) in swaps():
+        raise ValueError("Owned swap file remains active")
+    # Keep the inactive file in disposable job storage; never delete or alter other swap.
+    return {"cleanup": "owned-swap-inactive"}
+
+
+if __name__ == "__main__":
+    operation = {"prepare": prepare, "cleanup": cleanup}[sys.argv[1]]
+    print(json.dumps(operation(os.environ)), flush=True)
