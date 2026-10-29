@@ -1,0 +1,115 @@
+name: Diagnose native regressions
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_sha:
+        description: Merged failing main commit for the isolated headless boot comparison
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-regression-diagnosis
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    # ci-lint: allow-CI006  Main-only targeted diagnosis in an ephemeral VM
+    runs-on: macrunner
+    timeout-minutes: 35
+    env:
+      CHANNEL: oss
+      CARGO_BUILD_JOBS: '4'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Require merged main sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]]
+          [[ "$BASELINE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          state=$(gh api "repos/byte5ai/zaplex/compare/$BASELINE_SHA...$GITHUB_SHA" --jq .status)
+          [[ "$state" == ahead || "$state" == identical ]]
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          is_self_hosted: false
+          install_release_deps: false
+          cache_on_failure: true
+          cache_workspace_crates: true
+      - name: Compare only the failed native cases
+        env:
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+          RUST_BACKTRACE: '1'
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, re, subprocess
+          from pathlib import Path
+
+          source = os.environ["GITHUB_SHA"]
+          baseline = os.environ["BASELINE_SHA"]
+          assert subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() == source
+          artifact = Path(os.environ["RUNNER_TEMP"]) / "native-regression-diagnosis"
+          artifact.mkdir()
+          boot = "workspace::view::tests::test_boot_registers_all_keybindings_without_panicking"
+          cases = [boot,
+              "ai::subscription_agent::process::lifecycle_tests::local_fake_claude_covers_account_cwd_events_approval_and_completion",
+              "ai::subscription_agent::process::lifecycle_tests::local_fake_codex_uses_local_cwd_account_and_scrubbed_environment"]
+
+          def test(names, logfile):
+              with logfile.open("w") as log:
+                  result = subprocess.run(["cargo", "test", "--locked", "-p", "warp", "--lib", "--",
+                      *names, "--exact", "--test-threads=1"], stdin=subprocess.DEVNULL,
+                      stdout=log, stderr=subprocess.STDOUT, timeout=1200)
+              text = logfile.read_text()
+              for line in text.splitlines():
+                  if line.startswith(("running ", "test ", "error:", "Caused by:")) or "SIGABRT" in line:
+                      print(line[:2000], flush=True)
+              return result.returncode, text
+
+          subprocess.run(["git", "fetch", "--no-tags", "--depth=1", "origin", baseline], check=True, timeout=60)
+          try:
+              subprocess.run(["git", "checkout", "--detach", baseline], check=True, timeout=60)
+              old_status, old_log = test([boot], artifact / "baseline-boot.log")
+          finally:
+              subprocess.run(["git", "checkout", "--detach", source], check=True, timeout=60)
+          selection_log = artifact / "selected-cases.txt"
+          with selection_log.open("w") as selection:
+              subprocess.run(["cargo", "test", "--locked", "-p", "warp", "--lib", "--",
+                  *cases, "--exact", "--list"], stdin=subprocess.DEVNULL, stdout=selection,
+                  stderr=subprocess.STDOUT, check=True, timeout=1200)
+          selected = set(re.findall(r"^(\S+): test$", selection_log.read_text(), re.MULTILINE))
+          assert selected == set(cases), "The exact three native cases must exist before execution"
+          status, log = test(cases, artifact / "corrected-cases.log")
+          old_abort = old_status == 101 and "running 1 test" in old_log and "SIGABRT" in old_log
+          passed = set(re.findall(r"^test (\S+) \.\.\. ok$", log, re.MULTILINE))
+          complete = status == 0 and "test result: ok. 3 passed; 0 failed; 0 ignored;" in log
+          report = {"source_sha": source, "baseline_sha": baseline,
+              "baseline_boot_abort_reproduced": old_abort,
+              "corrected_cases": sorted(selected if complete else passed),
+              "all_three_corrected_cases_passed": complete,
+              "scope": "Isolated native regression diagnosis; no installed-DMG or product acceptance"}
+          (artifact / "result.json").write_text(json.dumps(report, indent=2) + "\n")
+          print(json.dumps(report), flush=True)
+          assert old_abort, "The isolated baseline did not reproduce the original boot abort"
+          assert complete, "All three corrected cases must execute and pass"
+          PYTHON
+      - name: Preserve comparison evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-regression-diagnosis-${{ github.sha }}
+          path: ${{ runner.temp }}/native-regression-diagnosis/
+          if-no-files-found: warn
+          retention-days: 14

@@ -164,16 +164,18 @@ impl AttentionDriver {
         let model = CockpitModel::as_ref(ctx);
         let now = model.needs_me();
         let baseline_ready = attention_baseline_ready(&model.snapshot().health, model.inventory());
-        // The passive surface always tracks the truth, DND or not — including on
-        // the very first refresh.
-        set_attention(now);
+        // Headless apps still reconcile attention state but own no native UI.
+        if !ctx.is_headless() {
+            set_attention(now);
+        }
         // The chime is the only audible thing, and only on a genuine calm→needy
         // edge. The first refresh merely establishes the baseline: it has no
         // real "previous" value to form an edge against, so it never chimes (a
         // fleet already waiting at launch is shown, not sounded).
         let dnd = *CockpitSettings::as_ref(ctx).attention_dnd;
         let sound_on = *CockpitSettings::as_ref(ctx).attention_sound;
-        if self.record_update(now, baseline_ready, dnd || !sound_on) {
+        let chime = self.record_update(now, baseline_ready, dnd || !sound_on);
+        if chime && !ctx.is_headless() {
             play_chime();
         }
     }

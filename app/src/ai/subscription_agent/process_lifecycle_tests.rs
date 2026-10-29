@@ -159,15 +159,16 @@ fn process_exit_timeout_escalates_and_reaps_the_child() {
 fn local_fake_claude_covers_account_cwd_events_approval_and_completion() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
-        let working_directory = directory.path().join("working directory");
-        let config_dir = directory.path().join("claude account");
+        let root = directory.path().canonicalize().unwrap();
+        let working_directory = root.join("working directory");
+        let config_dir = root.join("claude account");
         std::fs::create_dir_all(&working_directory).unwrap();
         std::fs::create_dir_all(&config_dir).unwrap();
-        let executable = directory.path().join("fake-claude");
-        let observed_cwd = directory.path().join("claude-cwd");
-        let observed_config = directory.path().join("claude-config");
-        let observed_key = directory.path().join("claude-api-key");
-        let observed_approval = directory.path().join("claude-approval");
+        let executable = root.join("fake-claude");
+        let observed_cwd = root.join("claude-cwd");
+        let observed_config = root.join("claude-config");
+        let observed_key = root.join("claude-api-key");
+        let observed_approval = root.join("claude-approval");
         let script = r#"
 printf '%s' "$PWD" > __CWD__
 printf '%s' "${CLAUDE_CONFIG_DIR-unset}" > __CONFIG__
@@ -637,15 +638,16 @@ exec /bin/sh -c "$last"
 fn local_fake_codex_uses_local_cwd_account_and_scrubbed_environment() {
     futures_lite::future::block_on(async {
         let directory = tempfile::tempdir().unwrap();
-        let working_directory = directory.path().join("local codex cwd");
-        let config_dir = directory.path().join("local codex account");
+        let root = directory.path().canonicalize().unwrap();
+        let working_directory = root.join("local codex cwd");
+        let config_dir = root.join("local codex account");
         std::fs::create_dir_all(&working_directory).unwrap();
         std::fs::create_dir_all(&config_dir).unwrap();
-        let executable = directory.path().join("fake-local-codex");
-        let observed_cwd = directory.path().join("local-codex-cwd");
-        let observed_config = directory.path().join("local-codex-config");
-        let observed_key = directory.path().join("local-codex-api-key");
-        let observed_thread = directory.path().join("local-codex-thread");
+        let executable = root.join("fake-local-codex");
+        let observed_cwd = root.join("local-codex-cwd");
+        let observed_config = root.join("local-codex-config");
+        let observed_key = root.join("local-codex-api-key");
+        let observed_thread = root.join("local-codex-thread");
         let app_server_script = r#"
 printf '%s' "$PWD" > __CWD__
 printf '%s' "${CODEX_HOME-unset}" > __CONFIG__
