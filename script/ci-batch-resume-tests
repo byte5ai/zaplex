@@ -7,6 +7,7 @@ import runpy
 import unittest
 import json
 import hashlib
+import subprocess
 from unittest.mock import patch
 
 
@@ -16,6 +17,35 @@ validate_test_inputs = module["validate_test_inputs"]
 
 
 class ResumeTests(unittest.TestCase):
+    def test_read_run_preserves_complete_history_and_avoids_redundant_fetches(self):
+        source = "a" * 40
+        reader = module["read_run"]
+        for present, shallow in ((True, False), (False, False), (False, True)):
+            calls = []
+
+            def command(*args):
+                calls.append(args)
+                if args[:2] == ("gh", "api"):
+                    return json.dumps([{"jobs": []}] if "--paginate" in args else {"head_sha": source})
+                if args[:3] == ("git", "rev-parse", "--verify"):
+                    if not present:
+                        raise subprocess.CalledProcessError(1, args)
+                    return ""
+                if args[:2] == ("git", "rev-parse"):
+                    return "true" if shallow else "false"
+                if args[:2] == ("git", "fetch"):
+                    return ""
+                self.fail(f"Unexpected command: {args}")
+
+            with self.subTest(present=present, shallow=shallow), patch.dict(reader.__globals__, {"command": command}):
+                self.assertEqual(reader("10")[2], source)
+            fetches = [args for args in calls if args[:2] == ("git", "fetch")]
+            if present:
+                self.assertEqual(fetches, [])
+            else:
+                self.assertEqual(len(fetches), 1)
+                self.assertEqual("--depth=1" in fetches[0], shallow)
+
     def setUp(self):
         self.run = {
             "status": "completed", "conclusion": "failure", "event": "workflow_dispatch",

@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.47] — 2026-10-29
+
+- Headless-Cockpit aktualisiert den Aufmerksamkeitszustand ohne Dock- oder Toneffekte; lokale CLI-Fixtures verwenden portable kanonische Testpfade.
+
 ## [1.2.46] — 2026-10-29
 
 - SSH-Installationsfehler erhalten nicht-ASCII-Zeichen auch unter Bash 3.2 korrekt im strukturierten Fehlerereignis; Prüfungen laufen weiterhin vollständig auf der vorgesehenen Plattform.
