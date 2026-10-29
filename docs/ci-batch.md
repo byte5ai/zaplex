@@ -6,11 +6,11 @@ denselben Commit des Dispatchs; weitere Merges verändern diesen Lauf nicht.
 
 | Workflow | Art und Auslösung |
 | --- | --- |
-| `no-new-cjk` | Leichter Linux-Check auf PRs. Dateipfade werden im Job gefiltert, damit der gleichnamige Pflicht-Status auch bei Dokumentationsänderungen erscheint. |
+| `no-new-cjk` | Leichter Check auf `macrunner` für PRs. Dateipfade werden im Job gefiltert, damit der gleichnamige Pflicht-Status auch bei Dokumentationsänderungen erscheint. |
 | `dependency-security` | Advisory-Prüfung ohne App-Build; zuerst im Batch, zusätzlich manuell aufrufbar. |
-| `pr-check` | Schwere Linux-/macOS-Compile- und Regressionstests; nur aus dem Batch. |
-| `test-dispatch` | Schwere Rust-Tests auf Blacksmith Ubuntu 22.04 (16 vCPU / 64 GB); nur aus dem Batch. |
-| `live-sftp-safety` | Schwere SFTP-Integrationstests; nur aus dem Batch. |
+| `pr-check` | Native macOS-Compile- und App-Regressionstests auf `macrunner`; nur aus dem Batch. |
+| `test-dispatch` | Vollständige App-Paketsuite und Dokumentationstests auf `macrunner`; Linux-Daemon-/Systemtests separat auf GitHub Ubuntu 22.04. Nur aus dem Batch. |
+| `live-sftp-safety` | Linux-spezifische OpenSSH/SFTP-Integrationstests auf GitHub Ubuntu 22.04; nur aus dem Batch. |
 | `cockpit-parity-audit` | Schwere Paritätsprüfung; nur aus dem Batch. Echte Zwei-Host-Abnahme wird nur mit `require_manual_runtime=true` verlangt. Ein automatischer grüner Lauf ersetzt diese Abnahme nicht. |
 | `test-dmg` | Optionaler signierter Test-DMG-Build nach grünen Prüfungen, einschließlich Linux-Daemon. |
 | `build-remote-server` | Optionaler separater Daemon-Build nach grünen Prüfungen; alternativ zum Test-DMG. |
@@ -47,9 +47,10 @@ Die konkrete Release-Freigabe bleibt Voraussetzung für diesen manuellen Dispatc
 ### Prüfungen und Artefakt-Build zeitlich trennen
 
 Ein Batch mit `artifacts=none` führt alle Sicherheits-, Compile-, Test- und
-Live-SFTP-Prüfungen aus, ohne App oder DMG zu bauen. Er enthält nur einen
-macrunner-Job (macOS-Compile und native Regressionen); die übrigen Jobs laufen
-auf Linux. Nach seinem Ende bleibt der Mac bis zum nächsten Dispatch frei.
+Live-SFTP-Prüfungen aus, ohne App oder DMG zu bauen. Allgemeine Prüfungen,
+native App-Regressionen, die vollständige Mac-Paketsuite und Dokumentationstests
+laufen auf `macrunner`. Nur die Linux-Daemon-/Systemtests und Live-SFTP laufen
+auf GitHub-Linux-Runnern. Nach dem Ende der Mac-Jobs ist der Mac wieder frei.
 
 Ein späterer Batch mit `artifacts=test-dmg` und `checks_run_id=<Prüflauf>`
 übernimmt ausschließlich einen erfolgreichen Prüf-Batch auf **exakt demselben
@@ -121,7 +122,7 @@ abweichenden Versions-Tag und das Debug-Profil. App, Verpackung und GUI-Tests
 checken ausdrücklich den ursprünglichen Quellcommit aus. Nur die Fortsetzungs-
 Workflow-Datei stammt vom neuen `main`; ein gewöhnlicher GitHub-Rerun würde auch
 die alte Workflow-Datei behalten. Das App-Build-Limit ist `CARGO_BUILD_JOBS=4`.
-Erfolgreiche Compile-/Paket-/SFTP-Prüfungen und der Blacksmith-Daemon werden nicht
+Erfolgreiche Compile-/Paket-/SFTP-Prüfungen und der Linux-Daemon werden nicht
 wiederholt. Der ursprüngliche Batch bleibt als fehlgeschlagener Lauf erhalten;
 der Fortsetzungslauf verknüpft seine Belege mit ihm im Job-Summary.
 

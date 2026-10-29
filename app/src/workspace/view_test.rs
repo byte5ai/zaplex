@@ -30,8 +30,8 @@ use repo_metadata::watcher::DirectoryWatcher;
 use repo_metadata::RepoMetadataModel;
 use std::collections::HashMap;
 use std::sync::Arc;
-use warpui::r#async::FutureExt;
 use warpui::event::Event as MouseEvent;
+use warpui::r#async::FutureExt;
 use watcher::HomeDirectoryWatcher;
 
 use crate::cloud_object::update_manager::UpdateManager;
@@ -380,26 +380,8 @@ fn non_unix_daemon_retry_branch_is_statically_fail_closed() {
     assert!(non_unix.contains("Some(request)"));
     assert!(!non_unix.contains("let _ = (pane_group, pane_id, draft)"));
 
-    // Cancel keeps a daemon pane in place on every platform: the only surface
-    // replacement left is the classic-SSH branch, which never has a daemon
-    // identity, so a cancelled daemon restore can never become a local shell.
-    let cancel_start = source.find("fn cancel_remote_restore(").unwrap();
-    let cancel_end = source[cancel_start..]
-        .find("fn open_resolved_ssh_terminal_command(")
-        .map(|offset| cancel_start + offset)
-        .unwrap();
-    let cancel = &source[cancel_start..cancel_end];
-    assert!(cancel.contains("view.cancel_remote_input_readiness(ctx)"));
-    assert_eq!(
-        cancel.matches("replace_remote_terminal_surface(").count(),
-        1
-    );
-    let classic_branch = cancel
-        .find("if !matches!(&identity.transport, RemoteTerminalTransport::Daemon { .. })")
-        .unwrap();
-    let daemon_marked = cancel.find("daemon_restore = true").unwrap();
-    let replacement = cancel.find("replace_remote_terminal_surface(").unwrap();
-    assert!(classic_branch < replacement && replacement < daemon_marked);
+    // Cancellation is covered by the real pane-state tests below, including
+    // cancelling_classic_ssh_setup_closes_the_attempt_without_a_replacement_surface.
 }
 
 #[test]

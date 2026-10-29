@@ -2248,7 +2248,8 @@ fn open_nofollow(
             {
                 OpenOptions::new()
                     .read(true)
-                    .custom_flags(libc::O_SYMLINK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                    // O_SYMLINK opens the link itself; O_NOFOLLOW would reject it on Darwin.
+                    .custom_flags(libc::O_SYMLINK | libc::O_CLOEXEC)
                     .open(path)
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos")))]

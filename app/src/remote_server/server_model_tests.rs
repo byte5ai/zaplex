@@ -3221,9 +3221,10 @@ fn create_directory_creates_nested_directories() {
 // the background reader task streams PTY bytes back as SessionOutput pushes via
 // the model, and CloseSession reaps the shell and emits SessionExited. This is
 // the path that was previously only compile-verified (no async-model harness).
-// Unix-only: the daemon owns the PTY (PTY ownership is unix-only).
+// The shipped daemon runs on Linux; these real-PTY system tests exercise its
+// Linux process identity, managed-open capabilities, and session lifecycle.
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 mod daemon_session {
     use super::super::{
         normalize_pty_dimensions, LogicalOpenReservation, HOST_RING_CAP_BYTES,

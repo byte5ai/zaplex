@@ -684,12 +684,13 @@ fn agent_refresh_and_remove_preserve_other_managed_agents() {
 #[test]
 fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
     let temp = TempDir::new().unwrap();
-    fs::create_dir_all(temp.path().join(".claude-work/projects")).unwrap();
-    fs::create_dir_all(temp.path().join(".claude-backup/projects")).unwrap();
+    let home = temp.path().canonicalize().unwrap();
+    fs::create_dir_all(home.join(".claude-work/projects")).unwrap();
+    fs::create_dir_all(home.join(".claude-backup/projects")).unwrap();
 
     let claude_paths = hook_paths(
         warp_cli::CliAgentHookAgent::Claude,
-        temp.path(),
+        &home,
         Some(std::ffi::OsStr::new("/custom/claude")),
         None,
         None,
@@ -697,15 +698,15 @@ fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
         None,
         None,
     );
-    assert!(claude_paths.contains(&temp.path().join(".claude/settings.json")));
-    assert!(claude_paths.contains(&temp.path().join(".claude-work/settings.json")));
-    assert!(!claude_paths.contains(&temp.path().join(".claude-backup/settings.json")));
+    assert!(claude_paths.contains(&home.join(".claude/settings.json")));
+    assert!(claude_paths.contains(&home.join(".claude-work/settings.json")));
+    assert!(!claude_paths.contains(&home.join(".claude-backup/settings.json")));
     assert!(claude_paths.contains(&Path::new("/custom/claude/settings.json").to_path_buf()));
 
     assert_eq!(
         hook_paths(
             warp_cli::CliAgentHookAgent::Codex,
-            temp.path(),
+            &home,
             None,
             None,
             Some(std::ffi::OsStr::new("/custom/codex")),
@@ -718,7 +719,7 @@ fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
     assert_eq!(
         hook_paths(
             warp_cli::CliAgentHookAgent::Grok,
-            temp.path(),
+            &home,
             None,
             None,
             None,
@@ -731,7 +732,7 @@ fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
     assert_eq!(
         hook_paths(
             warp_cli::CliAgentHookAgent::Antigravity,
-            temp.path(),
+            &home,
             None,
             None,
             None,
@@ -739,12 +740,12 @@ fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
             None,
             None,
         ),
-        vec![temp.path().join(".gemini/antigravity-cli/settings.json")]
+        vec![home.join(".gemini/antigravity-cli/settings.json")]
     );
     assert_eq!(
         hook_paths(
             warp_cli::CliAgentHookAgent::DeepSeek,
-            temp.path(),
+            &home,
             None,
             None,
             None,
@@ -758,7 +759,7 @@ fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
     assert_eq!(
         hook_paths(
             warp_cli::CliAgentHookAgent::DeepSeek,
-            temp.path(),
+            &home,
             None,
             None,
             None,
@@ -766,14 +767,14 @@ fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
             None,
             None,
         ),
-        vec![temp.path().join(".codewhale/config.toml")]
+        vec![home.join(".codewhale/config.toml")]
     );
-    fs::create_dir_all(temp.path().join(".deepseek")).unwrap();
-    fs::write(temp.path().join(".deepseek/config.toml"), "").unwrap();
+    fs::create_dir_all(home.join(".deepseek")).unwrap();
+    fs::write(home.join(".deepseek/config.toml"), "").unwrap();
     assert_eq!(
         hook_paths(
             warp_cli::CliAgentHookAgent::DeepSeek,
-            temp.path(),
+            &home,
             None,
             None,
             None,
@@ -781,7 +782,7 @@ fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
             None,
             None,
         ),
-        vec![temp.path().join(".deepseek/config.toml")]
+        vec![home.join(".deepseek/config.toml")]
     );
 }
 
