@@ -3763,6 +3763,7 @@ impl SshManagerPanel {
                     appearance.ui_font_footnote(),
                 )
                 .with_color(color)
+                .soft_wrap(true)
                 .finish(),
             )
             .with_padding_top(ITEM_PADDING_VERTICAL)
@@ -4719,7 +4720,16 @@ impl TypedActionView for SshManagerPanel {
             SshManagerPanelAction::ToggleSessions(id) => self.on_toggle_sessions(id.clone(), ctx),
             SshManagerPanelAction::ConnectForSessions(id) => {
                 self.sessions_expanded.insert(id.clone());
-                if !self.connecting.contains(id) {
+                let server = warp_ssh_manager::with_conn(|conn| resolve_server_for_node(conn, id))
+                    .ok()
+                    .flatten();
+                if server.is_some_and(|server| {
+                    server.auth_type != AuthType::Key || !server.session_resilience.is_enabled()
+                }) {
+                    ctx.emit(SshManagerPanelEvent::OpenServerEditor {
+                        node_id: id.clone(),
+                    });
+                } else if !self.connecting.contains(id) {
                     self.dispatch_connect_for(id, ctx);
                 }
             }

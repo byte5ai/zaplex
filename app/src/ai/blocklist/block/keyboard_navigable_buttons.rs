@@ -134,7 +134,7 @@ fn build_rich_navigation_label(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let font_size = appearance.monospace_font_size();
+    let font_size = appearance.ui_font_size();
 
     let title = Text::new(
         text_label.to_string(),
@@ -151,7 +151,7 @@ fn build_rich_navigation_label(
         Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(title)
+            .with_child(Shrinkable::new(1., title).finish())
             .with_child(
                 Container::new(render_recommended_badge(appearance))
                     .with_margin_left(8.)
@@ -167,10 +167,10 @@ fn build_rich_navigation_label(
         let sub_label_element = Text::new(
             sub_label.to_string(),
             appearance.ui_font_family(),
-            appearance.monospace_font_size() - 2.,
+            appearance.ui_font_size(),
         )
         .soft_wrap(true)
-        .with_color(internal_colors::neutral_5(theme))
+        .with_color(theme.sub_text_color(theme.surface_2()).into())
         .finish();
 
         Flex::column()

@@ -4443,6 +4443,26 @@ impl PaneGroup {
         }
     }
 
+    /// An abandoned connection must release its PTY instead of keeping it in
+    /// the undo-close stack, where setup could otherwise continue invisibly.
+    pub(crate) fn cancel_remote_connection_pane(
+        &mut self,
+        pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.pane_contents.contains_key(&pane_id) {
+            return;
+        }
+        let closes_tab = self.panes.visible_pane_count() == 1;
+        self.focus_next_terminal_pane_and_activate_session(pane_id, PaneRemovalReason::Close, ctx);
+        self.discard_pane(pane_id, ctx);
+        if closes_tab {
+            ctx.emit(Event::Exited {
+                add_to_undo_stack: false,
+            });
+        }
+    }
+
     pub fn close_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
         // Don't close a pane that doesn't exist
         if !self.pane_contents.contains_key(&pane_id) {

@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.44] — 2026-10-29
+
+- SSH-Ersteinrichtung ordnet Befehlsabschlüsse korrekt zu und wartet auf Erweiterungswahl und Installation. Abbrechen entfernt die Verbindung vollständig; die Auswahl bleibt lesbar und die Session-Einrichtung führt bei fehlender Schlüssel-Anmeldung zu den Host-Einstellungen (#725).
+
 ## [1.2.43] — 2026-10-29
 
 - Agent-Starts warten auf die tatsächliche Shell; Remote-Sessionfehler bieten direkte Einrichtung. Cockpit öffnet im eigenen Tab und zeigt schmale Sessionlisten lesbar mit vollständigen Metadaten. Agent-Tabs erhalten eindeutige Titel, Startfehler sind lokalisiert.

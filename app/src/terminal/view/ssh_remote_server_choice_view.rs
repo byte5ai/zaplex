@@ -17,11 +17,10 @@
 //! Dismissing the block (on click of either option, or when the session is
 //! deregistered) is the parent's responsibility.
 use settings::Setting;
-use warp_core::ui::theme::color::internal_colors;
 use warpui::{
     elements::{
         Border, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-        MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
+        MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
     },
     platform::Cursor,
     ui_components::components::{UiComponent, UiComponentStyles},
@@ -130,10 +129,10 @@ impl SshRemoteServerChoiceView {
 
     fn render_footer(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let muted_color = internal_colors::neutral_5(theme);
+        let muted_color = theme.sub_text_color(theme.background()).into();
         let accent_color = theme.accent().into_solid();
         let ui_font_family = appearance.ui_font_family();
-        let footer_font_size = appearance.monospace_font_size() - 2.;
+        let footer_font_size = appearance.ui_font_size();
 
         let checkbox = appearance
             .ui_builder()
@@ -181,7 +180,7 @@ impl SshRemoteServerChoiceView {
                 })),
                 self.manage_settings_mouse_state.clone(),
             )
-            .soft_wrap(false)
+            .soft_wrap(true)
             .with_style(UiComponentStyles {
                 font_size: Some(footer_font_size),
                 font_family_id: Some(ui_font_family),
@@ -191,10 +190,10 @@ impl SshRemoteServerChoiceView {
             .build()
             .finish();
 
-        let row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        let row = Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_spacing(8.)
             .with_child(checkbox_row)
             .with_child(manage_settings_link)
             .finish();

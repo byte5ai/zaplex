@@ -8044,3 +8044,49 @@ fn new_agent_tab_titles_distinguish_same_project_launches_without_renaming_tabs(
         });
     });
 }
+
+#[test]
+fn cancelling_classic_ssh_setup_closes_the_attempt_without_a_replacement_surface() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let original_group = workspace.active_tab_pane_group().clone();
+            workspace.add_tab_with_pane_layout(
+                PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                    hide_homepage: true,
+                    ..Default::default()
+                })),
+                Arc::new(HashMap::new()),
+                None,
+                ctx,
+            );
+            let group = workspace.active_tab_pane_group().clone();
+            let pane = group.as_ref(ctx).focused_pane_id(ctx);
+            assert!(group.as_ref(ctx).set_terminal_remote_identity(
+                pane,
+                RemoteTerminalIdentity {
+                    registry_node_id: "cancelled-ssh-fixture".to_string(),
+                    host: "remote.example.test".to_string(),
+                    transport: RemoteTerminalTransport::ClassicSsh,
+                    current_working_directory: None,
+                    input_draft: String::new(),
+                }
+            ));
+            let view = group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane, ctx)
+                .unwrap();
+            view.update(ctx, |view, ctx| view.fail_remote_input_readiness(ctx));
+            workspace.cancel_remote_restore(&group, pane, ctx);
+            assert!(group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(pane, ctx)
+                .is_none());
+            assert!(original_group
+                .as_ref(ctx)
+                .terminal_view_from_pane_id(original_group.as_ref(ctx).focused_pane_id(ctx), ctx)
+                .is_some());
+        });
+    });
+}
