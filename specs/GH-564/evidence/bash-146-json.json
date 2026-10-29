@@ -1,0 +1,166 @@
+{
+  "scope": "Read-only Bash 3.2.57 JSON escaping; no installer, file write, cleanup, app or build executed on the host.",
+  "cases": [
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/install_tmux_and_zaplexify_linux.sh",
+      "input": "false \"quoted\" \\path 100% café\nnext\tline\r\u0001",
+      "escaped": "false \\\"quoted\\\" \\\\path 100% café\\u000anext\\u0009line\\u000d\\u0001",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/install_tmux_and_zaplexify_linux.sh",
+      "input": "日本語 ü ä ß € 😀",
+      "escaped": "日本語 ü ä ß € 😀",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/install_tmux_and_zaplexify_linux.sh",
+      "input": "plain",
+      "escaped": "plain",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/install_tmux_and_zaplexify_linux.sh",
+      "input": "quote\" and slash\\ and \u0002",
+      "escaped": "quote\\\" and slash\\\\ and \\u0002",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_apt.sh",
+      "input": "false \"quoted\" \\path 100% café\nnext\tline\r\u0001",
+      "escaped": "false \\\"quoted\\\" \\\\path 100% café\\u000anext\\u0009line\\u000d\\u0001",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_apt.sh",
+      "input": "日本語 ü ä ß € 😀",
+      "escaped": "日本語 ü ä ß € 😀",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_apt.sh",
+      "input": "plain",
+      "escaped": "plain",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_apt.sh",
+      "input": "quote\" and slash\\ and \u0002",
+      "escaped": "quote\\\" and slash\\\\ and \\u0002",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_dnf.sh",
+      "input": "false \"quoted\" \\path 100% café\nnext\tline\r\u0001",
+      "escaped": "false \\\"quoted\\\" \\\\path 100% café\\u000anext\\u0009line\\u000d\\u0001",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_dnf.sh",
+      "input": "日本語 ü ä ß € 😀",
+      "escaped": "日本語 ü ä ß € 😀",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_dnf.sh",
+      "input": "plain",
+      "escaped": "plain",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_dnf.sh",
+      "input": "quote\" and slash\\ and \u0002",
+      "escaped": "quote\\\" and slash\\\\ and \\u0002",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_pacman.sh",
+      "input": "false \"quoted\" \\path 100% café\nnext\tline\r\u0001",
+      "escaped": "false \\\"quoted\\\" \\\\path 100% café\\u000anext\\u0009line\\u000d\\u0001",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_pacman.sh",
+      "input": "日本語 ü ä ß € 😀",
+      "escaped": "日本語 ü ä ß € 😀",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_pacman.sh",
+      "input": "plain",
+      "escaped": "plain",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_pacman.sh",
+      "input": "quote\" and slash\\ and \u0002",
+      "escaped": "quote\\\" and slash\\\\ and \\u0002",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_yum.sh",
+      "input": "false \"quoted\" \\path 100% café\nnext\tline\r\u0001",
+      "escaped": "false \\\"quoted\\\" \\\\path 100% café\\u000anext\\u0009line\\u000d\\u0001",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_yum.sh",
+      "input": "日本語 ü ä ß € 😀",
+      "escaped": "日本語 ü ä ß € 😀",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_yum.sh",
+      "input": "plain",
+      "escaped": "plain",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_yum.sh",
+      "input": "quote\" and slash\\ and \u0002",
+      "escaped": "quote\\\" and slash\\\\ and \\u0002",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_zypper.sh",
+      "input": "false \"quoted\" \\path 100% café\nnext\tline\r\u0001",
+      "escaped": "false \\\"quoted\\\" \\\\path 100% café\\u000anext\\u0009line\\u000d\\u0001",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_zypper.sh",
+      "input": "日本語 ü ä ß € 😀",
+      "escaped": "日本語 ü ä ß € 😀",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_zypper.sh",
+      "input": "plain",
+      "escaped": "plain",
+      "pass": true
+    },
+    {
+      "asset": "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_zypper.sh",
+      "input": "quote\" and slash\\ and \u0002",
+      "escaped": "quote\\\" and slash\\\\ and \\u0002",
+      "pass": true
+    }
+  ],
+  "shell_version": "3.2.57(1)-release",
+  "verified_at": "2026-10-29T16:33:03.527029+00:00",
+  "base_commit": "832e217d3db3d57230c7c03832c421f03115a421",
+  "source_file_sha256": {
+    "app/assets/bundled/ssh/bash_zsh/install_tmux_and_zaplexify_linux.sh": "62b85e1c1d0dd4b7e68f1bfdefee1714c285d752e7aca231064666dd3ad5bb58",
+    "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_apt.sh": "a848dc0585758c9f4f49e2a3d3372e5650c4ac65a42de134518f149c33b3a888",
+    "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_dnf.sh": "4f0be326eab7826854423b883238bce709f64ac71d4a9c95fa13fb82fb6912fe",
+    "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_pacman.sh": "e8bc75aea6087cb46d8a5ef0257c75788635dac9bf52b1b8522434681462ba4b",
+    "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_yum.sh": "bb5a2f74eceb32d40d03ce976dd15acbf59d85229853f764d263eda547c321df",
+    "app/assets/bundled/ssh/bash_zsh/root/install_tmux_and_zaplexify_zypper.sh": "ec6c1d4d3dca78b9b41262c495df7b69a5f2cf787d1c40d0df7b0a452afadd64"
+  },
+  "pre_fix_observation": "BASH=3.2.57(1)-release\nfalse \\\"quoted\\\" \\\\path 100% caf\\uffffffffffffffc3\\u000anext\\u0009line\\u000d\\u0001",
+  "corrected_observation": "BASH=3.2.57(1)-release\nfalse \\\"quoted\\\" \\\\path 100% café\\u000anext\\u0009line\\u000d\\u0001",
+  "limits": [
+    "Read-only extracted JSON encoder; not a full installer or installed-DMG acceptance.",
+    "Fish asset mirrors the corrected Bash program; the existing asset fixture compares its decoded program when Fish is installed."
+  ]
+}

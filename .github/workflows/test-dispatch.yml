@@ -388,6 +388,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Linux SSH installer assets
+        if: ${{ !inputs.coverage }}
+        run: script/ssh-tmux-asset-tests
+        shell: bash
+
       - name: Linux daemon and process tests
         if: ${{ !inputs.coverage }}
         run: |

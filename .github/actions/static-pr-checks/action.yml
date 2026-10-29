@@ -4,56 +4,69 @@ runs:
   using: composite
   steps:
     - name: Verify Docker supply-chain policy
+      if: ${{ !cancelled() }}
       run: script/check-docker-supply-chain --self-test
       shell: bash
 
     - name: Verify release supply-chain policy
+      if: ${{ !cancelled() }}
       run: script/check-release-supply-chain --self-test
       shell: bash
 
     - name: Validate release input rejection
+      if: ${{ !cancelled() }}
       run: script/validate-release-tag-tests
       shell: bash
 
     - name: Verify fork-facing repository links
+      if: ${{ !cancelled() }}
       run: script/fork-link-contract-tests
       shell: bash
 
     - name: Verify Linux development container security
+      if: ${{ !cancelled() }}
       run: script/check-linux-dev-container-security
       shell: bash
 
     - name: Verify SSH tmux installer assets
+      if: ${{ !cancelled() }}
       run: script/ssh-tmux-asset-tests
       shell: bash
 
     - name: Validate release tag classification
+      if: ${{ !cancelled() }}
       run: script/classify-release-tag-tests
       shell: bash
 
     - name: Verify atomic release version updater
+      if: ${{ !cancelled() }}
       run: script/set-version-tests
       shell: bash
 
     - name: Verify release-readiness fixtures
+      if: ${{ !cancelled() }}
       run: script/check-v1-release-readiness --self-test
       shell: bash
 
     - name: Verify release metadata consistency
+      if: ${{ !cancelled() }}
       run: script/check-v1-release-readiness --phase-a
       shell: bash
 
     - name: Verify macOS packaging split
+      if: ${{ !cancelled() }}
       run: python3 script/test-macos-bundle
       shell: bash
 
     - name: Verify Cockpit matrix and mutation-gate fixtures
+      if: ${{ !cancelled() }}
       run: |
         script/cockpit-parity-audit validate
         script/cockpit-parity-audit self-test
       shell: bash
 
     - name: Verify suite-evidence parser fixtures
+      if: ${{ !cancelled() }}
       run: |
         python3 -m venv "$RUNNER_TEMP/suite-evidence-parser"
         "$RUNNER_TEMP/suite-evidence-parser/bin/python" -m pip install --only-binary=:all: --require-hashes -r script/test-suite-evidence-requirements.txt
@@ -61,18 +74,22 @@ runs:
       shell: bash
 
     - name: Verify fork-only audit inventory fixtures
+      if: ${{ !cancelled() }}
       run: PYTHONDONTWRITEBYTECODE=1 python3 script/codebase-audit-fork-scope-tests
       shell: bash
 
     - name: Verify worktree cleanup preserves unmerged work
+      if: ${{ !cancelled() }}
       run: PYTHONDONTWRITEBYTECODE=1 python3 script/prune-worktrees-tests
       shell: bash
 
     - name: Verify GUI acceptance rejects incomplete evidence
+      if: ${{ !cancelled() }}
       run: PYTHONDONTWRITEBYTECODE=1 python3 script/macos/gui-tests/report_tests.py
       shell: bash
 
     - name: Verify hover states survive re-renders
+      if: ${{ !cancelled() }}
       run: |
         script/check-persistent-hover-state --self-test
         script/check-persistent-hover-state
