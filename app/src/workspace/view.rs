@@ -12314,15 +12314,12 @@ impl Workspace {
         if let Some((pane_uuid, mut identity, draft)) = restore_state {
             identity.input_draft = draft.clone();
             if !matches!(&identity.transport, RemoteTerminalTransport::Daemon { .. }) {
-                // Classic SSH runs in a local PTY; its cancel keeps replacing
-                // the surface with a cancelled one.
-                crate::app_state::register_remote_terminal_identity(&pane_uuid, identity);
-                let replaced = pane_group.update(ctx, |group, ctx| {
-                    group.replace_remote_terminal_surface(pane_id, None, draft, true, ctx)
+                // End the attempted connection instead of creating an empty,
+                // permanently cancelled terminal with another Retry action.
+                view.update(ctx, |view, ctx| view.cancel_remote_input_readiness(ctx));
+                pane_group.update(ctx, |group, ctx| {
+                    group.cancel_remote_connection_pane(pane_id, ctx)
                 });
-                if let Some(replaced) = replaced {
-                    Self::retire_replaced_remote_surface(&replaced, ctx);
-                }
                 ctx.dispatch_global_action("workspace:save_app", ());
                 return;
             }

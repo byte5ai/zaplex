@@ -540,6 +540,7 @@ jobs:
           terminal::input::tests::remote_readiness_gate_
           pending_remote_setup_command_does_not_replace_the_user_draft
           failed_remote_setup_command_cannot_execute_later
+          classic_ssh_setup_
           failed_and_cancelled_remote_readiness_expose_retry_actions
           pending_remote_attach_can_be_cancelled_without_exposing_retry
           listed_current_runtime_pins_version_without_becoming_a_historical_route

@@ -2533,10 +2533,9 @@ pub struct TerminalView {
 
     bootstrap_start: Option<Instant>,
     is_login_shell_bootstrapped: bool,
-    /// Set when a pending command is submitted to the shell. Cleared on the
-    /// next `AfterBlockCompleted`, at which point `Event::PendingCommandCompleted`
-    /// is emitted so subscribers know the command has finished.
-    awaiting_pending_command_completion: bool,
+    /// The submitted setup block. Bootstrap and unrelated block completions
+    /// must not finish a pending SSH connection or agent launch.
+    awaiting_pending_command_completion: Option<BlockId>,
     /// Keep the structured launch until the new shell is known. The bool marks
     /// a fork that must follow worktree setup already queued in the input.
     pending_routed_agent_launch: Option<(cli_agent::RoutedAgentLaunch, bool)>,
@@ -2857,6 +2856,7 @@ pub struct TerminalView {
     /// Explicit readiness for a remote pane. The input editor keeps its draft,
     /// while normal submissions stay blocked until this reaches Ready.
     remote_input_phase: Option<RemoteInputPhase>,
+    classic_ssh_readiness_generation: u64,
     /// Persists through reconnect phases without relocking the terminal model.
     remote_raw_terminal: bool,
     remote_restore_pane_uuid: Option<Vec<u8>>,
@@ -4110,7 +4110,7 @@ impl TerminalView {
             last_hover_fragment_boundary: None,
             bootstrap_start: None,
             is_login_shell_bootstrapped: false,
-            awaiting_pending_command_completion: false,
+            awaiting_pending_command_completion: None,
             pending_routed_agent_launch: None,
             file_manager_origin: None,
             pending_file_manager_directory: None,
@@ -4130,6 +4130,7 @@ impl TerminalView {
             sessions,
             remote_server_shimmer_handle: ShimmeringTextStateHandle::new(),
             remote_input_phase: None,
+            classic_ssh_readiness_generation: 0,
             remote_raw_terminal: false,
             remote_restore_pane_uuid: None,
             remote_input_has_reached_initial_ready: false,
@@ -4260,6 +4261,12 @@ impl TerminalView {
                         // Sessions handles the state update directly via its own
                         // subscription to the manager. Notify the view so the
                         // loading footer re-renders with the updated message.
+                        if me.remote_input_phase == Some(RemoteInputPhase::Transport)
+                            && me.remote_input_session_id.is_none()
+                            && me.active_ssh_remote_server_choice_block().is_none()
+                        {
+                            me.arm_classic_ssh_readiness_timeout(ctx);
+                        }
                         ctx.notify();
                     }
                     RemoteServerManagerEvent::SessionConnected { session_id, .. } => {
@@ -6950,18 +6957,43 @@ impl TerminalView {
             return;
         }
         self.set_remote_input_phase(RemoteInputPhase::Transport, None, ctx);
+        self.arm_classic_ssh_readiness_timeout(ctx);
+    }
+
+    fn arm_classic_ssh_readiness_timeout(&mut self, ctx: &mut ViewContext<Self>) {
+        self.classic_ssh_readiness_generation =
+            self.classic_ssh_readiness_generation.wrapping_add(1);
+        let generation = self.classic_ssh_readiness_generation;
         let _ = ctx.spawn(
             async {
                 Timer::after(CLASSIC_SSH_READY_TIMEOUT).await;
             },
-            |view, (), ctx| {
-                if view.remote_input_session_id.is_none()
-                    && view.remote_input_phase == Some(RemoteInputPhase::Transport)
-                {
-                    view.set_remote_input_phase(RemoteInputPhase::Failed, None, ctx);
-                }
+            move |view, (), ctx| {
+                view.check_classic_ssh_readiness_timeout(generation, ctx);
             },
         );
+    }
+
+    fn check_classic_ssh_readiness_timeout(
+        &mut self,
+        generation: u64,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if generation != self.classic_ssh_readiness_generation
+            || self.remote_input_session_id.is_some()
+            || self.remote_input_phase != Some(RemoteInputPhase::Transport)
+        {
+            return;
+        }
+        // User choice has no deadline. Installation has its own transport
+        // timeouts and must finish before the shell bootstrap can start.
+        let setup_pending = self.active_ssh_remote_server_choice_block().is_some()
+            || self.show_remote_server_loading_footer(&self.model.lock(), ctx);
+        if setup_pending {
+            self.arm_classic_ssh_readiness_timeout(ctx);
+        } else {
+            self.set_remote_input_phase(RemoteInputPhase::Failed, None, ctx);
+        }
     }
 
     pub(crate) fn fail_remote_input_readiness(&mut self, ctx: &mut ViewContext<Self>) {
@@ -10847,11 +10879,26 @@ impl TerminalView {
 
                 // Emit PendingCommandCompleted when a pending command's block
                 // finishes (e.g. tab config setup commands like `git worktree add`).
-                if self.awaiting_pending_command_completion {
-                    self.awaiting_pending_command_completion = false;
+                if matches!(block_type, BlockType::User(block)
+                    if self.awaiting_pending_command_completion.as_ref()
+                        == Some(&block.serialized_block.id))
+                {
+                    self.awaiting_pending_command_completion = None;
                     ctx.emit(Event::PendingCommandCompleted);
+                    // The view's active-session metadata can lag the model's
+                    // precmd. Reinitializing for SSH also completes the outer
+                    // block, but its new prompt belongs to a different shell.
+                    let returned_to_setup_shell = {
+                        let model = self.model.lock();
+                        model.pending_session_id().is_none()
+                            && matches!(block_type, BlockType::User(block)
+                                if block.serialized_block.session_id.is_some()
+                                    && block.serialized_block.session_id
+                                        == model.block_list().active_block().session_id())
+                    };
                     if self.remote_input_session_id.is_none()
                         && self.remote_input_phase == Some(RemoteInputPhase::Transport)
+                        && returned_to_setup_shell
                     {
                         self.set_remote_input_phase(RemoteInputPhase::Failed, None, ctx);
                     }
@@ -11669,10 +11716,12 @@ impl TerminalView {
         ctx.subscribe_to_view(&choice_view, move |me, _, event, ctx| match event {
             SshRemoteServerChoiceViewEvent::Install => {
                 me.remove_ssh_remote_server_choice_block(session_id, ctx);
+                me.arm_classic_ssh_readiness_timeout(ctx);
                 ctx.emit(Event::RemoteServerInstallRequested { session_id });
             }
             SshRemoteServerChoiceViewEvent::Skip => {
                 me.remove_ssh_remote_server_choice_block(session_id, ctx);
+                me.arm_classic_ssh_readiness_timeout(ctx);
                 ctx.emit(Event::RemoteServerSkipRequested { session_id });
             }
             SshRemoteServerChoiceViewEvent::ZapifySettings => {
@@ -14451,13 +14500,15 @@ impl TerminalView {
         }
         self.apply_file_manager_directory(ctx);
         let had_pending = self.input.read(ctx, |input, _| input.has_pending_command());
+        let pending_block_id =
+            had_pending.then(|| self.model.lock().block_list().active_block().id().clone());
         self.input.update(ctx, |input, ctx| {
             input.execute_pending_command(ctx);
         });
         // If the pending command was just consumed, track that we're waiting
         // for the resulting block to complete.
         if had_pending && !self.input.read(ctx, |input, _| input.has_pending_command()) {
-            self.awaiting_pending_command_completion = true;
+            self.awaiting_pending_command_completion = pending_block_id;
         }
     }
 
@@ -14658,7 +14709,7 @@ impl TerminalView {
     }
     pub fn has_pending_command_or_awaiting_completion(&self, ctx: &AppContext) -> bool {
         self.pending_routed_agent_launch.is_some()
-            || self.awaiting_pending_command_completion
+            || self.awaiting_pending_command_completion.is_some()
             || self.input.as_ref(ctx).has_pending_command()
     }
 
@@ -26080,7 +26131,13 @@ impl View for TerminalView {
                     .is_some_and(|phase| phase != RemoteInputPhase::Ready);
                 let input_box_visible = self.is_input_box_visible(&model, app);
                 let mut floating_readiness_footer = None;
-                if input_box_visible || (remote_input_is_gated && !is_alt_screen_active) {
+                if self.active_ssh_remote_server_choice_block().is_some() {
+                    // The choice block owns focus and is the only action surface.
+                } else if self.show_remote_server_loading_footer(&model, app) {
+                    column.add_child(
+                        self.render_remote_server_loading_footer(&model, appearance, app),
+                    );
+                } else if input_box_visible || (remote_input_is_gated && !is_alt_screen_active) {
                     if !model.is_raw_terminal() {
                         column.add_child(self.render_input());
                     }
@@ -26093,10 +26150,6 @@ impl View for TerminalView {
                     // session reconnects: the status floats above the grid.
                     floating_readiness_footer =
                         self.render_remote_input_readiness_footer(appearance, app);
-                } else if self.show_remote_server_loading_footer(&model, app) {
-                    column.add_child(
-                        self.render_remote_server_loading_footer(&model, appearance, app),
-                    );
                 }
 
                 let mut stack = Stack::new()

@@ -7202,3 +7202,174 @@ fn routed_agent_fork_waits_for_shell_and_preserves_worktree_setup_order() {
         );
     });
 }
+
+#[test]
+fn classic_ssh_setup_ignores_bootstrap_and_unrelated_completions() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            view.begin_classic_ssh_readiness(ctx);
+            let expected = BlockId::new();
+            view.awaiting_pending_command_completion = Some(expected.clone());
+            let unrelated = {
+                let mut model = view.model.lock();
+                model.simulate_block("echo unrelated", "done");
+                let block = model
+                    .block_list()
+                    .blocks()
+                    .iter()
+                    .find(|block| block.command_to_string() == "echo unrelated")
+                    .expect("the completed unrelated command");
+                BlockType::from(block)
+            };
+            assert!(matches!(unrelated, BlockType::User(_)));
+            for block_type in [BlockType::BootstrapHidden, unrelated] {
+                view.handle_terminal_event(
+                    &ModelEvent::AfterBlockCompleted(AfterBlockCompletedEvent {
+                        command_finished_to_precmd_delay: None,
+                        block_type,
+                        num_secrets_obfuscated: 0,
+                        cloud_workflow_id: None,
+                        cloud_env_var_collection_id: None,
+                    }),
+                    ctx,
+                );
+                assert_eq!(
+                    view.awaiting_pending_command_completion,
+                    Some(expected.clone())
+                );
+                assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Transport));
+            }
+        });
+    });
+}
+
+#[test]
+fn classic_ssh_setup_completion_only_fails_after_return_to_local_shell() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        for remote_shell in [true, false] {
+            let terminal = add_window_with_terminal(&mut app, None);
+            terminal.update(&mut app, |view, ctx| {
+                let session = SessionId::from(if remote_shell { 812u64 } else { 0u64 });
+                view.sessions.update(ctx, |sessions, _| {
+                    sessions.register_session_for_test(
+                        SessionInfo::new_for_test()
+                            .with_id(session)
+                            .with_session_type(if remote_shell {
+                                BootstrapSessionType::ZaplexifiedRemote
+                            } else {
+                                BootstrapSessionType::Local
+                            }),
+                    );
+                });
+                // The model already received the remote precmd, while the view
+                // still displays the local shell's metadata.
+                view.active_block_metadata =
+                    Some(BlockMetadata::new(Some(SessionId::from(0u64)), None));
+                view.begin_classic_ssh_readiness(ctx);
+                let block_type = {
+                    let mut model = view.model.lock();
+                    model
+                        .block_list_mut()
+                        .active_block_mut()
+                        .set_session_id(SessionId::from(0u64));
+                    model.simulate_block("ssh example.test", "output");
+                    model
+                        .block_list_mut()
+                        .active_block_mut()
+                        .set_session_id(session);
+                    let block = model
+                        .block_list()
+                        .blocks()
+                        .iter()
+                        .find(|block| block.command_to_string() == "ssh example.test")
+                        .expect("the completed SSH command");
+                    view.awaiting_pending_command_completion = Some(block.id().clone());
+                    BlockType::from(block)
+                };
+                assert!(matches!(block_type, BlockType::User(_)));
+                view.handle_terminal_event(
+                    &ModelEvent::AfterBlockCompleted(AfterBlockCompletedEvent {
+                        command_finished_to_precmd_delay: None,
+                        block_type,
+                        num_secrets_obfuscated: 0,
+                        cloud_workflow_id: None,
+                        cloud_env_var_collection_id: None,
+                    }),
+                    ctx,
+                );
+                assert!(view.awaiting_pending_command_completion.is_none());
+                assert_eq!(
+                    view.remote_input_phase,
+                    Some(if remote_shell {
+                        RemoteInputPhase::Transport
+                    } else {
+                        RemoteInputPhase::Failed
+                    })
+                );
+                if remote_shell {
+                    view.set_remote_input_phase(RemoteInputPhase::Ready, None, ctx);
+                    assert!(view.input.as_ref(ctx).ordinary_command_input_is_ready());
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn classic_ssh_setup_deadline_waits_for_choice_but_detects_a_stalled_shell() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let session = SessionId::from(813u64);
+            view.begin_classic_ssh_readiness(ctx);
+            view.show_ssh_remote_server_choice_block(session, ctx);
+            view.check_classic_ssh_readiness_timeout(view.classic_ssh_readiness_generation, ctx);
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Transport));
+            let old_deadline = view.classic_ssh_readiness_generation;
+            view.remove_ssh_remote_server_choice_block(session, ctx);
+            view.arm_classic_ssh_readiness_timeout(ctx);
+            view.check_classic_ssh_readiness_timeout(old_deadline, ctx);
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Transport));
+            view.check_classic_ssh_readiness_timeout(view.classic_ssh_readiness_generation, ctx);
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Failed));
+        });
+    });
+}
+
+#[test]
+fn classic_ssh_setup_deadline_waits_for_extension_installation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            let _extension = FeatureFlag::SshRemoteServer.override_enabled(true);
+            let session = SessionId::from(814u64);
+            view.begin_classic_ssh_readiness(ctx);
+            view.model.lock().init_shell(InitShellValue {
+                session_id: session,
+                shell: "bash".to_owned(),
+                ..Default::default()
+            });
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.set_remote_server_setup_state(
+                    session,
+                    RemoteServerSetupState::Installing {
+                        progress_percent: Some(50),
+                    },
+                );
+            });
+            view.check_classic_ssh_readiness_timeout(view.classic_ssh_readiness_generation, ctx);
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Transport));
+            view.sessions.update(ctx, |sessions, _| {
+                sessions.set_remote_server_setup_state(session, RemoteServerSetupState::Ready);
+            });
+            view.check_classic_ssh_readiness_timeout(view.classic_ssh_readiness_generation, ctx);
+            assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Failed));
+        });
+    });
+}
