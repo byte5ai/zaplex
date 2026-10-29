@@ -2,7 +2,7 @@
   "schema_version": 1,
   "scope": "Native macOS build-free PR test suites plus measurement-adapter regressions; policy guards separate; each suite once per acceptance revision",
   "inventory_source_hashes": {
-    ".github/actions/static-pr-checks/action.yml": "993e955f267c7c5e4dde4ef37a793f6c622e1eba8c011561bfa11d52df1ccc18",
+    ".github/actions/static-pr-checks/action.yml": "b548697650c9329451b43804f83a1f667f85cba0250aed4fb71ac4b498011a6b",
     ".github/workflows/pr-check.yml": "77187c8382c4302bb6e6e04da9951a93bfc71893ab36e9f620ccbcec9561e517"
   },
   "required_tools": [

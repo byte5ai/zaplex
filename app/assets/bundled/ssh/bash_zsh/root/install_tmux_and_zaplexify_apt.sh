@@ -8,7 +8,7 @@ _json_escape() {
             '\''"'\'') printf '\''\\"'\'' ;;
             '\''\'\'') printf '\''\\\\'\'' ;;
             *) printf -v _code '\''%d'\'' "'\''$_char"
-                if [ "$_code" -lt 32 ]; then
+                if [ "$_code" -ge 0 ] && [ "$_code" -lt 32 ]; then
                     printf '\''\\u%04x'\'' "$_code"
                 else
                     printf '\''%s'\'' "$_char"
