@@ -28,6 +28,9 @@ jobs:
       CARGO_PROFILE_DEV_STRIP: none
       CARGO_PROFILE_TEST_STRIP: none
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - name: Require main
         run: test "$GITHUB_REF" = refs/heads/main
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -129,6 +132,9 @@ jobs:
       WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS: '1'
       ZAPLEX_SHELL_PATH: /bin/zsh
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false

@@ -2,12 +2,16 @@
 
 ## Runner-Zuordnung
 
-Die native macOS-App, Signierung, DMG-Verpackung und GUI-Prüfungen laufen auf
-`macrunner`. Linux-Compile, Linux-/OpenSSH-Tests und der ausgelieferte Linux-Daemon
-laufen auf kostenlosen GitHub-hosted Runnern. Die GNU-Linux-Prüfungen behalten
-Ubuntu 22.04; der statische musl-Daemon und kurze Linux-Prüfungen verwenden
-Ubuntu 24.04. Die große Paket-Testsuite aktiviert 12 GB Swap für Linkerspitzen.
-Es gibt keine voreingestellte Blacksmith-Zuordnung.
+Alle allgemeinen Projektprüfungen, App-Regressions- und Pakettests, native
+macOS-Builds, Signierung, DMG und GUI-Abnahme laufen auf `macrunner`.
+Kompilierende macOS-Prüfjobs hängen nacheinander, damit die ephemeren VMs
+nicht um dieselben CPU-Kerne konkurrieren. Python 3.12 ist ausdrücklich gewählt.
+Die Abhängigkeitsprüfung verwendet das unveränderte cargo-deny 0.20.2 als
+hashgeprüftes natives Binary statt einer nur unter Linux ausführbaren Docker-Action.
+
+Ausschließlich der ausgelieferte Linux-Daemon, Linux-/OpenSSH-Systemtests und
+die optionale Linux-Coverage-Projektion laufen auf kostenlosen GitHub-hosted
+Linux-Runnern. Es gibt keine voreingestellte Blacksmith-Zuordnung.
 
 ## Gezielte native Layoutprüfung
 

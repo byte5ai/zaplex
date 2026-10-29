@@ -13,10 +13,11 @@ REPO = "byte5ai/zaplex"
 PASSED_JOBS = {
     "dependency_security / cargo deny check advisories",
     "compile_checks / detect build-relevant changes",
-    "compile_checks / cargo check (Linux x86_64)",
+    "compile_checks / cargo policy (macOS Apple Silicon)",
     "compile_checks / cargo check (macOS Apple Silicon)",
-    "compile_checks / keymap validation (Linux x86_64)",
+    "compile_checks / app regressions (macOS Apple Silicon)",
     "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+    "tests / Linux daemon regressions",
 }
 # These paths do not feed the passed compile, SFTP or documentation-test commands.
 RESUME_PATHS = {
@@ -31,18 +32,17 @@ RESUME_PATHS = {
 MACOS_RESUME_PATHS = {
     ".github/workflows/ci-batch.yml",
     ".github/workflows/pr-check.yml",
-    ".github/actions/prepare_environment/action.yml",
-    "script/prepare-macos-rust",
-    "script/prepare-macos-rust-tests",
     "script/ci-batch-resume",
     "script/ci-batch-resume-tests",
     "docs/ci-batch.md",
 }
 MACOS_GATE = "compile_checks / cargo check (macOS Apple Silicon)"
-LINUX_GATES = PASSED_JOBS - {MACOS_GATE, "live_sftp / OpenSSH/SFTP commit-boundary recovery"}
+EARLY_NATIVE_GATES = PASSED_JOBS - {MACOS_GATE, "compile_checks / app regressions (macOS Apple Silicon)",
+                            "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+                            "tests / Linux daemon regressions"}
 LINUX_INPUT = """    inputs:
       reuse_linux_checks:
-        description: Reuse Linux gates validated by the batch preflight
+        description: Reuse earlier native policy gates validated by the batch preflight
         type: boolean
         default: false
 """
@@ -64,18 +64,18 @@ def validate_tail(run, jobs, changed_paths):
     if len(by_name) != len(jobs):
         raise ValueError("Ambiguous duplicate job names")
     for name in ("Validate main batch", "compile_checks / detect build-relevant changes",
-                 MACOS_GATE, "tests / cargo test (Linux)"):
+                 MACOS_GATE, "tests / cargo test (macOS)"):
         if by_name.get(name, {}).get("conclusion") != "success":
             raise ValueError(f"Missing successful tail prerequisite: {name}")
-    for name in ("dependency_security", "compile_checks / cargo check (Linux x86_64)",
-                 "compile_checks / keymap validation (Linux x86_64)", "live_sftp"):
+    for name in ("dependency_security", "compile_checks / cargo policy (macOS Apple Silicon)",
+                 "compile_checks / app regressions (macOS Apple Silicon)", "live_sftp"):
         if by_name.get(name, {}).get("conclusion") != "skipped":
             raise ValueError(f"Unexpected tail source gate: {name}")
     steps = {step["name"]: step.get("conclusion")
-             for step in by_name["tests / cargo test (Linux)"].get("steps", [])}
+             for step in by_name["tests / cargo test (macOS)"].get("steps", [])}
     if (steps.get("Isolated package tests") != "success"
             or steps.get("Package documentation tests") != "success"
-            or steps.get("Rust workspace coverage tests") != "skipped"):
+            or steps.get("Rust workspace coverage tests", "skipped") != "skipped"):
         raise ValueError("Tail resume requires successful package/doc tests without coverage")
     for name, job in by_name.items():
         if name.startswith(("live_sftp /", "test_dmg", "remote_server")):
@@ -99,27 +99,28 @@ def validate(run, jobs, changed_paths):
     if len(by_name) != len(jobs):
         raise ValueError("Ambiguous duplicate job names")
     if by_name.get(MACOS_GATE, {}).get("conclusion") == "failure":
-        for name in sorted(LINUX_GATES):
+        for name in sorted(EARLY_NATIVE_GATES):
             if by_name.get(name, {}).get("conclusion") != "success":
                 raise ValueError(f"Cannot reuse missing or unsuccessful gate: {name}")
         # The following stages must not have executed: they run for the first time.
         for name, job in by_name.items():
-            if name.startswith(("tests /", "live_sftp /", "test_dmg /", "remote_server /")):
+            if (name.startswith(("tests /", "live_sftp /", "test_dmg /", "remote_server /"))
+                    or name == "compile_checks / app regressions (macOS Apple Silicon)"):
                 if job.get("conclusion") != "skipped":
                     raise ValueError(f"Downstream stage already executed: {name}")
         if any(path not in MACOS_RESUME_PATHS for path in changed_paths):
-            raise ValueError("Passed Linux/security gate inputs changed")
+            raise ValueError("Passed native policy/security gate inputs changed")
         return "linux"
     for name in sorted(PASSED_JOBS):
         if by_name.get(name, {}).get("conclusion") != "success":
             raise ValueError(f"Cannot reuse missing or unsuccessful gate: {name}")
-    tests = by_name.get("tests / cargo test (Linux)", {})
+    tests = by_name.get("tests / cargo test (macOS)", {})
     steps = {step["name"]: step.get("conclusion") for step in tests.get("steps", [])}
     if (
         tests.get("conclusion") != "failure"
         or steps.get("Isolated package tests") != "failure"
         or steps.get("Package documentation tests") != "success"
-        or steps.get("Rust workspace coverage tests") != "skipped"
+        or steps.get("Rust workspace coverage tests", "skipped") != "skipped"
     ):
         raise ValueError("Resume supports a failed package test with passed doc tests only")
     unsafe = [
@@ -135,7 +136,10 @@ def validate_linux_inputs(previous, current, *, include_tests=False):
     workflow = ".github/workflows/pr-check.yml"
     def normalize_compile(text):
         text = text.replace(LINUX_INPUT, "")
-        for job in ("cargo_check", "keymap_smoke_test"):
+        # These later native jobs had not executed when the compile gate failed.
+        for job in ("cargo_check_macos", "keymap_smoke_test"):
+            text = re.sub(rf"(?ms)^  {job}:\n.*?(?=^  \w+:|\Z)", "", text)
+        for job in ("cargo_check",):
             text = re.sub(
                 rf"(?ms)^  {job}:\n.*?(?=^  \w+:|\Z)",
                 lambda block: re.sub(
@@ -146,28 +150,11 @@ def validate_linux_inputs(previous, current, *, include_tests=False):
             )
         return text
     if normalize_compile(previous[workflow]) != normalize_compile(current[workflow]):
-        raise ValueError("Linux compile/keymap workflow inputs changed")
+        raise ValueError("Earlier native dependency-policy inputs changed")
 
     action = ".github/actions/prepare_environment/action.yml"
-    def normalize_setup(text):
-        # Only the explicitly macOS-only Rust bootstrap may change. Everything
-        # else in the shared action still feeds the passed Linux commands.
-        pattern = (
-            r"(?m)^    - name: (?:Install rustup \(macOS runners without Rust\)|Prepare macOS Rust tools)\n"
-            r"      if: \$\{\{ inputs.target_os == 'macos' \}\}\n"
-            r"[\s\S]*?(?=^    - (?:name:|uses:)|\Z)"
-        )
-        text, count = re.subn(pattern, "", text)
-        if count != 1:
-            raise ValueError("Missing or unguarded macOS Rust bootstrap")
-        # This comment described the old macOS step only.
-        return text.replace(
-            "    # The own macOS runner (`macrunner`) starts a fresh VM without Rust. Install\n"
-            "    # a digest-pinned rustup-init there; rust-toolchain.toml then selects the\n"
-            "    # pinned toolchain on first use. Runners that already ship rustup skip this.\n", ""
-        )
-    if normalize_setup(previous[action]) != normalize_setup(current[action]):
-        raise ValueError("Shared Linux environment setup changed")
+    if previous[action] != current[action]:
+        raise ValueError("Passed native dependency-policy environment changed")
 
     batch = ".github/workflows/ci-batch.yml"
     for text in (previous[batch], current[batch]):
@@ -282,7 +269,7 @@ def main():
             {path: Path(path).read_text() for path in paths},
         )
         output_name = "reuse_linux_checks"
-        evidence = "dependency-security and Linux compile/keymap"
+        evidence = "dependency-security and native dependency/Clippy policy"
         remaining = "macOS checks and the previously unexecuted downstream stages"
     elif mode == "package":
         workflow = ".github/workflows/test-dispatch.yml"

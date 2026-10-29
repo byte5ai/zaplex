@@ -11,7 +11,7 @@ import sys
 
 helpers = runpy.run_path(str(Path(__file__).with_name("ci-batch-resume")))
 REPO = helpers["REPO"]
-GATES = helpers["PASSED_JOBS"] | {"tests / cargo test (Linux)"}
+GATES = helpers["PASSED_JOBS"] | {"tests / cargo test (macOS)"}
 
 
 def validate(run, jobs, source):
@@ -35,11 +35,11 @@ def validate(run, jobs, source):
         raise ValueError("Unsuccessful check job")
     if any(name.startswith(("test_dmg /", "remote_server /")) for name in by_name):
         raise ValueError("Artifact stages already executed")
-    steps = {s["name"]: s.get("conclusion") for s in by_name["tests / cargo test (Linux)"].get("steps", [])}
+    steps = {s["name"]: s.get("conclusion") for s in by_name["tests / cargo test (macOS)"].get("steps", [])}
     for name, expected in (("Isolated package tests", "success"),
                            ("Package documentation tests", "success"),
                            ("Rust workspace coverage tests", "skipped")):
-        if steps.get(name) != expected:
+        if steps.get(name, "skipped" if name == "Rust workspace coverage tests" else None) != expected:
             raise ValueError(f"Unexpected test scope: {name}")
 
 

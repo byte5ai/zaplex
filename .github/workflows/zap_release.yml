@@ -29,7 +29,7 @@ on:
       release_tag:
         description: "Release tag; must match VERSION"
         type: string
-        default: v1.2.44
+        default: v1.2.45
         required: true
 
 # Build and metadata jobs only need repository read access. The publisher job
@@ -50,7 +50,7 @@ env:
 jobs:
   prepare_metadata:
     name: Prepare metadata
-    runs-on: ubuntu-24.04
+    runs-on: macrunner
     timeout-minutes: 15
     outputs:
       release_tag: ${{ steps.compute_tag.outputs.tag }}
@@ -59,6 +59,9 @@ jobs:
       prerelease: ${{ steps.classify-tag.outputs.prerelease }}
       make_latest: ${{ steps.classify-tag.outputs.make_latest }}
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       # fetch-depth: 0 lets git-cliff see the full commit history and the tag of
       # the previous published release.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -307,6 +310,9 @@ jobs:
     needs: prepare_metadata
     timeout-minutes: 10
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
@@ -795,7 +801,7 @@ jobs:
   publish_release:
     name: Publish GitHub Release
     # ci-lint: allow-CI005  This Linux job only publishes already-built artifacts.
-    runs-on: ubuntu-24.04
+    runs-on: macrunner
     timeout-minutes: 30
     permissions:
       contents: write
@@ -815,6 +821,9 @@ jobs:
       - release_linux
       - gui_acceptance
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - name: Download release packages only
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

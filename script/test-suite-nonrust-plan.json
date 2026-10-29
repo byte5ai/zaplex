@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "scope": "Linux build-free PR test suites plus measurement-adapter regressions; policy guards separate; each suite once per acceptance revision",
+  "scope": "Native macOS build-free PR test suites plus measurement-adapter regressions; policy guards separate; each suite once per acceptance revision",
   "inventory_source_hashes": {
-    ".github/actions/static-pr-checks/action.yml": "429e0d823f85756e20349c434f5de0d28591550d2f6ac95291557039d155578a",
-    ".github/workflows/pr-check.yml": "ae38647cfed0e9bd0dba50fc5b6f15a95cc0f85a92f1acbd442d085ac274a5d6"
+    ".github/actions/static-pr-checks/action.yml": "993e955f267c7c5e4dde4ef37a793f6c622e1eba8c011561bfa11d52df1ccc18",
+    ".github/workflows/pr-check.yml": "77187c8382c4302bb6e6e04da9951a93bfc71893ab36e9f620ccbcec9561e517"
   },
   "required_tools": [
     "bash",

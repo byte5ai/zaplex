@@ -3,9 +3,9 @@ name: Test (manual)
 # Rust tests called by ci-batch.yml after the compile checks pass.
 #
 # Runner choice (see `runs_on` / `add_swap` inputs):
-# - GitHub-hosted Ubuntu 22.04 matches the Linux compile checks.
-# - The full Linux package suite uses swap to bound peak linker memory.
-# - Native client and installed-DMG tests run separately on macrunner.
+# - The full app package suite and documentation tests run on macrunner.
+# - Only Linux daemon/process tests and Linux coverage use GitHub Ubuntu.
+# - The Linux leg uses swap for peak linker memory.
 
 on:
   workflow_call:
@@ -60,9 +60,12 @@ jobs:
   nonrust_evidence:
     name: Non-Rust suite execution evidence
     if: ${{ inputs.coverage }}
-    runs-on: ubuntu-22.04
+    runs-on: macrunner
     timeout-minutes: 20
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
@@ -70,18 +73,10 @@ jobs:
 
       - name: Install binary-only fixture dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fish
-          # Ubuntu 22.04's ripgrep package lacks the PCRE2 engine used by our guards.
-          rg_archive="$RUNNER_TEMP/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output "$rg_archive" \
-            https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz
-          printf '%s  %s\n' '4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e' "$rg_archive" | sha256sum --check --strict
-          mkdir -p "$RUNNER_TEMP/nonrust-tools/bin"
-          tar -xzf "$rg_archive" --directory "$RUNNER_TEMP/nonrust-tools/bin" \
-            --strip-components=1 ripgrep-14.1.1-x86_64-unknown-linux-musl/rg
-          printf '%s\n' "$RUNNER_TEMP/nonrust-tools/bin" >> "$GITHUB_PATH"
+          if ! command -v fish >/dev/null || ! command -v rg >/dev/null; then
+            brew install --force-bottle fish ripgrep
+          fi
+          rg --pcre2-version
           python3 -m venv "$RUNNER_TEMP/nonrust-evidence-parser"
           "$RUNNER_TEMP/nonrust-evidence-parser/bin/python" -m pip install \
             --only-binary=:all: --require-hashes -r script/test-suite-evidence-requirements.txt
@@ -103,7 +98,56 @@ jobs:
           retention-days: 30
 
   test:
-    name: cargo test (Linux)
+    if: ${{ !inputs.coverage }}
+    name: cargo test (macOS)
+    runs-on: macrunner
+    timeout-minutes: 120
+    env:
+      CARGO_BUILD_JOBS: '4'
+    steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          cache_key: macos-aarch64-check
+          is_self_hosted: false
+          install_release_deps: false
+      - name: Install isolated Rust test runner
+        run: cargo install cargo-nextest --locked --version 0.9.146
+      - name: Isolated package tests
+        env:
+          PKG: ${{ inputs.package }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          args=(--locked -p "$PKG" --profile ci --no-fail-fast)
+          if [[ -n "$FILTER" ]]; then args+=("$FILTER"); fi
+          cargo nextest run "${args[@]}"
+      - name: Package documentation tests
+        if: ${{ inputs.run_doc_tests && !cancelled() }}
+        env:
+          PKG: ${{ inputs.package }}
+          FILTER: ${{ inputs.filter }}
+        run: |
+          args=(--locked --doc -p "$PKG" --no-fail-fast)
+          if [[ -n "$FILTER" ]]; then args+=("$FILTER"); fi
+          cargo test "${args[@]}"
+      - name: Preserve native test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-package-tests-${{ github.sha }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  test_linux:
+    if: inputs.run_doc_tests || inputs.coverage
+    name: Linux daemon regressions
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 120
     env:
@@ -344,31 +388,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Isolated package tests
+      - name: Linux daemon and process tests
         if: ${{ !inputs.coverage }}
-        env:
-          PKG: ${{ inputs.package }}
-          FILTER: ${{ inputs.filter }}
         run: |
-          # Match workspace coverage: each test owns its process-wide settings,
-          # feature flags and file descriptors. Libtest threads share those globals.
-          args=(--locked -p "$PKG" --profile ci --no-fail-fast)
-          if [ -n "$FILTER" ]; then
-            args+=("$FILTER")
-          fi
-          echo "Running: cargo nextest run ${args[*]}"
-          script/run-shell-ssh-fixtures -- xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" cargo nextest run "${args[@]}"
-        shell: bash
-
-      - name: Package documentation tests
-        if: ${{ !inputs.coverage && inputs.run_doc_tests && !cancelled() }}
-        env:
-          PKG: ${{ inputs.package }}
-          FILTER: ${{ inputs.filter }}
-        run: |
-          args=(--locked --doc -p "$PKG" --no-fail-fast)
-          if [ -n "$FILTER" ]; then
-            args+=("$FILTER")
-          fi
-          cargo test "${args[@]}"
+          script/run-shell-ssh-fixtures -- xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            cargo nextest run --locked -p warp --profile ci --no-fail-fast \
+            -E 'test(remote_server::) | test(terminal::local_tty::) | test(ai::subscription_agent::process) | test(sftp_manager::sftp_backend::)'
         shell: bash

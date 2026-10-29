@@ -33,10 +33,13 @@ permissions:
 jobs:
   validate:
     name: validate-tag-on-main
-    runs-on: ubuntu-24.04
+    runs-on: macrunner
     # No historical runs exist yet; this deterministic Git-only check is capped conservatively.
     timeout-minutes: 5
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false

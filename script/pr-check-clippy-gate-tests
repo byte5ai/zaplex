@@ -12,7 +12,7 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-check.yml"
-REQUIRED_CONTEXT = "cargo check (Linux x86_64)"
+REQUIRED_CONTEXT = "cargo policy (macOS Apple Silicon)"
 
 
 def fail(message: str) -> None:

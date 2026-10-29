@@ -9,10 +9,13 @@ permissions:
 
 jobs:
   stale:
-    runs-on: ubuntu-24.04
+    runs-on: macrunner
     # Recent p90 is below one minute; five minutes also covers the observed outlier.
     timeout-minutes: 5
     steps:
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: '3.12'
       - uses: actions/stale@5bef64f19d7facfb25b37b414482c7164d639639 # v9
         with:
           days-before-stale: 30
