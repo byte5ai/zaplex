@@ -3,9 +3,9 @@ name: Test (manual)
 # Rust tests called by ci-batch.yml after the compile checks pass.
 #
 # Runner choice (see `runs_on` / `add_swap` inputs):
-# - DEFAULT: Blacksmith `blacksmith-16vcpu-ubuntu-2204` (16 vCPU / 64 GB).
-#   Ubuntu 22.04 matches the Linux compile checks; no swap is needed.
-# - Callers can override `runs_on` and opt into `add_swap` for constrained runners.
+# - GitHub-hosted Ubuntu 22.04 matches the Linux compile checks.
+# - The full Linux package suite uses swap to bound peak linker memory.
+# - Native client and installed-DMG tests run separately on macrunner.
 
 on:
   workflow_call:
@@ -21,15 +21,15 @@ on:
         type: string
         default: ""
       runs_on:
-        description: "Runner label. Default: Blacksmith Ubuntu 22.04, 16 vCPU / 64 GB."
+        description: "GitHub-hosted Linux runner label. Default: Ubuntu 22.04."
         required: false
         type: string
-        default: "blacksmith-16vcpu-ubuntu-2204"
+        default: "ubuntu-22.04"
       add_swap:
-        description: "Add a 12 GB swapfile. Only needed on the 7 GB standard runner; leave off for the large runner (it has enough RAM)."
+        description: "Add a 12 GB swapfile for peak package-test linker memory."
         type: boolean
         required: false
-        default: false
+        default: true
 
       coverage:
         description: "Collect full Rust workspace LCOV, executed test results, and timing for suite pruning."
@@ -137,7 +137,7 @@ jobs:
           install_release_deps: false
           install_test_deps: true
 
-      - name: Add swap (standard runner has only ~7 GB RAM)
+      - name: Add swap for package-test linker memory
         if: ${{ inputs.add_swap }}
         run: |
           sudo fallocate -l 12G /swapfile

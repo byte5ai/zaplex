@@ -160,10 +160,9 @@ jobs:
   build_remote_server:
     if: inputs.resume_run_id == ''
     name: Build bundled remote-server (Linux musl x86_64)
-    # Fast large runner (16 vCPU / 64 GB) — this is a static **musl** build, so the
-    # glibc-consistency reason the client jobs pin `ubuntu-22.04` does not apply
-    # here; the large Blacksmith runner is used precisely to speed up heavy builds.
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    # The shipped daemon needs Linux; GitHub-hosted minutes are free for this
+    # public repository. Static musl output is independent of the host glibc.
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     needs: [readiness, signing_preflight]
     steps:
