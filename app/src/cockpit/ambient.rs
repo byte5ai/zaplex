@@ -19,70 +19,15 @@
 //! — a heavier surface than the dock badge, and not something to fake. The dock
 //! badge is the honest, self-contained core; the menu-bar item is a follow-up.
 //!
-//! Everything platform-specific is `#[cfg(target_os = "macos")]`; every other
-//! platform gets a typechecking no-op so the driver logic below is
-//! platform-agnostic.
+//! OS surfaces belong to the active platform delegate. Native macOS paints the
+//! Dock and plays the sound; test and headless backends retain all attention
+//! state without creating an AppKit application.
 
-#[cfg(target_os = "macos")]
-use objc::{class, msg_send, runtime::Object, sel, sel_impl};
-#[cfg(target_os = "macos")]
-use warpui::platform::mac::{make_nsstring, AutoreleasePoolGuard};
 use warpui::{Entity, ModelContext, SingletonEntity};
 use zaplex_cockpit::{AgentInventoryStatus, FleetTree, HostAvailability, ScanHealth};
 
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::settings::CockpitSettings;
-
-/// Paint the fleet-wide *needs-me* count on the ambient surface (the macOS Dock
-/// badge). `count == 0` clears the badge; `> 0` shows the number. A no-op on
-/// non-macOS platforms.
-#[cfg(target_os = "macos")]
-pub fn set_attention(count: usize) {
-    // `AutoreleasePoolGuard` drains on `Drop`, covering every exit path — same
-    // idiom as `appearance::set_app_icon`.
-    unsafe {
-        let _pool = AutoreleasePoolGuard::new();
-        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
-        if app.is_null() {
-            return;
-        }
-        let tile: *mut Object = msg_send![app, dockTile];
-        if tile.is_null() {
-            return;
-        }
-        // An empty label clears the badge; the count otherwise. The dock tile
-        // copies the string, so the autoreleased `NSString` is safe to pass.
-        let label: *mut Object = if count > 0 {
-            make_nsstring(count.to_string())
-        } else {
-            make_nsstring("")
-        };
-        let _: () = msg_send![tile, setBadgeLabel: label];
-    }
-}
-
-/// No-op ambient surface off macOS (the dock badge has no cross-platform
-/// equivalent yet; the in-app "Offene Punkte" inbox carries attention there).
-#[cfg(not(target_os = "macos"))]
-pub fn set_attention(_count: usize) {}
-
-/// Play the single, subtle attention chime (the system alert sound). Called at
-/// most once per calm→needy edge; never per session. A no-op off macOS.
-#[cfg(target_os = "macos")]
-pub fn play_chime() {
-    // `NSBeep` is the plain system alert sound — no asset, no retained sound
-    // object, no volume knob. AppKit is already linked (cocoa crate).
-    extern "C" {
-        fn NSBeep();
-    }
-    unsafe {
-        NSBeep();
-    }
-}
-
-/// No-op chime off macOS.
-#[cfg(not(target_os = "macos"))]
-pub fn play_chime() {}
 
 /// Pure edge-detector for the single attention chime: the fleet-wide waiting
 /// count crossing from **zero to non-zero** — "nothing for me" → "something for
@@ -164,10 +109,12 @@ impl AttentionDriver {
         let model = CockpitModel::as_ref(ctx);
         let now = model.needs_me();
         let baseline_ready = attention_baseline_ready(&model.snapshot().health, model.inventory());
-        // Headless apps still reconcile attention state but own no native UI.
-        if !ctx.is_headless() {
-            set_attention(now);
-        }
+        let label = if now > 0 {
+            now.to_string()
+        } else {
+            String::new()
+        };
+        ctx.set_application_badge_label(&label);
         // The chime is the only audible thing, and only on a genuine calm→needy
         // edge. The first refresh merely establishes the baseline: it has no
         // real "previous" value to form an edge against, so it never chimes (a
@@ -175,8 +122,8 @@ impl AttentionDriver {
         let dnd = *CockpitSettings::as_ref(ctx).attention_dnd;
         let sound_on = *CockpitSettings::as_ref(ctx).attention_sound;
         let chime = self.record_update(now, baseline_ready, dnd || !sound_on);
-        if chime && !ctx.is_headless() {
-            play_chime();
+        if chime {
+            ctx.play_system_alert();
         }
     }
 

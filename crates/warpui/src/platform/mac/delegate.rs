@@ -1,7 +1,7 @@
 use super::app::create_native_platform_modal;
 use super::keycode::{modifier_code, Keycode};
 use super::utils::nsstring_as_str;
-use super::{app, make_nsstring, Clipboard, Window};
+use super::{app, make_nsstring, AutoreleasePoolGuard, Clipboard, Window};
 use anyhow::Result;
 use cocoa::base::{BOOL, NO, YES};
 use cocoa::foundation::NSUInteger;
@@ -9,7 +9,7 @@ use cocoa::{
     appkit::{NSApp, NSRequestUserAttentionType},
     base::{id, nil},
 };
-use objc::{class, msg_send, sel, sel_impl};
+use objc::{class, msg_send, runtime::Object, sel, sel_impl};
 use std::ffi::c_void;
 use std::path::Path;
 use std::sync::Arc;
@@ -38,6 +38,7 @@ extern "C" {
         on_error_callback: *const c_void,
         play_sound: BOOL,
     );
+    fn NSBeep();
     fn isDarkMode() -> BOOL;
     fn registerGlobalHotkey(key_code: NSUInteger, modifiers_key: NSUInteger);
     fn unregisterGlobalHotkey(key_code: NSUInteger, modifiers_key: NSUInteger);
@@ -195,6 +196,29 @@ impl AppDelegate {
 }
 
 impl platform::Delegate for AppDelegate {
+    fn set_application_badge_label(&self, label: &str) {
+        // This delegate belongs to the native app; test/headless delegates own no OS surface.
+        unsafe {
+            let _pool = AutoreleasePoolGuard::new();
+            let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
+                return;
+            }
+            let tile: *mut Object = msg_send![app, dockTile];
+            if tile.is_null() {
+                return;
+            }
+            let label = make_nsstring(label);
+            let _: () = msg_send![tile, setBadgeLabel: label];
+        }
+    }
+
+    fn play_system_alert(&self) {
+        unsafe {
+            NSBeep();
+        }
+    }
+
     /// Sets the cursor shape
     /// See https://developer.apple.com/documentation/appkit/nscursor?language=objc
     fn set_cursor_shape(&self, cursor: Cursor) {
