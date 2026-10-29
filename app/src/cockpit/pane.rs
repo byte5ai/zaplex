@@ -13,14 +13,17 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::coloru_with_opacity;
+use warp_core::ui::color::contrast::MinimumAllowedContrast;
+use warp_core::ui::color::ContrastingColor;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
     ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss, Element, Empty,
     Fill as ElementFill, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect,
-    RowBackground, ScrollbarWidth, Shrinkable, Stack, Table, TableColumnWidth, TableConfig,
-    TableHeader, TableStateHandle, TableVerticalSizing, Text,
+    RowBackground, SavePosition, ScrollbarWidth, Shrinkable, SizeConstraintCondition,
+    SizeConstraintSwitch, Stack, Table, TableColumnWidth, TableConfig, TableHeader,
+    TableStateHandle, TableVerticalSizing, Text, Wrap,
 };
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
@@ -84,6 +87,30 @@ const SESSION_TABLE_MAX_VISIBLE_ROWS: usize = 8;
 fn session_table_viewport_height(row_count: usize) -> f32 {
     let visible_rows = row_count.min(SESSION_TABLE_MAX_VISIBLE_ROWS);
     SESSION_TABLE_HEADER_HEIGHT + visible_rows as f32 * SESSION_TABLE_ROW_HEIGHT
+}
+
+fn compact_session_details(
+    session: &SessionSnapshot,
+    host: Option<&str>,
+    today: Option<&CostFigure>,
+) -> String {
+    let host = host
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::t!("cockpit-table-host-local"));
+    let worktree = session.worktree.as_deref().unwrap_or("—");
+    let model = zaplex_cockpit::model_effort_label(&session.model, session.effort.as_deref());
+    let cost = today.map(cost_text).unwrap_or_else(|| "—".to_string());
+    let status = state_text(zaplex_cockpit::state_word(session.presented_state()));
+    let age = age_text(relative_age(session.last_activity, chrono::Utc::now()));
+    format!(
+        "{}: {host} · {}: {worktree}\n{}: {model} · {}: {}\n{}: {cost} · {status} · {age}",
+        crate::t!("cockpit-table-col-host"),
+        crate::t!("cockpit-table-col-worktree"),
+        crate::t!("cockpit-table-col-model"),
+        crate::t!("cockpit-table-col-context"),
+        format_tokens(session.ctx_tokens),
+        crate::t!("cockpit-pane-col-today")
+    )
 }
 
 fn session_allows_new_work(is_local: bool, host_id: Option<&str>, app: &AppContext) -> bool {
@@ -485,9 +512,10 @@ pub struct CockpitPaneView {
     scroll_state: ClippedScrollStateHandle,
     pane_configuration: ModelHandle<PaneConfiguration>,
     /// Virtualised session table (P3). Its row count and renderer are rebuilt on
-    /// every render from the current filter/grouping — the sum-tree does the
-    /// windowing, so a hundred sessions cost what ten do.
+    /// every render from the current filter/grouping. The wide table windows
+    /// its rows; the compact layout uses the pane scroll and measured row heights.
     table_state: TableStateHandle,
+    compact_table_state: TableStateHandle,
     /// Which sessions the table shows (P3 filter chips).
     session_filter: SessionFilter,
     /// Collapsed project groups in the table, keyed by repo root. Absent =
@@ -788,6 +816,7 @@ impl CockpitPaneView {
             // Rebuilt with real rows on every render; this is just a valid empty
             // state for the frames before one exists.
             table_state: TableStateHandle::new(0, |_, _| Vec::new()),
+            compact_table_state: TableStateHandle::new(0, |_, _| Vec::new()),
             session_filter: SessionFilter::All,
             collapsed_table_groups: HashMap::new(),
             table_group_states: HashMap::new(),
@@ -2275,14 +2304,29 @@ impl CockpitPaneView {
             .with_width(SEARCH_WIDTH)
             .finish();
 
-        Flex::row()
+        let wide = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(10.0)
             .with_child(search)
             .with_child(Shrinkable::new(1.0, Empty::new().finish()).finish())
             .with_child(self.render_filter_chips(acct, tree, appearance))
-            .finish()
+            .finish();
+        let narrow = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_spacing(8.0)
+            .with_child(
+                ConstrainedBox::new(ChildView::new(&self.search_bar).finish())
+                    .with_max_width(SEARCH_WIDTH)
+                    .finish(),
+            )
+            .with_child(self.render_filter_chips(acct, tree, appearance))
+            .finish();
+        SizeConstraintSwitch::new(
+            wide,
+            vec![(SizeConstraintCondition::WidthLessThan(600.0), narrow)],
+        )
+        .finish()
     }
 
     /// **P3** — the filter chips: which sessions the table lists.
@@ -2297,8 +2341,11 @@ impl CockpitPaneView {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let bg = theme.background();
-        let muted = theme.sub_text_color(bg).into_solid();
+        let bg = theme.surface_1();
+        let muted = theme
+            .sub_text_color(bg)
+            .on_background(bg, MinimumAllowedContrast::Text)
+            .into_solid();
         let accent = theme.accent().into_solid();
 
         // Count against the same set the table draws from — live + dormant, every
@@ -2316,9 +2363,10 @@ impl CockpitPaneView {
         }
         let count = |f: SessionFilter| states.iter().filter(|s| f.matches(**s)).count();
 
-        let mut row = Flex::row()
+        let mut row = Wrap::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.0);
+            .with_spacing(6.0)
+            .with_run_spacing(6.0);
         for (key, label, filter) in [
             (
                 "all",
@@ -2356,7 +2404,7 @@ impl CockpitPaneView {
                 CockpitPaneAction::SetSessionFilter(filter),
             ));
         }
-        row.with_main_axis_size(MainAxisSize::Min).finish()
+        row.finish()
     }
 
     /// **P3/P4** — the account's sessions, every host, on the virtualised table.
@@ -2372,14 +2420,18 @@ impl CockpitPaneView {
         tree: &FleetTree,
         app: &AppContext,
         appearance: &Appearance,
+        compact: bool,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
-        let bg = theme.background();
+        let bg = theme.surface_1();
         // Only the headers and the empty state are drawn here; the row closure
         // takes its own colours from the context it is handed.
-        let muted = theme.sub_text_color(bg).into_solid();
+        let muted = theme
+            .sub_text_color(bg)
+            .on_background(bg, MinimumAllowedContrast::Text)
+            .into_solid();
 
         let rows = self.build_table_rows(acct, tree, app);
         if rows.is_empty() {
@@ -2437,22 +2489,33 @@ impl CockpitPaneView {
         let dots_states = self.row_dots_states.clone();
         let plus_states = self.table_plus_states.clone();
 
-        self.table_state.set_row_count(rows_len);
+        let table_state = if compact {
+            &self.compact_table_state
+        } else {
+            &self.table_state
+        };
+        table_state.set_row_count(rows_len);
         // The closure outlives this frame, so it reads the appearance from the
         // context it is handed rather than capturing this frame's reference —
         // which also means a theme switch repaints the rows without rebuilding
         // the table.
-        self.table_state.set_row_render_fn(move |i, app| {
+        table_state.set_row_render_fn(move |i, app| {
             let appearance = Appearance::as_ref(app);
             let theme = appearance.theme();
-            let bg = theme.background();
+            let bg = theme.surface_1();
             let main = theme.main_text_color(bg).into_solid();
-            let muted = theme.sub_text_color(bg).into_solid();
-            let faint = theme.sub_text_color(bg).with_opacity(55).into_solid();
+            let muted = theme
+                .sub_text_color(bg)
+                .on_background(bg, MinimumAllowedContrast::Text)
+                .into_solid();
+            let faint = theme
+                .sub_text_color(bg)
+                .on_background(bg, MinimumAllowedContrast::Text)
+                .into_solid();
             let family = appearance.ui_font_family();
             let body = appearance.ui_font_body();
 
-            match rows_for_render.get(i) {
+            let mut cells = match rows_for_render.get(i) {
                 None => vec![],
                 Some(TableRow::Group {
                     key,
@@ -2555,7 +2618,15 @@ impl CockpitPaneView {
                             .finish(),
                         )
                         .with_child(
-                            Shrinkable::new(1.0, Self::text(name, family, body, main)).finish(),
+                            Shrinkable::new(
+                                1.0,
+                                if compact {
+                                    Text::new(name, family, body).with_color(main).finish()
+                                } else {
+                                    Self::text(name, family, body, main)
+                                },
+                            )
+                            .finish(),
                         )
                         .with_main_axis_size(MainAxisSize::Max)
                         .finish();
@@ -2726,77 +2797,120 @@ impl CockpitPaneView {
                         },
                     ]
                 }
+            };
+            if compact && !cells.is_empty() {
+                let menu = cells.pop().expect("row menu column");
+                let first = cells.remove(0);
+                let content = if let Some(TableRow::Session {
+                    session,
+                    host,
+                    today_cost,
+                    ..
+                }) = rows_for_render.get(i)
+                {
+                    let details =
+                        compact_session_details(session, host.as_deref(), today_cost.as_ref());
+                    Flex::column()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .with_spacing(4.0)
+                        .with_child(first)
+                        .with_child(Text::new(details, family, body).with_color(muted).finish())
+                        .finish()
+                } else {
+                    first
+                };
+                let content = SavePosition::new(content, &format!("cockpit-compact-row-{i}"))
+                    .for_single_frame()
+                    .finish();
+                vec![content, menu]
+            } else {
+                cells
             }
         });
 
-        let table = Table::new(self.table_state.clone(), 0.0, 0.0)
-            .with_headers(vec![
+        let headers = vec![
+            header(
+                "session",
+                crate::t!("cockpit-table-col-session").to_string(),
+                SortColumn::Session,
+                false,
+            )
+            .with_width(TableColumnWidth::Flex(2.2)),
+            header(
+                "worktree",
+                crate::t!("cockpit-table-col-worktree").to_string(),
+                SortColumn::Worktree,
+                false,
+            )
+            .with_width(TableColumnWidth::Flex(1.2)),
+            header(
+                "host",
+                crate::t!("cockpit-table-col-host").to_string(),
+                SortColumn::Host,
+                false,
+            )
+            .with_width(TableColumnWidth::Flex(0.9)),
+            // 1.4: the model cell carries "family·effort" strings that a
+            // 1.0 share truncated mid-word ("codex-auto-revie…") with no
+            // way to read the rest. The existing tooltip helpers are
+            // button-bound (`icon_verb_button_tooltip`), there is no plain
+            // cell-tooltip wrapper — so the column gets the room instead
+            // (audit P1.3).
+            header(
+                "model",
+                crate::t!("cockpit-table-col-model").to_string(),
+                SortColumn::Model,
+                false,
+            )
+            .with_width(TableColumnWidth::Flex(1.4)),
+            header(
+                "context",
+                crate::t!("cockpit-table-col-context").to_string(),
+                SortColumn::Context,
+                true,
+            )
+            .with_width(TableColumnWidth::Flex(1.0)),
+            header(
+                "today",
+                crate::t!("cockpit-pane-col-today").to_string(),
+                SortColumn::Today,
+                true,
+            )
+            .with_width(TableColumnWidth::Flex(0.8)),
+            header(
+                "status",
+                crate::t!("cockpit-table-col-status").to_string(),
+                SortColumn::Status,
+                false,
+            )
+            .with_width(TableColumnWidth::Flex(1.0)),
+            header(
+                "last",
+                crate::t!("cockpit-table-col-last").to_string(),
+                SortColumn::Last,
+                true,
+            )
+            .with_width(TableColumnWidth::Flex(0.8)),
+            // The ⋯ column: no label — a header over a menu affordance would
+            // be naming the furniture.
+            TableHeader::new(Empty::new().finish()).with_width(TableColumnWidth::Fixed(24.0)),
+        ];
+        let headers = if compact {
+            vec![
                 header(
                     "session",
-                    crate::t!("cockpit-table-col-session").to_string(),
+                    crate::t!("cockpit-table-col-session"),
                     SortColumn::Session,
                     false,
                 )
-                .with_width(TableColumnWidth::Flex(2.2)),
-                header(
-                    "worktree",
-                    crate::t!("cockpit-table-col-worktree").to_string(),
-                    SortColumn::Worktree,
-                    false,
-                )
-                .with_width(TableColumnWidth::Flex(1.2)),
-                header(
-                    "host",
-                    crate::t!("cockpit-table-col-host").to_string(),
-                    SortColumn::Host,
-                    false,
-                )
-                .with_width(TableColumnWidth::Flex(0.9)),
-                // 1.4: the model cell carries "family·effort" strings that a
-                // 1.0 share truncated mid-word ("codex-auto-revie…") with no
-                // way to read the rest. The existing tooltip helpers are
-                // button-bound (`icon_verb_button_tooltip`), there is no plain
-                // cell-tooltip wrapper — so the column gets the room instead
-                // (audit P1.3).
-                header(
-                    "model",
-                    crate::t!("cockpit-table-col-model").to_string(),
-                    SortColumn::Model,
-                    false,
-                )
-                .with_width(TableColumnWidth::Flex(1.4)),
-                header(
-                    "context",
-                    crate::t!("cockpit-table-col-context").to_string(),
-                    SortColumn::Context,
-                    true,
-                )
                 .with_width(TableColumnWidth::Flex(1.0)),
-                header(
-                    "today",
-                    crate::t!("cockpit-pane-col-today").to_string(),
-                    SortColumn::Today,
-                    true,
-                )
-                .with_width(TableColumnWidth::Flex(0.8)),
-                header(
-                    "status",
-                    crate::t!("cockpit-table-col-status").to_string(),
-                    SortColumn::Status,
-                    false,
-                )
-                .with_width(TableColumnWidth::Flex(1.0)),
-                header(
-                    "last",
-                    crate::t!("cockpit-table-col-last").to_string(),
-                    SortColumn::Last,
-                    true,
-                )
-                .with_width(TableColumnWidth::Flex(0.8)),
-                // The ⋯ column: no label — a header over a menu affordance would
-                // be naming the furniture.
                 TableHeader::new(Empty::new().finish()).with_width(TableColumnWidth::Fixed(24.0)),
-            ])
+            ]
+        } else {
+            headers
+        };
+        let table = Table::new(table_state.clone(), 0.0, 0.0)
+            .with_headers(headers)
             .with_row_count(rows_len)
             // The table paint layer owns the complete row rectangle, so this
             // tint remains full-width regardless of cell or column sizing.
@@ -2829,14 +2943,23 @@ impl CockpitPaneView {
                     alternating: None,
                 },
                 fixed_header: true,
-                vertical_sizing: TableVerticalSizing::Viewported,
+                vertical_sizing: if compact {
+                    TableVerticalSizing::ExpandToContent
+                } else {
+                    TableVerticalSizing::Viewported
+                },
                 measure_body_cells_for_intrinsic_widths: false,
             })
             .finish();
 
-        ConstrainedBox::new(Clipped::new(table).finish())
-            .with_height(session_table_viewport_height(rows_len))
-            .finish()
+        if compact {
+            // Wrapped rows use their measured height; the enclosing pane owns scrolling.
+            table
+        } else {
+            ConstrainedBox::new(Clipped::new(table).finish())
+                .with_height(session_table_viewport_height(rows_len))
+                .finish()
+        }
     }
 
     /// Persist a typed alias and close the editor (A1).
@@ -2896,10 +3019,16 @@ impl CockpitPaneView {
         let family = appearance.ui_font_family();
         let body = appearance.ui_font_body();
         let heading = appearance.ui_font_heading_3();
-        let bg = theme.background();
+        let bg = theme.surface_1();
         let main = theme.main_text_color(bg).into_solid();
-        let muted = theme.sub_text_color(bg).into_solid();
-        let faint = theme.sub_text_color(bg).with_opacity(55).into_solid();
+        let muted = theme
+            .sub_text_color(bg)
+            .on_background(bg, MinimumAllowedContrast::Text)
+            .into_solid();
+        let faint = theme
+            .sub_text_color(bg)
+            .on_background(bg, MinimumAllowedContrast::Text)
+            .into_solid();
         let now = chrono::Utc::now();
 
         let identity = account_identity(&acct.account);
@@ -3056,10 +3185,10 @@ impl CockpitPaneView {
             }
             column.finish()
         };
-        let figures = Flex::row()
+        let figures = Wrap::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_main_axis_size(MainAxisSize::Max)
             .with_spacing(24.0)
+            .with_run_spacing(12.0)
             .with_child(figure(
                 crate::t!("cockpit-pane-col-today").to_string(),
                 &acct.today,
@@ -3578,7 +3707,18 @@ impl View for CockpitPaneView {
                                         .finish(),
                                     )
                                     .with_child(
-                                        self.render_sessions_table(acct, &tree, app, appearance),
+                                        SizeConstraintSwitch::new(
+                                            self.render_sessions_table(
+                                                acct, &tree, app, appearance, false,
+                                            ),
+                                            vec![(
+                                                SizeConstraintCondition::WidthLessThan(900.0),
+                                                self.render_sessions_table(
+                                                    acct, &tree, app, appearance, true,
+                                                ),
+                                            )],
+                                        )
+                                        .finish(),
                                     )
                                     .finish(),
                                 appearance,

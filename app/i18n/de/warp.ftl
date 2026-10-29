@@ -825,7 +825,7 @@ workspace-left-panel-ssh-manager-session-open-error = Diese Session konnte nicht
 workspace-left-panel-ssh-manager-session-stale = Diese Session hat sich geändert oder existiert nicht mehr. Die Sessionliste wird neu geladen.
 workspace-left-panel-ssh-manager-sessions-refreshing = Sessions werden aktualisiert…
 workspace-left-panel-ssh-manager-sessions-timeout = Die Sessionliste konnte innerhalb von { $seconds } Sekunden nicht geladen werden. Aktualisiere die Sessions, um es erneut zu versuchen.
-workspace-left-panel-ssh-manager-sessions-needs-install = Verbinde zuerst den Host, um den Zaplex-Sitzungsdienst einzurichten. Aktualisiere danach die Sessions.
+workspace-left-panel-ssh-manager-sessions-needs-install = Der Sitzungsdienst muss für diese Zaplex-Version eingerichtet werden. Beim Verbinden wird er eingerichtet; danach erscheinen die Sessions automatisch.
 terminal-daemon-initial-attach-timeout = Verbindung und Shell-Initialisierung wurden nach { $seconds } Sekunden nicht abgeschlossen. Die Remote-Session wurde nicht beendet. Aktualisiere „Verbindungen“ und öffne die Session erneut.
 workspace-left-panel-ssh-manager-multiplexer-heading = Bestehende tmux-/byobu-Sessions
 workspace-left-panel-ssh-manager-multiplexer-open = In neuem Tab öffnen
@@ -4328,3 +4328,7 @@ persistence-startup-error-close = Zaplex schließen
 
 workspace-left-panel-ssh-manager-collapse-all = Alle Ordner einklappen
 workspace-left-panel-ssh-manager-expand-all = Alle Ordner ausklappen
+workspace-left-panel-ssh-manager-connect-sessions = Verbinden und einrichten
+
+workspace-agent-terminal-unavailable = Der Agent konnte in diesem Terminal nicht gestartet werden. Öffne ein neues Terminal und versuche es erneut.
+workspace-agent-remote-route-unavailable = Die Verbindung zum ausgewählten Agent-Konto konnte nicht geöffnet werden. Verbinde den Host erneut und wiederhole den Start.

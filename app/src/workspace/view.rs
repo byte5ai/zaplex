@@ -8493,11 +8493,7 @@ impl Workspace {
         };
         let repo_str = repo.to_string_lossy().into_owned();
 
-        let repo_display_name = repo
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| repo_str.clone());
-        let config_name = format!("Fork into worktree: {repo_display_name}");
+        let config_name = self.next_agent_tab_title(agent, Some(&repo), ctx);
 
         let branches = crate::util::git::list_local_branches_sync(&repo);
         let branch_refs: HashSet<&str> = branches.iter().map(|s| s.as_str()).collect();
@@ -8523,8 +8519,7 @@ impl Workspace {
                 });
                 if !appended {
                     self.show_agent_launch_error(
-                        "Could not determine the new terminal's shell for the agent fork."
-                            .to_string(),
+                        crate::t!("workspace-agent-terminal-unavailable"),
                         ctx,
                     );
                 }
@@ -8533,6 +8528,34 @@ impl Workspace {
                 log::warn!("fork into worktree: generated config failed to parse: {e:?}");
             }
         }
+    }
+
+    fn next_agent_tab_title(
+        &self,
+        agent: CLIAgent,
+        cwd: Option<&Path>,
+        ctx: &AppContext,
+    ) -> String {
+        let directory = cwd
+            .and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "~".to_string());
+        let base = format!("{} · {directory}", agent.display_name());
+        let titles: HashSet<String> = self
+            .tabs
+            .iter()
+            .map(|tab| tab.pane_group.as_ref(ctx).display_title(ctx))
+            .collect();
+        if !titles.contains(&base) {
+            return base;
+        }
+        for number in 2.. {
+            let title = format!("{base} ({number})");
+            if !titles.contains(&title) {
+                return title;
+            }
+        }
+        unreachable!("finite number of tabs")
     }
 
     /// Plain fork in an explicit directory (the non-worktree tail of
@@ -8546,11 +8569,12 @@ impl Workspace {
         account_email: Option<&str>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let title = self.next_agent_tab_title(agent, Some(cwd), ctx);
         let options = NewTerminalOptions::default().with_initial_directory(cwd.to_path_buf());
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(options)),
             Arc::new(HashMap::new()),
-            None,
+            Some(title),
             ctx,
         );
         self.bind_active_terminal_account(agent, config_dir, account_email, ctx);
@@ -8564,10 +8588,7 @@ impl Workspace {
                 })
         });
         if !launched {
-            self.show_agent_launch_error(
-                "Could not determine the new terminal's shell for the agent launch.".to_string(),
-                ctx,
-            );
+            self.show_agent_launch_error(crate::t!("workspace-agent-terminal-unavailable"), ctx);
         }
     }
 
@@ -8864,7 +8885,7 @@ impl Workspace {
                         }
                         return Ok(LaunchedAgent { token, terminal });
                     }
-                    return Err("The remote account route could not be opened.".to_string());
+                    return Err(crate::t!("workspace-agent-remote-route-unavailable"));
                 }
                 _ => {
                     return Err(crate::t!(
@@ -8890,12 +8911,13 @@ impl Workspace {
         if let Some(dir) = cwd {
             options = options.with_initial_directory(dir.to_path_buf());
         }
+        let title = self.next_agent_tab_title(agent, cwd, ctx);
         let terminal = match split.as_ref() {
             None => {
                 self.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(Box::new(options)),
                     Arc::new(HashMap::new()),
-                    None,
+                    Some(title),
                     ctx,
                 );
                 self.launched_agent_terminal(None, ctx)
@@ -8912,7 +8934,7 @@ impl Workspace {
             }
         };
         let Some(terminal) = terminal else {
-            return Err("Could not determine the new terminal's shell.".to_string());
+            return Err(crate::t!("workspace-agent-terminal-unavailable"));
         };
         Self::bind_terminal_account_with_id(&terminal, agent, config_dir, account_email, None, ctx);
         let token = format!("local:{}", launch_id.opaque_id());
@@ -8921,7 +8943,7 @@ impl Workspace {
             view.execute_routed_agent_launch_or_set_pending(&launch, ctx)
         });
         if !launched {
-            return Err("Could not determine the new terminal's shell.".to_string());
+            return Err(crate::t!("workspace-agent-terminal-unavailable"));
         }
         Ok(LaunchedAgent {
             token,
@@ -10738,50 +10760,39 @@ impl Workspace {
         }
     }
 
-    /// Opens the roomy cockpit dashboard pane in the central area (C2b). Like
-    /// the SSH panes, always opens a new pane (multi-instance is fine — it's a
-    /// read-only lens over the data spine).
-    /// Open (or focus) the **fleet dashboard** — every account at once.
+    /// Open or focus the fleet dashboard in its own tab, preserving existing shells.
     pub fn open_cockpit_pane(&mut self, ctx: &mut ViewContext<Self>) {
         self.open_cockpit_pane_for(None, ctx);
     }
 
     /// Open (or focus) the pane for one account (`None` = the fleet dashboard).
     ///
-    /// Deduped **per account**, not per pane type: clicking an account whose
-    /// pane is already open focuses it rather than stacking an identical one —
-    /// and clicking a different account opens its own pane beside the first,
-    /// which is the point. A single dashboard filtered by one global selection
-    /// could only ever show one subscription at a time (spec v3 §4.1 P1).
+    /// Deduplicate across tabs by account. A new dashboard gets the complete
+    /// content area; users may explicitly split or move it afterward.
     pub fn open_cockpit_pane_for(
         &mut self,
         account_key: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::pane_group::pane::cockpit_pane::CockpitPane;
-        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-            // `visible_pane_ids` excludes panes hidden-for-close, so we never match
-            // a stale pane that `focus_pane_by_id` can't focus (which would `return`
-            // and open nothing — review).
-            let existing = pane_group.visible_pane_ids().into_iter().find(|id| {
-                pane_group
-                    .downcast_pane_by_id::<CockpitPane>(*id)
-                    .is_some_and(|p| p.account_key(ctx) == account_key)
-            });
-            if let Some(id) = existing {
-                pane_group.focus_pane_by_id(id, ctx);
-                return;
-            }
-            let pane = CockpitPane::for_account(account_key.clone(), ctx);
-            let smart_split_direction =
-                pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
-            pane_group.add_pane_with_direction(
-                smart_split_direction,
-                pane,
-                true, /* focus_new_pane */
-                ctx,
-            );
+        let existing = self.tabs.iter().enumerate().find_map(|(index, tab)| {
+            let group = tab.pane_group.as_ref(ctx);
+            group.visible_pane_ids().into_iter().find_map(|id| {
+                group
+                    .downcast_pane_by_id::<CockpitPane>(id)
+                    .filter(|pane| pane.account_key(ctx) == account_key)
+                    .map(|_| (index, id))
+            })
         });
+        if let Some((index, id)) = existing {
+            self.activate_tab(index, ctx);
+            self.active_tab_pane_group().update(ctx, |group, ctx| {
+                group.focus_pane_by_id(id, ctx);
+            });
+            return;
+        }
+        let pane = CockpitPane::for_account(account_key, ctx);
+        self.add_tab_from_existing_pane(Box::new(pane), self.active_tab_index + 1, ctx);
     }
 
     /// Opens an edit pane for the given SSH node in the central area. Deduped per

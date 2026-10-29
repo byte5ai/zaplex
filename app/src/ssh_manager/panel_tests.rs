@@ -2229,3 +2229,31 @@ fn tailscale_import_rolls_back_earlier_hosts_when_a_later_host_fails() {
     );
     assert_eq!(SshRepository::list_nodes(&mut conn).unwrap().len(), 2);
 }
+
+#[test]
+fn session_setup_recovery_remains_expanded_until_connection_refreshes_inventory() {
+    with_session_panel(|panel, ctx| {
+        let id = "fixture-recovery";
+        panel.set_nodes_for_test(vec![server(id, None, "Remote", 0)], ctx);
+        panel.resilient_hosts.insert(id.to_string());
+        let generation = panel.begin_session_fetch(id).unwrap();
+        panel.complete_session_fetch(
+            id,
+            generation,
+            Err(crate::t!(
+                "workspace-left-panel-ssh-manager-sessions-needs-install"
+            )),
+            ctx,
+        );
+        assert!(panel.session_recovery_actions.contains_key(id));
+        panel.handle_action(
+            &SshManagerPanelAction::ConnectForSessions(id.to_string()),
+            ctx,
+        );
+        assert_eq!(panel.session_refresh_ids(), [id]);
+        let generation = panel.begin_session_fetch(id).unwrap();
+        panel.complete_session_fetch(id, generation, Ok(Default::default()), ctx);
+        assert!(!panel.sessions_error.contains_key(id));
+        assert!(panel.host_session_inventories.contains_key(id));
+    });
+}

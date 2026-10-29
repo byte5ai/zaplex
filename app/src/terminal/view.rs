@@ -2537,6 +2537,9 @@ pub struct TerminalView {
     /// next `AfterBlockCompleted`, at which point `Event::PendingCommandCompleted`
     /// is emitted so subscribers know the command has finished.
     awaiting_pending_command_completion: bool,
+    /// Keep the structured launch until the new shell is known. The bool marks
+    /// a fork that must follow worktree setup already queued in the input.
+    pending_routed_agent_launch: Option<(cli_agent::RoutedAgentLaunch, bool)>,
     /// The exact shell session and directory hidden by the file manager.
     file_manager_origin: Option<FileManagerOrigin>,
     /// Applied at the next idle prompt, never written into a running process.
@@ -4108,6 +4111,7 @@ impl TerminalView {
             bootstrap_start: None,
             is_login_shell_bootstrapped: false,
             awaiting_pending_command_completion: false,
+            pending_routed_agent_launch: None,
             file_manager_origin: None,
             pending_file_manager_directory: None,
             classic_ssh_root_session_id: None,
@@ -10348,6 +10352,7 @@ impl TerminalView {
                 ctx.request_user_attention();
             }
             ModelEvent::Exit { reason } => {
+                self.pending_routed_agent_launch = None;
                 self.cancel_su_root_confirmation(ctx);
                 self.input
                     .update(ctx, |input, _| input.clear_file_manager_directory_input());
@@ -14430,6 +14435,20 @@ impl TerminalView {
         if self.remote_raw_terminal {
             return;
         }
+        if let Some(shell) = self.active_session_shell_type(ctx) {
+            if let Some((launch, append)) = self.pending_routed_agent_launch.take() {
+                let command = launch.shell_command(shell);
+                if append && self.input.as_ref(ctx).has_pending_command() {
+                    self.input.update(ctx, |input, ctx| {
+                        input.system_insert(&format!(" && {command}"), ctx);
+                    });
+                } else {
+                    self.input.update(ctx, |input, _| {
+                        input.set_pending_system_command(command);
+                    });
+                }
+            }
+        }
         self.apply_file_manager_directory(ctx);
         let had_pending = self.input.read(ctx, |input, _| input.has_pending_command());
         self.input.update(ctx, |input, ctx| {
@@ -14492,36 +14511,37 @@ impl TerminalView {
         launch: &cli_agent::RoutedAgentLaunch,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        if self.remote_raw_terminal {
-            return false;
-        }
-        let Some(shell_type) = self.active_session_shell_type(ctx) else {
-            return false;
-        };
-        let command = launch.shell_command(shell_type);
-        self.execute_command_or_set_pending(&command, ctx);
-        true
+        self.queue_routed_agent_launch(launch, false, ctx)
     }
 
-    /// Append a routed launch behind existing setup commands, preserving their
-    /// ordering while still delaying serialization until the shell is known.
+    /// Append behind worktree setup, serializing only when the shell is known.
     pub(crate) fn append_routed_agent_launch_to_pending(
         &mut self,
         launch: &cli_agent::RoutedAgentLaunch,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
-        let Some(shell_type) = self.active_session_shell_type(ctx) else {
+        self.queue_routed_agent_launch(launch, true, ctx)
+    }
+
+    fn queue_routed_agent_launch(
+        &mut self,
+        launch: &cli_agent::RoutedAgentLaunch,
+        append: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if self.remote_raw_terminal
+            || self.pty_spawn_failed
+            || self.pending_routed_agent_launch.is_some()
+        {
             return false;
-        };
-        let command = launch.shell_command(shell_type);
-        if self.input.as_ref(ctx).has_pending_command() {
-            self.input.update(ctx, |input, ctx| {
-                input.system_insert(&format!(" && {command}"), ctx)
-            })
-        } else {
-            self.execute_command_or_set_pending(&command, ctx);
-            true
         }
+        self.pending_routed_agent_launch = Some((launch.clone(), append));
+        // An external CLI owns the terminal. Do not leave the new pane in the
+        // default conversation composer while waiting for its shell.
+        self.enter_agent_view_after_pending_commands = false;
+        self.exit_agent_view(ctx);
+        self.execute_pending_command((), ctx);
+        true
     }
 
     /// Resumes the exact local CLI-agent binding restored for this pane.
@@ -14637,7 +14657,9 @@ impl TerminalView {
         self.is_login_shell_bootstrapped
     }
     pub fn has_pending_command_or_awaiting_completion(&self, ctx: &AppContext) -> bool {
-        self.awaiting_pending_command_completion || self.input.as_ref(ctx).has_pending_command()
+        self.pending_routed_agent_launch.is_some()
+            || self.awaiting_pending_command_completion
+            || self.input.as_ref(ctx).has_pending_command()
     }
 
     /// Marks this terminal to enter agent view once pending setup commands
@@ -14665,6 +14687,7 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.pty_spawn_failed = true;
+        self.pending_routed_agent_launch = None;
         self.insert_shell_process_terminated_banner(
             shell_terminated_banner::TerminationType::PtySpawnFailure { pty_spawn_error },
             ctx,

@@ -3132,7 +3132,7 @@ workspace-left-panel-ssh-manager-session-open-error = Could not open this sessio
 workspace-left-panel-ssh-manager-session-stale = This session has changed or no longer exists. Reloading the session list.
 workspace-left-panel-ssh-manager-sessions-refreshing = Refreshing sessions…
 workspace-left-panel-ssh-manager-sessions-timeout = The session list could not be loaded within { $seconds } seconds. Refresh sessions to try again.
-workspace-left-panel-ssh-manager-sessions-needs-install = Connect to the host first to set up the Zaplex session service. Then refresh sessions.
+workspace-left-panel-ssh-manager-sessions-needs-install = The session service needs setup for this Zaplex version. Connecting sets it up and loads sessions automatically.
 terminal-daemon-initial-attach-timeout = Connection and shell initialization did not complete within { $seconds } seconds. The remote session was not stopped. Refresh Connections and open the session again.
 workspace-left-panel-ssh-manager-multiplexer-heading = Existing tmux/byobu sessions
 workspace-left-panel-ssh-manager-multiplexer-open = Open in new tab
@@ -4672,3 +4672,7 @@ persistence-startup-error-close = Close Zaplex
 
 workspace-left-panel-ssh-manager-collapse-all = Collapse all folders
 workspace-left-panel-ssh-manager-expand-all = Expand all folders
+workspace-left-panel-ssh-manager-connect-sessions = Connect and set up
+
+workspace-agent-terminal-unavailable = The agent could not start in this terminal. Open a new terminal and try again.
+workspace-agent-remote-route-unavailable = The selected agent account could not be reached. Reconnect the host and try starting again.

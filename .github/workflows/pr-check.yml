@@ -448,6 +448,8 @@ jobs:
             ZAPLEX_SPAWN_LAYOUT_TEST_LOCALE="$locale" cargo test --locked -p warp --lib -- \
               spawn_card_long_model_options_stay_inside_the_window \
               spawn_card_errors_wrap_and_cancel_remains_reachable_after_resize
+            ZAPLEX_COCKPIT_LAYOUT_TEST_LOCALE="$locale" cargo test --locked -p warp --lib -- \
+              compact_cockpit_rows_wrap_real_text_when_resized
           done
         shell: bash
 
@@ -469,6 +471,12 @@ jobs:
           file_manager_start_path_falls_back_when_no_cwd
           pane_group::tree::tests::
           pane_group::terminal_titles::tests::
+          routed_agent_launch_waits_for_the_new_shell_without_losing_the_request
+          routed_agent_fork_waits_for_shell_and_preserves_worktree_setup_order
+          cockpit_opens_in_its_own_tab_and_refocuses_without_splitting_the_shell
+          new_agent_tab_titles_distinguish_same_project_launches_without_renaming_tabs
+          compact_session_metadata_preserves_full_model_host_and_worktree
+          session_setup_recovery_remains_expanded_until_connection_refreshes_inventory
           file_manager_directory_
           same_fs_conflict_confirmation_rejects_a_closed_target_before_queue_submission
           same_fs_target_appearing_after_probe_is_skipped_without_overwrite_consent

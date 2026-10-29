@@ -75,7 +75,9 @@ use crate::terminal::view::{terminal_identity, TerminalIdentity};
 use crate::ui_components::compact_row_action::CompactRowAction;
 use crate::ui_components::icons::Icon;
 use crate::ui_components::modal_frame;
-use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
+use crate::view_components::action_button::{
+    ActionButton, DangerPrimaryTheme, NakedTheme, SecondaryTheme,
+};
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
 
@@ -756,6 +758,7 @@ pub enum SshManagerPanelAction {
     ToggleSessions(String),
     /// Re-fetch the expanded inline Zaplex-session inventory for one server.
     RefreshSessions(String),
+    ConnectForSessions(String),
     /// Click a listed daemon session: adopt it (attach + replay) in a new tab.
     AdoptSession {
         node_id: String,
@@ -1020,6 +1023,7 @@ pub struct SshManagerPanel {
     resilient_hosts: std::collections::HashSet<String>,
     /// Last fetch error per server node_id (shown inline under the host).
     sessions_error: HashMap<String, String>,
+    session_recovery_actions: HashMap<String, ViewHandle<ActionButton>>,
     /// Hover/click state per session row, scoped by host, daemon runtime, PTY
     /// identity, and generation.
     session_row_states: HashMap<String, MouseStateHandle>,
@@ -1170,6 +1174,7 @@ impl SshManagerPanel {
             connecting: std::collections::HashSet::new(),
             resilient_hosts: std::collections::HashSet::new(),
             sessions_error: HashMap::new(),
+            session_recovery_actions: HashMap::new(),
             session_row_states: HashMap::new(),
             session_open_actions: HashMap::new(),
             session_end_actions: HashMap::new(),
@@ -1306,7 +1311,25 @@ impl SshManagerPanel {
         self.refresh_actions.retain(|id, _| server_ids.contains(id));
         self.refreshing_actions
             .retain(|id, _| server_ids.contains(id));
+        self.session_recovery_actions
+            .retain(|id, _| server_ids.contains(id));
         for node_id in server_ids {
+            self.session_recovery_actions
+                .entry(node_id.clone())
+                .or_insert_with(|| {
+                    let id = node_id.clone();
+                    ctx.add_typed_action_view(|_| {
+                        ActionButton::new(
+                            crate::t!("workspace-left-panel-ssh-manager-connect-sessions"),
+                            SecondaryTheme,
+                        )
+                        .on_click(move |ctx| {
+                            ctx.dispatch_typed_action(SshManagerPanelAction::ConnectForSessions(
+                                id.clone(),
+                            ))
+                        })
+                    })
+                });
             for (actions, icon, tooltip, action) in [
                 (
                     &mut self.connecting_actions,
@@ -3775,6 +3798,17 @@ impl SshManagerPanel {
                 .for_single_frame()
                 .finish(),
             );
+            if let Some(action) = self.session_recovery_actions.get(&node.id) {
+                if !self.connecting.contains(&node.id) {
+                    rows.push(
+                        Container::new(ChildView::new(action).finish())
+                            .with_padding_left(section_indent)
+                            .with_padding_right(ITEM_PADDING_HORIZONTAL)
+                            .with_padding_bottom(ITEM_PADDING_VERTICAL)
+                            .finish(),
+                    );
+                }
+            }
             return rows;
         }
         if let Some(sessions) = host_inventory
@@ -4683,6 +4717,12 @@ impl TypedActionView for SshManagerPanel {
             }
             SshManagerPanelAction::ToggleConnection(id) => self.on_toggle_connection(id, ctx),
             SshManagerPanelAction::ToggleSessions(id) => self.on_toggle_sessions(id.clone(), ctx),
+            SshManagerPanelAction::ConnectForSessions(id) => {
+                self.sessions_expanded.insert(id.clone());
+                if !self.connecting.contains(id) {
+                    self.dispatch_connect_for(id, ctx);
+                }
+            }
             SshManagerPanelAction::RefreshSessions(id) => {
                 self.focused_row = Some(FocusedRow::Node(id.clone()));
                 ctx.focus_self();
