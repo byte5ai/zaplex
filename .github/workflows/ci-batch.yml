@@ -52,6 +52,7 @@ jobs:
       dmg_tag: ${{ steps.inputs.outputs.dmg_tag }}
       reuse_all_checks: ${{ steps.checks.outputs.reuse_all_checks }}
       reuse_checks: ${{ steps.resume.outputs.reuse_checks }}
+      package_cases: ${{ steps.resume.outputs.package_cases }}
       reuse_linux_checks: ${{ steps.resume.outputs.reuse_linux_checks }}
       reuse_pre_sftp_checks: ${{ steps.resume.outputs.reuse_pre_sftp_checks }}
       reuse_pre_policy_checks: ${{ steps.resume.outputs.reuse_pre_policy_checks }}
@@ -104,6 +105,7 @@ jobs:
           python3 script/ci-batch-scheduling-tests
           python3 script/ci-batch-resume-tests
           python3 script/ci-native-checks-resume-tests
+          python3 script/ci-package-cases-resume-tests
           python3 script/ci-batch-resume
 
       - name: Preserve pre-policy provenance
@@ -123,6 +125,15 @@ jobs:
           path: ci-native-checks-provenance.json
           if-no-files-found: error
           retention-days: 7
+
+      - name: Preserve complete package case provenance
+        if: steps.resume.outputs.reuse_checks == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci-package-cases-provenance
+          path: ci-package-cases-provenance.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Verify completed checks-only batch
         id: checks
@@ -174,6 +185,7 @@ jobs:
       coverage: ${{ inputs.coverage }}
       per_test_coverage: ${{ inputs.per_test_coverage }}
       run_doc_tests: ${{ needs.preflight.outputs.reuse_checks != 'true' }}
+      package_cases: ${{ needs.preflight.outputs.package_cases || '[]' }}
     secrets: inherit
 
   live_sftp:

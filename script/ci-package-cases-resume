@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""Complete failed package cases while retaining independently verified passed cases."""
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import re
+import runpy
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+import zipfile
+
+REPO = "byte5ai/zaplex"
+WORKFLOW = ".github/workflows/test-dispatch.yml"
+FIXTURE = "app/src/remote_server/safe_file_tests.rs"
+CASE = "remote_server::safe_file::tests::terminal_journal_records_are_capped"
+MAC = "tests / cargo test (macOS)"
+PROOF = "ci-package-cases-provenance"
+OLD_SEED = '        journal\n            .save(&JournalRecord {\n                operation_id: format!("rejected-{index:04}"),\n                state: JournalState::Rejected,\n                operation: JournalOperation::Create {\n                    path: format!("/unused/{index}"),\n                    identity: None,\n                },\n                recovery_paths: Vec::new(),\n                failure: Some("expected test rejection".to_string()),\n            })\n            .unwrap();\n    }'
+NEW_SEED = '        let record = JournalRecord {\n            operation_id: format!("rejected-{index:04}"),\n            state: JournalState::Rejected,\n            operation: JournalOperation::Create {\n                path: format!("/unused/{index}"),\n                identity: None,\n            },\n            recovery_paths: Vec::new(),\n            failure: Some("expected test rejection".to_string()),\n        };\n        // Seed retention input directly; durable save is not exercised by this test.\n        fs::write(\n            journal.record_path(&record.operation_id).unwrap(),\n            serde_json::to_vec(&record).unwrap(),\n        )\n        .unwrap();\n    }'
+
+SEED_PREFIX = """fn terminal_journal_records_are_capped() {
+    let directory = tempfile::tempdir().unwrap();
+    let journal = Journal::new_at(directory.path().join("journal")).unwrap();
+    for index in 0..=MAX_TERMINAL_JOURNAL_RECORDS {
+"""
+CASE_INPUT = """      package_cases:
+        description: Exact failed cases qualified by the batch preflight
+        type: string
+        default: '[]'
+"""
+CASE_ENV = "          PACKAGE_CASES: ${{ inputs.package_cases }}\n"
+CASE_ARGS = """          if [[ "$PACKAGE_CASES" != '[]' ]]; then
+            args+=(-E "$(python3 script/ci-package-cases-resume expression "$PACKAGE_CASES")")
+          fi
+"""
+VERIFY_STEP = """      - name: Verify complete package case coverage
+        if: inputs.package_cases != '[]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_CASES: ${{ inputs.package_cases }}
+        run: python3 script/ci-package-cases-resume verify
+"""
+
+
+def validate_fixture(previous, current):
+    if previous == current:
+        return False
+    if (previous.count(OLD_SEED) != 1 or previous.count(SEED_PREFIX + OLD_SEED) != 1
+            or current != previous.replace(OLD_SEED, NEW_SEED, 1)):
+        raise ValueError("Only the reviewed retention-fixture seeding change is inheritable")
+    return True
+
+
+def normalize_dispatch(text):
+    for addition in (VERIFY_STEP, CASE_INPUT, CASE_ENV, CASE_ARGS, "  actions: read\n"):
+        if text.count(addition) > 1:
+            raise ValueError("Ambiguous package-case scheduling addition")
+        text = text.replace(addition, "")
+    return text
+
+
+def junit(payload):
+    root = ET.fromstring(payload)
+    if root.tag != "testsuites":
+        raise ValueError("Expected nextest JUnit suites")
+    cases = {}
+    for case in root.iter("testcase"):
+        key = (case.get("classname"), case.get("name"))
+        if not all(key) or key in cases or case.find("skipped") is not None:
+            raise ValueError("Missing, duplicate or skipped executed package case")
+        failures = list(case.findall("failure")) + list(case.findall("error"))
+        cases[key] = "failed" if failures else "passed"
+    if (not cases or int(root.get("tests", -1)) != len(cases)
+            or int(root.get("skipped", -1)) != 0
+            or int(root.get("failures", -1)) + int(root.get("errors", -1))
+               != sum(v == "failed" for v in cases.values())):
+        raise ValueError("Package case inventory disagrees with its JUnit totals")
+    return cases
+
+
+def inventory_hash(cases):
+    return hashlib.sha256(json.dumps(sorted((a, b, state) for (a, b), state in cases.items())).encode()).hexdigest()
+
+
+def artifacts(run_id, helpers):
+    pages = json.loads(helpers["command"]("gh", "api", "--paginate", "--slurp",
+        f"repos/{REPO}/actions/runs/{run_id}/artifacts?per_page=100"))
+    return [item for page in pages for item in page["artifacts"]]
+
+
+def artifact_file(run_id, items, name, filename):
+    matches = [a for a in items if a["name"] == name]
+    if (len(matches) != 1 or matches[0].get("expired") is not False
+            or matches[0].get("workflow_run", {}).get("id") != int(run_id)):
+        raise ValueError("Missing, expired or foreign package evidence artifact")
+    row = matches[0]
+    payload = subprocess.check_output(["gh", "api",
+        f"repos/{REPO}/actions/artifacts/{row['id']}/zip"], timeout=60)
+    if row.get("digest") != "sha256:" + hashlib.sha256(payload).hexdigest():
+        raise ValueError("Package evidence archive digest differs")
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        if archive.namelist() != [filename]:
+            raise ValueError("Unexpected package evidence archive contents")
+        return archive.read(filename)
+
+
+def source_file(helpers, source, path):
+    return helpers["command"]("git", "show", f"{source}:{path}")
+
+
+def qualify(run, jobs, source, qualified, helpers, read_artifacts=artifacts, read_file=artifact_file):
+    if (not re.fullmatch(r"[a-f0-9]{40}", source)
+            or not re.fullmatch(r"[a-f0-9]{40}", qualified) or run.get("head_sha") != source):
+        raise ValueError("Package source commits differ from their original run")
+    changed = helpers["command"]("git", "diff", "--name-only", source, qualified).splitlines()
+    fixture_changed = False
+    if FIXTURE in changed:
+        fixture_changed = validate_fixture(source_file(helpers, source, FIXTURE),
+                                          source_file(helpers, qualified, FIXTURE))
+    mode = helpers["validate"](run, jobs, [p for p in changed if p != FIXTURE])
+    if mode != "package":
+        raise ValueError("Case continuation requires the original failed package stage")
+    by_name = {j["name"]: j for j in jobs}
+    if (by_name.get("Validate main batch", {}).get("conclusion") != "success"
+            or by_name[MAC].get("labels") != ["macrunner"]):
+        raise ValueError("Package evidence requires qualified native macOS execution")
+    if any(j["name"].startswith(("test_dmg /", "remote_server /"))
+           and j.get("conclusion") != "skipped" for j in jobs):
+        raise ValueError("Artifact stages already executed")
+    old_batch = source_file(helpers, source, ".github/workflows/ci-batch.yml")
+    new_batch = source_file(helpers, qualified, ".github/workflows/ci-batch.yml")
+    for text in (old_batch, new_batch):
+        if re.search(r"(?m)^env:", text):
+            raise ValueError("Batch-wide environment would change inherited inputs")
+    if new_batch.count("      package_cases: ${{ steps.resume.outputs.package_cases }}\n") != 1:
+        raise ValueError("Package-case output must be forwarded from the qualified preflight")
+    for name in ("dependency_security", "compile_checks", "tests", "live_sftp"):
+        pattern = rf"(?ms)^  {name}:\n.*?(?=^  [a-zA-Z_]+:|\Z)"
+        old = re.search(pattern, old_batch)
+        new = re.search(pattern, new_batch)
+        forward = "      package_cases: ${{ needs.preflight.outputs.package_cases || '[]' }}\n"
+        if name == "tests" and (new is None or new.group().count(forward) != 1):
+            raise ValueError("Package cases must reach the native test invocation")
+        if (old is None or new is None or old.group() != new.group().replace(
+                "      package_cases: ${{ needs.preflight.outputs.package_cases || '[]' }}\n", "")):
+            raise ValueError(f"Inherited batch invocation changed: {name}")
+    previous = source_file(helpers, source, WORKFLOW)
+    current = source_file(helpers, qualified, WORKFLOW)
+    if normalize_dispatch(previous) != normalize_dispatch(current):
+        raise ValueError("Passed package/setup/Linux/doc commands or environment changed")
+    parent = source_file(helpers, qualified, "app/src/remote_server/safe_file.rs")
+    if not re.search(r'#\[cfg\(test\)\]\s*#\[path = "safe_file_tests.rs"\]\s*mod tests;', parent):
+        raise ValueError("Retention fixture is no longer test-only")
+    items = read_artifacts(str(run["id"]), helpers)
+    if any(a["name"].startswith("ci-") and a["name"].endswith("-provenance") for a in items):
+        raise ValueError("Package continuation requires direct original gate evidence")
+    cases = junit(read_file(str(run["id"]), items, f"native-package-tests-{source}", "junit.xml"))
+    failed = sorted(key for key, state in cases.items() if state == "failed")
+    passed = len(cases) - len(failed)
+    if (not failed or not passed
+            or any(sum(other[1] == key[1] for other in cases) != 1 for key in failed)):
+        raise ValueError("Package source needs unambiguous failed and positive executed cases")
+    if fixture_changed and failed != [("warp", CASE)]:
+        raise ValueError("Fixture-only exception requires this exact sole failed retention case")
+    names = [key[1] for key in failed]
+    if len(names) > 64 or len(json.dumps(names)) > 10000:
+        raise ValueError("Package failure set is too large for exact case continuation")
+    expression(json.dumps(names))
+    return {"run_id": str(run["id"]), "source_sha": source, "qualified_sha": qualified,
+            "failed_keys": [list(key) for key in failed], "passed_cases": passed,
+            "executed_cases": len(cases), "inventory_sha256": inventory_hash(cases)}
+
+
+def expression(encoded):
+    names = json.loads(encoded)
+    if (not isinstance(names, list) or not names
+            or any(not isinstance(n, str) or not re.fullmatch(r"[A-Za-z0-9_:]+", n) for n in names)
+            or len(set(names)) != len(names)):
+        raise ValueError("Exact nonempty Rust test names required")
+    return " | ".join(f"test(={name})" for name in names)
+
+
+def validate_fresh(receipt, payload):
+    cases = junit(payload)
+    if (set(cases) != {tuple(key) for key in receipt["failed_keys"]}
+            or any(state != "passed" for state in cases.values())):
+        raise ValueError("Fresh package cases must pass exactly the original failure set")
+    return receipt["passed_cases"] + len(cases)
+
+
+def receipt_for_current(run_id, qualified, helpers, read_artifacts=artifacts, read_file=artifact_file):
+    items = read_artifacts(str(run_id), helpers)
+    receipt = json.loads(read_file(str(run_id), items, PROOF, PROOF + ".json"))
+    original, jobs, source = helpers["read_run"](str(receipt["run_id"]))
+    expected = qualify(original, jobs, source, qualified, helpers, read_artifacts, read_file)
+    if receipt != expected:
+        raise ValueError("Package provenance differs from independent original evidence")
+    return receipt, jobs, items
+
+
+def restore(run, jobs, items, helpers):
+    proofs = [a for a in items if a["name"] == PROOF]
+    if not proofs:
+        return jobs
+    if (len(proofs) != 1 or proofs[0].get("expired") is not False
+            or any(a["name"] in ("ci-native-checks-provenance", "ci-pre-policy-provenance", "ci-checks-provenance") for a in items)
+            or run.get("status") != "completed" or run.get("conclusion") not in ("success", "failure")
+            or run.get("event") != "workflow_dispatch" or run.get("head_branch") != "main"
+            or run.get("path") != ".github/workflows/ci-batch.yml"
+            or run.get("head_repository", {}).get("full_name") != REPO):
+        raise ValueError("Invalid package continuation context")
+    receipt, original_jobs, _ = receipt_for_current(str(run["id"]), run["head_sha"], helpers)
+    by_name = {j["name"]: j for j in jobs}
+    if len(by_name) != len(jobs) or by_name.get("Validate main batch", {}).get("conclusion") != "success":
+        raise ValueError("Package continuation lacks successful qualification")
+    for name in ("dependency_security", "compile_checks", "live_sftp", "tests / Linux daemon regressions"):
+        if by_name.get(name, {}).get("conclusion") != "skipped":
+            raise ValueError("Unexpected inherited package prerequisite")
+    mac = by_name.get(MAC, {})
+    steps = {s["name"]: s.get("conclusion") for s in mac.get("steps", [])}
+    if (mac.get("conclusion") != "success" or mac.get("labels") != ["macrunner"]
+            or steps.get("Isolated package tests") != "success"
+            or steps.get("Verify complete package case coverage") != "success"
+            or steps.get("Package documentation tests") != "skipped"):
+        raise ValueError("Missing fresh case validation or unexpected documentation rerun")
+    payload = artifact_file(str(run["id"]), items, f"native-package-tests-{run['head_sha']}", "junit.xml")
+    validate_fresh(receipt, payload)
+    original_mac = next(j for j in original_jobs if j["name"] == MAC)
+    restored_mac = dict(mac, steps=[s for s in mac["steps"] if s["name"] != "Package documentation tests"]
+        + [s for s in original_mac["steps"] if s["name"] == "Package documentation tests"])
+    placeholders = {"dependency_security", "compile_checks", "live_sftp", "tests / Linux daemon regressions", MAC}
+    restored = [j for j in jobs if j["name"] not in placeholders] + [restored_mac]
+    restored += [j for j in original_jobs if j["name"] in helpers["PASSED_JOBS"]]
+    if len({j["name"] for j in restored}) != len(restored):
+        raise ValueError("Duplicate restored package prerequisite")
+    return restored
+
+
+def main():
+    if sys.argv[1] == "expression":
+        print(expression(sys.argv[2]))
+        return
+    if (sys.argv[1] != "verify" or os.environ.get("GITHUB_REPOSITORY") != REPO
+            or os.environ.get("GITHUB_REF") != "refs/heads/main"
+            or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"):
+        raise ValueError("Package coverage verification requires this main CI run")
+    helpers = runpy.run_path(str(Path(__file__).with_name("ci-batch-resume")))
+    receipt, _, _ = receipt_for_current(os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_SHA"], helpers)
+    if json.loads(os.environ["PACKAGE_CASES"]) != [key[1] for key in receipt["failed_keys"]]:
+        raise ValueError("Requested package cases differ from qualification")
+    total = validate_fresh(receipt, Path("target/nextest/ci/junit.xml").read_bytes())
+    print(f"Verified all {total} executed package cases: {receipt['passed_cases']} original passes plus exact fresh cases.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, KeyError, subprocess.SubprocessError, ET.ParseError, zipfile.BadZipFile) as error:
+        print(f"Package case reuse refused: {error}", file=sys.stderr)
+        sys.exit(1)
