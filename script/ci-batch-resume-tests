@@ -5,6 +5,9 @@ import copy
 from pathlib import Path
 import runpy
 import unittest
+import json
+import hashlib
+from unittest.mock import patch
 
 
 module = runpy.run_path(str(Path(__file__).resolve().with_name("ci-batch-resume")))
@@ -99,6 +102,87 @@ jobs:
                          ("--doc -p warp", "--doc -p warp --all-features")):
             with self.subTest(old=old), self.assertRaises(ValueError):
                 validate_test_inputs(previous, current.replace(old, new))
+
+
+    def pre_policy_jobs(self):
+        jobs = copy.deepcopy(self.jobs[:5])
+        for row in jobs[:2]:
+            row["labels"] = ["macrunner"]
+        jobs[2]["conclusion"] = "failure"
+        jobs[3]["conclusion"] = "skipped"
+        jobs[4]["conclusion"] = "skipped"
+        return jobs
+
+    def test_pre_policy_reuse_requires_native_passes_and_unchanged_sources(self):
+        jobs = self.pre_policy_jobs()
+        self.assertEqual(validate(self.run, jobs, ["script/prepare-native-checks"]), "pre-policy")
+        for index in (0, 1):
+            for key, value in (("conclusion", "failure"), ("conclusion", "skipped"), ("labels", ["ubuntu-24.04"])):
+                changed = copy.deepcopy(jobs)
+                changed[index][key] = value
+                with self.subTest(index=index, key=key), self.assertRaises(ValueError):
+                    validate(self.run, changed, [])
+        for path in ("Cargo.lock", "deny.toml", "app/src/main.rs", "script/install-cargo-deny",
+                     ".github/actions/static-pr-checks/action.yml"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                validate(self.run, jobs, [path])
+        with self.assertRaises(ValueError):
+            validate(self.run, jobs + [dict(name="tests / cargo test (macOS)", conclusion="success")], [])
+
+    def test_pre_policy_fingerprint_rejects_changed_static_command_or_environment(self):
+        before = "env:\n  CHANNEL: oss\njobs:\n  changes:\n    steps:\n      - run: static-check\n  cargo_check:\n    steps: []\n"
+        after = before.replace("  changes:\n", "  changes:\n    if: ${{ !inputs.reuse_static_checks }}\n")
+        verify = module["validate_pre_policy_inputs"]
+        verify(before, after)
+        for text in (after.replace("static-check", "different-check"), after.replace("CHANNEL: oss", "CHANNEL: other")):
+            with self.assertRaises(ValueError):
+                verify(before, text)
+
+
+    def test_pre_policy_inventory_cannot_change_cases_or_forge_fingerprints(self):
+        before = dict(inventory_source_hashes={".github/workflows/pr-check.yml": hashlib.sha256(b"old").hexdigest()}, suites=[{"id": "must-run"}])
+        after = copy.deepcopy(before)
+        after["inventory_source_hashes"][".github/workflows/pr-check.yml"] = hashlib.sha256(b"new").hexdigest()
+        verify = module["validate_pre_policy_plan"]
+        verify(before, after, "old", "new")
+        changed = copy.deepcopy(after)
+        changed["suites"] = []
+        with self.assertRaises(ValueError):
+            verify(before, changed, "old", "new")
+        with self.assertRaises(ValueError):
+            verify(before, before, "old", "new")
+
+    def test_pre_policy_receipt_restores_exact_origins_and_rejects_mismatch(self):
+        receipt = dict(run_id="11", source_sha="a" * 40, qualified_sha="b" * 40)
+        run = {**self.run, "id": 22, "head_sha": "b" * 40, "conclusion": "success"}
+        jobs = [dict(name="Validate main batch", conclusion="success"),
+                dict(name="dependency_security", conclusion="skipped"),
+                dict(name="compile_checks / detect build-relevant changes", conclusion="skipped")]
+        artifacts = [dict(name="ci-pre-policy-provenance", expired=False)]
+        workflow = "jobs:\n  changes:\n    steps:\n      - run: unchanged-static-check\n"
+        plan = dict(inventory_source_hashes={".github/workflows/pr-check.yml": hashlib.sha256(workflow.encode()).hexdigest()}, suites=[{"id": "case"}])
+        def command(*args):
+            if args[:3] == ("gh", "run", "download"):
+                (Path(args[-1]) / "ci-pre-policy-provenance.json").write_text(json.dumps(receipt))
+                return ""
+            if args[:2] == ("git", "diff"):
+                return "script/prepare-native-checks\n"
+            if args[:2] == ("git", "show"):
+                return json.dumps(plan) if args[-1].endswith("script/test-suite-nonrust-plan.json") else workflow
+            raise AssertionError(args)
+        restore = module["restore_pre_policy"]
+        with patch.dict(restore.__globals__, command=command,
+                        read_run=lambda value: (self.run, self.pre_policy_jobs(), "a" * 40)):
+            restored = restore(run, jobs, artifacts)
+            proven = {j["name"] for j in restored if j["conclusion"] == "success"}
+            self.assertTrue(module["PRE_POLICY_GATES"].issubset(proven))
+            receipt["qualified_sha"] = "c" * 40
+            with self.assertRaises(ValueError):
+                restore(run, jobs, artifacts)
+            receipt["qualified_sha"] = "b" * 40
+            duplicate = jobs + [dict(name="dependency_security / cargo deny check advisories", conclusion="success")]
+            with self.assertRaises(ValueError):
+                restore(run, duplicate, artifacts)
 
 
     def macos_jobs(self):

@@ -153,3 +153,20 @@ während App- und XCTest-Quellstand unverändert bleiben.
 Einziger Pflicht-Check für Merges nach `main` ist `no-new-cjk`;
 `strict_required_status_checks_policy` ist aus. Ein PR braucht keine
 Freigabe durch Reviews und kann gemergt werden, sobald `no-new-cjk` grün ist.
+
+
+## Fortsetzung nach fehlendem nativen Prüfwerkzeug
+
+`resume_run_id` kann den fehlgeschlagenen nativen Policy-Job aus einem Main-Batch
+fortsetzen, dessen native Sicherheits- und statische Schranken bestanden sind.
+Die Vorprüfung bindet Quellstände, Plattform, unveränderte statische Befehle und
+Testinventar; App-, Cargo-, Sicherheits- oder Asset-Änderungen schließen diese
+Übernahme aus. Sie schreibt `ci-pre-policy-provenance` mit Ursprungs- und
+Qualifikationsrevision. Nachfolgende Artefakt-/Releaseprüfungen lösen diesen
+Nachweis selbstständig auf und prüfen den Ursprung erneut.
+
+Nur die beiden belegten Schranken werden übernommen. Die native Policyprüfung,
+Compile-, App-/Linux-Tests und Artefakte laufen regulär. Für kompakte Zeilenaktionen
+stellt `prepare-native-checks` ripgrep mit PCRE2 bereit: vorhandene Fähigkeiten
+werden geprüft, andernfalls wird ein natives Homebrew-Binärpaket mit seiner PCRE2-Abhängigkeit
+verwendet. Der Aufruf prüft anschließend die tatsächliche Lookbehind-Funktion.

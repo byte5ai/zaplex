@@ -1,0 +1,8 @@
+name: Native check tools
+description: Verify native check capabilities and use a binary-only package fallback.
+runs:
+  using: composite
+  steps:
+    - name: Require native search tools
+      shell: bash
+      run: bash script/prepare-native-checks
