@@ -388,6 +388,24 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Linux minidump lifecycle
+        run: |
+          set -euo pipefail
+          # An absent platform-gated suite must never count as success.
+          cargo test --locked -p warp --lib --features crash_reporting -- \
+            minidump_backend_ --list > "$RUNNER_TEMP/minidump-tests.txt"
+          test "$(grep -c '^crash_reporting::local_minidump::tests::minidump_backend_.*: test$' "$RUNNER_TEMP/minidump-tests.txt")" -ge 2
+          cargo test --locked -p warp --lib --features crash_reporting -- minidump_backend_
+        shell: bash
+
+      - name: Linux minidump smoke test
+        run: |
+          dump_dir="$(mktemp -d)"
+          cargo run --locked -p warp --bin zaplex --features crash_reporting -- \
+            minidump-smoke "$dump_dir"
+          test "$(find "$dump_dir" -type f -name 'zap-minidump-*.dmp' -size +0c | wc -l)" -eq 1
+        shell: bash
+
       - name: Linux SSH installer assets
         if: ${{ !inputs.coverage }}
         run: script/ssh-tmux-asset-tests

@@ -170,3 +170,21 @@ Compile-, App-/Linux-Tests und Artefakte laufen regulär. Für kompakte Zeilenak
 stellt `prepare-native-checks` ripgrep mit PCRE2 bereit: vorhandene Fähigkeiten
 werden geprüft, andernfalls wird ein natives Homebrew-Binärpaket mit seiner PCRE2-Abhängigkeit
 verwendet. Der Aufruf prüft anschließend die tatsächliche Lookbehind-Funktion.
+
+### Fortsetzung eines nativen Regressionstestblocks
+
+Scheitert der Mac-Regressionsblock nach erfolgreichen nativen Sicherheits-,
+statischen, Clippy- und Compile-/Layout-Gates, kann `resume_run_id` diese
+unveränderten Gates und genau die belegten erfolgreichen Testschritte übernehmen.
+`ci-native-checks-provenance.json` bindet Originallauf, beide Quellstände und die
+exakte Schrittmenge. App-/Cargo-/Toolchain-/Werkzeugänderungen, veränderte
+Testbefehle oder Testumgebungen sperren diesen Weg. Der spätere Artefaktvalidator
+prüft Originalbelege und aktuelle Restergebnisse erneut; fehlende oder unerwartet
+übersprungene Schritte sind Fehler. Frische VM-Einrichtung läuft weiterhin.
+Unabhängige Restprüfungen laufen auch nach einem Fehler weiter, der Job bleibt rot.
+
+Die Minidump-Adapterprüfungen gehören zum expliziten Linux-Teil: Adapter,
+Abhängigkeiten und CLI-Worker existieren für Linux/Windows, nicht macOS. Der
+Mac-Lauf 40924294137 führte beim alten Filter null Fälle aus; dieser Schritt wird
+nie als Erfolg übernommen. Der Linux-Job verlangt mindestens die beiden
+Lebenszyklustests und anschließend genau einen neu erzeugten, nicht leeren Dump.

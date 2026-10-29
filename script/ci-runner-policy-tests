@@ -31,6 +31,8 @@ def validate(text, filename):
             raise ValueError("Unshipped Windows job must remain gated off")
         if label == "macrunner" and "cargo-deny-action@" in body:
             raise ValueError("Docker-only cargo-deny action cannot run natively")
+        if label == "macrunner" and ("minidump-smoke" in body or "minidump_backend_" in body):
+            raise ValueError("Linux minidump adapter cannot be qualified on macOS")
 
 
 class RunnerPolicy(unittest.TestCase):
@@ -51,6 +53,24 @@ class RunnerPolicy(unittest.TestCase):
     def test_docker_action_is_rejected_on_native_runner(self):
         with self.assertRaises(ValueError):
             validate("jobs:\n  check:\n    runs-on: macrunner\n    steps:\n      - uses: EmbarkStudios/cargo-deny-action@hash\n", "ci-batch.yml")
+
+    def test_linux_minidump_checks_cannot_return_to_mac(self):
+        for command in ("cargo test -- minidump_backend_", "zaplex minidump-smoke"):
+            with self.subTest(command=command), self.assertRaises(ValueError):
+                validate(f"jobs:\n  check:\n    runs-on: macrunner\n    steps:\n      - run: {command}\n", "pr-check.yml")
+
+    def test_linux_adapter_retains_lifecycle_and_real_dump_checks(self):
+        text = (ROOT / ".github/workflows/test-dispatch.yml").read_text()
+        job = re.search(r"(?ms)^  test_linux:\n.*?(?=^  \w+:|\Z)", text).group()
+        for name, command in (("Linux minidump lifecycle", "minidump_backend_"),
+                              ("Linux minidump smoke test", "minidump-smoke")):
+            with self.subTest(name=name):
+                step = re.search(rf"(?ms)^      - name: {name}\n.*?(?=^      - |\Z)", job).group()
+                self.assertNotIn("        if:", step)
+                self.assertIn(command, step)
+        self.assertIn("minidump_backend_ --list", job)
+        self.assertIn(' -ge 2', job)
+        self.assertIn("-size +0c", job)
 
 
 if __name__ == "__main__":
