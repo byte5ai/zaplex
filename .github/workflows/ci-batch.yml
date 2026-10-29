@@ -100,6 +100,7 @@ jobs:
           python3 script/shell-ssh-runner-guard-tests
           python3 script/prepare-macos-rust-tests
           python3 script/ci-runner-policy-tests
+          python3 script/linux/test-swap-tests
           python3 script/ci-batch-scheduling-tests
           python3 script/ci-batch-resume-tests
           python3 script/ci-native-checks-resume-tests

@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Swap capacity and ownership regressions; no real swap or sudo calls."""
+
+import json
+from pathlib import Path
+import runpy
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[2]
+M = runpy.run_path(str(Path(__file__).with_name("test-swap")))
+GIB, MIB = M["GIB"], M["MIB"]
+
+
+class SwapTests(unittest.TestCase):
+    def setUp(self):
+        (ROOT / "target").mkdir(exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(prefix="swap-test-", dir=ROOT / "target")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name).resolve()
+        self.environment = self.root / "github-env"
+        self.environment.touch()
+        self.env = dict(GITHUB_ACTIONS="true", GITHUB_REPOSITORY="byte5ai/zaplex",
+                        GITHUB_RUN_ID="123", GITHUB_JOB="linux", RUNNER_TEMP=str(self.root),
+                        GITHUB_ENV=str(self.environment))
+        self.active = {"/swapfile": 4 * GIB}
+        self.commands = []
+        self.allocated = {}
+        self.fail_on = None
+        self.platform = patch("sys.platform", "linux")
+        self.platform.start()
+        self.addCleanup(self.platform.stop)
+
+    def run_command(self, *args):
+        self.commands.append(args)
+        self.assertNotEqual(args[-1], "/swapfile")
+        if args[1] == self.fail_on:
+            raise subprocess.CalledProcessError(1, args)
+        if args[1] == "fallocate":
+            self.allocated[args[-1]] = int(args[-2])
+        if args[1] == "swapon":
+            self.active[args[-1]] = self.allocated[args[-1]] - 4096
+        if args[1] == "swapoff":
+            del self.active[args[-1]]
+
+    def prepare(self, **kwargs):
+        return M["prepare"](self.env, swaps=lambda: self.active.copy(), run=self.run_command,
+                            free_bytes=kwargs.get("free_bytes", 100 * GIB))
+
+    def lease(self):
+        line = self.environment.read_text().strip()
+        name, path = line.split("=", 1)
+        self.assertEqual(name, "ZAPLEX_TEST_SWAP_LEASE")
+        self.env[name] = path
+        return Path(path)
+
+    def cleanup(self):
+        return M["cleanup"](self.env, swaps=lambda: self.active.copy(), run=self.run_command)
+
+    def test_existing_capacity_is_used_without_any_resource_change(self):
+        self.active = {"/swapfile": 12 * GIB}
+        self.assertEqual(self.prepare()["added_mib"], 0)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.environment.read_text(), "")
+
+    def test_partial_capacity_gets_only_a_job_owned_topup(self):
+        result = self.prepare()
+        self.assertEqual(result["added_mib"], 8 * 1024 + 1)
+        self.assertGreaterEqual(sum(self.active.values()), 12 * GIB)
+        lease = self.lease(); record = json.loads(lease.read_text())
+        self.assertEqual(Path(record["path"]).parent, self.root)
+        self.assertEqual(self.active["/swapfile"], 4 * GIB)
+
+    def test_empty_runner_gets_the_full_usable_capacity(self):
+        self.active = {}
+        self.assertEqual(self.prepare()["added_mib"], 12 * 1024 + 1)
+        self.assertGreaterEqual(sum(self.active.values()), 12 * GIB)
+
+    def test_disk_shortage_fails_before_creating_resources(self):
+        with self.assertRaises(ValueError): self.prepare(free_bytes=GIB)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(list(self.root.iterdir()), [self.environment])
+
+    def test_failed_allocation_retains_a_cleanup_lease_and_preserves_system_swap(self):
+        self.fail_on = "fallocate"
+        with self.assertRaises(subprocess.CalledProcessError): self.prepare()
+        self.lease(); before = len(self.commands)
+        self.assertEqual(self.cleanup()["cleanup"], "owned-swap-inactive")
+        self.assertEqual(len(self.commands), before)
+        self.assertEqual(self.active, {"/swapfile": 4 * GIB})
+
+    def test_cleanup_deactivates_only_the_owned_file_and_keeps_it_in_job_storage(self):
+        self.prepare(); lease = self.lease(); path = Path(json.loads(lease.read_text())["path"])
+        self.assertEqual(self.cleanup()["cleanup"], "owned-swap-inactive")
+        self.assertEqual(self.commands[-1], ("sudo", "swapoff", str(path)))
+        self.assertEqual(self.active, {"/swapfile": 4 * GIB})
+        self.assertTrue(path.exists())
+
+    def test_foreign_job_run_and_file_identity_are_rejected_before_swapoff(self):
+        self.prepare(); lease = self.lease(); original = json.loads(lease.read_text())
+        before = len(self.commands)
+        for field, value in (("run_id", "999"), ("job", "other"), ("inode", original["inode"] + 1),
+                             ("path", "/swapfile")):
+            record = {**original, field: value}; lease.write_text(json.dumps(record))
+            with self.subTest(field=field), self.assertRaises(ValueError): self.cleanup()
+            self.assertEqual(len(self.commands), before)
+
+    def test_redirected_owned_file_is_rejected(self):
+        self.prepare(); lease = self.lease(); record = json.loads(lease.read_text())
+        redirect = self.root / "zaplex-swap-123-redirect"
+        redirect.symlink_to(record["path"])
+        record["path"] = str(redirect)
+        redirected_lease = redirect.with_name(redirect.name + ".json")
+        redirected_lease.write_text(json.dumps(record))
+        self.env["ZAPLEX_TEST_SWAP_LEASE"] = str(redirected_lease)
+        before = len(self.commands)
+        with self.assertRaises(ValueError): self.cleanup()
+        self.assertEqual(len(self.commands), before)
+
+    def test_outside_or_redirected_lease_is_rejected(self):
+        self.prepare(); lease = self.lease()
+        redirected = self.root / "redirect.json"; redirected.symlink_to(lease)
+        self.env["ZAPLEX_TEST_SWAP_LEASE"] = str(redirected)
+        with self.assertRaises(ValueError): self.cleanup()
+
+    def test_cleanup_without_allocation_changes_nothing(self):
+        self.assertEqual(self.cleanup(), {"cleanup": "nothing-created"})
+        self.assertEqual(self.commands, [])
+
+    def test_wrong_execution_context_is_rejected(self):
+        for field, value in (("GITHUB_ACTIONS", "false"), ("GITHUB_REPOSITORY", "other/repo"),
+                             ("GITHUB_RUN_ID", "not-a-run"), ("GITHUB_JOB", "")):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                M["prepare"]({**self.env, field: value}, swaps=lambda: self.active, run=self.run_command)
+        self.assertEqual(self.commands, [])
+
+    def test_unactivated_capacity_is_never_reported_as_success(self):
+        with self.assertRaises(ValueError):
+            M["prepare"](self.env, swaps=lambda: self.active.copy(), run=lambda *args: None,
+                         free_bytes=100 * GIB)
+
+
+if __name__ == "__main__":
+    unittest.main()
