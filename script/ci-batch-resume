@@ -2,11 +2,13 @@
 """Reuse proven CI gates after runner failures, never after app changes."""
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 
 REPO = "byte5ai/zaplex"
@@ -51,6 +53,90 @@ TAIL_RESUME_PATHS = {
     "script/ci-batch-resume-tests", "script/ci-batch-completion",
     "script/ci-batch-scheduling-tests", "docs/ci-batch.md",
 }
+
+PRE_POLICY_PATHS = {
+    ".github/workflows/pr-check.yml", ".github/workflows/ci-batch.yml",
+    ".github/actions/prepare-native-checks/action.yml", "script/prepare-native-checks",
+    "script/ci-batch-resume", "script/ci-batch-resume-tests",
+    "script/ci-batch-completion", "script/ci-batch-scheduling-tests",
+    "script/ci-batch-checks", "script/ci-batch-checks-tests", "script/pr-check-clippy-gate-tests",
+    "script/test-suite-nonrust-plan.json", "docs/ci-batch.md",
+}
+PRE_POLICY_GATES = {"dependency_security / cargo deny check advisories",
+                    "compile_checks / detect build-relevant changes"}
+
+
+def validate_pre_policy_inputs(previous, current):
+    def detector(text):
+        match = re.search(r"(?ms)^  changes:\n.*?(?=^  \w+:|\Z)", text)
+        if match is None:
+            raise ValueError("Missing static check job")
+        return match.group().replace("    if: ${{ !inputs.reuse_static_checks }}\n", "")
+    if detector(previous) != detector(current):
+        raise ValueError("Passed static check commands or environment changed")
+    def environment(text):
+        match = re.search(r"(?ms)^env:\n.*?(?=^jobs:)", text)
+        return match.group() if match else ""
+    if environment(previous) != environment(current):
+        raise ValueError("Passed static check global environment changed")
+
+
+def validate_pre_policy_plan(previous, current, old_workflow, new_workflow):
+    for plan, workflow in ((previous, old_workflow), (current, new_workflow)):
+        expected = hashlib.sha256(workflow.encode()).hexdigest()
+        if plan["inventory_source_hashes"].get(".github/workflows/pr-check.yml") != expected:
+            raise ValueError("Static inventory workflow fingerprint differs")
+    old, new = json.loads(json.dumps(previous)), json.loads(json.dumps(current))
+    for plan in (old, new):
+        plan["inventory_source_hashes"].pop(".github/workflows/pr-check.yml")
+    if old != new:
+        raise ValueError("Passed non-Rust test inventory changed")
+
+
+def restore_pre_policy(run, jobs, artifacts):
+    proofs = [a for a in artifacts if a["name"] == "ci-pre-policy-provenance"]
+    if not proofs:
+        return jobs
+    if (len(proofs) != 1 or proofs[0].get("expired") is not False
+            or run.get("head_branch") != "main" or run.get("event") != "workflow_dispatch"
+            or run.get("status") != "completed" or run.get("conclusion") not in ("success", "failure")
+            or run.get("head_repository", {}).get("full_name") != REPO):
+        raise ValueError("Invalid pre-policy provenance context")
+    with tempfile.TemporaryDirectory(prefix="zaplex-pre-policy-") as directory:
+        command("gh", "run", "download", str(run["id"]), "--repo", REPO,
+                "--name", "ci-pre-policy-provenance", "--dir", directory)
+        receipt = json.loads((Path(directory) / "ci-pre-policy-provenance.json").read_text())
+    if receipt.get("qualified_sha") != run.get("head_sha"):
+        raise ValueError("Pre-policy provenance source mismatch")
+    original, original_jobs, source = read_run(str(receipt["run_id"]))
+    if source != receipt.get("source_sha"):
+        raise ValueError("Pre-policy origin changed")
+    changed = command("git", "diff", "--name-only", source, run["head_sha"]).splitlines()
+    if validate(original, original_jobs, changed) != "pre-policy":
+        raise ValueError("Origin does not prove the pre-policy gates")
+    workflow = ".github/workflows/pr-check.yml"
+    validate_pre_policy_inputs(command("git", "show", f"{source}:{workflow}"),
+                              command("git", "show", f"{run['head_sha']}:{workflow}"))
+    plan = "script/test-suite-nonrust-plan.json"
+    validate_pre_policy_plan(
+        json.loads(command("git", "show", f"{source}:{plan}")),
+        json.loads(command("git", "show", f"{run['head_sha']}:{plan}")),
+        command("git", "show", f"{source}:{workflow}"),
+        command("git", "show", f"{run['head_sha']}:{workflow}"),
+    )
+    by_name = {j["name"]: j for j in jobs}
+    if len(by_name) != len(jobs) or by_name.get("Validate main batch", {}).get("conclusion") != "success":
+        raise ValueError("Pre-policy reuse requires successful qualification")
+    if by_name.get("dependency_security", {}).get("conclusion") != "skipped":
+        raise ValueError("Expected explicitly inherited dependency gate")
+    static = "compile_checks / detect build-relevant changes"
+    if by_name.get(static, {}).get("conclusion") != "skipped":
+        raise ValueError("Expected explicitly inherited static gate")
+    restored = [j for j in jobs if j["name"] != static]
+    restored.extend(j for j in original_jobs if j["name"] in PRE_POLICY_GATES)
+    if len({j["name"] for j in restored}) != len(restored):
+        raise ValueError("Duplicate restored pre-policy gate")
+    return restored
 
 
 def validate_tail(run, jobs, changed_paths):
@@ -98,6 +184,21 @@ def validate(run, jobs, changed_paths):
     by_name = {job["name"]: job for job in jobs}
     if len(by_name) != len(jobs):
         raise ValueError("Ambiguous duplicate job names")
+    policy = "compile_checks / cargo policy (macOS Apple Silicon)"
+    if (by_name.get(policy, {}).get("conclusion") == "failure"
+            and by_name.get(MACOS_GATE, {}).get("conclusion") == "skipped"):
+        for name in PRE_POLICY_GATES:
+            gate = by_name.get(name, {})
+            if gate.get("conclusion") != "success" or gate.get("labels") != ["macrunner"]:
+                raise ValueError("Pre-policy reuse needs proven native security/static gates")
+        for name, job in by_name.items():
+            if (name.startswith(("tests /", "live_sftp /", "test_dmg /", "remote_server /"))
+                    or name == "compile_checks / app regressions (macOS Apple Silicon)"):
+                if job.get("conclusion") != "skipped":
+                    raise ValueError("Downstream checks already executed")
+        if any(path not in PRE_POLICY_PATHS for path in changed_paths):
+            raise ValueError("Passed pre-policy gate inputs changed")
+        return "pre-policy"
     if by_name.get(MACOS_GATE, {}).get("conclusion") == "failure":
         for name in sorted(EARLY_NATIVE_GATES):
             if by_name.get(name, {}).get("conclusion") != "success":
@@ -261,7 +362,20 @@ def main():
         mode = "tail"
     else:
         mode = validate(run, jobs, changed)
-    if mode == "linux":
+    if mode == "pre-policy":
+        workflow = ".github/workflows/pr-check.yml"
+        validate_pre_policy_inputs(command("git", "show", f"{source}:{workflow}"), Path(workflow).read_text())
+        plan = "script/test-suite-nonrust-plan.json"
+        validate_pre_policy_plan(json.loads(command("git", "show", f"{source}:{plan}")),
+            json.loads(Path(plan).read_text()), command("git", "show", f"{source}:{workflow}"),
+            Path(workflow).read_text())
+        Path("ci-pre-policy-provenance.json").write_text(json.dumps({
+            "run_id": run_id, "source_sha": source, "qualified_sha": os.environ["GITHUB_SHA"],
+        }) + "\n")
+        output_name = "reuse_pre_policy_checks"
+        evidence = "native dependency-security and static"
+        remaining = "native policy/compile/tests and previously unexecuted artifacts"
+    elif mode == "linux":
         paths = (".github/workflows/pr-check.yml", ".github/workflows/ci-batch.yml",
                  ".github/actions/prepare_environment/action.yml")
         validate_linux_inputs(

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $(uname -s) == Darwin && $(uname -m) == arm64 ]]
+brew_bin=$(command -v brew || true)
+if [[ -z "$brew_bin" && -x /opt/homebrew/bin/brew ]]; then brew_bin=/opt/homebrew/bin/brew; fi
+[[ -n "$brew_bin" ]] || { echo 'Native checks require the image Homebrew installation.' >&2; exit 2; }
+prefix=$("$brew_bin" --prefix)
+export PATH="$prefix/bin:$PATH"
+printf '%s\n' "$prefix/bin" >> "${GITHUB_PATH:?}"
+if ! command -v rg >/dev/null || ! printf 'zaplex-fixture\n' | rg --no-config --pcre2 --quiet '(?<=zaplex-)fixture'; then
+  # Binary bottles also supply PCRE2; the upstream macOS rg archive links it dynamically.
+  HOMEBREW_NO_AUTO_UPDATE=1 "$brew_bin" install --force-bottle ripgrep
+fi
+command -v rg
+rg --version
+rg --pcre2-version
+printf 'zaplex-fixture\n' | rg --no-config --pcre2 --quiet '(?<=zaplex-)fixture'
+if printf 'unmatched\n' | rg --no-config --pcre2 --quiet '(?<=zaplex-)fixture'; then
+  echo 'Native PCRE2 negative control unexpectedly matched.' >&2
+  exit 2
+fi

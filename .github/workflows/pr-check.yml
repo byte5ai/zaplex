@@ -6,6 +6,10 @@ name: PR Check
 on:
   workflow_call:
     inputs:
+      reuse_static_checks:
+        description: Reuse source-bound static checks verified by the batch preflight
+        type: boolean
+        default: false
       reuse_linux_checks:
         description: Reuse earlier native policy gates validated by the batch preflight
         type: boolean
@@ -27,6 +31,7 @@ env:
 
 jobs:
   changes:
+    if: ${{ !inputs.reuse_static_checks }}
     name: detect build-relevant changes
     runs-on: macrunner
     timeout-minutes: 5
@@ -72,10 +77,12 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           NEEDS_BUILD: ${{ needs.changes.outputs.needs_build }}
+          REUSE_STATIC: ${{ inputs.reuse_static_checks }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$CHANGES_RESULT" == "success" && "$NEEDS_BUILD" == "true" ]] || {
+          [[ "$CHANGES_RESULT" == "success" && "$NEEDS_BUILD" == "true" ]] ||
+          [[ "$CHANGES_RESULT" == "skipped" && "${REUSE_STATIC:-false}" == "true" ]] || {
             echo "Static PR checks or build-relevance detection did not succeed." >&2
             exit 1
           }
@@ -88,6 +95,8 @@ jobs:
           persist-credentials: false
 
       # Validate the gate before setup and compilation consume runner time.
+      - uses: ./.github/actions/prepare-native-checks
+
       - name: Enforce compact sidebar row actions
         run: script/check-compact-row-actions
         shell: bash
@@ -167,7 +176,7 @@ jobs:
     name: cargo check (macOS Apple Silicon)
     needs: [changes, cargo_check]
     if: >
-      !cancelled() && needs.changes.outputs.needs_build == 'true' &&
+      !cancelled() && (needs.changes.outputs.needs_build == 'true' || inputs.reuse_static_checks) &&
       (needs.cargo_check.result == 'success' || inputs.reuse_linux_checks)
     # ci-lint: allow-CI006  Fork-PR-Approval: all external contributors; ephemere VM pro Job
     runs-on: macrunner
@@ -290,7 +299,9 @@ jobs:
   keymap_smoke_test:
     name: app regressions (macOS Apple Silicon)
     needs: [changes, cargo_check_macos]
-    if: needs.changes.outputs.needs_build == 'true' && !inputs.reuse_linux_checks
+    if: >
+      !cancelled() && needs.cargo_check_macos.result == 'success' &&
+      (needs.changes.outputs.needs_build == 'true' || inputs.reuse_static_checks) && !inputs.reuse_linux_checks
     # Serialize compiling macOS jobs on the shared runner.
     runs-on: macrunner
     timeout-minutes: 60
@@ -301,6 +312,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - uses: ./.github/actions/prepare-native-checks
 
       - name: Enforce compact sidebar row actions
         run: script/check-compact-row-actions

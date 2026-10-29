@@ -47,12 +47,17 @@ def read(run_id, source):
     if not re.fullmatch(r"[1-9][0-9]*", run_id):
         raise ValueError("Numeric checks run ID required")
     run, jobs, _ = helpers["read_run"](run_id)
+    pages = json.loads(helpers["command"]("gh", "api", "--paginate", "--slurp",
+        f"repos/{REPO}/actions/runs/{run_id}/artifacts?per_page=100"))
+    artifacts = [item for page in pages for item in page["artifacts"]]
+    jobs = helpers["restore_pre_policy"](run, jobs, artifacts)
     validate(run, jobs, source)
     return jobs
 
 
 def restore(run, jobs, artifacts, load_receipt, read_checks=read):
     """Resolve inherited gates independently for later artifact/release validators."""
+    jobs = helpers["restore_pre_policy"](run, jobs, artifacts)
     proofs = [item for item in artifacts if item["name"] == "ci-checks-provenance"]
     if not proofs:
         return jobs
