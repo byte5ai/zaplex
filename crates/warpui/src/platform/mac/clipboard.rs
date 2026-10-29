@@ -1,10 +1,7 @@
 use anyhow::{anyhow, Result};
 use cocoa::appkit::{NSPasteboard, NSPasteboardTypeHTML, NSPasteboardTypeString};
+use cocoa::base::{id, nil};
 use cocoa::foundation::{NSArray, NSData};
-use cocoa::{
-    base::{id, nil},
-    foundation::NSString,
-};
 use objc::{class, msg_send, sel, sel_impl};
 use std::os::raw::c_void;
 use std::slice;

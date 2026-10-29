@@ -1,6 +1,6 @@
 use cocoa::{
     base::{id, nil, BOOL},
-    foundation::{NSArray, NSString, NSUInteger},
+    foundation::{NSArray, NSUInteger},
 };
 use objc::{msg_send, sel, sel_impl};
 use warpui_core::keymap::Keystroke;

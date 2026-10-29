@@ -7,7 +7,6 @@ use warpui_core::{keymap::Keystroke, Event};
 use cocoa::{
     appkit::{NSEvent, NSEventModifierFlags, NSEventType},
     base::{id, YES},
-    foundation::NSString,
 };
 use pathfinder_geometry::vector::vec2f;
 
