@@ -1,0 +1,23 @@
+{
+  "app_and_installed_gui_source": "421125b94239368c718d30784e7c3d17448b3506",
+  "changed_paths": [
+    "specs/GH-564/CANDIDATE-1.2.50-NATIVE.md",
+    "specs/GH-564/MATRIX.md",
+    "specs/GH-564/evidence/candidate-150-native/41034730295.json",
+    "specs/GH-564/evidence/candidate-150-native/41038876716.json",
+    "specs/GH-564/evidence/candidate-150-native/41051951751.json",
+    "specs/GH-564/evidence/candidate-150-native/ci-results.json",
+    "specs/GH-564/evidence/candidate-150-native/fixtures.json",
+    "specs/GH-564/evidence/candidate-150-native/inbox-shortcut-local.json",
+    "specs/GH-564/evidence/candidate-150-native/installed-gui.json",
+    "specs/GH-564/evidence/candidate-150-native/modal-close-ci.json"
+  ],
+  "independent_check": "Exhaustive git comparison: every path outside specs/GH-564 is byte-identical, including application code, resources, GUI scripts and workflows.",
+  "checked_at": "2026-10-30T12:48:46.834791+00:00",
+  "exploration_harness": "cdda5e7b114ae978371ae1a12293a21e1f990066",
+  "verified_exploration_runs": [
+    41075900378,
+    41077486365,
+    41079791577
+  ]
+}

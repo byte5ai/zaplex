@@ -17,8 +17,8 @@
 //! local and remote rows.
 //!
 //! Surfaced from the workspace via `WorkspaceAction::OpenAttentionInbox`
-//! (default binding `cmd/ctrl-shift-o`); closed with `escape` or its close
-//! button.
+//! (default `ctrl-cmd-o` on macOS, `ctrl-shift-O` on Linux/Windows); closed
+//! with `escape` or its close button.
 
 use std::collections::HashMap;
 

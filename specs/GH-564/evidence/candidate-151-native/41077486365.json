@@ -1,0 +1,153 @@
+{
+  "run_id": 41077486365,
+  "app_source": "421125b94239368c718d30784e7c3d17448b3506",
+  "harness_source": "cdda5e7b114ae978371ae1a12293a21e1f990066",
+  "version": "1.2.51",
+  "dmg_sha256": "20afd5f5d8900f34c5429044eb142ced8787d7059f539f2599c33b7fa5fc0195",
+  "artifact_id": 12988523456,
+  "archive_sha256": "731a5d768680247e1e0f0ad6b9184c3ba83200facde7290990da988bd00c5b6b",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "4d33bca740fd17feba3040f28e9b1fcef76e0b5f3fa3fe43593e64b093fc60e1"
+    },
+    {
+      "file": "002-appearance.png",
+      "sha256": "0e64ce2a7e86f3d45b597e6a2909eb5a97e59e0e638fcf429d59c31e586d8cac"
+    },
+    {
+      "file": "003-language-menu.png",
+      "sha256": "650230c9d052a557f6a607d92e710ee9da7670586ba871dfe1303dc671829f9f"
+    },
+    {
+      "file": "004-language-changed.png",
+      "sha256": "8a6708aa333d8c323a993e672cef748054e49fdb31b69c893ffcfe3639cc7bc2"
+    },
+    {
+      "file": "005-de-restarted.png",
+      "sha256": "4e15ef165ef1a8cde710e0cd5c63e8f7df724d5674b7e3a35e86795f7756b062"
+    },
+    {
+      "file": "006-baseline-output.png",
+      "sha256": "78cfc0d499f4d90e169247b9fa99d0debcc8000b8ff5f8687b5bc589740b7392"
+    },
+    {
+      "file": "007-de-dark-normal-inbox-rest.png",
+      "sha256": "c1e70cae9b87e6222eb4ecb4b6a364e83a909ea7b13c51568a7888abb2716cb5"
+    },
+    {
+      "file": "008-de-dark-normal-inbox-hover.png",
+      "sha256": "0a9b0665912a559a6414be33bbdd6963ea544017532e73a5ec4b50229271725a"
+    },
+    {
+      "file": "009-de-dark-normal-closed.png",
+      "sha256": "8a84de7b1539e127af3ba1002c989c8165a2b400abb313edee4faea84de87279"
+    },
+    {
+      "file": "010-de-dark-normal-shell-output.png",
+      "sha256": "d544169a6e484c489863d25fe566d2ba7d2de1920449b400c5b92a4842fdb1fa"
+    },
+    {
+      "file": "011-de-dark-minimum-inbox-rest.png",
+      "sha256": "5152fbfc7710fdd7903084097a7038a92fdb7e0c934fa9f1cb530d1e3475f0fb"
+    },
+    {
+      "file": "012-de-dark-minimum-inbox-hover.png",
+      "sha256": "938d87d4db981a46b95969c1b00679c1a6dc44e0d12140f32f6548e6ceecdce5"
+    },
+    {
+      "file": "013-de-dark-minimum-closed.png",
+      "sha256": "092f91f3353bb5799ac02bb9e48aac878fc6b477c9775e0ec70611dcfc11ed21"
+    },
+    {
+      "file": "014-de-dark-minimum-shell-output.png",
+      "sha256": "834e54e95d8d1f5def16982c4f266cfb7a33d43624f23c522606f78c2f730661"
+    },
+    {
+      "file": "015-de-appearance.png",
+      "sha256": "61a996f9197758149177e7ee28f55b23738f966dcb85d8ad671e96d8a608b358"
+    },
+    {
+      "file": "016-de-theme-picker.png",
+      "sha256": "9342e7997a206e2318976f2cbbdcccb68ec48811b4cb378f7c0f39dc7a626c4c"
+    },
+    {
+      "file": "017-de-light-selected.png",
+      "sha256": "c258750418a5d2756d22c3df61f08c773dea8942e27c6a84ce2c874c9c8aaacc"
+    },
+    {
+      "file": "018-de-light-normal-inbox-rest.png",
+      "sha256": "304bf70f941bbfe36445d80f9df5eb97ef26f9d13fd0abd017067ac410436c81"
+    },
+    {
+      "file": "019-de-light-normal-inbox-hover.png",
+      "sha256": "60b8841a7e8e7e9b1d7a6707b8b7c96cd867f18fae4ba1cf98391518ba1dffac"
+    },
+    {
+      "file": "020-de-light-normal-closed.png",
+      "sha256": "61549d5d7800cb3e1cdf31a0a63c4f4a9381cc83c28356e82e069f2b1cb32872"
+    },
+    {
+      "file": "021-de-light-normal-shell-output.png",
+      "sha256": "d10c9497995745df2c3b8d0991716acc0da9763403bb427b93561fa2f0e42107"
+    },
+    {
+      "file": "022-de-light-minimum-inbox-rest.png",
+      "sha256": "3a823ba97b3c9008d246858eb07166910acae31021b3bcdbbc1a1dcfeb049464"
+    },
+    {
+      "file": "023-de-light-minimum-inbox-hover.png",
+      "sha256": "63448f64da0f55844cc77dda60d3b445f4fbacf8e14d8f75915f09ba020fb147"
+    },
+    {
+      "file": "024-de-light-minimum-closed.png",
+      "sha256": "b51e077df0abc8937fbe29f54af7d8f8b74da2ea20ff5c641d23de8f53bf106d"
+    },
+    {
+      "file": "025-de-light-minimum-shell-output.png",
+      "sha256": "2f168b66e55e4af56c2b54fc2ea29d1695b9e61810616682dc83e5bd05482937"
+    },
+    {
+      "file": "026-de-repository-open-dialog.png",
+      "sha256": "1e5689d68ec6346edfc6d0c4fc63b8273014912839be2f4072d84ee43079fb1b"
+    },
+    {
+      "file": "027-de-repository-cancel-shell-output.png",
+      "sha256": "470eb8b3ee509282d5c915e4ec07923d72987da49fc04c877d85fa6a7b179bd7"
+    }
+  ],
+  "artifact_byte_comparisons": 34,
+  "locale": "de after full owned app restart; new baseline, no persistence claim across restart",
+  "themes": [
+    "Zaplex Dark",
+    "Light"
+  ],
+  "window_sizes": [
+    [
+      1024,
+      678
+    ],
+    [
+      480,
+      320
+    ]
+  ],
+  "shell_pid": 1959,
+  "nonexported_marker": "DE151=kept",
+  "cwd_preserved": true,
+  "cases": {
+    "dark_normal": "pass: rest/hover X, one explicitly targeted click closes, fresh same shell",
+    "dark_minimum": "pass: rest/hover X, one explicitly targeted click closes, fresh same shell after restoring normal size",
+    "light_normal": "pass: rest/hover X, one explicitly targeted click closes, fresh same shell",
+    "light_minimum": "pass: rest/hover X, one explicitly targeted click closes, fresh same shell after restoring normal size",
+    "inbox_shortcut": "Ctrl+Cmd+O opens real Offene Punkte on every invocation",
+    "repository_shortcut": "Cmd+Shift+O opens real native Open window; explicit window inventory/target; Escape without selection; fresh same original shell"
+  },
+  "finish": "explicit finished marker, no session expiry; workflow success",
+  "operator_action_span_seconds": 455.375818,
+  "not_covered": [
+    "Filled inbox, waiting agents or live subscription starts",
+    "Full product matrix",
+    "Customized user shortcut configuration"
+  ]
+}
