@@ -257,6 +257,15 @@ pub fn trigger_to_keystroke(trigger: &Trigger) -> Option<Keystroke> {
     }
 }
 
+pub(crate) fn open_repository_keystroke(platform: OperatingSystem) -> Option<Keystroke> {
+    match platform {
+        OperatingSystem::Mac => Keystroke::parse("cmd-shift-O").ok(),
+        OperatingSystem::Linux | OperatingSystem::Windows | OperatingSystem::Other(_) => {
+            Keystroke::parse("alt-shift-O").ok()
+        }
+    }
+}
+
 /// Returns the corresponding [`Keystroke`], if any, of a [`CustomTag`].
 pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
     match custom.into() {
@@ -415,13 +424,7 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
                 Keystroke::parse("ctrl-shift-2").ok()
             }
         }
-        CustomAction::OpenRepository => {
-            if OperatingSystem::get().is_mac() {
-                Keystroke::parse("cmd-shift-O").ok()
-            } else {
-                Keystroke::parse("alt-shift-O").ok()
-            }
-        }
+        CustomAction::OpenRepository => open_repository_keystroke(OperatingSystem::get()),
         CustomAction::GoToLine => Keystroke::parse("ctrl-g").ok(),
         CustomAction::ToggleGlobalSearch => {
             if OperatingSystem::get().is_mac() {
