@@ -48,8 +48,9 @@ use serde::{Deserialize, Serialize};
 use warp_core::context_flag::ContextFlag;
 use warpui::accessibility::AccessibilityVerbosity;
 use warpui::elements::DropTargetData;
+use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;
-use warpui::keymap::{BindingDescription, EditableBinding};
+use warpui::keymap::{BindingDescription, EditableBinding, PerPlatformKeystroke};
 use warpui::AppContext;
 
 pub use action::{
@@ -102,6 +103,22 @@ pub use toast_stack::ToastStack;
 #[cfg(test)]
 pub(crate) use toast_stack::ToastStackEvent;
 
+const ATTENTION_INBOX_DEFAULTS: PerPlatformKeystroke = PerPlatformKeystroke {
+    mac: "ctrl-cmd-o",
+    linux_and_windows: "ctrl-shift-O",
+};
+
+fn attention_inbox_binding() -> EditableBinding {
+    EditableBinding::new(
+        "workspace:open_attention_inbox",
+        crate::t!("keybinding-desc-workspace-open-attention-inbox"),
+        WorkspaceAction::OpenAttentionInbox,
+    )
+    .with_context_predicate(id!("Workspace"))
+    .with_mac_key_binding(ATTENTION_INBOX_DEFAULTS.mac)
+    .with_linux_or_windows_key_binding(ATTENTION_INBOX_DEFAULTS.linux_and_windows)
+}
+
 pub fn init(app: &mut AppContext) {
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| cross_window_tab_drag::CrossWindowTabDrag::new());
@@ -140,19 +157,13 @@ pub fn init(app: &mut AppContext) {
     )]);
 
     // Attention inbox ("Offene Punkte"): the calm, on-demand list of fleet-wide
-    // waiting agents. Editable so the user can rebind; default cmd/ctrl-shift-O.
+    // waiting agents. Editable so the user can rebind; the Mac default leaves
+    // cmd-shift-O available to the native repository picker.
     // NB: shift + a letter must be spelled with the uppercase letter, otherwise
     // `Keystroke::parse` panics under debug_assertions (keymap.rs) and the
     // binding is silently never delivered in release (the OS sends the uppercase
     // form for shift+letter).
-    app.register_editable_bindings([EditableBinding::new(
-        "workspace:open_attention_inbox",
-        crate::t!("keybinding-desc-workspace-open-attention-inbox"),
-        WorkspaceAction::OpenAttentionInbox,
-    )
-    .with_context_predicate(id!("Workspace"))
-    .with_mac_key_binding("cmd-shift-O")
-    .with_linux_or_windows_key_binding("ctrl-shift-O")]);
+    app.register_editable_bindings([attention_inbox_binding()]);
     // "Stop all": interrupt every signalable agent in the fleet. Registered so it
     // is reachable by name and bindable, but with **no default key** — it is the
     // broadest destructive act in the app, and a key you can hit by accident is
@@ -1561,3 +1572,7 @@ impl DropTargetData for VerticalTabsPaneDropTargetData {
         self
     }
 }
+
+#[cfg(test)]
+#[path = "mod_test.rs"]
+mod tests;

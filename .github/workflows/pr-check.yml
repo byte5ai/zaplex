@@ -564,6 +564,7 @@ jobs:
           invalid_adopt_identity_error_survives_late_terminal_view_binding
           final_replay_gap_keeps_truncation_in_persistent_exit_detail
           test_boot_registers_all_keybindings_without_panicking
+          attention_inbox_default_does_not_shadow_repository_shortcuts
         shell: bash
 
       # Regression tests added for the premium workspace issues (#455, #456,

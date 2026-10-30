@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.51] — 2026-10-30
+
+- Die Inbox verwendet unter macOS Ctrl+Cmd+O, damit der Repository-Einstieg mit Cmd+Shift+O erreichbar bleibt (#746).
+
 ## [1.2.50] — 2026-10-30
 
 - Schließen-Symbole gemeinsamer Modale verwenden das vorhandene Theme und bleiben auch im hellen Erscheinungsbild sichtbar (#743).
