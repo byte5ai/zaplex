@@ -1,0 +1,10 @@
+{
+  "run": 40992840627,
+  "job": 123872775804,
+  "source": "b3d5c4cde4b372e6770aed97a1c43accf04bfe70",
+  "cases": {
+    "view_components::action_button::tests::modal_close_icon_is_readable_on_light_surfaces": "pass",
+    "view_components::action_button::tests::modal_close_icon_is_readable_on_dark_surfaces": "pass"
+  },
+  "log_sha256": "ef153739ec5068f4992049e52ae0ac679cb9dc32d444b6f15aaaf6cbaf9d9c83"
+}

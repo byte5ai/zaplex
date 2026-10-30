@@ -1,0 +1,191 @@
+{
+  "source": "b3d5c4cde4b372e6770aed97a1c43accf04bfe70",
+  "run_id": 40992840627,
+  "reviewed": [
+    {
+      "path": "agent/test_subscription_agent_conversation_layout_evidence/2026-10-30T03-21-53/subscription-agent-narrow-540x670.png",
+      "sha256": "67e57ab34861912627dd1b8a6c92dc9fc335ab32f354f1a754bd2a32a8054b33"
+    },
+    {
+      "path": "agent/test_subscription_agent_conversation_layout_evidence/2026-10-30T03-21-53/subscription-agent-normal-1180x640.png",
+      "sha256": "3bb0166ebb7500e2dbb13d9f18371a00f536df6c1be835822215cc2c5d2e0ff4"
+    },
+    {
+      "path": "agent/test_subscription_agent_conversation_layout_evidence/2026-10-30T03-21-53/subscription-agent-recoverable-error-540x670.png",
+      "sha256": "0810a16a7f74522732e87983bb53a5f3fad39223ce2c44a5390446635f38ef81"
+    },
+    {
+      "path": "workspace/test_native_file_manager_header_entry/2026-10-30T03-22-35/file-manager-header-after.png",
+      "sha256": "8fcb67fc3c2e8da7e5783ddb9141b4a054c4984622cc6bfeb253ba185a80d787"
+    },
+    {
+      "path": "workspace/test_native_file_manager_header_entry/2026-10-30T03-22-35/file-manager-header-before.png",
+      "sha256": "8defc8bccf88730bd59801ad44f9b89af222502817a39350b996c95025ff3a65"
+    },
+    {
+      "path": "workspace/test_native_workspace_connections_evidence/2026-10-30T03-22-10/native-connections-dark-250.png",
+      "sha256": "9d7c8c608e79e34cffd50187c538eebf12d33370ccac660f1937bbe44234325c"
+    },
+    {
+      "path": "workspace/test_native_workspace_connections_evidence/2026-10-30T03-22-10/native-connections-dark-320.png",
+      "sha256": "41b66d20b9227e79b2496d4635acc9a8a680d4a833ac18d9fa3097f1a816cf35"
+    },
+    {
+      "path": "workspace/test_native_workspace_connections_evidence/2026-10-30T03-22-10/native-connections-dark-480.png",
+      "sha256": "868ac358cca592c20a02be38b1d1dfa04e7617133d76e4d37ead034cd33ace10"
+    },
+    {
+      "path": "workspace/test_native_workspace_connections_evidence/2026-10-30T03-22-10/native-connections-light-250.png",
+      "sha256": "ac4eeb0de22e3ee37869574e9eee74ae772b26678e68a606d68f4e39ac2a3513"
+    },
+    {
+      "path": "workspace/test_native_workspace_connections_evidence/2026-10-30T03-22-10/native-connections-light-320.png",
+      "sha256": "08401dc19f41e144eade46203b3715bfc42a0f2b792b9a7b43aa978664bd2569"
+    },
+    {
+      "path": "workspace/test_native_workspace_connections_evidence/2026-10-30T03-22-10/native-connections-light-480.png",
+      "sha256": "d880d4ffd40048a91db82ba74a1cfdf79900097c8852546e2e3ac4b981da70fa"
+    },
+    {
+      "path": "workspace/test_native_workspace_connections_evidence/2026-10-30T03-22-10/native-favorite-flyout.png",
+      "sha256": "580d1c48680766eca6cf5817812ad67c3844f4c46fc8f6fa71e65c416ce3b913"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_evidence/2026-10-30T03-22-14/native-empty-connections-dark-250.png",
+      "sha256": "8a0f76da4df0e0ca5e158f1b68a30114c95cd6df38d37cd63c31702b503b8841"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_evidence/2026-10-30T03-22-14/native-empty-connections-dark-320.png",
+      "sha256": "4c4ff82e225d54da973955430b387e6ed3542585ebca55e70e888e5072da2977"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_evidence/2026-10-30T03-22-14/native-empty-connections-dark-480.png",
+      "sha256": "4e65598adcbc142a78e0a27fdce55089787ec1b750392ee05aeff13728437607"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_evidence/2026-10-30T03-22-14/native-empty-connections-light-250.png",
+      "sha256": "87940bde4544d6c6dfd80bdd8488c610c4ca26d1a07537c5d4a19bd5e67e3155"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_evidence/2026-10-30T03-22-14/native-empty-connections-light-320.png",
+      "sha256": "48894e5e6965109fe4df590f2efc4ca6a86d4789351b32ad13eb48a6cb05150f"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_evidence/2026-10-30T03-22-14/native-empty-connections-light-480.png",
+      "sha256": "2ed7fe3625d462dfd68800f44fef5062a6f409601c0923cd850b29b0ed7d71b1"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_evidence/2026-10-30T03-22-14/native-empty-favorites-dark.png",
+      "sha256": "fc8dbd34c8fcd7c622450cb31d49a1abfe59adf9e604873f82dcf03d54b1376c"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_evidence/2026-10-30T03-22-14/native-empty-favorites-light.png",
+      "sha256": "47d90d7bced3bfef542c60c73486820788095a99227bd93b2d77361e4efad946"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_german_evidence/2026-10-30T03-22-18/native-empty-connections-dark-250.png",
+      "sha256": "e64d2f0f452c83bee47d0afd51cf1aaed2aca0ee550f0bb22bbcec9162293781"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_german_evidence/2026-10-30T03-22-18/native-empty-connections-dark-320.png",
+      "sha256": "39533590779391159f9c0b44b3fc505ba358fce54739f1f795830b7a57b99ebb"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_german_evidence/2026-10-30T03-22-18/native-empty-connections-dark-480.png",
+      "sha256": "207c02f2d7ca786f5114e51f690ef3551c9b09b5a1483955c3f8af993a68c3bb"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_german_evidence/2026-10-30T03-22-18/native-empty-connections-light-250.png",
+      "sha256": "b2efa01f82056a8f9e87e9c77afdd2bbca85b41cb41b8b8fa519a5e3d980c5c1"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_german_evidence/2026-10-30T03-22-18/native-empty-connections-light-320.png",
+      "sha256": "a3300f95e13d02fcb3c4e8001ce9798cc7772236ad4f06252e1968c6c4cca411"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_german_evidence/2026-10-30T03-22-18/native-empty-connections-light-480.png",
+      "sha256": "84cb9e7d93f8fb0cc26baaaa171d93b3301501abacb858740e0f8c2fccdecace"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_german_evidence/2026-10-30T03-22-18/native-empty-favorites-dark.png",
+      "sha256": "6c734b60b778f1f111354947ba588715cb4ae68d1829a40b99bc510178ada477"
+    },
+    {
+      "path": "workspace/test_native_workspace_empty_states_german_evidence/2026-10-30T03-22-18/native-empty-favorites-light.png",
+      "sha256": "d67bb1cef6643dc2ebb7358baf9ea6d22adba57eb118f76d86e120d35363f2c6"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_evidence/2026-10-30T03-22-22/native-file-manager-focused-action.png",
+      "sha256": "ab40e4d95c95dc5828c888abc21c88191fde6a997fb260203817c2d033e4b5b8"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_evidence/2026-10-30T03-22-22/native-file-manager-full-name.png",
+      "sha256": "828b55192d8364d91bafb2d1508c756b88a1bfda139cd4fb61091ef1123e627c"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_evidence/2026-10-30T03-22-22/native-file-managers-narrow-light.png",
+      "sha256": "2ea33464ad75b9c23b185e934bbd5ba46ed37f493422ec703fd60a8e0254678b"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_evidence/2026-10-30T03-22-22/native-file-managers-narrow.png",
+      "sha256": "57544f65cff7a0a50fced07a840c3cdc6c747c0147ed661b5086a1967cd9601e"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_evidence/2026-10-30T03-22-22/native-file-managers-normal-light.png",
+      "sha256": "755db8857a868815665855a7897e4e3e836b90dd1d91d667cddd8b33c75e1f4f"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_evidence/2026-10-30T03-22-22/native-file-managers-normal.png",
+      "sha256": "e0e36a9b0fb3e4d3b7fe152daf8518dd6fb03d54fc6cd494356114066563f574"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_evidence/2026-10-30T03-22-22/native-file-managers-restored-terminals.png",
+      "sha256": "93c7d216a2c7568341ed316058134d4cdc9070691f2496961b191cf9a3525d64"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_german_evidence/2026-10-30T03-22-26/native-file-manager-focused-action.png",
+      "sha256": "889a736d18c0616a84a47fa570f5ca3a2b9a344025d050e4dbcdba77a157450b"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_german_evidence/2026-10-30T03-22-26/native-file-manager-full-name.png",
+      "sha256": "6af83b877a2dc9155776419ad2f953e540dcd50e46005e1b49437b30e7c3dac5"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_german_evidence/2026-10-30T03-22-26/native-file-managers-narrow-light.png",
+      "sha256": "71bde0f6feac9b11bf4f97f1bf3b74359f9d9f134cf3493924962d72c1e17b6b"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_german_evidence/2026-10-30T03-22-26/native-file-managers-narrow.png",
+      "sha256": "8e9f1a2f200b687d408fe895a2b944a24a801f5ac8a8bcca96079840f450d848"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_german_evidence/2026-10-30T03-22-26/native-file-managers-normal-light.png",
+      "sha256": "80e96a870c8d16db41b16fdfbccce572896eed15bc557f3962c4dba0c1d8bf5f"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_german_evidence/2026-10-30T03-22-26/native-file-managers-normal.png",
+      "sha256": "3920a267670b6fd64abf6101c3758b9ac3e83baaa3473bca01b960179c2b5c36"
+    },
+    {
+      "path": "workspace/test_native_workspace_file_managers_german_evidence/2026-10-30T03-22-26/native-file-managers-restored-terminals.png",
+      "sha256": "b8e7f0e263a68c4e79c2f755d5e9725b99be3b8c2283253c8d4ba6180ea895f0"
+    },
+    {
+      "path": "workspace/test_native_workspace_panes_evidence/2026-10-30T03-22-30/native-panes-after-drag.png",
+      "sha256": "a4cb89a2cc71fba65960b308506856f3acddcc55ea31e58ac3e1c5e62a628cb6"
+    },
+    {
+      "path": "workspace/test_native_workspace_panes_evidence/2026-10-30T03-22-30/native-panes-side-by-side.png",
+      "sha256": "77ab6419774cd770e1f169690e291a410040e51a4418a83e2d05c7e79a17d58d"
+    }
+  ],
+  "scope": "Static native fixture review, not live provider/subscription acceptance. Long metadata is visibly ellipsized; tooltip access is not established by these frames.",
+  "observations": [
+    "Agent conversation controls and recovery actions are visible in the three simulated states; no live provider acceptance.",
+    "Long connection host tooltip is visible at the three sidebar widths in both themes. Session names remain ellipsized; complete identity interaction is not established.",
+    "Empty connection instructions include folder and plus actions in DE/EN and both themes at 250/320/480.",
+    "Favorite flyout and its parent are visible; abbreviations and tooltip overlays are not an exhaustive keyboard/identity acceptance.",
+    "File-manager focus, eight action cells in two/four rows, folder-dialog caret and retained terminal draft are visible in both locales; no transfer or complete file-operation acceptance.",
+    "Pane before/after frames show the retained draft and custom tab title after rearrangement; no movement/video acceptance."
+  ]
+}

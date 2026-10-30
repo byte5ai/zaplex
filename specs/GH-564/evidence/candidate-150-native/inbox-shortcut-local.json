@@ -1,0 +1,37 @@
+{
+  "original_source": "b3d5c4cde4b372e6770aed97a1c43accf04bfe70",
+  "fix_commit": "acd0dae701214a480532b2de4084d717809c00d9",
+  "test": "workspace::tests::attention_inbox_default_does_not_shadow_repository_shortcuts",
+  "red": {
+    "passed": 0,
+    "failed": 1,
+    "ignored": 0,
+    "process_exit": 101,
+    "log_sha256": "2e61bae8c2c8f52254b7d56ef9a79f7fe7f271e2097b1705f88b743a660f94ac",
+    "source_file_sha256": {
+      "app/src/workspace/mod.rs": "260b2184af5ea8be0e2a4e92da305524875c9d09b674321133e0ac8d799c6525",
+      "app/src/workspace/mod_test.rs": "0c7a86db4e1af64d8a45c1e384a541efab9e136f14fc750e760918a45a59bf63",
+      "app/src/util/bindings.rs": "b2d5b7562010fdc16ff7ad5888225721c14a670ea1cb8fe815fca8f840780187"
+    }
+  },
+  "green": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "log_sha256": "ec49dc2b823a5b0d3a3ad41878d6c00c151679b2dfe1eabc079cd7b606377008"
+  },
+  "independent_provenance": "Red and final fix use byte-identical test and repository resolver. Red reports the original conflicting Mac default.",
+  "fixed_file_sha256": {
+    "app/src/workspace/mod.rs": "2472d9500fe9f2dce2fcdeaf6abc988c449c5677b3cb1ec0ff9362ab68d4a115",
+    "app/src/workspace/mod_test.rs": "0c7a86db4e1af64d8a45c1e384a541efab9e136f14fc750e760918a45a59bf63",
+    "app/src/util/bindings.rs": "b2d5b7562010fdc16ff7ad5888225721c14a670ea1cb8fe815fca8f840780187"
+  },
+  "gates": {
+    "cargo check --locked": "pass",
+    "cargo clippy --locked --bin zaplex -- -D warnings": "pass",
+    "phase_a": "13 passed",
+    "actionlint": "pass",
+    "no-new-cjk": "pass"
+  },
+  "native_fixed_dmg": "not-run; requires new 1.2.51 DMG"
+}

@@ -1,0 +1,168 @@
+{
+  "run_id": 41038876716,
+  "source": "b3d5c4cde4b372e6770aed97a1c43accf04bfe70",
+  "version": "1.2.50",
+  "dmg_sha256": "077ff57b221b01c70faf19d33a3f7921fa33f1d250873d04362adc5ba82712dc",
+  "artifact_id": 12971663851,
+  "archive_sha256": "2aadaf067ca33b498cf79ebb8ad124bf7612a9244e7fb6a4780759565c7f7926",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "4d33bca740fd17feba3040f28e9b1fcef76e0b5f3fa3fe43593e64b093fc60e1"
+    },
+    {
+      "file": "002-appearance-language.png",
+      "sha256": "f3b93eb388d1d46150cd32d5918efec0e69052b1c666c0b3d4f74390c8427e35"
+    },
+    {
+      "file": "003-language-menu.png",
+      "sha256": "650230c9d052a557f6a607d92e710ee9da7670586ba871dfe1303dc671829f9f"
+    },
+    {
+      "file": "004-language-changed.png",
+      "sha256": "8a6708aa333d8c323a993e672cef748054e49fdb31b69c893ffcfe3639cc7bc2"
+    },
+    {
+      "file": "005-german-after-restart.png",
+      "sha256": "83f4d26cc88df7659261a23acbc6d9b3f2cd246c26dbfff0e0fa49c49f826b87"
+    },
+    {
+      "file": "006-baseline-output.png",
+      "sha256": "48a7912c80bab7248e16c4aec0573d9974d6cda9e0e2ffc99154be6bf84d0fc2"
+    },
+    {
+      "file": "007-de-dark-card-normal.png",
+      "sha256": "ec7bccd112882f5ba44733fa8eb2dd3c1f7a1a5d0268ab6adb26210d19928b78"
+    },
+    {
+      "file": "008-de-dark-card-hover.png",
+      "sha256": "1f9a991c388f3a20fa5d67387cfb344432d3b54608050ff6a516e33fe00feeeb"
+    },
+    {
+      "file": "009-de-dark-codex-normal.png",
+      "sha256": "a602adf710611f7375c1bffda5b0f9af3dbeca51bea192041ffe584f5edc78d2"
+    },
+    {
+      "file": "010-after-de-dark-normal-x-typed.png",
+      "sha256": "dddc55b860d4428dd7c0bc1bf33c3a1d4f2355ba9f225c690065d49d72d1c95b"
+    },
+    {
+      "file": "011-after-de-dark-x-observed.png",
+      "sha256": "a1876bda680aae98118aa1cba9ec0b499fc78d435e8af2307f45169717a4d4ee"
+    },
+    {
+      "file": "012-after-de-dark-normal-x-output.png",
+      "sha256": "01954063e7c30cd909c957266361d8d243590b166c36fd71c18393952d3de183"
+    },
+    {
+      "file": "013-de-dark-card-minimum.png",
+      "sha256": "6f4567614a231345348ed04c01860a23430e7a557c50e0a2a497a00d82e73791"
+    },
+    {
+      "file": "014-de-dark-minimum-hover.png",
+      "sha256": "7d88e448b3437ca089e2c4ec14b80604639d29108b43c12a24e4ecd4286d58da"
+    },
+    {
+      "file": "015-de-dark-codex-minimum.png",
+      "sha256": "9dcb44285a76215fbc1e6838bd9252683f51470f604f73a39f8516801ab863da"
+    },
+    {
+      "file": "016-de-dark-minimum-options.png",
+      "sha256": "a8853186d896579890f769079f0082c7568d46634bb0ca6921fcf47757570f6c"
+    },
+    {
+      "file": "017-de-dark-minimum-before-x.png",
+      "sha256": "7d88e448b3437ca089e2c4ec14b80604639d29108b43c12a24e4ecd4286d58da"
+    },
+    {
+      "file": "018-after-de-dark-minimum-x.png",
+      "sha256": "284c046ad3fa93a552f98982202f9e8dc8e45c5927dcd03b7decf75096b3aaf9"
+    },
+    {
+      "file": "019-after-de-dark-minimum-x-output.png",
+      "sha256": "1f9b6de6a6a89c4046255aea2e312f9b161eededaf14041599660c145515e918"
+    },
+    {
+      "file": "020-de-appearance.png",
+      "sha256": "ad55c3df7726cafd3d69a2c087073e9e321430278644b6c60d1b5850907d8b51"
+    },
+    {
+      "file": "021-de-theme-picker.png",
+      "sha256": "bab3e4ac76ac49ea7770dfc160ed14ee87bdc2a0bb90795fae0134bb3645d1a3"
+    },
+    {
+      "file": "022-de-light-close-tooltip-before.png",
+      "sha256": "eb45d3ad05ad330a0845c91c5e7d6c6d46b872d37ac963f3d8f6b6064958f1ec"
+    },
+    {
+      "file": "023-de-after-theme-panel-closed-pointer-away.png",
+      "sha256": "12a5bb3f098e59c6ce0f7c3b4f22e01fe16166eb27dd0bd28f5f44aa57ebc4c2"
+    },
+    {
+      "file": "024-de-light-card-normal.png",
+      "sha256": "b62b71f5fd7df6d0ffeef568617a42fdacc82b0990bf92d20fba3482b29c2bf4"
+    },
+    {
+      "file": "025-de-light-card-hover.png",
+      "sha256": "89886a6e08d5ff135d73e31ded8a417e6b975947498d6819cb5a4293cace65a0"
+    },
+    {
+      "file": "026-de-light-codex-normal.png",
+      "sha256": "cac701fa71644ccd5557190fad1eadddada797b46750b474df1e02755e3717d5"
+    },
+    {
+      "file": "027-de-light-codex-hover.png",
+      "sha256": "afd588c8424b729a54167aa2d20b96ffc71fe95f87916ec5097e122ab2cfb1a3"
+    },
+    {
+      "file": "028-after-de-light-normal-x.png",
+      "sha256": "aa6444dee64bfc668a78d1851c9b9b89027e4fb013325320958d3943e8886519"
+    },
+    {
+      "file": "029-after-de-light-normal-x-output.png",
+      "sha256": "984bfce27e2b5b981ebde5454e448cfc968e3d2cddd890aa251094f9ef4dc98a"
+    },
+    {
+      "file": "030-de-light-card-minimum.png",
+      "sha256": "73eafdb8f9b02cc383dff5f484a556d150e625e8bc79000d9f8567ee2f39b65d"
+    },
+    {
+      "file": "031-de-light-minimum-hover.png",
+      "sha256": "4f355e7bb6b12add48a4cf94efc6d61966ca686efd60ce94f3d0154d748a4624"
+    },
+    {
+      "file": "032-de-light-codex-minimum.png",
+      "sha256": "fa1f121d4eb68c96d2c91258f18eef328f43fe1adcf4193d82a86bb138b7261f"
+    },
+    {
+      "file": "033-de-light-minimum-options.png",
+      "sha256": "056d703a215c0f575772ae7f34043c63afd2e1440893937d4b47dbd5ef766c41"
+    },
+    {
+      "file": "034-de-light-minimum-before-x.png",
+      "sha256": "4f355e7bb6b12add48a4cf94efc6d61966ca686efd60ce94f3d0154d748a4624"
+    }
+  ],
+  "locale": "de after full app restart",
+  "themes": [
+    "Zaplex Dark",
+    "Light"
+  ],
+  "shell_pid_after_restart": 2232,
+  "marker": "DE150=kept",
+  "case_results": {
+    "de_dark_normal": "X visible at rest/hover; closed after fresh observation and explicit window targeting; fresh original shell preserved. Initial unconfirmed click had no effect; cause unresolved.",
+    "de_dark_minimum": "X visible at rest/hover; one explicitly targeted click closes; fresh same original shell after restoring normal size.",
+    "de_light_normal": "X visible at rest/hover; one explicitly targeted click closes; fresh same original shell.",
+    "de_light_minimum_visual": "X visible at rest/hover, full real Codex error and four models/five effort options reachable.",
+    "de_light_minimum_close_and_shell": "not-run: interaction lease expired before click; operator rejected all subsequent input. Targeted continuation on same unchanged DMG required.",
+    "stale_tooltip": "Not reproduced with explicit pointer movement before clicks and away from the closed theme panel; no product-cause claim."
+  },
+  "finish": "Interaction window expired; workflow cleanup completed. No explicit finished marker.",
+  "not_covered": [
+    "Live subscription launch",
+    "Filled account views",
+    "Inbox keyboard navigation (known #746)",
+    "Single-click reliability claim for initial unconfirmed DE/Dark normal input"
+  ]
+}

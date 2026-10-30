@@ -153,6 +153,15 @@ Die fehlenden isolierten Abonnements begrenzen den tatsächlichen verwalteten
 Agent-/Agenten-Worktree-Fork und gefüllte Cockpit-Kontotabs. Details und Fallgrenzen
 stehen im Kandidatenbericht; die Gesamtmatrix bleibt getrennt.
 
+Die [installierte Nachprüfung von 1.2.50](CANDIDATE-1.2.50-NATIVE.md) bestätigt
+einen vollständig grünen Batch, 16/16 installierte Pflichtfälle sowie 44 einzeln
+betrachtete native Fixture-Dateien. Die Startkarte zeigt das korrigierte X in
+DE/EN und Hell/Dunkel bei 1024×678/480×320. Tatsächlicher Klick mit frischer
+erhaltener Shell ist in allen Varianten außer DE/Light am Minimum belegt; dort
+lief das Operatorfenster vor dem Klick ab, die gezielte Fortsetzung bleibt separat.
+Der Inbox-Einstieg scheitert am konkurrierenden Kürzel #746. Beides wird nicht
+durch grüne Fixtures oder GUI-Pflichtfälle ersetzt; die Gesamtmatrix bleibt offen.
+
 ## Referenzen und Bewertung
 
 - **C**: [Cockpit-Spezifikation](../../docs/ui/cockpit-sidebar-connections.html#spec),
