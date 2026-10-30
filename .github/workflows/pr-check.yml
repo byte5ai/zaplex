@@ -509,6 +509,8 @@ jobs:
           test_import_from_file
           file_manager_start_path_uses_session_cwd
           file_manager_start_path_falls_back_when_no_cwd
+          view_components::action_button::tests::modal_close_icon_is_readable_on_light_surfaces
+          view_components::action_button::tests::modal_close_icon_is_readable_on_dark_surfaces
           pane_group::tree::tests::
           pane_group::terminal_titles::tests::
           routed_agent_launch_waits_for_the_new_shell_without_losing_the_request
