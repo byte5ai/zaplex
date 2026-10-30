@@ -1,0 +1,29 @@
+{
+  "run_id": 41106705216,
+  "job_id": 124256132101,
+  "source": "7d16fee989aea6d4ab8b0727478143f5064fb9bd",
+  "version": "1.2.52",
+  "verified_at": "2026-10-30T19:14:58.188193+00:00",
+  "artifact_id": 13005245720,
+  "archive_sha256": "cbabaeace9dc071670d7aee5490392cef4f01fe65bd6fd254d63507c1e9a56b4",
+  "junit_sha256": "d2e6caa44dc4f8c64f05c4c493d31f53e9df7825056a35b2e7325bddeb50378a",
+  "testcases": 4402,
+  "failed": 0,
+  "skipped": 0,
+  "new_case_matches": {
+    "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects": 1,
+    "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection": 1,
+    "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen": 1,
+    "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity": 1,
+    "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path": 1,
+    "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository": 1,
+    "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch": 1
+  },
+  "frozen_expected_sha256": "2b575f134fac03826554f6dc86e37d8c6518a36ffd7af6860c45661e139c42a6",
+  "frozen_at": "2026-10-30T18:26:20.510493+00:00",
+  "baseline_run": 41056697950,
+  "case_inventory_sha256": "3a103b7ba004885c5c4da77cb8c5f5aaadd12ee6f687a5f3d8bb378640ccf05e",
+  "flaky_or_rerun_failure_records": 0,
+  "frozen_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6530428655",
+  "frozen_hash_comment_updated_before_package_started": true
+}

@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.53] — 2026-10-30
+
+- Repository-Auswahl auch nach einer erfolglosen Suche sichtbar halten: Die neue Ordnerwahl setzt den alten Suchfilter zurück, bevor das gewählte Ziel angezeigt wird (#749).
+
 ## [1.2.52] — 2026-10-30
 
 - Repository-Auswahl im Worktree-Startdialog sichtbar halten: aktuelles und neu gewähltes Ziel stimmen mit der Anzeige überein; lange Pfade sind vollständig als Tooltip lesbar (#749).

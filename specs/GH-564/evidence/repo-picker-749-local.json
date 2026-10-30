@@ -47,9 +47,19 @@
     "diff_check": {
       "exit": 0
     },
-    "changed_workflow_actionlint": {
+    "changed_workflow_actionlint_typecheck_without_shellcheck": {
       "exit": 0,
       "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "default_actionlint_with_shellcheck": {
+      "exit": 1,
+      "baseline_exit": 1,
+      "baseline_product_revision": "5b3d84e37e23bf12dde3ed90b5c332665d7f88ec",
+      "diagnostics": 9,
+      "identical_diagnostics_after_normalizing_baseline_copy_prefix": true,
+      "all_diagnostics_in_unchanged_release_scripts": true,
+      "log_sha256": "b96ea8483fbe2b9776c0165a3ae051cd5b9ec59c1cc1bcd2e7de45e82ba41e29",
+      "baseline_log_sha256": "5e8156891bfe2919ff0a4e788fc0845e40ce778e0df5eba9f084701854d89a4b"
     }
   },
   "source_files_sha256": {

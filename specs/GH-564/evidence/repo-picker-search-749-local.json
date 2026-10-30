@@ -1,0 +1,70 @@
+{
+  "issue": 749,
+  "version": "1.2.53",
+  "base_product_revision": "7d16fee989aea6d4ab8b0727478143f5064fb9bd",
+  "verified_at": "2026-10-30T19:42:00.436554+00:00",
+  "counterexample": {
+    "product_version": "1.2.52",
+    "case": "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search",
+    "executed": 1,
+    "failed": 1,
+    "ignored": 0,
+    "assertion": "actual closed-dropdown rendered label is empty instead of the newly selected repository B",
+    "actual_search_editor_input_verified": true,
+    "log_sha256": "1a73e03e2ce03f9348895f4eabf54fa43f6e5c287297314b46e09acaca267d0d",
+    "initial_empty_selector_counted_as_test": false
+  },
+  "regression_tests": {
+    "expected_count": 8,
+    "executed": 8,
+    "passed_case_ids": [
+      "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch",
+      "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects",
+      "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search",
+      "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path",
+      "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection",
+      "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen",
+      "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity"
+    ],
+    "failed": 0,
+    "ignored": 0,
+    "log_sha256": "32cb42124c01424ff3067efa070cef944db3f8ec54f69dff01eacf20038e142c"
+  },
+  "checks": {
+    "cargo_check_locked": {
+      "exit": 0,
+      "log_sha256": "362a040ceb3e2d1e6bf2c17d85a2785a72b4978633a49f37ffe4d1a0ca8bceed"
+    },
+    "binary_clippy_warnings_denied": {
+      "exit": 0,
+      "log_sha256": "a81b1721232ac4b486848e2c4dc197fd88c32d906edfc3a44e7a70c2c9d80495"
+    },
+    "phase_a": {
+      "exit": 0,
+      "passed": 13
+    },
+    "touched_rustfmt": {
+      "exit": 0
+    },
+    "diff_check": {
+      "exit": 0
+    },
+    "default_actionlint_including_shellcheck": {
+      "exit": 1,
+      "baseline_exit": 1,
+      "diagnostics": 9,
+      "identical_to_base_after_only_baseline_copy_prefix_normalization": true,
+      "all_diagnostics_in_unchanged_release_scripts": true,
+      "log_sha256": "b96ea8483fbe2b9776c0165a3ae051cd5b9ec59c1cc1bcd2e7de45e82ba41e29",
+      "baseline_log_sha256": "dabce6277362407d873f5668b3cb8c71b5dcca6fb96812649cc43f44dbf8cdae"
+    }
+  },
+  "source_files_sha256": {
+    "app/src/tab_configs/repo_picker.rs": "3cb6167f9473bc2b41e278469ef5d0a0ddfe58d2f785104fa4656e8799cb6a1a",
+    "app/src/tab_configs/repo_picker_tests.rs": "87d03a848193c70ac4cf975d1f718b5e188bb4679852e0d61ccef9299d352d88",
+    "VERSION": "c1a6175087f3cd84c56d92a9ef15370e0af7cb3a99d57a540a1745dcc94f4e3d",
+    "Cargo.lock": "7dce54e65394b391de41be3d16e33b838bd7bbcae9c307d646c4338aaa1f5e82"
+  },
+  "native_acceptance": "Pending a new unchanged 1.2.53 DMG; the superseded 1.2.52 batch was explicitly cancelled before a DMG was built."
+}

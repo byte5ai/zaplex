@@ -140,6 +140,7 @@ impl RepoPicker {
             .map(|path| DropdownItem::new(path.clone(), RepoPickerAction::Select(path.clone())))
             .collect();
         self.dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.clear_filter(ctx);
             dropdown.set_items(items, ctx);
             if let Some(ref path) = path_to_select {
                 dropdown.set_selected_by_name(path.as_str(), ctx);
