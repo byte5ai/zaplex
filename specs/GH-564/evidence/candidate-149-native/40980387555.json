@@ -1,0 +1,71 @@
+{
+  "run_id": 40980387555,
+  "app_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+  "version": "1.2.49",
+  "language": "en",
+  "theme": "Zaplex Dark",
+  "window": [
+    1024,
+    678
+  ],
+  "visually_reviewed": {
+    "001-initial.png": "2317bf4db783ff9f2f300c71c4d2603b2d8ce3d5e7147bf0604daa9758c8e46d",
+    "002-local-baseline.png": "e99d91d41dd20c0886f12e475c73ba37886154f713e20ca6e888660ab72417d5",
+    "003-remote-owner-output.png": "8a1919fd6e037f1b3e0df34f6496b9ca927ef02fb810b5c0f244c284da04207f",
+    "006-first-install-output.png": "cb7819fd30bc2361cb9d54906911d071ffedbbea98c5809b2effc7d24d5270fa",
+    "007-classic-ssh-output.png": "9ba799bc3638caf26b8fd5f62e541be7335a5de82978d0ae3cb5da9405314a74",
+    "008-ssh-choice.png": "f96576d654cd842c11d712ce0e5d7c28f77151988a8849d2f4b1fc0054871e26",
+    "009-remote-runtime-output.png": "aa74e56e4d371bef63655f5bfc77abafc3fed770b32a32703311c1adc96b6028",
+    "010-connections.png": "ab6de6a4e533d727f52a26740118d32061e84b28f1c27e5d35d4e35276be3bb2",
+    "011-connection-click.png": "44082974957e87f0b365d95ab0605fb561d5dc44a42d3ecac9efc61fd38af92a",
+    "012-add-host.png": "a93055140ca511211146cc733688bb0ee5c95aaeba3e0e0c9a3fa84efa8267cb",
+    "014-fresh-directory-output.png": "0e4103e90ab7b2d65f1cb9961acf2ea544ee17774910d46e893682ddaa259c1f",
+    "016-true-first-choice.png": "514c827b97a59684b060d5c730e0f7d4c726166c76e46fd396d203663649a164",
+    "017-choice-after-65s.png": "514c827b97a59684b060d5c730e0f7d4c726166c76e46fd396d203663649a164",
+    "018-install-progress.png": "fe5e4f0e825326ca80da8b81e4307c63c60f0170bfd792d4c1974ef1677cc828",
+    "019-installed-ready.png": "1e03a784e411ad772ffebd8025d9d125d5511dddf9b5c6dfd4891218d0ed2b90",
+    "020-first-install-shell-output.png": "81575919e1580f0f41c0afaf0db78871efd96fef700d7ca7907b916e9f6f8f5b",
+    "021-imported-host.png": "c6b1ef72c8abdf5f3fede56848a07b6482254c9bf520183786d7d85de0d53ec7",
+    "023-persistent-connecting.png": "21738c4d3977ead24d5b445babd4b87753e92bb8f25b590f023d83db92200551",
+    "024-persist-before-output.png": "a737c9a130dc77a328141cfb92d64460996d155af24897228112bad2ebcc1ec7",
+    "025-local-control-tab.png": "cc64b562b4f505303e28a6c827c1939d03d30a4c711ac184b287a9ecf9bfa22b",
+    "026-disconnect-output.png": "fba4e57eb2cdc6dd34f4465f366c0e0338758366bcc7313756de27f7c8ecb17f",
+    "027-reconnected-tab.png": "6465be5aad8d958fe94e09047f381e3e5eddb17f2a16b239c2f30b030987b526",
+    "028-persist-after-output.png": "b15337d6dbfe18fa1288271adb79fb19e0b27861f4499c333dd408a487693ded",
+    "029-official-auth-output.png": "3dd991912e1bcfe97ec45ec6759da359ca3ac731735dfa6290de53e7fd34556c",
+    "030-original-tab.png": "974b2349caaa7a681b5e05e210b57d2b0e48f20d648bbf199fe673034097287a",
+    "031-classic-return-output.png": "9bb374d25478175d510bc0d43dd242122f93dce52b60383d8e482fe36b6f2085",
+    "032-local-preserved-output.png": "9b7811f1093cf00ca32558371f861f24a8ee8686695c70ff10ef88df5a0fcbac"
+  },
+  "case_results": {
+    "classic_ssh_auto_update": "pass",
+    "first_install_choice_over_65s": "pass",
+    "first_install_followed_by_fresh_shell": "pass",
+    "registered_persistent_session_appears_automatically": "pass",
+    "same_shell_after_transport_exit": "pass",
+    "original_local_shell_preserved": "pass",
+    "subscription_agent_start": "not-run; official live status Claude api_key_helper and Codex API",
+    "password_connection_and_key_settings": "not-run",
+    "cancel_pending_ssh": "not-run"
+  },
+  "operator_exclusions": [
+    "004/005: read-only process scan permission errors, no fixture mutation",
+    "010: incorrect operator y-coordinate; 011 used image coordinates",
+    "prepared binary moved first; existing directory caused expected auto-update; 014 removed directory by owned reversible rename before true first installation"
+  ],
+  "cleanup": {
+    "cleanup": "owned-processes-stopped-and-data-trashed",
+    "daemon_processes": 1,
+    "owned_processes": 2
+  },
+  "product_acceptance": "not-run",
+  "choice_wait_seconds_between_observations": 85.375289,
+  "archive_verification": {
+    "sha256": "7c4043ba4730b0438eaad081a18fd37d76ff12caed55a26be4324e311ac71508",
+    "app_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+    "dmg_sha256": "5f4429e3f38b128b6cfc079a1993fe16bd46846158bbca516a5ed31ecd622557",
+    "version": "v1.2.49",
+    "matched_images": 49,
+    "contains_private_keys": false
+  }
+}
