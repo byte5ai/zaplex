@@ -1,0 +1,14 @@
+{
+  "run_id": 41056697950,
+  "job_id": 124088851296,
+  "source": "421125b94239368c718d30784e7c3d17448b3506",
+  "version": "1.2.51",
+  "artifact_id": 12982532691,
+  "archive_sha256": "1bdb6570ba014f75102d0b1f27c834f924da48de33593e3357fc6d837f241057",
+  "junit_sha256": "28e18cc3d033b76c9bc4758a79296f1bc2f8086d4e37a0ef5d866ec946806ef0",
+  "testcases": 4395,
+  "failed": 0,
+  "skipped": 0,
+  "new_collision_case_matches": 1,
+  "new_collision_case": "workspace::tests::attention_inbox_default_does_not_shadow_repository_shortcuts"
+}
