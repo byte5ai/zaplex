@@ -1,0 +1,203 @@
+{
+  "run_id": 41034730295,
+  "source": "b3d5c4cde4b372e6770aed97a1c43accf04bfe70",
+  "version": "1.2.50",
+  "dmg_sha256": "077ff57b221b01c70faf19d33a3f7921fa33f1d250873d04362adc5ba82712dc",
+  "artifact_id": 12969625046,
+  "archive_sha256": "e3e201e9e7ba3211429198668c52b759c3c708a31bf127eb308db9dfc971f444",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "462ba84cc709197b5f78c6dbed89a15b5c3899bb7046c84421bfd78827e4e0f0"
+    },
+    {
+      "file": "002-baseline-output.png",
+      "sha256": "780258a1ac3c92e85ff8e12039cfbb6ff90568ebb865b7fa665ab72916512d13"
+    },
+    {
+      "file": "003-launch-menu.png",
+      "sha256": "625fda70347c8af3809a501082c95f613a86db78bdceb1a86119ac9a124a8f9f"
+    },
+    {
+      "file": "004-en-dark-card-normal.png",
+      "sha256": "24181c003953775fd25fb52294a7db698e8f0ce88cafd3f0869ceb5a930fd959"
+    },
+    {
+      "file": "005-en-dark-card-hover.png",
+      "sha256": "0dbb4a74cf8147e2261dead96a97f1a8acaa60f4955e05dd83944db92ed68b71"
+    },
+    {
+      "file": "006-en-dark-codex-normal.png",
+      "sha256": "019572d149a87fc56f7a5cec6a64cc86b1045ae723a104067df7c6a6219a5eff"
+    },
+    {
+      "file": "008-en-dark-codex-hover.png",
+      "sha256": "00653f4b3f28913fa8b1c52093afa09c9353887e023578c39fb3ae146b156365"
+    },
+    {
+      "file": "009-after-normal-x-output.png",
+      "sha256": "1d39eca46481ebfb4cca4f0f74290c9891c4cb132c01875c5e1805e0e7daba54"
+    },
+    {
+      "file": "010-en-dark-inbox-normal.png",
+      "sha256": "80468c9bf16960217991fb68821564669b275e6f44764b5e208c9b0a9e447f77"
+    },
+    {
+      "file": "012-shortcut-open-dialog.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "013-en-dark-card-minimum.png",
+      "sha256": "72da1c2e80d690a3cec336dbc33bf8acc670255ad2a4a0eff30b1ce79bf734c3"
+    },
+    {
+      "file": "014-en-dark-minimum-menu.png",
+      "sha256": "80e32eb5a84468703e2dfad80bd54c2511ad1fa505262d8ee00c8437fd496aa7"
+    },
+    {
+      "file": "015-en-dark-card-minimum.png",
+      "sha256": "a1df96828b27dc909d4959eeca9e2aee802ff34a83a42de06971190e312c3868"
+    },
+    {
+      "file": "016-en-dark-minimum-hover.png",
+      "sha256": "ddabd51ac2f268e9d26d1df98a0ee64be57b958bc48bca86e491a321becbd919"
+    },
+    {
+      "file": "017-en-dark-codex-minimum.png",
+      "sha256": "240b29457bb8c99b09262a73c96253d3c7b4a3a015f6256e4ef176f22f2fd57d"
+    },
+    {
+      "file": "018-en-dark-minimum-options.png",
+      "sha256": "1da80afce220e6478df5d626732f1d54ae8a987f23f2c9c013ad0fc1fe9c36ef"
+    },
+    {
+      "file": "019-en-dark-minimum-before-x.png",
+      "sha256": "6200f190407766000b91266fe9ad617c2ed7c04bc69245e3a927eddf13a305a7"
+    },
+    {
+      "file": "020-after-minimum-x-output.png",
+      "sha256": "ce26d08115872dbb8825327542b6bbb540dad32e75a761174839bf2355dc4445"
+    },
+    {
+      "file": "021-settings.png",
+      "sha256": "770d783999f2aeccaedac054245853fa0ded4a7880fd85beb934b3e5e9cff1a3"
+    },
+    {
+      "file": "022-appearance.png",
+      "sha256": "c5657a75c732e14e97f1d2cea6efc5737d5919aa1de5479930231edd1bf9c700"
+    },
+    {
+      "file": "023-theme-picker.png",
+      "sha256": "d7923ef78ba1bf1588a614a1dbc39ed9ad904fc8ce4ce9b76d1801a82f91d4ca"
+    },
+    {
+      "file": "024-light-selected.png",
+      "sha256": "ea0f05286e7d6b9831bbee76f058372845e799a5dff332f129618489265fd269"
+    },
+    {
+      "file": "025-after-theme-output.png",
+      "sha256": "44a5268ed5a4cb1cb6e46f299b6e91c7512661b4a347676495eb12def797213d"
+    },
+    {
+      "file": "026-en-light-card-normal.png",
+      "sha256": "c1fcd848d3de453ec5fb48d59595334e3367d1a2592ad245cadd2b7c2c7959aa"
+    },
+    {
+      "file": "027-en-light-card-hover.png",
+      "sha256": "fecf5753c721c6f0c633bdc82957680d15991769880929bcc6fa09ce1a0cafdb"
+    },
+    {
+      "file": "028-en-light-codex-normal.png",
+      "sha256": "4d78548fccf841492bfdf07d43e9dee38a645ca57999429bc63560c12eaa67e4"
+    },
+    {
+      "file": "029-en-light-disabled-launch.png",
+      "sha256": "4d78548fccf841492bfdf07d43e9dee38a645ca57999429bc63560c12eaa67e4"
+    },
+    {
+      "file": "030-after-light-normal-x-output.png",
+      "sha256": "90ea5e64ea2676977421ceca1c2af4f0231272ab3766e40022456f76b9866896"
+    },
+    {
+      "file": "031-en-light-minimum-shell.png",
+      "sha256": "443a0a78c6bf161df19347ff3d7968b5ea6ec9890b32cca9d3a7e1aafad119e9"
+    },
+    {
+      "file": "032-en-light-card-minimum.png",
+      "sha256": "3fe09a5c4f187bd755bf4fdb6ceb92f1ad42079e5926ce22a811662607cd5976"
+    },
+    {
+      "file": "033-en-light-minimum-hover.png",
+      "sha256": "51e11cfa96dd065b46ee1c4f2f60ca0f8ab8a8568e3ebd0de0ca78302eef2b19"
+    },
+    {
+      "file": "034-en-light-codex-minimum.png",
+      "sha256": "f9c445fd9b7877d42b9de012b7cea9b02718458a9dfb842278d458d336dd10d4"
+    },
+    {
+      "file": "035-en-light-minimum-options.png",
+      "sha256": "066a7ffb06c25979d9e9fe88433116099a3b970660fedd8e469f071c881f10be"
+    },
+    {
+      "file": "036-en-light-minimum-before-x.png",
+      "sha256": "8cb2a74b221b115286fe53676537906901249caf65b395735e660ef9a625f899"
+    },
+    {
+      "file": "037-after-light-minimum-x-output.png",
+      "sha256": "05efc40f628eb298de2926a6b0fcd86046bfa8081409c411fd1a95c8f7e7c286"
+    },
+    {
+      "file": "038-connections-hover-after-stale-tooltip.png",
+      "sha256": "838d02842127c03ac2739a58e4c15ea4d846452e6648234ffdb0e51a507c95c6"
+    },
+    {
+      "file": "039-empty-hover-after-stale-tooltip.png",
+      "sha256": "4a4dd8a98f7a3dd70aee6979ce151604c4f0e9b010565fc1c0eeb7ae57f1f0ca"
+    },
+    {
+      "file": "040-en-light-options-with-normal-pointer-movement.png",
+      "sha256": "29641cb790b729639a35f36876fc7fb46f7571b3c121b1bd527ad657379e6abb"
+    },
+    {
+      "file": "041-en-light-clean-minimum-before-x.png",
+      "sha256": "bf5e4caa10aabbbb8dd5a201364b7376e3cf4b8b240f4c4ea994100771443172"
+    },
+    {
+      "file": "042-final-shell-output.png",
+      "sha256": "056b3ab8cc8eabddcbb1c63cfa48035d48273dac3ef7ac18e5f3a441d6b183dc"
+    }
+  ],
+  "shell_pid": 1509,
+  "marker": "NATIVE150=kept",
+  "window_sizes": [
+    [
+      1024,
+      678
+    ],
+    [
+      480,
+      320
+    ]
+  ],
+  "locale": "en",
+  "themes": [
+    "Zaplex Dark",
+    "Light"
+  ],
+  "finish": "explicit finished marker; workflow completed successfully",
+  "cases": {
+    "modal_x_en_dark_normal": "pass: visible at rest and hover, click closes, fresh original shell output",
+    "modal_x_en_dark_minimum": "pass: visible at rest and hover, click closes, fresh original shell output later fully visible after restoring normal size",
+    "modal_x_en_light_normal": "pass: visible at rest and hover, click closes, fresh original shell output",
+    "modal_x_en_light_minimum": "pass: visible at rest and hover, click closes, fresh original shell output after restoring normal size",
+    "real_codex_error": "fully visible at normal and minimum sizes in both themes; actual disabled Launch click in EN/Light normal has byte-identical before/after images",
+    "model_effort_options": "four models and five effort options visible in both themes; minimum Light cleanly recaptured in frame 040",
+    "attention_inbox_shortcut": "fail: Cmd+Shift+O opens the native repository picker; duplicate default verified in source",
+    "stale_tooltip": "observation: Close panel tooltip persists across removal/theme/modal states, then is replaced by Connections tooltip and disappears on leaving that control. Root cause versus input-sequence contribution remains unverified."
+  },
+  "operator_exclusions": [
+    "007: stale X coordinate after the Codex card re-centered; typed-command readback prevented Return, then fresh coordinates succeeded.",
+    "010/011: default see selected the inactive main window; explicit window 88 revealed the native Open dialog.",
+    "013: stale plus-menu coordinate after shrinking the tab strip; no menu opened. Fresh geometry was then used."
+  ]
+}

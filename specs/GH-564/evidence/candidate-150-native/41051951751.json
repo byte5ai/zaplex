@@ -1,0 +1,86 @@
+{
+  "run_id": 41051951751,
+  "source": "b3d5c4cde4b372e6770aed97a1c43accf04bfe70",
+  "version": "1.2.50",
+  "dmg_sha256": "077ff57b221b01c70faf19d33a3f7921fa33f1d250873d04362adc5ba82712dc",
+  "artifact_id": 12976309263,
+  "archive_sha256": "39643b5b7cb276e245064218da7a1665c01ac59eb73ece7b84b4793c301c7b76",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "2317bf4db783ff9f2f300c71c4d2603b2d8ce3d5e7147bf0604daa9758c8e46d"
+    },
+    {
+      "file": "002-settings.png",
+      "sha256": "55891cc7e6b05413eea735188c34cfd252498ddffab2e7833a2b1ec50af015c2"
+    },
+    {
+      "file": "003-appearance.png",
+      "sha256": "0e64ce2a7e86f3d45b597e6a2909eb5a97e59e0e638fcf429d59c31e586d8cac"
+    },
+    {
+      "file": "004-language.png",
+      "sha256": "650230c9d052a557f6a607d92e710ee9da7670586ba871dfe1303dc671829f9f"
+    },
+    {
+      "file": "005-language-changed.png",
+      "sha256": "8a6708aa333d8c323a993e672cef748054e49fdb31b69c893ffcfe3639cc7bc2"
+    },
+    {
+      "file": "006-german-restarted.png",
+      "sha256": "4e15ef165ef1a8cde710e0cd5c63e8f7df724d5674b7e3a35e86795f7756b062"
+    },
+    {
+      "file": "007-german-settings.png",
+      "sha256": "63fdd0e6f66fee490b956ab8e75c74aa29e9a296935fc9ad2607b0aded3a391d"
+    },
+    {
+      "file": "008-theme-picker.png",
+      "sha256": "7c239a462a2e73215fcd420a17634020a76dccbb293cd6b20456857ec0e2749f"
+    },
+    {
+      "file": "009-light-selected.png",
+      "sha256": "76d86704adb9d949cd159eda82f51b821a9b26ad14ae034201ab8cb9236dfbfc"
+    },
+    {
+      "file": "010-baseline-output.png",
+      "sha256": "e43980fa16277414741afe932c5b2af25389e3a9c0ee9686a88e5fb2ccc7af68"
+    },
+    {
+      "file": "011-minimum-menu.png",
+      "sha256": "721dce124dd6ebdf898cbffd51c345ce03e16e043bc30f03dca30527e84792b9"
+    },
+    {
+      "file": "012-de-light-minimum-rest.png",
+      "sha256": "887690f25a8d3f1a1522aeacdf3424669e0eede2a959fa0b5aa41703e3483f86"
+    },
+    {
+      "file": "013-de-light-minimum-hover.png",
+      "sha256": "fc04da9f9b20c1bb43b83b208cc4ec194885e8455db813a826c94917322fa6dd"
+    },
+    {
+      "file": "014-after-x.png",
+      "sha256": "3f401e0cb206c8e8ae70dfcb3beef637e5f0d2210688714d7bd85b19cca37d87"
+    },
+    {
+      "file": "015-after-x-shell-output.png",
+      "sha256": "b12244b54e1e5f3cfc4d118c21f95c4b57bdff5f578eaa75f0b907806e5b3fba"
+    }
+  ],
+  "artifact_byte_comparisons": 18,
+  "locale": "de after full owned app restart; new shell baseline",
+  "theme": "Light",
+  "window_size": [
+    480,
+    320
+  ],
+  "shell_pid": 2002,
+  "nonexported_marker": "DE150F=kept",
+  "cwd_preserved": true,
+  "case_result": "pass: visible X at rest (012) and hover (013); one explicitly targeted click closes only card (014); fresh same shell after restoring 1024x678 (015).",
+  "finish": "explicit finished marker; completed successfully; no session expiry",
+  "not_covered": [
+    "Additional provider/model cases intentionally not repeated",
+    "Inbox fix is only in later 1.2.51 source"
+  ]
+}

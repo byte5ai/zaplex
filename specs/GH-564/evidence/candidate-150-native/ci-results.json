@@ -1,0 +1,16 @@
+{
+  "run_id": 40992840627,
+  "source": "b3d5c4cde4b372e6770aed97a1c43accf04bfe70",
+  "package": {
+    "testcases": 4394,
+    "failed": 0,
+    "skipped": 0,
+    "junit_sha256": "679361a6d9bbbce6fe62cf9a3a0e756955ace9a92023bbfb6c372504213e8b3f"
+  },
+  "app_regressions": {
+    "passed_executions": 813,
+    "successful_result_blocks": 27,
+    "distinct_tests": "not inferred; selections can overlap",
+    "log_sha256": "ef153739ec5068f4992049e52ae0ac679cb9dc32d444b6f15aaaf6cbaf9d9c83"
+  }
+}
