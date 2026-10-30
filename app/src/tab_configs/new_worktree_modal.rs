@@ -588,3 +588,7 @@ impl TypedActionView for NewWorktreeModal {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "new_worktree_modal_tests.rs"]
+mod tests;

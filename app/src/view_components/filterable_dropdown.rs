@@ -57,6 +57,7 @@ pub struct FilterableDropdown<A: Action + Clone> {
     style_override: Option<UiComponentStyles>,
     hovered_style_override: Option<UiComponentStyles>,
     menu_header_text_override: Option<MenuHeaderTextFormatter>,
+    selected_item_tooltip_enabled: bool,
     /// True when a pinned footer has been registered via `set_footer`.
     /// When true, the footer lives inside the `Menu`'s own `Dismiss` (via
     /// `Menu::set_pinned_footer_builder`), so clicks on it never trigger the
@@ -120,6 +121,7 @@ where
             style_override: None,
             hovered_style_override: None,
             menu_header_text_override: None,
+            selected_item_tooltip_enabled: false,
             has_pinned_footer: false,
             menu_width: None,
             vertical_margin: DROPDOWN_PADDING,
@@ -132,6 +134,11 @@ where
         F: Fn(&str) -> String + 'static,
     {
         self.menu_header_text_override = Some(Box::new(formatter));
+    }
+
+    /// Makes the complete selected label available when the closed picker is hovered.
+    pub fn set_selected_item_tooltip_enabled(&mut self, enabled: bool) {
+        self.selected_item_tooltip_enabled = enabled;
     }
 
     pub fn set_footer<F>(&mut self, builder: F, ctx: &mut ViewContext<Self>)
@@ -435,6 +442,13 @@ where
 
         if let Some(hovered_style) = self.hovered_style_override {
             top_bar = top_bar.with_hovered_styles(hovered_style);
+        }
+
+        if self.selected_item_tooltip_enabled {
+            if let Some(label) = self.selected_item_label() {
+                let tooltip = appearance.ui_builder().tool_tip(label);
+                top_bar = top_bar.with_tooltip(move || tooltip.build().finish());
+            }
         }
 
         if self.disabled {
