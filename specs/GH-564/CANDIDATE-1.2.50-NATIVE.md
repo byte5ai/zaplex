@@ -46,7 +46,7 @@ folgt keine Shellpersistenz über den Neustart.
 | EN / Zaplex Dark | X bei Ruhe/Hover kontrastreich, Klick schließt, frische ursprüngliche Shell (004–009). | Dasselbe Ergebnis (015–020); Shellausgabe nach Rückvergrößerung vollständig lesbar. |
 | EN / Light | X sichtbar, Hover und Klick wirksam, frische ursprüngliche Shell (026–030). | Dasselbe Ergebnis, nochmals ohne den zuvor beobachteten fremden Tooltip aufgenommen (032–042). |
 | DE / Zaplex Dark | X bei Ruhe/Hover sichtbar; nach frischer Beobachtung und expliziter Fensterwahl geschlossen, frische ursprüngliche Shell (007–012). | Ein explizit adressierter Klick schließt; frische ursprüngliche Shell (013–019). |
-| DE / Light | X sichtbar, Hover und ein explizit adressierter Klick wirksam, frische ursprüngliche Shell (024–029). | Sichtbarkeit, Hover, Fehler und Optionen belegt (030–034). Abschließender Klick und frische Shell in dieser Sitzung nicht ausgeführt: Operatorfenster abgelaufen. Gezielte Fortsetzung am selben DMG erforderlich. |
+| DE / Light | X sichtbar, Hover und ein explizit adressierter Klick wirksam, frische ursprüngliche Shell (024–029). | Sichtbarkeit, Hover, Fehler und Optionen in der ersten Sitzung belegt (030–034). Die gezielte Fortsetzung bestätigt zusätzlich sichtbares X vor/mit Hover, tatsächliches Schließen und frische ursprüngliche Shell (012–015 des Folgelaufs). |
 
 Die echte Codex-Fehlermeldung ist in allen vier Sprach-/Themevarianten sowohl
 normal als auch am Minimum vollständig lesbar beziehungsweise vertikal erreichbar.
@@ -61,6 +61,24 @@ bytegenau gegen das jeweilige abgeschlossene Workflow-Artefakt geprüft. Die zwe
 Zahl bezeichnet keine zusätzliche visuelle Abnahme.
 [EN-Fallurteile und Einzelhashes](evidence/candidate-150-native/41034730295.json),
 [DE-Fallurteile und Einzelhashes](evidence/candidate-150-native/41038876716.json).
+
+Die deutsche Sitzung lief vor dem letzten X-Klick am Minimum ab; abgelehnte
+Eingaben zählen nicht als ausgeführt. Die kurze
+[Fortsetzung 41051951751](https://github.com/byte5ai/zaplex/actions/runs/41051951751)
+verwendet denselben unveränderten 1.2.50-DMG/Quellstand, stellt Deutsch und Light
+erneut über die echte UI ein und erfasst nach dem App-Neustart eine neue Baseline.
+Ein explizit ans aktuelle Fenster gerichteter Klick auf das zuvor sichtbar
+angehoverte X schließt nur die Karte. Die anschließend frisch ausgeführte Ausgabe
+bestätigt dieselbe Shell-PID, denselben nicht exportierten Marker und dasselbe CWD.
+15 weitere Originale wurden einzeln angesehen; alle 18 lokal gesicherten PNGs
+stimmen bytegenau mit dem Workflow-Artefakt überein. Der Lauf wurde unmittelbar
+danach ausdrücklich beendet, ohne Ablauf des Interaktionsfensters.
+[Fortsetzungsnachweis](evidence/candidate-150-native/41051951751.json).
+
+Damit ist #743 an der Agentenkarte in allen acht festgelegten Kombinationen aus
+Sprache, Theme und Größe nativ nachgeprüft. Die drei Sitzungen umfassen zusammen
+89 einzeln betrachtete Originale. Das ist keine pauschale Abnahme aller gemeinsamen
+Modale oder der vollständigen Produktmatrix.
 
 ## Zusätzlicher nativer Befund: konkurrierende Kürzel
 
