@@ -1,0 +1,137 @@
+{
+  "run_id": 41075900378,
+  "app_source": "421125b94239368c718d30784e7c3d17448b3506",
+  "harness_source": "cdda5e7b114ae978371ae1a12293a21e1f990066",
+  "version": "1.2.51",
+  "dmg_sha256": "20afd5f5d8900f34c5429044eb142ced8787d7059f539f2599c33b7fa5fc0195",
+  "artifact_id": 12987901683,
+  "archive_sha256": "8840c2317e9c201585e07615b11e025b7665ba2df0cba0a90ec63ec473836abb",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "4d33bca740fd17feba3040f28e9b1fcef76e0b5f3fa3fe43593e64b093fc60e1"
+    },
+    {
+      "file": "002-baseline-output.png",
+      "sha256": "7c405907d08a456dfe3e86fb5cdc4b82fb90f2d76683d977a45e755192f463d0"
+    },
+    {
+      "file": "003-dark-normal-inbox-rest.png",
+      "sha256": "939fa734db675033de0e1742ccd277dfa2954a1554aeb80840412b7ff0684ade"
+    },
+    {
+      "file": "004-dark-normal-inbox-hover.png",
+      "sha256": "617ef80755cd3329553cb65406c3a9c5f42596b868f6c7fbac280ec088ee067a"
+    },
+    {
+      "file": "005-dark-normal-closed.png",
+      "sha256": "dcb4625a3be930fb1d4b0ff4a71651c682f55e919586df8d7451b6f8be017d55"
+    },
+    {
+      "file": "006-dark-normal-shell-output.png",
+      "sha256": "b1958c17385e385be832b4c9614b74e675b00e087ff855980172f76368b6e91b"
+    },
+    {
+      "file": "007-dark-minimum-inbox-rest.png",
+      "sha256": "210ff33e284097ae418c57d0218933357a123bdf9d9b02666d126aec17128b6f"
+    },
+    {
+      "file": "008-dark-minimum-inbox-hover.png",
+      "sha256": "d442e881eeab82db3fbf29dd5b39cf1648d068e13bb9d1afdce3aa0132e15f04"
+    },
+    {
+      "file": "009-dark-minimum-closed.png",
+      "sha256": "554eb7669e1567559e21e508fd54ff0dc166f8bbf9d440ea2536d96c96a55e7b"
+    },
+    {
+      "file": "010-dark-minimum-shell-output.png",
+      "sha256": "25b985d2d3f282b533a0c999ccb189fc604806fcb941feb0d97d1fe85fce8c2e"
+    },
+    {
+      "file": "011-appearance.png",
+      "sha256": "139119955f7c9c8f6f04094b6eed108a1a60cc432c14e41095e97effcc424e6a"
+    },
+    {
+      "file": "012-theme-picker.png",
+      "sha256": "d5320e140f91965f06b36cc98209fc08c9107a2ce1d410720bd3ec67d199d253"
+    },
+    {
+      "file": "013-light-selected.png",
+      "sha256": "c801279ebd78dc2233ac98b61a9e4ebd458d4a52a945c3e956c41e2861f1312d"
+    },
+    {
+      "file": "014-light-normal-inbox-rest.png",
+      "sha256": "3ca07fa9e1957d08f69e3ecf8d256c30eb1a6e378559dd71fb9c763cec28188c"
+    },
+    {
+      "file": "015-light-normal-inbox-hover.png",
+      "sha256": "24a1a6c364dffe0b770b5b5e61a42098b87e58707b8bc2c595a46f330f118d07"
+    },
+    {
+      "file": "016-light-normal-closed.png",
+      "sha256": "89735727fb99884321fb33707eeb1e29e10aa3b7c3697b9500e0348485022234"
+    },
+    {
+      "file": "017-light-normal-shell-output.png",
+      "sha256": "fbbd83a71fb16f162dbef6d323dab413c9a94b17b865e2e2b645842d6f7421f6"
+    },
+    {
+      "file": "018-light-minimum-inbox-rest.png",
+      "sha256": "2bf1a947c9826771a495b6fd4aceb772b717d8907e2b316212541ab25df72854"
+    },
+    {
+      "file": "019-light-minimum-inbox-hover.png",
+      "sha256": "45043d87dd029c67778d23a4e2510baa779a127483510052ae83ead71c8b8dca"
+    },
+    {
+      "file": "020-light-minimum-closed.png",
+      "sha256": "197c234b183ad1c7b77740805f6d2a37705681bd7f196fa2cc2d1ffaa7779d68"
+    },
+    {
+      "file": "021-light-minimum-shell-output.png",
+      "sha256": "65090276501cb5ace9c7cbb7ff217e8c5beebaa95efbd8faa2771e7492d6e716"
+    },
+    {
+      "file": "022-repository-open-dialog.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "023-repository-cancel-shell-output.png",
+      "sha256": "1c3e35b4647ca3fe59f4458d2835f06714d122c3aa734658ddaedc74b7b9a42e"
+    }
+  ],
+  "artifact_byte_comparisons": 30,
+  "locale": "en",
+  "themes": [
+    "Zaplex Dark",
+    "Light"
+  ],
+  "window_sizes": [
+    [
+      1024,
+      678
+    ],
+    [
+      480,
+      320
+    ]
+  ],
+  "shell_pid": 1458,
+  "nonexported_marker": "EN151=kept",
+  "cwd_preserved": true,
+  "cases": {
+    "dark_normal": "pass: rest/hover X, one explicitly targeted click closes, fresh same shell",
+    "dark_minimum": "pass: rest/hover X, one explicitly targeted click closes, fresh same shell after restoring normal size",
+    "light_normal": "pass: rest/hover X, one explicitly targeted click closes, fresh same shell",
+    "light_minimum": "pass: rest/hover X, one explicitly targeted click closes, fresh same shell after restoring normal size",
+    "inbox_shortcut": "Ctrl+Cmd+O opens real Open items on every invocation",
+    "repository_shortcut": "Cmd+Shift+O opens real native Open window; explicit window inventory/target; Escape without selection; fresh same original shell"
+  },
+  "finish": "explicit finished marker, no session expiry; workflow success",
+  "operator_action_span_seconds": 408.907939,
+  "not_covered": [
+    "Filled inbox, waiting agents or live subscription starts",
+    "Full product matrix",
+    "Customized user shortcut configuration"
+  ]
+}

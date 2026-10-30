@@ -1,0 +1,133 @@
+{
+  "run_id": 41079791577,
+  "app_source": "421125b94239368c718d30784e7c3d17448b3506",
+  "harness_source": "cdda5e7b114ae978371ae1a12293a21e1f990066",
+  "version": "1.2.51",
+  "dmg_sha256": "20afd5f5d8900f34c5429044eb142ced8787d7059f539f2599c33b7fa5fc0195",
+  "artifact_id": 12990147299,
+  "archive_sha256": "857d001b5f5f6cc73f779de71389205d722801e1d716f03f48d7f1a212257d2c",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "4d33bca740fd17feba3040f28e9b1fcef76e0b5f3fa3fe43593e64b093fc60e1"
+    },
+    {
+      "file": "002-locate-output.png",
+      "sha256": "cbbada4eda9e635e5548044bd8b1ce2eec59317e90b76902d0d05ee17acf9d4c"
+    },
+    {
+      "file": "003-verify-repository-output.png",
+      "sha256": "ec4553ab4c16cccc99649181f2fc3735fd50f377a2fe99cf91652b80272803fb"
+    },
+    {
+      "file": "004-baseline-output.png",
+      "sha256": "3256d431973eac4c587063a59eff720fc825bd6ca5f6b645181f8ae96cd0a5a0"
+    },
+    {
+      "file": "005-git-snapshot-output.png",
+      "sha256": "cdc2e883f0256edd27012f4e3ef039c81761fe8273e10f2914c64932e6f1387e"
+    },
+    {
+      "file": "006-launch-menu.png",
+      "sha256": "cf8506ab20b88027533b51089d0124ea242e629c75d125b370e982bd4003daa9"
+    },
+    {
+      "file": "007-worktree-submenu.png",
+      "sha256": "ab55fb8b08f9c33af780e4597207c481f75c3403cfc1fcccbf60666512400a6d"
+    },
+    {
+      "file": "008-after-add-repo.png",
+      "sha256": "1fbc4a287a43494004d88e70797a43036c13085342362c4f2336687ad79720a9"
+    },
+    {
+      "file": "009-repository-options.png",
+      "sha256": "6047467185a6486b13a12769fb5d2b9ac1ff807a6970e9d976fa0aff854515cc"
+    },
+    {
+      "file": "010-repo-picker.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "011-go-to-existing-repo.png",
+      "sha256": "2e58c6858dde4aba0ed3c46ece5a76fbb6766f1b8e7ea492c02fb0a63b63f0b3"
+    },
+    {
+      "file": "012-go-folder-screen.png",
+      "sha256": "ca4a5a7f6a8b8f9a372d560bfd3829829755b24d9253059dd213cad37b268272"
+    },
+    {
+      "file": "013-go-folder-path-readback.png",
+      "sha256": "4d7a1337e0263a6cac8886b4d28971642ac4e592209af7aec6315045c2d92c04"
+    },
+    {
+      "file": "014-existing-repo-selected.png",
+      "sha256": "ba06e927a7e085c3a503785871497f4b0e64a167ac3daa9a112971bb03eaabc6"
+    },
+    {
+      "file": "015-worktree-form-ready.png",
+      "sha256": "0978182c36e43c070bf5eed7d9e0a9c94fd9da749e14ce2fb4138458a92ad73a"
+    },
+    {
+      "file": "016-after-worktree-open.png",
+      "sha256": "f0aeee20e64ad57de48d708b5e4f908abacc38befb098219c72683bb8920c3e1"
+    },
+    {
+      "file": "017-worktree-shell-output.png",
+      "sha256": "a03afe44fba684fce56e7c832db9ad7a14bb4535db5a47dd7a01d2e89c3d2105"
+    },
+    {
+      "file": "018-original-tab-returned.png",
+      "sha256": "14d40f8ac746a9bb442dc88467e3e7466ca3a6e7053838a3a965c2842e3f2d47"
+    },
+    {
+      "file": "019-original-shell-output.png",
+      "sha256": "f4d43085744aa7de9c4f41f67defc1cc5fc0e090c1b9e083398e2d6075d06bf7"
+    }
+  ],
+  "artifact_byte_comparisons": 26,
+  "locale": "en",
+  "theme": "Zaplex Dark",
+  "window_size": [
+    1024,
+    678
+  ],
+  "original_shell_pid": 1476,
+  "new_shell_pid": 4003,
+  "nonexported_original_marker": "WT151=kept; unset in new shell",
+  "original_cwd_preserved": true,
+  "base_git_head": "cdda5e7b114ae978371ae1a12293a21e1f990066",
+  "base_branch": "main",
+  "new_branch": "barrel-siesta",
+  "worktree_count_before": 1,
+  "worktree_count_after": 2,
+  "original_git_status": "clean before and after, byte-identical",
+  "original_git_head_preserved": true,
+  "original_worktree_record_preserved": true,
+  "common_git_directory": "same original repository, independently shown by git in new shell (017)",
+  "git_snapshot_sha256": {
+    "git-head-after.txt": "218815f8f3a40dce31b98d60c3b88d3d77b5911b87f6869175245106f12c39a4",
+    "git-head-before.txt": "218815f8f3a40dce31b98d60c3b88d3d77b5911b87f6869175245106f12c39a4",
+    "git-status-after.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "git-status-before.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "git-worktrees-after.txt": "ae00dc8d4c23125460b6f815d9fdb259aebf2c518e4997c4b373fa8008c185f1",
+    "git-worktrees-before.txt": "28db949444ec33646ed062eca6d295908eaaea5d6478359b2075004fb17a7f0c"
+  },
+  "functional_result": "pass: created via actual visible UI; no clone/git init; own new tab/shell/branch at base HEAD; exact one additional worktree; original shell preserved",
+  "ui_results": {
+    "repository_confirmation": "fail: selected repository field stays visually empty after existing folder selection, while Open becomes enabled; new worktree proves selection took effect",
+    "menu_label": "shortened but full New worktree config tooltip visible in 007; meets existing #711 full-label-or-tooltip criterion",
+    "tab_identity": "pass: Local \u00b7 zaplex and Local \u00b7 barrel-siesta readable and distinct after creation"
+  },
+  "operator_exclusions": [
+    "Go to Folder is a transient native sheet without independent AX-window identity. Pinned typing refused focus; fresh full-screen observation showed empty input. Documented intentional foreground typing used only after that observation, with visible path readback before Return.",
+    "Full-screen 012/013 include an OS Dock tile extension banner; those frames prove only unobscured folder field/path input, not complete toolbar parity."
+  ],
+  "finish": "explicit finished marker, no session expiry; workflow success",
+  "operator_action_span_seconds": 550.179884,
+  "not_covered": [
+    "Managed agent or subscription worktree fork",
+    "Other languages/themes/sizes",
+    "Filled account views"
+  ],
+  "correction_issue": 749
+}

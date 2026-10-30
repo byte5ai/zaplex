@@ -1,0 +1,16 @@
+{
+  "run_id": 41056697950,
+  "job_id": 124083986786,
+  "source": "421125b94239368c718d30784e7c3d17448b3506",
+  "version": "1.2.51",
+  "test": "workspace::tests::attention_inbox_default_does_not_shadow_repository_shortcuts",
+  "passed": 1,
+  "matched_success_lines": 1,
+  "failed": 0,
+  "ignored": 0,
+  "log_sha256": "a984a3f64839607299f43535c3efe7913eacb89a8e06a41355ec7b8835552105",
+  "app_regression_result_blocks": 27,
+  "passed_app_test_executions": 814,
+  "distinct_test_total": "not inferred; overlapping selections possible",
+  "platform": "native macOS Apple Silicon"
+}
