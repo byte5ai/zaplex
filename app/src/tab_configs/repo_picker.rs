@@ -18,7 +18,7 @@ const DEFAULT_DROPDOWN_WIDTH: f32 = 380.;
 /// Label for the sticky "Add new repo..." footer at the bottom of the picker.
 const ADD_NEW_REPO_LABEL: &str = "+ Add new repo...";
 
-/// A filterable dropdown listing known repos (from `PersistedWorkspace`), with a
+/// A filterable dropdown showing the current repo, with a
 /// sticky "+ Add new repo..." footer that is always visible even when scrolling.
 ///
 /// Emits:
@@ -26,7 +26,7 @@ const ADD_NEW_REPO_LABEL: &str = "+ Add new repo...";
 /// - [`RepoPickerEvent::RequestAddRepo`] when the user clicks "+ Add new repo...".
 pub struct RepoPicker {
     dropdown: ViewHandle<FilterableDropdown<RepoPickerAction>>,
-    /// The currently selected repo path (updated by `handle_action`).
+    /// The currently selected repo path.
     selected: Option<String>,
     /// Mouse state for the sticky "Add new repo..." footer row.
     add_repo_mouse_state: MouseStateHandle,
@@ -44,10 +44,7 @@ pub enum RepoPickerEvent {
 }
 
 impl RepoPicker {
-    /// Creates a new picker pre-populated with all known projects.
-    ///
-    /// `default_value` is pre-selected if it appears in the project list (or is
-    /// added as an extra entry if it doesn't).
+    /// Creates a new picker with the optional current repo pre-selected.
     pub fn new(default_value: Option<String>, ctx: &mut ViewContext<Self>) -> Self {
         Self::new_with_style(default_value, None, ctx)
     }
@@ -57,14 +54,13 @@ impl RepoPicker {
         style: Option<PickerStyle>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        // PersistedWorkspace is deprecated, no longer subscribes to "WorkspaceAdded" events.
-        // Dropdown list is always empty, only the bottom `+ Add new repo...` fallback button remains.
         let width = style.as_ref().map_or(DEFAULT_DROPDOWN_WIDTH, |s| s.width);
         let bg = style.and_then(|s| s.background);
         let dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = FilterableDropdown::new(ctx);
             dropdown.set_top_bar_max_width(width);
             dropdown.set_menu_width(width, ctx);
+            dropdown.set_selected_item_tooltip_enabled(true);
             if let Some(bg) = bg {
                 dropdown.set_style(UiComponentStyles {
                     background: Some(bg.into()),
@@ -128,27 +124,28 @@ impl RepoPicker {
         picker
     }
 
-    /// Refreshes the dropdown list from `PersistedWorkspace` and optionally
-    /// pre-selects a specific path.
+    /// Shows and selects the path chosen in the folder picker.
     pub fn refresh_and_select(&mut self, path: PathBuf, ctx: &mut ViewContext<Self>) {
         let path_str = path.to_string_lossy().to_string();
         self.refresh_items(Some(&path_str), ctx);
     }
 
     fn refresh_items(&mut self, select_path: Option<&str>, ctx: &mut ViewContext<Self>) {
-        // PersistedWorkspace is deprecated, no longer provides "previously opened git repos" as candidates,
-        // dropdown list is always empty, `+ Add new repo...` exists as sticky footer.
-        let items: Vec<DropdownItem<RepoPickerAction>> = Vec::new();
-
         let path_to_select = select_path
             .or(self.selected.as_deref())
-            .map(|s| s.to_owned());
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned);
+        let items = path_to_select
+            .iter()
+            .map(|path| DropdownItem::new(path.clone(), RepoPickerAction::Select(path.clone())))
+            .collect();
         self.dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(items, ctx);
             if let Some(ref path) = path_to_select {
                 dropdown.set_selected_by_name(path.as_str(), ctx);
             }
         });
+        self.selected = path_to_select;
 
         ctx.notify();
     }
@@ -202,3 +199,7 @@ impl TypedActionView for RepoPicker {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "repo_picker_tests.rs"]
+mod tests;

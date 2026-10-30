@@ -1,0 +1,67 @@
+{
+  "issue": 749,
+  "version": "1.2.52",
+  "verified_at": "2026-10-30T18:22:06.619305+00:00",
+  "base_product_revision": "5b3d84e37e23bf12dde3ed90b5c332665d7f88ec",
+  "initial_counterexample": {
+    "product_version": "1.2.51",
+    "tests": 4,
+    "passed": 1,
+    "failed": 3,
+    "first_failed_assertion": "effective selection was None instead of the supplied repository path",
+    "log_sha256": "dd049888c526eefb5b35821a1dc8589d629a679a0849f9df2b53c6114ae311f2"
+  },
+  "regression_tests": {
+    "command": "cargo test --locked -p warp --lib -- repository_picker_ worktree_modal_submits_the_displayed_current_or_newly_selected_repository worktree_modal_without_repository_rejects_submission_even_with_a_branch",
+    "expected_count": 7,
+    "actual_count": 7,
+    "passed_case_ids": [
+      "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch",
+      "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects",
+      "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path",
+      "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection",
+      "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen",
+      "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity"
+    ],
+    "failures": 0,
+    "ignored": 0,
+    "log_sha256": "b162d9c72b1aab96d3e64bf24276bb09ea34f3f2e8aee6d469ab609e9bf45998"
+  },
+  "checks": {
+    "cargo_check_locked": {
+      "exit": 0,
+      "log_sha256": "fa5af96eb102e126094c5647d1565373daebf61659c65aa027c9a6bb5d6e52fc"
+    },
+    "binary_clippy_warnings_denied": {
+      "exit": 0,
+      "log_sha256": "de5464b96f7badb5045b9d686502bf1becd97e2e529d0cd4c56e44a1867b0ee9"
+    },
+    "phase_a": {
+      "exit": 0,
+      "passed": 13
+    },
+    "touched_rustfmt": {
+      "exit": 0
+    },
+    "diff_check": {
+      "exit": 0
+    },
+    "changed_workflow_actionlint": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "source_files_sha256": {
+    "app/src/tab_configs/repo_picker.rs": "05698d2aa307f771c58d843c597ff73d5ad4a5d7fc4f8cf4ce056df58174c91c",
+    "app/src/tab_configs/repo_picker_tests.rs": "8c82e94182caea4547a85f84a6c9023b129e32a2506ea01c51f02aed39c3724f",
+    "app/src/tab_configs/new_worktree_modal.rs": "53ab13eba2f74908d7d3186fd1269a866376bacf92d669dca023398a8b51549a",
+    "app/src/tab_configs/new_worktree_modal_tests.rs": "7c61b6374d0cc1a2a13785b137b6a0ce63f8ef443eaf771f775edefe4391d07d",
+    "app/src/view_components/filterable_dropdown.rs": "7db1626b3454339bb79c647004d8480d64a6aeb69134fdf94e405e7fdb8f679a",
+    ".github/workflows/pr-check.yml": "b22b2e6eb93f025c72c4ce3f5143216107507ab85683a717fd609a417061141e",
+    "VERSION": "2238ac8d008e6f8e9aeb4078dd9673906f64d5494ba15fe3e16cf63d34dd31b3",
+    "Cargo.lock": "b75f48ac17c291d7878e91456675fed1e24e5d497c02ead11555298fe6f91955"
+  },
+  "scope": "Real RepoPicker dropdown render text, selected value and NewWorktreeModal Submit events; branch-completion input is delivered as a controlled event independently of Git timing.",
+  "native_acceptance": "Pending a new unchanged 1.2.52 DMG; earlier 1.2.51 native failure is preserved in candidate-151-native/41079791577.json."
+}

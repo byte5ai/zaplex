@@ -32,7 +32,7 @@ on:
       dmg_tag:
         description: Must match the original source VERSION
         type: string
-        default: v1.2.51
+        default: v1.2.52
       fast:
         description: Resume requires the original release profile (false)
         type: boolean
@@ -45,7 +45,7 @@ on:
       dmg_tag:
         description: "GIT_RELEASE_TAG (bestimmt den remote-server-Pfad auf dem Ziel-Host)"
         type: string
-        default: v1.2.51
+        default: v1.2.52
       fast:
         description: "Debug-Profil für Mac-App und Linux-Daemon. Nur für schnelle Entwicklerprüfung; für Abnahme-DMGs ausgeschaltet lassen."
         type: boolean

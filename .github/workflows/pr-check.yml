@@ -565,6 +565,9 @@ jobs:
           final_replay_gap_keeps_truncation_in_persistent_exit_detail
           test_boot_registers_all_keybindings_without_panicking
           attention_inbox_default_does_not_shadow_repository_shortcuts
+          repository_picker_
+          worktree_modal_submits_the_displayed_current_or_newly_selected_repository
+          worktree_modal_without_repository_rejects_submission_even_with_a_branch
         shell: bash
 
       # Regression tests added for the premium workspace issues (#455, #456,
