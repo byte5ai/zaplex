@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.54] — 2026-10-30
+
+- Repository-Auswahl: Die gesamte Zeile „Add new repo“ öffnet den Ordnerdialog, auch nach einer Suche ohne Treffer.
+
 ## [1.2.53] — 2026-10-30
 
 - Repository-Auswahl auch nach einer erfolglosen Suche sichtbar halten: Die neue Ordnerwahl setzt den alten Suchfilter zurück, bevor das gewählte Ziel angezeigt wird (#749).
