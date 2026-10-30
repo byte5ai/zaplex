@@ -1,0 +1,76 @@
+{
+  "run_id": 40982095905,
+  "app_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+  "version": "1.2.49",
+  "dmg_sha256": "5f4429e3f38b128b6cfc079a1993fe16bd46846158bbca516a5ed31ecd622557",
+  "languages": [
+    "en"
+  ],
+  "themes": [
+    "Zaplex Dark",
+    "Light"
+  ],
+  "geometry": [
+    [
+      1024,
+      678
+    ],
+    [
+      480,
+      320
+    ]
+  ],
+  "visually_reviewed": {
+    "001-local-initial.png": "4d33bca740fd17feba3040f28e9b1fcef76e0b5f3fa3fe43593e64b093fc60e1",
+    "002-local-baseline-output.png": "5f65a307c8de8c347593ad955e5920c05e76839c98cf5655d2992e904fce7cf0",
+    "003-plus-menu.png": "ccdca66a845cbe0e8de1584d76fbc0a9c432af41bf205758830997ac715f2f92",
+    "005-launch-menu.png": "9d474c38050df7aa3cf81dd7528c76e1a4510f6bdae7048ea48163d77d803406",
+    "006-agent-selected.png": "b585b120cb339d38a8164cde3643f9d2518f98ec35edba1a121904850d355a8e",
+    "007-agent-card-endark.png": "37cab9b5b598ffc9d4b4c37e0cb8778e03d1d77f034231442dc75eeebe38433a",
+    "008-card-endark-minimum-top.png": "bb4687a07151c3fa50b9d2f3b0a02629e47a83171e8c743912a741700390af0b",
+    "009-card-endark-minimum-middle.png": "eff3af93fe643816eef69dab1deab392ed50994b0bc273229797a687163d026b",
+    "010-card-endark-minimum-models.png": "3db06eb7b500216ba63dd35e9f7b1f69d81a59d6274a7d832375f8b02405de9b",
+    "012-card-endark-middle-drag.png": "e6fd971b6e91284649a17ae10aaa8f8a1882ecaff82eb896bbec98c90a176e6b",
+    "013-card-endark-efforts.png": "59ce0d0384781e2a5df99c0090ad89214ed982ff44c9383cd8ff095f4cab74a2",
+    "014-card-endark-summary-max.png": "ed76c5882f3a296d104d527c662bd94c5c91eea7e2e3b87505978fe1526d704d",
+    "015-card-top-again.png": "1f8e707afae11c1cf621f8d7332285e7ff0add1785144b768eb8ddca9664508f",
+    "016-codex-endark-error-top.png": "6f1b9630e229829982d066804d5c27b5294b5ed0157f20ce9c05c7e36798db1f",
+    "017-codex-endark-error-middle.png": "8244b75845f23234087f3587737be3784efa4e4f4c9034cc6fe17a3ca3d1520b",
+    "018-codex-endark-disabled.png": "8244b75845f23234087f3587737be3784efa4e4f4c9034cc6fe17a3ca3d1520b",
+    "020-cancel-return.png": "5f65a307c8de8c347593ad955e5920c05e76839c98cf5655d2992e904fce7cf0",
+    "021-local-auth-and-shell-output.png": "b705ba3e8242f2760a102cb7affa37a6e6ed9b153ef3e6d9c1c2b64e58e45542",
+    "022-cockpit-sidebar.png": "c4a97173c81f8a62d0f19ea06ba7c3b5007f7321b29f50951d6948a0db8f5cd8",
+    "023-accounts-endark.png": "d64e961662185fb990c50c94a8a4e85520ea33fdc3d07514e813833fc862be4d",
+    "024-settings.png": "770d783999f2aeccaedac054245853fa0ded4a7880fd85beb934b3e5e9cff1a3",
+    "025-appearance.png": "c5657a75c732e14e97f1d2cea6efc5737d5919aa1de5479930231edd1bf9c700",
+    "026-theme-picker.png": "eb5ac91dddf7c4f367838f9b8f2638b4c7a31d828855e81aa6bf37f8894d08e1",
+    "027-light-search.png": "d7923ef78ba1bf1588a614a1dbc39ed9ad904fc8ce4ce9b76d1801a82f91d4ca",
+    "028-light-selected.png": "ea0f05286e7d6b9831bbee76f058372845e799a5dff332f129618489265fd269",
+    "029-enlight-shell.png": "53d8a7e32144dfc4055bb40ad9f81ebac65e29548ef50abdb1d8a9bd7453a97f",
+    "030-agent-menu-enlight.png": "e8de14c9ea1acab8b16b4d094eb0cb50942e08a65697f058445d66719e967558",
+    "031-card-enlight-1024.png": "baee896182d351aa78710aa4c52160ec5e985b636074b47f6b626dad577b86c9",
+    "032-card-enlight-minimum-top.png": "02f10331ff858fbe7d2689799c43c924cacce786dff8ee7cadf1c7c0c00a2c32",
+    "033-card-enlight-models-efforts.png": "9b0a93a7f29b5bf807b25c8551802256a7e37bebadef09cbda1430bb6fa0982a",
+    "034-card-enlight-top-after-scroll.png": "61ea7fbdfeeeab5a814a2fa7f7da377db619d6658eec1c4593870a448c52d5b9",
+    "035-codex-enlight-error.png": "81c080657fe3a40825d92356726a2916b01776dc8cb800dbce8eb64326d01e07",
+    "036-codex-enlight-footer.png": "07481a450c0b0cb47a126bd5875cdc20ca7c602a04df5920efc68e024f5c0ad5",
+    "037-after-enlight-output.png": "70540da76b86d1f2277e740881de78da650e0e7600b3f8c5191fec9ec7bcc1f1"
+  },
+  "case_results": {
+    "model_and_effort_reachable_at_minimum": "pass",
+    "real_codex_error_not_horizontally_clipped": "pass",
+    "launch_disabled_on_discovery_error": "pass",
+    "original_shell_after_card_cancel": "pass",
+    "light_modal_close_icon": "fail; GH-743",
+    "real_subscription_launch_and_agent_worktree_fork": "not-run; no isolated authenticated subscription",
+    "populated_cockpit_account_tabs": "not-run; no actual accounts"
+  },
+  "product_acceptance": "not-run",
+  "archive_verification": {
+    "artifact_id": 12946157152,
+    "archive_sha256": "a54521b4417f7bfb1bb525f6278d2eaad6289de179b1010a7b6013033aa59f28",
+    "matched_images": 41,
+    "app_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+    "dmg_sha256": "5f4429e3f38b128b6cfc079a1993fe16bd46846158bbca516a5ed31ecd622557"
+  }
+}

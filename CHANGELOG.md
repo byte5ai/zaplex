@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.50] — 2026-10-30
+
+- Schließen-Symbole gemeinsamer Modale verwenden das vorhandene Theme und bleiben auch im hellen Erscheinungsbild sichtbar (#743).
+
 ## [1.2.49] — 2026-10-29
 
 - Sichere Symlink-Operationen öffnen unter macOS den Link selbst; native Pfadprüfungen verwenden kanonische Testverzeichnisse und Linux-Daemon-Systemtests laufen auf Linux.

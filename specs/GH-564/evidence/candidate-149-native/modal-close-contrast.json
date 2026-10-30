@@ -1,0 +1,40 @@
+{
+  "app_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+  "test": "view_components::action_button::tests::modal_close_icon_is_readable_on_light_surfaces",
+  "result": "failed on original production factory, Light unhovered",
+  "production_file_sha256": "5f0e0408dfcc44334e33dba0ed1cbc56d3b422669c34de3925d238d0f2dc76bc",
+  "test_file_sha256": "9d3fa3eac492dd9f17b2db008335712a9834b88f889cf443b61964e4d23ae93a",
+  "process_exit": 101,
+  "corrected_version": "1.2.50",
+  "green": {
+    "tests": [
+      "view_components::action_button::tests::modal_close_icon_is_readable_on_light_surfaces",
+      "view_components::action_button::tests::modal_close_icon_is_readable_on_dark_surfaces"
+    ],
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "hover_states": [
+      false,
+      true
+    ]
+  },
+  "native_corrected_dmg": "not-run",
+  "compile_gate": "cargo check --locked: pass",
+  "required_clippy": "cargo clippy --locked --bin zaplex -- -D warnings: pass",
+  "extended_test_clippy": {
+    "base_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+    "corrected_version": "1.2.50",
+    "command": "cargo clippy -p warp --lib --tests --locked -- -D warnings",
+    "baseline_exit": 101,
+    "change_exit": 101,
+    "baseline_diagnostics": 159,
+    "change_diagnostics": 159,
+    "diagnostic_files": 43,
+    "new_diagnostics": [],
+    "removed_diagnostics": [],
+    "normalized_diagnostics_sha256": "e0944ea91765bfd7b75ba4dce968860f7fbbcb2f1aee4999efb54de33ec7e512",
+    "configuration_sha256": "de92b9f9b5868ab66b51c721d6e54d32cc1c1e7fd2ad68c51f1900ee486a72ed",
+    "required_binary_clippy": "pass"
+  }
+}

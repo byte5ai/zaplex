@@ -1529,3 +1529,7 @@ impl ButtonSize {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "action_button_tests.rs"]
+mod tests;

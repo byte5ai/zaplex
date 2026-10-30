@@ -19,7 +19,6 @@
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use warp_core::ui::theme::{phenomenon::PhenomenonStyle, Fill};
 use warpui::elements::{
     Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     Dismiss, DropShadow, Element, Flex, MainAxisSize, OffsetPositioning, ParentAnchor,
@@ -30,7 +29,7 @@ use warpui::{Action, AppContext};
 
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
+use crate::view_components::action_button::{ActionButton, ButtonSize, PaneHeaderTheme};
 
 /// The one corner radius for every modal card. Unified from the old split
 /// (`Modal`/`Dialog` = 8, cockpit = 10) to the premium cockpit value.
@@ -69,33 +68,10 @@ pub fn unsaved_input_dismiss_action<A>() -> Option<A> {
 /// carries the caller's dispatch) and places it via [`modal_header`], giving
 /// every modal the identical corner ✕.
 pub fn close_button<A: Action + Clone + 'static>(action: A) -> ActionButton {
-    ActionButton::new("", CloseButtonTheme)
+    ActionButton::new("", PaneHeaderTheme)
         .with_icon(Icon::X)
         .with_size(ButtonSize::Small)
         .on_click(move |ctx| ctx.dispatch_typed_action(action.clone()))
-}
-
-/// The shared theming for the modal close ✕: transparent at rest, a calm hover
-/// wash, the muted modal-chrome text color. One definition for every modal.
-struct CloseButtonTheme;
-
-impl ActionButtonTheme for CloseButtonTheme {
-    fn background(&self, hovered: bool, _appearance: &Appearance) -> Option<Fill> {
-        if hovered {
-            Some(Fill::Solid(PhenomenonStyle::modal_close_button_hover()))
-        } else {
-            None
-        }
-    }
-
-    fn text_color(
-        &self,
-        _hovered: bool,
-        _background: Option<Fill>,
-        _appearance: &Appearance,
-    ) -> ColorU {
-        PhenomenonStyle::modal_close_button_text()
-    }
 }
 
 /// The one modal header: `title` (+ optional `subtitle`) resting on the left, a

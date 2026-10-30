@@ -1,0 +1,29 @@
+{
+  "verified_at": "2026-10-30T00:33:37.492841+00:00",
+  "run_id": 40970919530,
+  "artifact_id": 12944158410,
+  "app_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+  "test_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+  "dmg_sha256": "5f4429e3f38b128b6cfc079a1993fe16bd46846158bbca516a5ed31ecd622557",
+  "version": "v1.2.49",
+  "case_results": {
+    "NavigationTests/testCancelSplitKeepsOriginalShell": "Passed",
+    "NavigationTests/testClosingTabPreservesOriginalShell": "Passed",
+    "NavigationTests/testSettingsReturnToOriginalShell": "Passed",
+    "NavigationTests/testSplitDown": "Passed",
+    "NavigationTests/testSplitLeft": "Passed",
+    "NavigationTests/testSplitRight": "Passed",
+    "NavigationTests/testSplitUp": "Passed",
+    "NavigationTests/testTabsKeepIndependentShells": "Passed",
+    "SmokeTests/testNativeCloseButtonClosesWindow": "Passed",
+    "SmokeTests/testNewWindowRunsItsOwnShell": "Passed",
+    "SmokeTests/testRelaunchAcceptsTerminalInput": "Passed",
+    "SmokeTests/testTerminalExecutesAndRendersOutput": "Passed",
+    "SurfaceTests/testConnectionsPanelKeepsTerminalUsable": "Passed",
+    "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell": "Passed",
+    "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible": "Passed",
+    "SurfaceTests/testWindowMinimumSizePreservesOriginalShell": "Passed"
+  },
+  "product_acceptance": "not-run",
+  "signature_evidence": "codesign --verify --deep --strict exits successfully in install-dmg; quiet success log"
+}

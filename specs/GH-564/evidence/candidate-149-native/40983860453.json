@@ -1,0 +1,105 @@
+{
+  "run_id": 40983860453,
+  "app_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+  "version": "1.2.49",
+  "dmg_sha256": "5f4429e3f38b128b6cfc079a1993fe16bd46846158bbca516a5ed31ecd622557",
+  "languages": [
+    "de"
+  ],
+  "themes": [
+    "Zaplex Dark",
+    "Light"
+  ],
+  "geometry": [
+    [
+      1024,
+      678
+    ],
+    [
+      480,
+      320
+    ]
+  ],
+  "visually_reviewed": {
+    "001-settings.png": "a9648573fb435ae344d966610645096996d74ea4d960a2febaee856112498433",
+    "002-appearance.png": "0e64ce2a7e86f3d45b597e6a2909eb5a97e59e0e638fcf429d59c31e586d8cac",
+    "003-language-picker.png": "650230c9d052a557f6a607d92e710ee9da7670586ba871dfe1303dc671829f9f",
+    "004-german-selected.png": "8a6708aa333d8c323a993e672cef748054e49fdb31b69c893ffcfe3639cc7bc2",
+    "005-german-after-restart.png": "4e15ef165ef1a8cde710e0cd5c63e8f7df724d5674b7e3a35e86795f7756b062",
+    "006-de-baseline-output.png": "46518865faeee8e82ceaf7d4e3f9b1ee86e49d59fa8e41a73398f3a91ecab3b5",
+    "007-de-agent-menu.png": "16ec0a0b3e8e8f39cc3ba982b33e35458ec65c3b5c4986a31baa2d76ae38e9aa",
+    "008-card-dedark-1024.png": "87c8d272b8ac85db6b6637e6f2ef56128e865b0bbaca9b949d417c6ac912c283",
+    "009-card-dedark-minimum-top.png": "1a62b61d0729494cb79c425326d381b685bd9c9196839ddd3b0873133a76ca72",
+    "010-card-dedark-models-efforts.png": "d651448097a03c5e13e3c01fceeea57cdfac4a2c2b3b1de9df6dd3ca667b0352",
+    "011-dedark-top-again.png": "cb2383f26b4b488a75934a5ecf0a26f41c7caf5bce9fee7b5ad3e71e214eb9db",
+    "012-codex-dedark-error.png": "fd80fa92c4e5f88c3dcde42a8fcf6932f971908093f527c67c61d79bd107877f",
+    "013-codex-dedark-footer.png": "94cbf44cbaa1d56a867511316190e2a65b12e18a09f28d3277121359e8e58947",
+    "014-de-dark-return-output.png": "6b634f6408ccf7b38594b5a418cb115ec1d16a489a8a356e9babfd5df0e65bcf",
+    "015-de-settings.png": "671a7dad565511f82b25a1f71bd6c0685aa7fe689ead8fc21d7ae3b4be322af2",
+    "016-de-appearance.png": "1054f18672c06f1181b70140b47a10622a1ef1d8edac526e726086355e5a7d2d",
+    "017-de-light-search.png": "76f8d45686b5d83472b3911bbcafa4315e504f7eed654818bfe7c14338d903fc",
+    "018-de-light-selected.png": "e9c2098f0784bc158bdf5743ec223c8d69b2a824a8538244f4922e6f9d3ba086",
+    "019-delight-shell.png": "f1a2042c95b7f430454b8762e42653b5f052966ab3f51599cc6776e3da1e5e04",
+    "020-delight-agent-menu.png": "3566a1b8696969f8a699b712c2ccd53e19ffd808a2a0b8b7112b8eb906fe1dbf",
+    "021-card-delight-1024.png": "a0acae27e46141f27fa8173acef2ca392ca7433b3ab995a22a446adb04d88181",
+    "022-card-delight-minimum-top.png": "1b475fde02d6847f9c7194d5289dc58e9c9e6e5543d56e2ca8eaf6bb96b83b6f",
+    "023-card-delight-options.png": "cc6c4e3bf733985f05cf37f8dfbd5d56a9df9f1d5af5e97ba879840c6d5ce935",
+    "024-card-delight-top.png": "b7d999c2f72718ab7581d5c609773354e112090fcb2e405643002aaa1f85d69c",
+    "025-codex-delight-error.png": "0fe1484e959f7d96cdb1de261e3064808b244ae6e8821880833006c305e43ebd",
+    "026-codex-delight-footer.png": "df5ab5edb5cfe701a7ff5393e48c8783c29c0a4fd02bc36cc451093248245bfe",
+    "027-delight-invisible-close-target.png": "0fe1484e959f7d96cdb1de261e3064808b244ae6e8821880833006c305e43ebd",
+    "028-close-hit-returns-shell.png": "a82aedce3cee1bc438ea184c39ca2b57b879ade4a96847683ab2e682210fa2d9",
+    "029-de-shell-and-fixture-output.png": "4ee058660c6f4c4b7474404c5a86d66527fee93b87bb6fee108c9284afde9de4",
+    "030-fresh-choice-target-output.png": "70240c2cb3c5257b2387207f19c0881128fb7c6e8eb67b88385d9090389e6dde",
+    "031-de-connections.png": "726bc870f85efc4d01f7f59122f32591d2d17090c197fbd0b0bc92f20f3dcaab",
+    "035-full-desktop-diagnosis.png": "742f43d33661e9dc820e1013bf0128a636a29c9f354fb2f37cea6aede46ce683",
+    "036-toggle-diagnosis.png": "e94b47779b0e8c31f88d6e483645fc12aa8a77c563ee333d316250e51ea69b93",
+    "037-connections-reopened.png": "9fd337d3d52acce9a0eac27eb4fa749bc3b917398a824624f98ad5c194591301",
+    "038-plus-hover.png": "89fc7078fe4b87e2172400eb8e8962165e0d61c279743d92c65557a3d417342c",
+    "039-import-after-toggle.png": "ccc379ab1ad177627580feb39bc09a152359ff20ecbaf3f710b60c02973813a8",
+    "040-de-host-editor.png": "0fc77952f7c6a83b5ed0d363d977752dcdc949867b73e0538fcdf956cd61629e",
+    "041-de-session-type.png": "5d975171bfe06e25ae305f2b394f1a9be85dc0f23477ffab56436ff85268543f",
+    "042-de-standard-pending-save.png": "37b30c47842aaf3522bcf26e5613511d0b7db2a35758e7fbb78691308743681a",
+    "043-de-standard-saved.png": "317af2e981ebe610934e7763f5e93961ef37a1650403b137278a23354de56815",
+    "044-de-standard-connecting.png": "a760a94ee8f122ac394fb050ec07d0177d3846b1f666d037ecbfc1c1e3fb9b90",
+    "046-choice-escape.png": "a7024a67cb68a3108efd86aa7f1f900eb71d4aad523be43017494aff24c058fa",
+    "047-cancel-shell-preserved-output.png": "f697061a0e939e4a96f8c8314239c9bb6c72e605fc7a87daf769fd8b197c28ad",
+    "048-password-settings.png": "64e04059c8ae7f4ee466bb9816eec040de09736019618703da90da9365025350",
+    "049-password-persistent-before-save.png": "121beb858f5eb7742e2ff69d377d6009c4073f28c63cab84c9101565a1f3c3bf",
+    "050-password-persistent-saved.png": "262b8c52f992e9d3d86219e5dc0d3ca2fdcc8c4eda2977aa5d2a437075fe3dc2",
+    "051-password-inventory-guidance.png": "39710e911c180aae892115d0f6d9104519176bd25f2811dacd75571a204a5542",
+    "052-key-setup-route.png": "80b82dcf3ea05ba91242f46a28fcce423fb64d61b6a0b841617fcbcd3a5da18c",
+    "053-final-owned-processes-output.png": "0965ff7d27b47a6c17f04f491300a237e0063d5760f21748409d0a05a74530f8",
+    "055-classify-remaining-ssh-output.png": "7f825696cd49946323b0c106852f00821fc294dc12f9e65034a9f65589aa8086",
+    "056-classify-remaining-ssh-v2-output.png": "c59f7ff128d5a514ab050f73f4dc0b2f36c1b9b42cc732598ae1640950ed3f35"
+  },
+  "case_results": {
+    "model_and_effort_reachable_at_minimum": "pass",
+    "real_codex_error_not_horizontally_clipped": "pass",
+    "launch_disabled_on_discovery_error": "pass",
+    "original_shell_after_card_cancel": "pass",
+    "light_modal_close_icon": "fail; GH-743",
+    "real_subscription_launch_and_agent_worktree_fork": "not-run; no isolated authenticated subscription",
+    "populated_cockpit_account_tabs": "not-run; no actual accounts",
+    "ssh_choice_escape_removes_new_tab": "pass; DE/Light 1024x678",
+    "ssh_key_setup_route_focuses_existing_host_settings": "pass; DE/Light 1024x678",
+    "classic_ssh_child_after_cancel": "no classic master or proxy; one reusable headless master observed"
+  },
+  "product_acceptance": "not-run",
+  "cleanup": {
+    "cleanup": "owned-processes-stopped-and-data-trashed",
+    "daemon_processes": 0,
+    "owned_processes": 0
+  },
+  "operator_exclusions": [
+    "031-034: first Add-host pointer attempts produced no menu; Ctrl-5 close/reopen and fresh hover/click then worked; cause not isolated, no claim of frozen app",
+    "055: first process classifier excluded unqualified executable names; 056 corrects filter and shows headless master only; first empty result proves nothing"
+  ],
+  "archive_verification": {
+    "sha256": "c9b7d6d8644b598a121cbb54dc014e1c9b807a43f89bf27c291703ee5c124ee1",
+    "matched_images": 60,
+    "app_source": "67be2c9ac435e1b636cb8ea0b725b8a941d4abf7",
+    "dmg_sha256": "5f4429e3f38b128b6cfc079a1993fe16bd46846158bbca516a5ed31ecd622557",
+    "contains_private_keys": false
+  }
+}
