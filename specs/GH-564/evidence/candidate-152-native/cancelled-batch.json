@@ -1,0 +1,123 @@
+{
+  "run_id": 41106705216,
+  "source": "7d16fee989aea6d4ab8b0727478143f5064fb9bd",
+  "version": "1.2.52",
+  "conclusion": "cancelled",
+  "reason": "Cancelled by this session after a real rendered-label counterexample under an unmatched search; no obsolete test-DMG artifact was built.",
+  "dmg_artifact_present": false,
+  "stages": [
+    {
+      "name": "Validate main batch",
+      "job_id": 124238317485,
+      "conclusion": "success",
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "dependency_security / cargo deny check advisories",
+      "job_id": 124238768757,
+      "conclusion": "success",
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "compile_checks / detect build-relevant changes",
+      "job_id": 124239474368,
+      "conclusion": "success",
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "compile_checks / cargo policy (macOS Apple Silicon)",
+      "job_id": 124240047648,
+      "conclusion": "success",
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "compile_checks / cargo check (macOS Apple Silicon)",
+      "job_id": 124246192981,
+      "conclusion": "success",
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "compile_checks / app regressions (macOS Apple Silicon)",
+      "job_id": 124251367046,
+      "conclusion": "success",
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "tests / Linux daemon regressions",
+      "job_id": 124256131978,
+      "conclusion": "cancelled",
+      "labels": [
+        "ubuntu-22.04"
+      ]
+    },
+    {
+      "name": "tests / cargo test (macOS)",
+      "job_id": 124256132101,
+      "conclusion": "success",
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+      "job_id": 124256132609,
+      "conclusion": "success",
+      "labels": [
+        "ubuntu-22.04"
+      ]
+    },
+    {
+      "name": "tests / Non-Rust suite execution evidence",
+      "job_id": 124256721453,
+      "conclusion": "skipped",
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "Verify all selected batch stages",
+      "job_id": 124266970289,
+      "conclusion": "cancelled",
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "test_dmg",
+      "job_id": 124266971848,
+      "conclusion": "skipped",
+      "labels": []
+    },
+    {
+      "name": "remote_server",
+      "job_id": 124266971877,
+      "conclusion": "skipped",
+      "labels": []
+    }
+  ],
+  "counterexample": {
+    "case": "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search",
+    "executed": 1,
+    "failed": 1,
+    "ignored": 0,
+    "assertion": "actual rendered label empty instead of selected repository B",
+    "red_log_sha256": "1a73e03e2ce03f9348895f4eabf54fa43f6e5c287297314b46e09acaca267d0d",
+    "test_source_sha256": "87d03a848193c70ac4cf975d1f718b5e188bb4679852e0d61ccef9299d352d88",
+    "initial_empty_selector_not_counted": true,
+    "empty_selector_log_sha256": "e95bcaf7a2aca3ab8bed2613016cb6d28e1f90093858fbbed4c15a0927bf83e8"
+  },
+  "native_acceptance": "not-run",
+  "releases_or_tags_created": false
+}

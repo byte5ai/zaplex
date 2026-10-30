@@ -1,7 +1,11 @@
+use warp_util::user_input::UserInput;
 use warpui::{platform::WindowStyle, App, AppContext, TypedActionView, View};
 
 use super::{RepoPicker, RepoPickerAction};
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::{
+    editor::{EditorAction, EditorView},
+    test_util::terminal::initialize_app_for_terminal_view,
+};
 
 fn assert_selection(picker: &RepoPicker, app: &AppContext, expected: Option<&str>) {
     let dropdown = picker.dropdown.as_ref(app);
@@ -96,5 +100,44 @@ fn repository_picker_empty_default_does_not_select_an_empty_path() {
             RepoPicker::new(Some(String::new()), ctx)
         });
         picker.read(&app, |picker, app| assert_selection(picker, app, None));
+    });
+}
+
+#[test]
+fn repository_picker_displays_new_folder_after_an_unmatched_search() {
+    crate::i18n::init(Some("en"));
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("repository-a");
+    let second = directory.path().join("repository-b");
+    git2::Repository::init(&first).unwrap();
+    git2::Repository::init(&second).unwrap();
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window, picker) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            RepoPicker::new(Some(first.to_string_lossy().into_owned()), ctx)
+        });
+        picker.update(&mut app, |picker, ctx| {
+            picker.toggle_dropdown(ctx);
+        });
+        let focused = app.focused_view_id(window).unwrap();
+        let search = app.read(|app| app.view_with_id::<EditorView>(window, focused).unwrap());
+        search.update(&mut app, |editor, ctx| {
+            editor.handle_action(
+                &EditorAction::UserInsert(UserInput::new("no-such-repository")),
+                ctx,
+            );
+        });
+        search.read(&app, |editor, app| {
+            assert_eq!(editor.buffer_text(app), "no-such-repository");
+        });
+        picker.update(&mut app, |picker, ctx| {
+            picker.handle_action(&RepoPickerAction::AddNewRepo, ctx);
+        });
+        picker.update(&mut app, |picker, ctx| {
+            picker.refresh_and_select(second.clone(), ctx);
+        });
+        picker.read(&app, |picker, app| {
+            assert_selection(picker, app, Some(&second.to_string_lossy()));
+        });
     });
 }
