@@ -1,0 +1,23 @@
+{
+  "run_id": 41119368489,
+  "job_id": 124288211164,
+  "source": "3fe124f00d7615398309753415639465d42b1450",
+  "version": "1.2.53",
+  "verified_at": "2026-10-30T20:41:50.372090+00:00",
+  "new_case_matches": {
+    "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository": 1,
+    "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch": 1,
+    "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects": 1,
+    "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search": 1,
+    "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path": 1,
+    "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection": 1,
+    "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen": 1,
+    "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity": 1
+  },
+  "log_sha256": "abba833a3ee646402983aa52d96db97a7fd4fbb42c33f5d5b95d9a706772419a",
+  "app_regression_result_blocks": 27,
+  "passed_app_test_executions": 822,
+  "failed": 0,
+  "ignored": 0,
+  "distinct_test_total": "not inferred; overlapping selections possible"
+}

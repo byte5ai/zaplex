@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use warpui::{
-    elements::{Border, ChildView, Container, Hoverable, MouseStateHandle, Text},
+    elements::{Border, ChildView, ConstrainedBox, Container, Hoverable, MouseStateHandle, Text},
     platform::Cursor,
     ui_components::components::UiComponentStyles,
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
@@ -99,15 +99,19 @@ impl RepoPicker {
                     let border_fill = theme.outline();
                     let mouse_state_clone = mouse_state.clone();
                     Hoverable::new(mouse_state_clone, move |_| {
-                        Container::new(
-                            Text::new_inline(ADD_NEW_REPO_LABEL, font_family, font_size)
-                                .with_color(text_color.into())
-                                .finish(),
+                        ConstrainedBox::new(
+                            Container::new(
+                                Text::new_inline(ADD_NEW_REPO_LABEL, font_family, font_size)
+                                    .with_color(text_color.into())
+                                    .finish(),
+                            )
+                            .with_horizontal_padding(8.)
+                            .with_vertical_padding(6.)
+                            .with_background(bg)
+                            .with_border(Border::top(1.).with_border_fill(border_fill))
+                            .finish(),
                         )
-                        .with_horizontal_padding(8.)
-                        .with_vertical_padding(6.)
-                        .with_background(bg)
-                        .with_border(Border::top(1.).with_border_fill(border_fill))
+                        .with_width(width)
                         .finish()
                     })
                     .on_click(|ctx, _, _| {

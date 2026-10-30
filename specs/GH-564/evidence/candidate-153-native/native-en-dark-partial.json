@@ -1,0 +1,117 @@
+{
+  "run_id": 41135423559,
+  "app_source": "3fe124f00d7615398309753415639465d42b1450",
+  "harness_source": "3fe124f00d7615398309753415639465d42b1450",
+  "version": "1.2.53",
+  "dmg_sha256": "98b9802faffe4ad81a4289ca250c4572daad4179144f31897f06b197be48e71c",
+  "artifact_id": 13018926270,
+  "archive_sha256": "89cd33fcf6f5fed3fefa96c066c22c35239502970b98fa800454f9f5dbf6ada8",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "4d33bca740fd17feba3040f28e9b1fcef76e0b5f3fa3fe43593e64b093fc60e1"
+    },
+    {
+      "file": "002-verify-repository-output.png",
+      "sha256": "ee3c706430fab6b4f799b29347568d19577eb92e78e73725181747c983ba0d2f"
+    },
+    {
+      "file": "003-baseline-output.png",
+      "sha256": "4edf159f7a4c6ff12e02f476e9e2b85a7c02cbdd9b5e77c9e0f94fa860a4d88f"
+    },
+    {
+      "file": "004-launch-menu.png",
+      "sha256": "6ec38ac643d4cc15f02ac944f4d7c97b74b763d9cbdccc372247634698f9321c"
+    },
+    {
+      "file": "005-worktree-submenu.png",
+      "sha256": "7c5dce1dda5894211f6275d220831d98b884484f37f6dc20a2a78ef1ad426950"
+    },
+    {
+      "file": "006-current-repository.png",
+      "sha256": "850395f852839a296d2f7c3e9719414506f78550771e6f9a537b33711bc54dfb"
+    },
+    {
+      "file": "007-unmatched-search.png",
+      "sha256": "92e869e99fa6484e18d2d08bc4847edbbeaf257efeb0f16337bb83cbddbd6ce8"
+    },
+    {
+      "file": "008-folder-dialog.png",
+      "sha256": "5513876b378d351e8ce199954a7d0971a2a665b0db8b44e0be28c868f7832047"
+    },
+    {
+      "file": "009-dialog-screen.png",
+      "sha256": "b3a0cc65698eb25ad8f08e55b15f4f20c13b247c6483248d950ec2b0456ab224"
+    },
+    {
+      "file": "010-search-reopened.png",
+      "sha256": "2e415b4560e14a06c18c150bbfb56d636f6fa29b2e124a74a157b4c93f0fec74"
+    },
+    {
+      "file": "011-add-hover.png",
+      "sha256": "2e415b4560e14a06c18c150bbfb56d636f6fa29b2e124a74a157b4c93f0fec74"
+    },
+    {
+      "file": "012-after-add-screen.png",
+      "sha256": "597fadf47fda9b28468fcb1459be52a68c4c6787ee029fbc9abc04b6130d3f2c"
+    },
+    {
+      "file": "013-modal-cancelled.png",
+      "sha256": "968d60e4c23dc354dee35e6b0610c0756bcf4465d34eaa80104e819abec1990b"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 17,
+  "operator_elapsed_seconds": 650.304503,
+  "operator_budget_result": "FAIL: exceeds the frozen 600-second limit",
+  "product_acceptance": "partial; folder flow not completed",
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "issue": 749,
+    "expected_version": "1.2.53",
+    "source_sha": "3fe124f00d7615398309753415639465d42b1450",
+    "checks": [
+      "Current existing Git directory appears in the closed repository picker without a saved project list.",
+      "Enter an unmatched query in the actual repository search field, request a folder, and confirm that a newly chosen directory appears despite the former query.",
+      "A real native folder-picker cancellation leaves the displayed and effective selection unchanged.",
+      "A real native folder selection appears in the closed picker before Open is pressed.",
+      "A long existing repository-directory path is fully readable in the selection tooltip.",
+      "English and German, Zaplex Dark and Light: selected identity remains visible.",
+      "Open creates exactly one additional worktree in the selected repository, with its own shell and expected Git HEAD/common directory.",
+      "Fresh output in the original tab confirms the same original shell PID, non-exported marker and working directory; source checkout remains clean."
+    ],
+    "limits": [
+      "No subscription or agent-provider acceptance is implied.",
+      "A/B submission is additionally covered by focused real-component unit tests.",
+      "Native sessions are bounded to ten minutes and explicitly finished."
+    ],
+    "frozen_at": "2026-10-30T19:56:33.097303+00:00",
+    "run_id": 41135423559,
+    "locale": "en",
+    "theme": "Zaplex Dark",
+    "window": "normal",
+    "session_scope": "Unmatched search, real folder cancellation/selection, actual worktree creation and fresh source-shell/Git proof; language/theme follow-ups are separate sessions."
+  },
+  "verdicts": {
+    "current_repository_visible_without_saved_list": "pass (006)",
+    "actual_unmatched_query_in_repository_search": "pass (007,010)",
+    "add_repo_from_unmatched_search": "observed failure to open native folder dialog twice; exact cause still under investigation (008-012)",
+    "folder_cancellation": "not-run: no native folder dialog became visible",
+    "new_folder_selection_and_display": "not-run",
+    "worktree_creation": "not-run",
+    "source_shell": "pass via archived command output: original PID 1455, marker kept and same cwd; before/after Git status, HEAD and worktree inventory byte-identical. No fresh return screenshot obtained.",
+    "operator_window_budget": "failed: planned less than 600 seconds exceeded; actual duration is retained, no under-budget claim",
+    "session_finish": "explicit finished marker requested; workflow completed successfully; own VM no longer listed",
+    "product_acceptance": "partial, no overall pass"
+  },
+  "source_return_artifacts": {
+    "pid": 1455,
+    "marker": "kept",
+    "same_current_directory": true,
+    "git_status_before_after_byte_identical": true,
+    "git_head_before_after_byte_identical": true,
+    "git_worktrees_before_after_byte_identical": true,
+    "worktree_count_before": 1,
+    "worktree_count_after": 1,
+    "fresh_return_screenshot_obtained": false
+  }
+}

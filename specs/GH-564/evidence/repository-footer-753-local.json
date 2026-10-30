@@ -1,0 +1,88 @@
+{
+  "issue": 753,
+  "version": "1.2.54",
+  "base_product_revision": "3fe124f00d7615398309753415639465d42b1450",
+  "product_commit": "837f4b80b6730098768228ef9bc3c176322ca55e",
+  "verified_at": "2026-10-30T23:07:47.349998+00:00",
+  "counterexample": {
+    "version": "1.2.53",
+    "case": "tab_configs::repo_picker::tests::repository_picker_add_repo_row_accepts_mouse_clicks_across_its_width",
+    "executed": 1,
+    "failed": 1,
+    "ignored": 0,
+    "left_label_area_x16": "completed successfully before the next app instance",
+    "middle_x190": "0 RequestAddRepo events instead of 1; only MenuAction::Close",
+    "right_edge": "not reached after middle assertion failed",
+    "production_source_unchanged_for_red": true,
+    "log_sha256": "ad98dcd8eb441d4de1519d10902677aebb4e3da52efcc82f048ba6bc371bb363"
+  },
+  "regression_tests": {
+    "executed": 9,
+    "failed": 0,
+    "ignored": 0,
+    "case_ids": [
+      "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch",
+      "tab_configs::repo_picker::tests::repository_picker_add_repo_row_accepts_mouse_clicks_across_its_width",
+      "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects",
+      "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search",
+      "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path",
+      "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection",
+      "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen",
+      "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity"
+    ],
+    "mouse_positions_x": [
+      16,
+      190,
+      364
+    ],
+    "actual_search_editor_input_verified": true,
+    "actual_presenter_move_down_up": true,
+    "log_sha256": "16f79563937eea6a756cdbd6b917ee9f575bd6aff965849fff511815072c100a"
+  },
+  "checks": {
+    "cargo_check_locked": {
+      "exit": 0,
+      "log_sha256": "6c37be641c50c4af05eb1998d17878f933b0cccf7cf5cecb9d88763da75d9021"
+    },
+    "binary_clippy_warnings_denied": {
+      "exit": 0,
+      "log_sha256": "1f8787dd612396165f7580e123ad98c8ad09bf6686894b3beb30b655a7681683"
+    },
+    "phase_a": {
+      "exit": 0,
+      "passed": 13
+    },
+    "touched_rustfmt": {
+      "exit": 0,
+      "files": [
+        "app/src/tab_configs/repo_picker.rs",
+        "app/src/tab_configs/repo_picker_tests.rs"
+      ]
+    },
+    "no_new_cjk": {
+      "exit": 0
+    },
+    "default_actionlint_including_shellcheck": {
+      "current": {
+        "exit": 1,
+        "diagnostics": 9
+      },
+      "baseline": {
+        "exit": 1,
+        "diagnostics": 9
+      },
+      "identical_to_base": true,
+      "complete_pass_claimed": false,
+      "log_sha256": "b96ea8483fbe2b9776c0165a3ae051cd5b9ec59c1cc1bcd2e7de45e82ba41e29",
+      "baseline_log_sha256": "6b4d077e6cba3842e1e7026ad59ac648ec6edf591447252f37fa9f94c3cc00eb"
+    }
+  },
+  "source_files_sha256": {
+    "app/src/tab_configs/repo_picker.rs": "5f1c55d5b2cb73a638f798c8c51318d0f44da252a34fbf5fb2a343842aef6ee0",
+    "app/src/tab_configs/repo_picker_tests.rs": "241fcfcb32415efca5b43c278ac897dcd19cdd148fd2a9e775cbf53e0983268b",
+    "VERSION": "55acf986d41e7fd695066a83a52694824b3d8be4fabdf584c123d6f64f055a76",
+    "Cargo.lock": "946c90a0e127d3489190783f7103f59e14123fd2a3d1619270f2316f44448676"
+  },
+  "native_acceptance": "pending a newly qualified unchanged 1.2.54 DMG; 1.2.53 native evidence is partial/diagnostic only"
+}
