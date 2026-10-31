@@ -1,0 +1,19 @@
+{
+  "issue": 755,
+  "source_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "expected_version": "1.2.55",
+  "frozen_at": "2026-10-31T03:58:01.754873+00:00",
+  "checks": [
+    "Repository picker identity, full-row hover/right/center clicks and actual unmatched-search path open the genuine native folder dialog.",
+    "Native folder cancellation preserves the displayed/effective selection; choosing a different existing valid Git directory visibly updates the path and its complete tooltip.",
+    "Cancel and Escape from the focused worktree modal return actual typing to the original terminal without an assisting prompt click; original PID/nonexported marker/cwd remain intact.",
+    "Submitting an actual terminal worktree creates exactly one additional worktree with expected HEAD/common Git directory and a different shell; typing reaches that new tab without an assisting prompt click.",
+    "Returning to the original tab gives fresh same-PID/marker/cwd output and a clean source checkout, verified independently from Git snapshots.",
+    "English/German, Dark/Light, normal/narrow: repository identity, readable tooltip and footer interaction remain reachable; app-language restart establishes a fresh baseline rather than claiming cross-restart shell survival."
+  ],
+  "limits": [
+    "No genuine managed-agent or subscription acceptance without real isolated profiles.",
+    "Each native session has an explicitly frozen scope and less-than-480-second operator budget; failed or untested cases are retained, never waived.",
+    "No release/tag authorization."
+  ]
+}

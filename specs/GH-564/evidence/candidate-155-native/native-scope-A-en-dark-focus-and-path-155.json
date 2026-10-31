@@ -1,0 +1,22 @@
+{
+  "issue": 755,
+  "scope": "A-en-dark-focus-and-path",
+  "app_source_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "harness_source_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "expected_version": "1.2.55",
+  "qualified_artifact_run": 41166591979,
+  "frozen_at": "2026-10-31T04:23:22.328839+00:00",
+  "operator_budget_seconds_exclusive": 480,
+  "checks": [
+    "Fresh English Dark normal-window baseline: actual original shell PID, nonexported WT155A marker, cwd, Git HEAD, clean status and one worktree.",
+    "The current Git repository is visible before editing. An actual unmatched query plus a click on the right side of the full-width Add repository row opens the genuine native folder dialog.",
+    "Cancel the native folder dialog and verify the displayed/effective repository is preserved. Cancel the worktree modal, then type and execute a harmless source-shell probe without any assisting prompt click; verify the original PID/marker/cwd and Git state.",
+    "Reopen the worktree modal, choose the existing long nested Git directory via the genuine native folder dialog, verify its displayed nonblank path and readable full-path tooltip, then Escape from the focused modal.",
+    "Type and execute the second harmless source-shell probe without any assisting prompt click; verify original PID/marker/cwd and no new worktree."
+  ],
+  "evidence": [
+    "Fresh viewed screenshots and recorded real GUI actions, no inferred screenshot verdicts.",
+    "Independently verified unchanged app/DMG identity, archived action/image byte equality, explicit finish and no expiry.",
+    "A missing or failed criterion stays missing or failed; no global product acceptance inferred from a bounded scope."
+  ]
+}

@@ -2,9 +2,13 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.56] — 2026-10-31
+
+- Repository-Auswahl: Nach dem Schließen des Suchmenüs sowie nach Ordnerwahl oder Ordnerabbruch erreicht Escape wieder den Worktree-Dialog; der Fokus anderer Eingabefelder bleibt erhalten (#757).
+
 ## [1.2.55] — 2026-10-31
 
-- Worktree-Dialog: Abbruch und Escape geben den Tastaturfokus unmittelbar an den aktiven Tab zurück.
+- Das Schließen des Worktree-Dialogs gibt den Tastaturfokus unmittelbar an den aktiven Tab zurück.
 
 ## [1.2.54] — 2026-10-30
 

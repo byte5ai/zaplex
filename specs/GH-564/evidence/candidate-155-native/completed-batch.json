@@ -1,0 +1,154 @@
+{
+  "id": 41166591979,
+  "head_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "head_branch": "main",
+  "created_at": "2026-10-31T03:58:17Z",
+  "updated_at": "2026-10-31T06:58:51Z",
+  "status": "completed",
+  "conclusion": "success",
+  "html_url": "https://github.com/byte5ai/zaplex/actions/runs/41166591979",
+  "stages": [
+    {
+      "name": "Validate main batch",
+      "conclusion": "success",
+      "job_id": 124435386555,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "dependency_security / cargo deny check advisories",
+      "conclusion": "success",
+      "job_id": 124435542609,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "compile_checks / detect build-relevant changes",
+      "conclusion": "success",
+      "job_id": 124435851982,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "compile_checks / cargo policy (macOS Apple Silicon)",
+      "conclusion": "success",
+      "job_id": 124436114897,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "compile_checks / cargo check (macOS Apple Silicon)",
+      "conclusion": "success",
+      "job_id": 124437664998,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "compile_checks / app regressions (macOS Apple Silicon)",
+      "conclusion": "success",
+      "job_id": 124439984680,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "tests / cargo test (macOS)",
+      "conclusion": "success",
+      "job_id": 124442199306,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "tests / Linux daemon regressions",
+      "conclusion": "success",
+      "job_id": 124442199398,
+      "labels": [
+        "ubuntu-22.04"
+      ]
+    },
+    {
+      "name": "live_sftp / OpenSSH/SFTP commit-boundary recovery",
+      "conclusion": "success",
+      "job_id": 124442199481,
+      "labels": [
+        "ubuntu-22.04"
+      ]
+    },
+    {
+      "name": "tests / Non-Rust suite execution evidence",
+      "conclusion": "skipped",
+      "job_id": 124442200423,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "test_dmg / Verify Phase A release readiness",
+      "conclusion": "success",
+      "job_id": 124446678127,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "remote_server",
+      "conclusion": "skipped",
+      "job_id": 124446678709,
+      "labels": []
+    },
+    {
+      "name": "test_dmg / Validate macOS signing identity",
+      "conclusion": "success",
+      "job_id": 124450382892,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "test_dmg / Build bundled remote-server (Linux musl x86_64)",
+      "conclusion": "success",
+      "job_id": 124455728556,
+      "labels": [
+        "ubuntu-24.04"
+      ]
+    },
+    {
+      "name": "test_dmg / Prepare Test app (macOS Apple Silicon)",
+      "conclusion": "success",
+      "job_id": 124455728580,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "test_dmg / Sign and package Test DMG (macOS Apple Silicon)",
+      "conclusion": "success",
+      "job_id": 124465797409,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "test_dmg / Verify installed DMG user flows / Installed DMG user flows",
+      "conclusion": "success",
+      "job_id": 124466397738,
+      "labels": [
+        "macrunner"
+      ]
+    },
+    {
+      "name": "Verify all selected batch stages",
+      "conclusion": "success",
+      "job_id": 124467994703,
+      "labels": [
+        "macrunner"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "issue": 755,
+  "scope": "C-de-layout-and-focus",
+  "app_source_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "harness_source_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "expected_version": "1.2.55",
+  "qualified_artifact_run": 41166591979,
+  "frozen_at": "2026-10-31T04:23:22.329670+00:00",
+  "operator_budget_seconds_exclusive": 480,
+  "checks": [
+    "Select German in this ephemeral app instance and restart the owned app. Establish a new post-restart original-shell baseline with actual PID, nonexported WT155C marker, cwd and Git state; do not claim shell survival across the restart.",
+    "For German Dark at normal and actual narrow widths, verify visible repository identity, readable full-path tooltip and full-width footer hover/click opening the genuine folder dialog. Native cancellation preserves selection.",
+    "Switch to Light and perform the same repository/tooltip/footer/native-cancellation checks at normal and actual narrow widths.",
+    "After Cancel and Escape from focused worktree modals, type and execute harmless shell probes without any assisting prompt click. Compare the actual PID/WT155C/cwd with the post-restart baseline and verify unchanged clean source checkout and worktree count."
+  ],
+  "evidence": [
+    "Fresh viewed screenshots and recorded real GUI actions, no inferred screenshot verdicts.",
+    "Independently verified unchanged app/DMG identity, archived action/image byte equality, explicit finish and no expiry.",
+    "A missing or failed criterion stays missing or failed; no global product acceptance inferred from a bounded scope."
+  ]
+}
