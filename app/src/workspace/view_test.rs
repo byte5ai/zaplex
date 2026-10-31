@@ -8072,3 +8072,7 @@ fn cancelling_classic_ssh_setup_closes_the_attempt_without_a_replacement_surface
         });
     });
 }
+
+#[cfg(test)]
+#[path = "view/worktree_modal_focus_tests.rs"]
+mod worktree_modal_focus_tests;

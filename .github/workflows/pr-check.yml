@@ -568,6 +568,7 @@ jobs:
           repository_picker_
           worktree_modal_submits_the_displayed_current_or_newly_selected_repository
           worktree_modal_without_repository_rejects_submission_even_with_a_branch
+          worktree_modal_cancel_restores_original_tab_focus
         shell: bash
 
       # Regression tests added for the premium workspace issues (#455, #456,
