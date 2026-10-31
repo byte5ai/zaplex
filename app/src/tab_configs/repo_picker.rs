@@ -10,7 +10,7 @@ use warpui::{
 use crate::{
     appearance::Appearance,
     tab_configs::PickerStyle,
-    view_components::{DropdownItem, FilterableDropdown},
+    view_components::{DropdownItem, FilterableDropdown, FilterableDropdownEvent},
 };
 
 const DEFAULT_DROPDOWN_WIDTH: f32 = 380.;
@@ -75,6 +75,16 @@ impl RepoPicker {
             selected: None,
             add_repo_mouse_state: Default::default(),
         };
+
+        ctx.subscribe_to_view(&picker.dropdown, |picker, _, event, ctx| match event {
+            FilterableDropdownEvent::Close => {
+                // Release the hidden search editor without reclaiming another control's focus.
+                if !picker.dropdown.as_ref(ctx).is_expanded() && ctx.is_self_or_child_focused() {
+                    ctx.focus_self();
+                }
+            }
+            FilterableDropdownEvent::ToggleExpanded => {}
+        });
 
         // Attach the sticky footer. It stays visible while scrolling because it is
         // rendered below the scrollable items but inside the Menu's Dismiss
