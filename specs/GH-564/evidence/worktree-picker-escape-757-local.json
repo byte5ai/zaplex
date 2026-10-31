@@ -1,0 +1,99 @@
+{
+  "issue": 757,
+  "prepared_at": "2026-10-31T08:00:11.701411+00:00",
+  "source_base": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "patch_version": "1.2.56",
+  "red": {
+    "source_base": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+    "test_file_sha256": "857b904cf72def0daa6172c65afd99904e57cf2f9e76aa3cbc23f781a2a393ba",
+    "log_sha256": "aacc94d8cf0bc3b6282c1a836439d20b5b8bd7d0a99b1a795ae9a5ce05d3dfbe",
+    "executed": 1,
+    "failed": 1,
+    "ignored": 0,
+    "failed_expectation": "real Escape after selected folder emits one modal Close; observed zero"
+  },
+  "green": {
+    "testcases": 13,
+    "failed": 0,
+    "ignored": 0,
+    "case_ids": [
+      "tab_configs::new_worktree_modal::tests::worktree_modal_repository_picker_close_preserves_other_editor_focus",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_repository_picker_escape_after_folder_result_closes_modal",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_repository_picker_escape_closes_filter_before_modal",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch",
+      "tab_configs::repo_picker::tests::repository_picker_add_repo_row_accepts_mouse_clicks_across_its_width",
+      "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects",
+      "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search",
+      "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path",
+      "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection",
+      "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen",
+      "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity",
+      "workspace::view::tests::worktree_modal_focus_tests::worktree_modal_cancel_restores_original_tab_focus"
+    ],
+    "new_case_ids": [
+      "tab_configs::new_worktree_modal::tests::worktree_modal_repository_picker_close_preserves_other_editor_focus",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_repository_picker_escape_after_folder_result_closes_modal",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_repository_picker_escape_closes_filter_before_modal"
+    ],
+    "log_sha256": "61897dc84f1a3ac3ad3da96bf48c326a643c2e0146b768e3f52031717ff23f52",
+    "same_test_file_for_red_and_green": true,
+    "package_version_during_targeted_tests": "1.2.55 with the Rust fix; followed by metadata-only patch bump to 1.2.56"
+  },
+  "rust_source_sha256": {
+    "app/src/tab_configs/repo_picker.rs": "5b4abefe60a27bee43652f9f9f4b5e03a6eae2e9c59fdb74349782f339dc1e80",
+    "app/src/tab_configs/new_worktree_modal_tests.rs": "857b904cf72def0daa6172c65afd99904e57cf2f9e76aa3cbc23f781a2a393ba",
+    "app/src/view_components/mod.rs": "29a23f16401b5d03d79ea4c34f421c9644404b91c13ae4b17ccad9e0c82b288f"
+  },
+  "cargo_check": {
+    "exit": 0,
+    "version": "1.2.56",
+    "locked": true,
+    "log_sha256": "044e7e2cc4efd3eeaf5059db980a791ca28aa69e61b25ce5edf9fc0c7d14acd4"
+  },
+  "clippy": {
+    "exit": 0,
+    "version": "1.2.56",
+    "command": "cargo clippy --locked --bin zaplex -- -D warnings",
+    "log_sha256": "d2f0ebdeebc0b3b7eae082a7bd85ca2e02e9858efc3070b1c491a52bf4e2d28f"
+  },
+  "phase_a": {
+    "passed": 13,
+    "failed": 0,
+    "log_sha256": "9e6a3178957ea1782776dc1288c1383f5d45e939f0b9b89a52ac4aa14a111325"
+  },
+  "format": {
+    "exit": 0,
+    "command": "rustfmt --edition 2021 --check --config skip_children=true",
+    "files": [
+      "app/src/tab_configs/repo_picker.rs",
+      "app/src/tab_configs/new_worktree_modal_tests.rs",
+      "app/src/view_components/mod.rs"
+    ]
+  },
+  "actionlint": {
+    "current": {
+      "exit": 1,
+      "diagnostic_lines": 9,
+      "log_sha256": "b96ea8483fbe2b9776c0165a3ae051cd5b9ec59c1cc1bcd2e7de45e82ba41e29"
+    },
+    "baseline": {
+      "exit": 1,
+      "diagnostic_lines": 9,
+      "log_sha256": "f7b0ef0d23b5abee15ebe0ec94f22827d2710fe72dd5eb48ac55c2368c313f96"
+    },
+    "identical_diagnostics": true,
+    "baseline_source": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+    "scope": [
+      ".github/workflows/test-dmg.yml",
+      ".github/workflows/zap_release.yml"
+    ],
+    "shellcheck": "enabled; default actionlint"
+  },
+  "version_update": "script/set-version updated all 14 metadata sources with CHANGELOG; historical 1.2.55 wording clarified to describe modal closing, not a verified physical Escape path",
+  "verification_limits": [
+    "No CI or native acceptance for 1.2.56 yet.",
+    "The 1.2.55 native Escape and time-budget failures remain failed.",
+    "No release or tag authorized."
+  ]
+}
