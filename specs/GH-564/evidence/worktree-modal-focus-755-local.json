@@ -1,0 +1,98 @@
+{
+  "issue": 755,
+  "version": "1.2.55",
+  "base_product_revision": "28db964d5839a06089040fecb85166fad366448a",
+  "product_commit": "1269cd66cd0f8abd89053bd6ca464bf9a1eb21f5",
+  "verified_at": "2026-10-31T03:25:11.085143+00:00",
+  "native_counterexample": {
+    "run_id": 41160181833,
+    "version": "1.2.54",
+    "result": "unassisted terminal input missing after worktree modal cancellation; Return withheld; only an explicit prompt click restores input",
+    "evidence": "candidate-154-native/repository-selection-and-focus.json"
+  },
+  "product_red": {
+    "case": "workspace::view::tests::worktree_modal_focus_tests::worktree_modal_cancel_restores_original_tab_focus",
+    "executed": 1,
+    "failed": 1,
+    "ignored": 0,
+    "preconditions_verified": true,
+    "assertion": "original active tab must regain keyboard focus after Cancel; dialog already closed and tab/group identity/count unchanged",
+    "production_source_unchanged_for_red": true,
+    "log_sha256": "4a1d91c0dcc2d0e0b0561a4b68f8d92a202b4445f60e1d8b51917aab469e63d6"
+  },
+  "first_harness_attempt": {
+    "failed_before_product_assertion": true,
+    "cause": "focus effects from the preparation update had not been flushed before the initial focus precondition",
+    "counted_as_product_counterexample": false,
+    "log_sha256": "08a69af8da9f281d1c8e5e908ae56f7a785d1db6d70e3bcacab7d7bd0e3a288f"
+  },
+  "regression_tests": {
+    "executed": 10,
+    "failed": 0,
+    "ignored": 0,
+    "case_ids": [
+      "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch",
+      "tab_configs::repo_picker::tests::repository_picker_add_repo_row_accepts_mouse_clicks_across_its_width",
+      "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects",
+      "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search",
+      "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path",
+      "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection",
+      "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen",
+      "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity",
+      "workspace::view::tests::worktree_modal_focus_tests::worktree_modal_cancel_restores_original_tab_focus"
+    ],
+    "focus_case_actions": [
+      "Cancel",
+      "Escape"
+    ],
+    "original_active_group_and_tab_count_preserved": true,
+    "log_sha256": "2ca727ba03342c11550d4ff1817f9cc78739b2f71d7d4fa9f85220ed1f205f59"
+  },
+  "checks": {
+    "cargo_check_locked": {
+      "exit": 0,
+      "log_sha256": "fde7bddd95f34e11c87c1f711bdcf978d298e7fdb346e834cbbc362bfd0fdac8"
+    },
+    "binary_clippy_warnings_denied": {
+      "exit": 0,
+      "log_sha256": "5dc62c78d9e9076196dc10636e48d596883091b6db5c0e2ac49fcf76e87d9581"
+    },
+    "phase_a": {
+      "exit": 0,
+      "passed": 13
+    },
+    "format_scope": {
+      "new_test_file_and_parent_module_formatted": true,
+      "changed_close_function_formatted": true,
+      "unrelated_view_rs_formatter_drift_preserved": true,
+      "full_view_rs_format_pass_claimed": false
+    },
+    "no_new_cjk": {
+      "exit": 0
+    },
+    "default_actionlint_including_shellcheck": {
+      "current": {
+        "exit": 1,
+        "diagnostics": 9
+      },
+      "baseline": {
+        "exit": 1,
+        "diagnostics": 9
+      },
+      "identical_to_base": true,
+      "complete_pass_claimed": false,
+      "log_sha256": "b96ea8483fbe2b9776c0165a3ae051cd5b9ec59c1cc1bcd2e7de45e82ba41e29",
+      "baseline_log_sha256": "6c3065a2eab5a92733666c9dcca49e8188031965ecfd06404bc6c86eba8bc0de"
+    }
+  },
+  "source_files_sha256": {
+    "app/src/workspace/view.rs": "29fd4eed0d95786893be127c791b9bb8a76179a0d32cc4da826bd8140cf0b784",
+    "app/src/workspace/view_test.rs": "721027eab80b576a18245c45bec36c76f0411398bc9f002370ddc5a9e8731f7c",
+    "app/src/workspace/view/worktree_modal_focus_tests.rs": "bce53125bb595bba6851871ca21805cb06875329f5d60afe46f69070653092ac",
+    ".github/workflows/pr-check.yml": "d5477bf34ebe0c6c86c3ed9576ac6031633f425be85bb3b5e5da4dd98077efb2",
+    "VERSION": "86142beb5be2a3ef9eb8532ddf840a24b7a39ca61d46e6985b965557234c94ce",
+    "Cargo.lock": "e1220dd43d7219af0eb1652b665379e0109534369e5a6bce944151befcf4fc26"
+  },
+  "native_acceptance": "pending a matching newly qualified unchanged 1.2.55 DMG; no automatic-focus or overall 1.2.55 native pass yet"
+}
