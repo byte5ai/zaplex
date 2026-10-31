@@ -1,0 +1,106 @@
+{
+  "run_id": 41195308301,
+  "app_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+  "harness_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+  "version": "1.2.56",
+  "dmg_sha256": "2e0dbbbdd1f67a41e2ccf73507cac7bba92e5c986a7f1b74d377c2ed520e7e02",
+  "artifact_id": 13040831084,
+  "archive_sha256": "472556abd3559c0be9a67c6ea89c76ca1477bc392e9c5ca336ab2956a97b087f",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "2317bf4db783ff9f2f300c71c4d2603b2d8ce3d5e7147bf0604daa9758c8e46d"
+    },
+    {
+      "file": "002-b-baseline-output.png",
+      "sha256": "d4ad9e729d790ba6679f2092c33079b8b384e7b9abfaa0af44ab89983e5d80c3"
+    },
+    {
+      "file": "003-dark-narrow-repository-tooltip.png",
+      "sha256": "b9dd1467c0cde7dbaba9375e46e8d5f5b5e150fd8a1a56193a313d5851aa472d"
+    },
+    {
+      "file": "004-dark-narrow-footer.png",
+      "sha256": "a2e85dfb3954b94f30b4cb5d3d17882767408ac8a9be3eab3fd23362eacb8948"
+    },
+    {
+      "file": "005-dark-native-open.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "006-dark-native-cancel.png",
+      "sha256": "97baf505a6a98c5d5923086eccec9abf8646a84495d79cb0b74c1bbbaf1f0453"
+    },
+    {
+      "file": "007-b-escape-output.png",
+      "sha256": "8a105008eaca4ee0e029b4e8b6925f1dcf8addeed0ff0b5210614e3d6cde1324"
+    },
+    {
+      "file": "008-settings.png",
+      "sha256": "89b0f88f9c151f51ccd34b399854c18eabf22869cf512d4d3a6dc2f26326809e"
+    },
+    {
+      "file": "010-appearance.png",
+      "sha256": "7a707718c0d5b977b7fc6fe09e6549e821b1a60b01468596df8810ec7691ad19"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 13,
+  "operator_elapsed_seconds": 361.070957,
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "issue": 757,
+    "scope": "B-en-layout-and-real-worktree",
+    "app_source_sha": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "harness_source_sha": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "expected_version": "1.2.56",
+    "frozen_at": "2026-10-31T08:20:52.930420+00:00",
+    "operator_budget_seconds_exclusive": 480,
+    "qualified_artifact_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "checks": [
+      "Fresh English Dark baseline in this ephemeral app instance: actual shell PID, nonexported WT156B marker, cwd, clean Git HEAD/status and one worktree.",
+      "At the actual observed narrow window width, verify Dark repository identity, readable full-path tooltip and reachable full-width footer; Escape restores unassisted terminal typing.",
+      "Switch to Light. At normal and actual narrow widths, verify repository identity, readable full-path tooltip and a footer hover/click that opens the genuine folder dialog; native cancellation preserves selection.",
+      "Return to the normal window and submit a real terminal worktree for the verified repository. Type a harmless command without any assisting prompt click into the new tab. Verify a different shell PID, expected Git HEAD, exactly two worktrees, the correct shared Git directory and cwd equal to the created worktree.",
+      "Return to the original tab and capture fresh same-PID/WT156B/cwd output, unchanged source HEAD and clean source status; the new worktree remains registered exactly once."
+    ],
+    "evidence": [
+      "Fresh viewed screenshots and recorded real GUI actions, no inferred screenshot verdicts.",
+      "Independently verified unchanged app/DMG identity, archived action/image byte equality, explicit finish and no expiry.",
+      "A missing or failed criterion stays missing or failed; no global product acceptance inferred from a bounded scope."
+    ]
+  },
+  "verdicts": {
+    "scope": "B",
+    "native_scope_passed": false,
+    "outcome": "Incomplete operator attempt; no product defect inferred",
+    "observed": [
+      "English Dark repository and full tooltip visible at actual 480x678",
+      "Full-width footer hover and right-edge click opens native Open panel",
+      "Native panel cancellation preserves repository selection",
+      "Actual Escape closes modal; unassisted source shell probe reaches PID 1463 and WT156B marker"
+    ],
+    "not_run": [
+      "Light normal/narrow checks",
+      "Worktree UI creation and new-shell/source-shell comparisons"
+    ],
+    "reason": "Operator context transition consumed the limited session; explicitly finished within the frozen 480-second budget rather than extending it. Same frozen B scope requires a fresh attempt."
+  },
+  "native_scope_passed": false,
+  "operator_budget_limit_seconds_exclusive": 480,
+  "operator_budget_passed": true,
+  "before_first_action_through_last_seconds": 363.92426,
+  "criteria_sha256": "27576609d7de048d4574540c6b26541c1ac9972f98324e308e5e7548987e9e56",
+  "source_comparison": {
+    "pid": 1463,
+    "marker_preserved": true,
+    "cwd_head_common_clean_status_worktree_inventory_preserved": true,
+    "worktree_count": 1,
+    "snapshot_sha256": {
+      "002-b-baseline-facts.txt": "6b4b34482f80e892f0797263ac9702431bacbe9484013b01d11c1d05643d5a33",
+      "007-b-escape-facts.txt": "6b4b34482f80e892f0797263ac9702431bacbe9484013b01d11c1d05643d5a33"
+    }
+  },
+  "native_run_url": "https://github.com/byte5ai/zaplex/actions/runs/41195308301",
+  "criteria_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6541101187",
+  "criteria_hash_updated_before_native_started": true
+}

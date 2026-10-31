@@ -1,0 +1,187 @@
+{
+  "run_id": 41196038594,
+  "app_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+  "harness_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+  "version": "1.2.56",
+  "dmg_sha256": "2e0dbbbdd1f67a41e2ccf73507cac7bba92e5c986a7f1b74d377c2ed520e7e02",
+  "artifact_id": 13041156794,
+  "archive_sha256": "279242743f12ed81ced7c714f79875a57e6b29e6e4372605afb0adabd3f85762",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "2317bf4db783ff9f2f300c71c4d2603b2d8ce3d5e7147bf0604daa9758c8e46d"
+    },
+    {
+      "file": "002-b-baseline-output.png",
+      "sha256": "852e34af828889bfc9741deadb9cb8f4bde55bcbada2c564ed461ecab7d11d72"
+    },
+    {
+      "file": "004-dark-narrow-tooltip.png",
+      "sha256": "4d80c5d3cc0b6a5d11ead701684ae023b230042fecbd58d0b45829dd6bf4877f"
+    },
+    {
+      "file": "005-dark-narrow-footer.png",
+      "sha256": "a8a3d96536b65ca2240c26d9d292b4b5f2f7311ed2bb740a0115a5166b5f6932"
+    },
+    {
+      "file": "006-dark-open.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "006-dark-cancel.png",
+      "sha256": "96da7b4bed6305e68a143f9a0cb64cb9d7b823459ec7209e33f90eca6cd48455"
+    },
+    {
+      "file": "007-b-escape-output.png",
+      "sha256": "f3427c9f1aad7623366604eb01ad1726ebe401edd6380337a7b1a7a73f5bbdb4"
+    },
+    {
+      "file": "008-light-picker.png",
+      "sha256": "88fa00c67e8fb8a0336f7071612475ce528cc80a5ef1b94e8e058384da3c73e3"
+    },
+    {
+      "file": "010-light-modal.png",
+      "sha256": "63fd4e67bab272acb3ccd4b5d317180a9a65fbc8ed03870825c8aa0a37fd1665"
+    },
+    {
+      "file": "012-after-settings-close.png",
+      "sha256": "75ddf85d70da9493f4ccd2471b4ee21076893a8dfddd3a7ba2e26c88c1b40acf"
+    },
+    {
+      "file": "014-light-normal-tooltip.png",
+      "sha256": "20f64fb6fabafcdccefd40c5308518ede4f38a9a49ad0463d5d4c2da7acead42"
+    },
+    {
+      "file": "015-light-normal-footer.png",
+      "sha256": "cc8a4ba6d83d247a0accde2949cb2b4b59830172910e116e37e68337681bff7d"
+    },
+    {
+      "file": "016-light-normal-open.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "016-light-normal-cancel.png",
+      "sha256": "af660293ceaf9ed1a973ac4a3c61e52e2009954a67f2cd8b7a9e28d9d997ddc1"
+    },
+    {
+      "file": "017-light-narrow-tooltip.png",
+      "sha256": "683b51c7c6102e65afcac1aa5f5b95a27b78d5134de4ef86b760f5440a9f6288"
+    },
+    {
+      "file": "018-light-narrow-footer.png",
+      "sha256": "d96ee3154fd2e7e5b6f9977f4be439efb3296d6cdf4b75caeb0fbc927a690af6"
+    },
+    {
+      "file": "019-light-narrow-open.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "019-light-narrow-cancel.png",
+      "sha256": "8b998f05be69d6b627896375c9d2d98c6dde50e955ecb5ef55ad3e5d13c3ef81"
+    },
+    {
+      "file": "020-ready-to-create.png",
+      "sha256": "2a1b5212ffbc72e37217dde7f5c63dc4bbf677bc6bc21a53ad521d48b0a51c99"
+    },
+    {
+      "file": "021-worktree-created.png",
+      "sha256": "7821d05eeac0006ce85e8be776244fb0ba8c3c8d8d973366916bd02ef65b8625"
+    },
+    {
+      "file": "022-b-new-output.png",
+      "sha256": "7dd2e9604c641ec69e763d00f9bfc71d681c88fe4e4c41a9129f0e03f76e1f50"
+    },
+    {
+      "file": "023-b-return-output.png",
+      "sha256": "0e53b9910a37ea8ef737c7b65c9a2d63240bf77d1faba4c62f831017d46dbd89"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 31,
+  "operator_elapsed_seconds": 417.380747,
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "issue": 757,
+    "scope": "B-en-layout-and-real-worktree",
+    "app_source_sha": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "harness_source_sha": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "expected_version": "1.2.56",
+    "frozen_at": "2026-10-31T08:20:52.930420+00:00",
+    "operator_budget_seconds_exclusive": 480,
+    "qualified_artifact_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "checks": [
+      "Fresh English Dark baseline in this ephemeral app instance: actual shell PID, nonexported WT156B marker, cwd, clean Git HEAD/status and one worktree.",
+      "At the actual observed narrow window width, verify Dark repository identity, readable full-path tooltip and reachable full-width footer; Escape restores unassisted terminal typing.",
+      "Switch to Light. At normal and actual narrow widths, verify repository identity, readable full-path tooltip and a footer hover/click that opens the genuine folder dialog; native cancellation preserves selection.",
+      "Return to the normal window and submit a real terminal worktree for the verified repository. Type a harmless command without any assisting prompt click into the new tab. Verify a different shell PID, expected Git HEAD, exactly two worktrees, the correct shared Git directory and cwd equal to the created worktree.",
+      "Return to the original tab and capture fresh same-PID/WT156B/cwd output, unchanged source HEAD and clean source status; the new worktree remains registered exactly once."
+    ],
+    "evidence": [
+      "Fresh viewed screenshots and recorded real GUI actions, no inferred screenshot verdicts.",
+      "Independently verified unchanged app/DMG identity, archived action/image byte equality, explicit finish and no expiry.",
+      "A missing or failed criterion stays missing or failed; no global product acceptance inferred from a bounded scope."
+    ]
+  },
+  "verdicts": {
+    "scope_status": "passed B criteria and independently verified archive, budget and all Git/shell facts",
+    "locale": "English",
+    "themes": [
+      "Zaplex Dark",
+      "Light"
+    ],
+    "window_points": [
+      [
+        1024,
+        678
+      ],
+      [
+        480,
+        678
+      ]
+    ],
+    "original_shell_pid": 1434,
+    "new_shell_pid": 4427,
+    "nonexported_marker": "WT156B=kept",
+    "dark_narrow_identity_tooltip_footer_native_dialog_cancel_escape_unassisted_input": true,
+    "light_normal_and_narrow_identity_tooltip_footer_native_dialog_and_cancellation": true,
+    "worktree_created_by_actual_app_submission": true,
+    "new_tab_input_without_assisting_prompt_click": true,
+    "new_shell_head_common_dir_worktree_count_and_cwd_verified": true,
+    "source_return_unassisted_fresh_same_pid_marker_and_cwd": true,
+    "operator_budget_seconds_exclusive": 480,
+    "before_first_action_through_last_seconds": 419.590662,
+    "operator_notes": [
+      "One resize was refused before dispatch because the private helper supplied an unsupported foreground option; corrected locally, no product mutation from refused action.",
+      "Initial theme-picker close did not close Settings; observed actual screenshot, explicitly closed theme picker and Settings before opening the worktree modal.",
+      "Final live facts fetch occurred after explicit finish and was refused; compare the fresh viewed return output with the actual archived raw facts, not with an assumed live file."
+    ],
+    "genuine_agent_profiles": "not available; no managed-agent fork inferred",
+    "release": "no release or tag"
+  },
+  "native_scope_passed": true,
+  "operator_budget_limit_seconds_exclusive": 480,
+  "operator_budget_passed": true,
+  "before_first_action_through_last_seconds": 419.590662,
+  "criteria_sha256": "27576609d7de048d4574540c6b26541c1ac9972f98324e308e5e7548987e9e56",
+  "criteria_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6541101187",
+  "criteria_hash_updated_before_native_started": true,
+  "all_local_facts_byte_identical_to_archive": 3,
+  "source_comparison": {
+    "original_shell_pid": 1434,
+    "new_shell_pid": 4427,
+    "escape_preserves_original_shell_and_all_git_facts": true,
+    "new_shell_is_different_and_has_no_source_marker": true,
+    "new_shell_cwd_is_created_worktree": true,
+    "head_and_shared_git_directory_match_source": true,
+    "source_return_preserves_pid_marker_cwd_head_common_and_clean_status": true,
+    "worktree_count_before": 1,
+    "worktree_count_after": 2,
+    "new_worktree_registered_exactly_once": true,
+    "snapshot_sha256": {
+      "002-b-baseline-facts.txt": "91b63aab04a08f23929a987cb9afe8aef76e53035c473169113b0f1912a5ce7d",
+      "007-b-escape-facts.txt": "91b63aab04a08f23929a987cb9afe8aef76e53035c473169113b0f1912a5ce7d",
+      "022-b-new-facts.txt": "5e68bd509fa7870273bdaff8b930b7a09d9d0b2d65bff062c22e408dd031296b",
+      "023-b-return-facts.txt": "23a58d3c990afe03bf654819597ffbe4c02ba7f1e8f91a7200bcdb4fccca42c8"
+    }
+  },
+  "native_run_url": "https://github.com/byte5ai/zaplex/actions/runs/41196038594"
+}
