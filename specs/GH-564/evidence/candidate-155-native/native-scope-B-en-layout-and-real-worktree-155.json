@@ -1,0 +1,22 @@
+{
+  "issue": 755,
+  "scope": "B-en-layout-and-real-worktree",
+  "app_source_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "harness_source_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "expected_version": "1.2.55",
+  "qualified_artifact_run": 41166591979,
+  "frozen_at": "2026-10-31T04:23:22.329455+00:00",
+  "operator_budget_seconds_exclusive": 480,
+  "checks": [
+    "Fresh English Dark baseline in this ephemeral app instance: actual shell PID, nonexported WT155B marker, cwd, clean Git HEAD/status and one worktree.",
+    "At the actual observed narrow window width, verify Dark repository identity, readable full-path tooltip and reachable full-width footer; Escape restores unassisted terminal typing.",
+    "Switch to Light. At normal and actual narrow widths, verify repository identity, readable full-path tooltip and a footer hover/click that opens the genuine folder dialog; native cancellation preserves selection.",
+    "Return to the normal window and submit a real terminal worktree for the verified repository. Type a harmless command without any assisting prompt click into the new tab. Verify a different shell PID, expected Git HEAD, exactly two worktrees, the correct shared Git directory and cwd equal to the created worktree.",
+    "Return to the original tab and capture fresh same-PID/WT155B/cwd output, unchanged source HEAD and clean source status; the new worktree remains registered exactly once."
+  ],
+  "evidence": [
+    "Fresh viewed screenshots and recorded real GUI actions, no inferred screenshot verdicts.",
+    "Independently verified unchanged app/DMG identity, archived action/image byte equality, explicit finish and no expiry.",
+    "A missing or failed criterion stays missing or failed; no global product acceptance inferred from a bounded scope."
+  ]
+}
