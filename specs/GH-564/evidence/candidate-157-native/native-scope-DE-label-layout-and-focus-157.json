@@ -1,0 +1,27 @@
+{
+  "issues": [
+    759,
+    760
+  ],
+  "scope": "DE-label-layout-and-focus",
+  "app_source_sha": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "harness_source_sha": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "expected_version": "1.2.57",
+  "frozen_at": "2026-10-31T13:19:04.520971+00:00",
+  "operator_budget_seconds_exclusive": 480,
+  "qualified_artifact_source": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "checks": [
+    "Select German in the fresh owned app and completely restart it. Establish a new post-restart original-shell baseline with actual PID, nonexported WT157DE marker, cwd, expected clean HEAD/common directory and exactly one worktree; no shell-survival claim across restart.",
+    "German Dark at actual 1024x678 and 480x678 points: repository identity and complete path tooltip are readable; the real footer reads + Neues Repository hinzuf\u00fcgen, highlights across its full width and opens a genuine native folder dialog when clicked on the right; cancellation preserves selection.",
+    "Mouse-Cancel from the focused normal Dark modal restores unassisted typing in the same post-restart shell; a fresh snapshot preserves actual PID/WT157DE/cwd and all clean Git/worktree facts.",
+    "Switch through the real theme picker to Light. With its sidebar open the complete German OS-theme explanation remains visible through its final words, wrapping within the available settings width.",
+    "German Light at actual 1024x678 and 480x678 points: the same readable identity/full tooltip and canonical + Neues Repository hinzuf\u00fcgen footer, full-row hover/right-click opening the genuine native dialog, and preserved selection after native cancellation.",
+    "Actual Escape from the focused narrow Light modal restores unassisted terminal typing; a fresh snapshot preserves the same post-restart PID/WT157DE/cwd/HEAD/common directory/clean status and one-worktree inventory."
+  ],
+  "evidence": [
+    "Fresh actual screenshots viewed before product verdicts; failed or missing observations remain failed or missing.",
+    "Independent unchanged DMG/app/harness/version provenance, archive/image byte equality and actual Git/shell raw facts.",
+    "Exclusive 480-second scope budget starts before the first native query/action and includes language/theme changes, probes and explicit cleanup. Old 1.2.56 failures remain unchanged.",
+    "A bounded native pass is not complete product, agent-account or motion acceptance. No release/tag inferred."
+  ]
+}

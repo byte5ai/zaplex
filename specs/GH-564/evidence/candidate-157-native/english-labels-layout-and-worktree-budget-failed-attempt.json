@@ -1,0 +1,201 @@
+{
+  "run_id": 41222001064,
+  "app_source": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "harness_source": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "version": "1.2.57",
+  "dmg_sha256": "8715686dee80ffdd61921a32e31f4e080dcffc339d09249ca365de38edc517b4",
+  "artifact_id": 13050079522,
+  "archive_sha256": "3edb9c4d3d49c8b14e89ad257fb6aa08cfc4328be7d05a29aeae34ea289d51d6",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "462ba84cc709197b5f78c6dbed89a15b5c3899bb7046c84421bfd78827e4e0f0"
+    },
+    {
+      "file": "002-en-baseline-output.png",
+      "sha256": "f12866e2e88e818e934a896ef1941fd1bd812918de3269a9ababb21484070323"
+    },
+    {
+      "file": "003-dark-normal-modal.png",
+      "sha256": "48e4a98ed21790ce59d51c94d25b438f97afbdacf7f4afc8d46694adfab9bf6e"
+    },
+    {
+      "file": "003-dark-normal-tooltip.png",
+      "sha256": "5b1d8256de0beb9c34f1ba56475f47e493ae15cd428f3f5ba788e5bdf9f82755"
+    },
+    {
+      "file": "004-dark-normal-footer.png",
+      "sha256": "e8435f48f7c9c1a2d5f95738292308596e98b6c66ba107e4fdeb2dd631608b4d"
+    },
+    {
+      "file": "005-dark-normal-open.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "005-dark-normal-cancel.png",
+      "sha256": "48e4a98ed21790ce59d51c94d25b438f97afbdacf7f4afc8d46694adfab9bf6e"
+    },
+    {
+      "file": "006-en-cancel-output.png",
+      "sha256": "baeccbcf3a821f6e9fed0ea44faa2f2ee578eb83b45940f31d13489debb4eeba"
+    },
+    {
+      "file": "008-dark-narrow-tooltip.png",
+      "sha256": "5cd0f5a1d2f859831c85692bb8d8f481994bbd1c71daef357162794f4fb420e7"
+    },
+    {
+      "file": "009-dark-narrow-footer.png",
+      "sha256": "1ffb0020a2d8ebf29c90f0c8ce3d282130f4af12b46d52d7f7f00f198fcdc653"
+    },
+    {
+      "file": "010-dark-narrow-open.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "010-dark-narrow-cancel.png",
+      "sha256": "e9719c349040f3b3e8f6b898e3245b43a911b1328bf73f0bfee91c55778cc0e2"
+    },
+    {
+      "file": "011-light-picker.png",
+      "sha256": "88fa00c67e8fb8a0336f7071612475ce528cc80a5ef1b94e8e058384da3c73e3"
+    },
+    {
+      "file": "012-light-selected.png",
+      "sha256": "1caba77e69f55617dac9a438d60e447da8c71e1765dbf848fdacfba10cd06672"
+    },
+    {
+      "file": "014-light-normal-tooltip.png",
+      "sha256": "d546bfba5be714f9143e7766baef877b9dc594d583a46ba712b68b6c6adb809a"
+    },
+    {
+      "file": "015-light-normal-footer.png",
+      "sha256": "ddac8a08063a8aa8730bdabdcda85e7fc6659e7f2122f3d3a618283b159ac2a5"
+    },
+    {
+      "file": "016-light-normal-open.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "016-light-normal-cancel.png",
+      "sha256": "7cd8ce5c259f92ef8db55c93adffb065e7656124cac4b3ff5cd850b9ad977ec1"
+    },
+    {
+      "file": "017-light-narrow-tooltip.png",
+      "sha256": "e97191c86f801e489a00d8537cd2e0cc30ce64c0200fe5bcbd384a52c023535b"
+    },
+    {
+      "file": "018-light-narrow-footer.png",
+      "sha256": "22044bf33cf6fceea88e6d84add3076303093b0cabb195dfb1f8da03d756b2ec"
+    },
+    {
+      "file": "019-light-narrow-open.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "019-light-narrow-cancel.png",
+      "sha256": "92953e3932134f147105d85bb3e7afed558012d13739cb3e0a1cb053d210953b"
+    },
+    {
+      "file": "020-en-escape-output.png",
+      "sha256": "69a2bdb39a8e3002a911ff108c45f887bf34a1f50a7fdb5d5f8020ee0dd0521d"
+    },
+    {
+      "file": "021-ready-normal.png",
+      "sha256": "b11af676d4e564097ddf86ae139386e260b00eb6c3fd8244c65efe6f62d6473e"
+    },
+    {
+      "file": "023-en-new-output.png",
+      "sha256": "15c1c667bd716f766e34ad19e01a96f130d10447c3665dfad4a2047fc8887955"
+    },
+    {
+      "file": "024-en-return-output.png",
+      "sha256": "e725d3ed9c770b4ecb87beba2d640dd633a1d7c0f9789aeb158467060bed7a1d"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 34,
+  "operator_elapsed_seconds": 477.438916,
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "issues": [
+      759,
+      760
+    ],
+    "scope": "EN-label-layout-and-worktree",
+    "app_source_sha": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+    "harness_source_sha": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+    "expected_version": "1.2.57",
+    "frozen_at": "2026-10-31T13:19:04.520971+00:00",
+    "operator_budget_seconds_exclusive": 480,
+    "qualified_artifact_source": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+    "checks": [
+      "Fresh English Dark baseline: real original shell PID, nonexported WT157EN marker, cwd, expected clean source HEAD/common directory and exactly one worktree.",
+      "English Dark at actual 1024x678 and 480x678 points: visible repository identity, readable full-path tooltip and canonical + Add new repo footer across its full width; a right-side hover/click opens a genuine native folder dialog and native cancellation preserves repository selection.",
+      "Mouse-Cancel from a focused normal Dark worktree modal restores unassisted terminal typing; a new real snapshot preserves original PID/marker/cwd/HEAD/common directory/clean status and one-worktree inventory.",
+      "Switch through the real theme picker to Light. With its sidebar open the complete English OS-theme explanation remains visible, including its final words, wrapping within the available settings width.",
+      "English Light at actual 1024x678 and 480x678 points: the same visible identity, full tooltip, canonical localized footer, whole-row hover/right-click, genuine native folder dialog and preserved selection after native cancellation.",
+      "Actual Escape from the focused narrow Light modal restores unassisted source typing; fresh real PID/marker/cwd/Git snapshot matches the original baseline.",
+      "Return to normal width and submit a real terminal worktree via the app. Without an assisting prompt click, type in the new tab and verify a different real shell PID with no source marker, expected HEAD/shared Git directory, clean status, exactly two worktrees and cwd equal to the newly created worktree.",
+      "Click the original tab and capture a fresh same-PID/WT157EN/cwd snapshot; source HEAD/common directory and clean status remain unchanged and the new worktree is registered exactly once."
+    ],
+    "evidence": [
+      "Fresh actual screenshots viewed before product verdicts; failed or missing observations remain failed or missing.",
+      "Independent unchanged DMG/app/harness/version provenance, archive/image byte equality and actual Git/shell raw facts.",
+      "Exclusive 480-second scope budget starts before the first native query/action and includes language/theme changes, probes and explicit cleanup. Old 1.2.56 failures remain unchanged.",
+      "A bounded native pass is not complete product, agent-account or motion acceptance. No release/tag inferred."
+    ]
+  },
+  "verdicts": {
+    "all_frozen_native_criteria_observed": true,
+    "scope_status": "failed or incomplete: preserve missing criteria and/or exclusive budget failure",
+    "locale": "en",
+    "sizes": [
+      [
+        1024,
+        678
+      ],
+      [
+        480,
+        678
+      ]
+    ],
+    "themes": [
+      "Zaplex Dark",
+      "Light"
+    ],
+    "repository_footer": "Canonical + Add new repo visible; whole row highlighted; right-edge click opened a genuine native Open panel in all four variants; native cancellation preserved the selected repository.",
+    "theme_description": "Complete English OS-theme explanation visible through 'when your system does.' with theme chooser sidebar open in both Dark and Light.",
+    "cancel_and_escape": "Fresh unassisted output after normal Dark Mouse-Cancel and narrow Light Escape preserved original shell PID 1458, WT157EN marker, cwd, source HEAD/common Git directory, clean status and one-worktree inventory.",
+    "real_worktree": "Created through visible app Open action. New unassisted shell PID 4056 had no source marker, expected clean HEAD/shared Git directory and exactly two worktrees. Return to original tab produced fresh PID 1458/kept/cwd output and exactly one additional distinct-branch worktree.",
+    "budget_failure": "Last finish Return action completed just beyond the unchanged exclusive 480-second prefix budget. The infrastructure run's success is not a native scope pass."
+  },
+  "native_scope_passed": false,
+  "operator_budget_limit_seconds_exclusive": 480,
+  "operator_budget_passed": false,
+  "before_first_action_through_last_seconds": 480.582967,
+  "criteria_sha256": "8a6eb2464c626b17beddfddc6c4defdca7f320ab9eae5635a7286178acfb4000",
+  "criteria_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6543879721",
+  "criteria_hash_updated_before_native_started": true,
+  "all_local_facts_byte_identical_to_archive": 5,
+  "source_comparison": {
+    "original_shell_pid": 1458,
+    "marker_preserved_after_cancel_and_escape": true,
+    "cwd_head_common_clean_status_and_one_worktree_inventory_preserved_after_cancel_and_escape": true,
+    "worktrees_before": 1,
+    "snapshot_sha256": {
+      "002-en-baseline-facts.txt": "a6e786918fbfc31bd4c53de1f15f5d2b656acd907b85b3b011133fa8c9980538",
+      "006-en-cancel-facts.txt": "a6e786918fbfc31bd4c53de1f15f5d2b656acd907b85b3b011133fa8c9980538",
+      "020-en-escape-facts.txt": "a6e786918fbfc31bd4c53de1f15f5d2b656acd907b85b3b011133fa8c9980538",
+      "023-en-new-facts.txt": "198647e98e49712cb3db13410d91eaba68640b7c4f8d9fe698c900f54f1912aa",
+      "024-en-return-facts.txt": "c4e827486fe0967b6f414418888b00b03c065f586c32cf5774a9cd4f9ac7b780"
+    },
+    "new_branch_distinct_from_source": true,
+    "new_shell_pid": 4056,
+    "new_shell_has_no_source_marker": true,
+    "new_cwd_is_created_worktree": true,
+    "new_head_and_shared_git_directory_match_source": true,
+    "source_return_pid_marker_cwd_head_common_and_clean_status_preserved": true,
+    "worktrees_after": 2,
+    "new_worktree_registered_exactly_once": true
+  },
+  "native_run_url": "https://github.com/byte5ai/zaplex/actions/runs/41222001064"
+}

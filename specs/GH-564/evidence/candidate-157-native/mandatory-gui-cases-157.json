@@ -1,0 +1,25 @@
+{
+  "source_sha": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "version": "1.2.57",
+  "frozen_at": "2026-10-31T13:19:04.520971+00:00",
+  "expected_count": 16,
+  "expected_case_ids": [
+    "NavigationTests/testCancelSplitKeepsOriginalShell",
+    "NavigationTests/testClosingTabPreservesOriginalShell",
+    "NavigationTests/testSettingsReturnToOriginalShell",
+    "NavigationTests/testSplitDown",
+    "NavigationTests/testSplitLeft",
+    "NavigationTests/testSplitRight",
+    "NavigationTests/testSplitUp",
+    "NavigationTests/testTabsKeepIndependentShells",
+    "SmokeTests/testNativeCloseButtonClosesWindow",
+    "SmokeTests/testNewWindowRunsItsOwnShell",
+    "SmokeTests/testRelaunchAcceptsTerminalInput",
+    "SmokeTests/testTerminalExecutesAndRendersOutput",
+    "SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+    "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell",
+    "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible",
+    "SurfaceTests/testWindowMinimumSizePreservesOriginalShell"
+  ],
+  "basis": "The independently passed sixteen 1.2.56 installed-GUI identities; GUI test sources unchanged."
+}
