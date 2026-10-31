@@ -18346,6 +18346,7 @@ impl Workspace {
                 body.on_close(ctx);
             });
         });
+        self.focus_active_tab(ctx);
         ctx.notify();
     }
 

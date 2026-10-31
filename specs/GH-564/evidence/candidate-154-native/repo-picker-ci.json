@@ -1,0 +1,26 @@
+{
+  "run_id": 41143783370,
+  "job_id": 124372580231,
+  "source": "28db964d5839a06089040fecb85166fad366448a",
+  "version": "1.2.54",
+  "verified_at": "2026-10-30T23:57:57.300865+00:00",
+  "new_case_matches": {
+    "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository": 1,
+    "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch": 1,
+    "tab_configs::repo_picker::tests::repository_picker_add_repo_row_accepts_mouse_clicks_across_its_width": 1,
+    "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects": 1,
+    "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search": 1,
+    "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path": 1,
+    "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection": 1,
+    "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen": 1,
+    "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity": 1
+  },
+  "log_sha256": "d3e874c6ce2e635ee5b75f17468f9a5287160530469185e7a8a6bb8200aec530",
+  "app_regression_result_blocks": 27,
+  "passed_app_test_executions": 823,
+  "failed": 0,
+  "ignored": 0,
+  "distinct_test_total": "not inferred; overlapping selections possible",
+  "frozen_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6535567417",
+  "frozen_hash_comment_updated_before_job_started": true
+}

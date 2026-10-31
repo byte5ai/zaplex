@@ -1,0 +1,109 @@
+{
+  "run_id": 41140594261,
+  "app_source": "3fe124f00d7615398309753415639465d42b1450",
+  "harness_source": "3fe124f00d7615398309753415639465d42b1450",
+  "version": "1.2.53",
+  "dmg_sha256": "98b9802faffe4ad81a4289ca250c4572daad4179144f31897f06b197be48e71c",
+  "artifact_id": 13019992344,
+  "archive_sha256": "870bbf9446eff0737bacc29990af1efa4129e43a24988516b4c50de2bdd99405",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "2317bf4db783ff9f2f300c71c4d2603b2d8ce3d5e7147bf0604daa9758c8e46d"
+    },
+    {
+      "file": "002-baseline-output.png",
+      "sha256": "84503d14e8379b0b7eba38ac00474f005450ec542d980ee013c69f0b08e4ab04"
+    },
+    {
+      "file": "005-menu.png",
+      "sha256": "d3810f95ac3682724ed2ddee77cf08b0cab2b50e60293276d699b4df6f6c2561"
+    },
+    {
+      "file": "006-submenu.png",
+      "sha256": "12f542020f78cd4bce90076c156583193f270c895809238978acb062ef6e5c52"
+    },
+    {
+      "file": "007-current-repo.png",
+      "sha256": "c095291a6849cae109461804184b6366bb8b119feb5a0fa5805bb787e512d2f9"
+    },
+    {
+      "file": "008-unmatched-search.png",
+      "sha256": "2a4e707188bf325562b35ad72d8e1a1d84f9cafbf8355ee5e130cd79d7a3e520"
+    },
+    {
+      "file": "009-label-hover.png",
+      "sha256": "52c33d6a350b00b5a1c91a6c1db5c85d2447c34d22845b63ac505aee47fb20a7"
+    },
+    {
+      "file": "010-folder-dialog.png",
+      "sha256": "427949f18c735e7d8d5bb51dff2575ca917a176ded51dfbbe779186f5c09829a"
+    },
+    {
+      "file": "011-native-open.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "012-folder-cancelled.png",
+      "sha256": "c095291a6849cae109461804184b6366bb8b119feb5a0fa5805bb787e512d2f9"
+    },
+    {
+      "file": "013-modal-cancelled.png",
+      "sha256": "785e0770c8fb57291cda16ad1c62ee9bc082aec2bda579b28332a0ff5cdcc50f"
+    },
+    {
+      "file": "014-return-output.png",
+      "sha256": "d4155041f5d5a4575c906aab073db10afe09b40280f93fd9814f5f29056ce0ab"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 17,
+  "operator_elapsed_seconds": 233.452448,
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "source_sha": "3fe124f00d7615398309753415639465d42b1450",
+    "version": "1.2.53",
+    "run_id": 41140594261,
+    "frozen_at": "2026-10-30T22:57:56.955133+00:00",
+    "scope": "Short diagnostic old-DMG counterprobe of footer label area, not a corrected-product acceptance",
+    "checks": [
+      "After an actual unmatched search, a click directly on the Add new repo label opens a real native folder dialog.",
+      "Cancelling the native folder dialog preserves the displayed repository.",
+      "Cancelling the worktree modal preserves the original shell/marker/cwd and Git status/HEAD/worktrees.",
+      "Finish explicitly in less than 480 seconds."
+    ],
+    "product_acceptance": "diagnostic-only; no overall pass"
+  },
+  "verdicts": {
+    "label_area_after_unmatched_search": "pass: blue hover only around label and genuine Open panel window73, actual screenshot011",
+    "real_native_folder_cancellation": "pass: escape in Open window73 returns unchanged visible repository in012",
+    "worktree_modal_cancellation": "pass013",
+    "fresh_original_shell_output": "pass014: archived original/return output exact same PID/marker/cwd; before/after Git status, HEAD and one-worktree inventory independently byte-identical",
+    "full_row_area_on_old_version": "not corrected: previous native right-of-label clicks and local red test show #753; this is a diagnostic counterprobe",
+    "new_folder_selection_and_worktree_creation": "not-run in this diagnostic session",
+    "session_finish": "explicit finished file present; no expiry; successful workflow; own VM no longer listed",
+    "product_acceptance": "diagnostic-only, no overall 1.2.53 or 1.2.54 acceptance pass"
+  },
+  "operator_budget": {
+    "expected_max_seconds": 480,
+    "actual_seconds": 233.452448,
+    "result": "pass"
+  },
+  "source_shell_and_git": {
+    "same_original_pid": 1473,
+    "same_nonexported_marker": true,
+    "same_working_directory": true,
+    "fresh_return_screenshot": "014-return-output.png",
+    "git_status_before_after_byte_identical_and_clean": true,
+    "git_head_before_after_byte_identical": true,
+    "git_worktree_inventory_before_after_byte_identical": true,
+    "worktree_count_before": 1,
+    "worktree_count_after": 1
+  },
+  "refused_setup_operations": {
+    "count": 2,
+    "mutation_dispatched": false,
+    "reason": "removed coordinate option and required foreground target corrected before any click was dispatched",
+    "counted_as_product_failure": false
+  },
+  "product_acceptance": "diagnostic-only; confirms old label-area behavior and real cancellation, no corrected 1.2.54 full-row/native pass"
+}

@@ -1,0 +1,10 @@
+{
+  "source_sha": "28db964d5839a06089040fecb85166fad366448a",
+  "version": "1.2.54",
+  "frozen_at": "2026-10-31T02:42:52.621394+00:00",
+  "run_id": 41160181833,
+  "probe": "Keyboard focus after worktree-modal cancellation",
+  "expected": "After cancelling the modal, typing a harmless source-shell verification command without clicking the terminal should place that command in the original visible terminal input. Return then produces the original PID, nonexported marker and cwd.",
+  "guard": "Verify the entire command is visibly present before Return. If absent, do not dispatch Return; record the focus failure or inconclusive targeting separately from pointer/selection results. Any subsequent explicit prompt click is recorded as assisted backend verification, not an automatic-focus pass.",
+  "relation": "Follow-up to the observed unassisted input miss in the first 1.2.53 native session; no change to the previously frozen repository-picker criteria or test identities."
+}

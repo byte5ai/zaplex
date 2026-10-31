@@ -1,0 +1,164 @@
+{
+  "run_id": 41160181833,
+  "app_source": "28db964d5839a06089040fecb85166fad366448a",
+  "harness_source": "28db964d5839a06089040fecb85166fad366448a",
+  "version": "1.2.54",
+  "dmg_sha256": "259cd20b19f163898e809ca17ebc25ac33fedf86602f96df69b093983e456da2",
+  "artifact_id": 13027167990,
+  "archive_sha256": "57c045ff8c642e2f16a286b0bbc68df43be3529c6cef54595294489acae49b43",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "2317bf4db783ff9f2f300c71c4d2603b2d8ce3d5e7147bf0604daa9758c8e46d"
+    },
+    {
+      "file": "002-baseline-output.png",
+      "sha256": "95d3fe65b8bff1a25c7fc0a2a2b75eb097cda5afa7228a3b2ab53557edf16df4"
+    },
+    {
+      "file": "003-menu.png",
+      "sha256": "5123f0912780a9dfd39fa9597c3e18a0ca87eec023d8855c104d4841808ab891"
+    },
+    {
+      "file": "004-submenu.png",
+      "sha256": "6ad2f32f8c0dc9e2cdc47f88cd6b7f08aad5b6b6fd47bc2be520b26f655350f1"
+    },
+    {
+      "file": "005-current-repository.png",
+      "sha256": "9f8562304e789345457c6224c5715af8d7463f624efcbceaa94282d814473e0b"
+    },
+    {
+      "file": "006-unmatched-search.png",
+      "sha256": "6a490f41ef452797991f09ee4966f5261d87ccdccd7e623aa83070f73c5e2353"
+    },
+    {
+      "file": "007-right-row-hover.png",
+      "sha256": "b689c1a69133c73f2eac860ffc9db150483211d938074aad544a94628b6de908"
+    },
+    {
+      "file": "008-native-open-right-click.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "009-folder-cancelled.png",
+      "sha256": "9f8562304e789345457c6224c5715af8d7463f624efcbceaa94282d814473e0b"
+    },
+    {
+      "file": "010-search-reopened.png",
+      "sha256": "d8fe7a8fdf52d79ad24548484e2f70e5eb7990040691426c5c0d0668f7332b39"
+    },
+    {
+      "file": "011-native-open-center.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "012-goto-folder-sheet.png",
+      "sha256": "3f97b1b0b1704bc84e83890d5fda72920235e066531f039e434ce7a388f0a5ce"
+    },
+    {
+      "file": "013-goto-folder-path.png",
+      "sha256": "d34d9fe290af4cc95fa105a045063f3be000856c9001c0b90eac1c34869946ea"
+    },
+    {
+      "file": "014-folder-selection.png",
+      "sha256": "89804820cdf74efa276aca9eaeb62f5a0314d2535bd9553fe013875ce9750a28"
+    },
+    {
+      "file": "015-chosen-long-repository.png",
+      "sha256": "856bc9c087eee1fbff8a6cdb31d02debb44aeefc2fc5e58da420a82c52c11c46"
+    },
+    {
+      "file": "016-full-path-tooltip.png",
+      "sha256": "967428169f617dde3c0324652a7cb1a13428f2375ee5552cd39e2df92d2cb312"
+    },
+    {
+      "file": "017-modal-cancelled.png",
+      "sha256": "5af5fd23f28827e3b59ca95ca54951f9ae2dbac3e8e4cc870631a79c32b7700b"
+    },
+    {
+      "file": "018-unassisted-return-typed.png",
+      "sha256": "5af5fd23f28827e3b59ca95ca54951f9ae2dbac3e8e4cc870631a79c32b7700b"
+    },
+    {
+      "file": "019-assisted-return-output.png",
+      "sha256": "969034bcb7ca912aa6acc146a2983308974711362e528d09eb108a3d1d578050"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 22,
+  "operator_elapsed_seconds": 378.296528,
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "issue": 753,
+    "source_sha": "28db964d5839a06089040fecb85166fad366448a",
+    "version": "1.2.54",
+    "dmg_sha256": "259cd20b19f163898e809ca17ebc25ac33fedf86602f96df69b093983e456da2",
+    "frozen_at": "2026-10-31T02:28:35.307086+00:00",
+    "locale": "en",
+    "theme": "Zaplex Dark",
+    "window": "normal (1024x678)",
+    "operator_budget_seconds": 480,
+    "scope": "Real full-row repository action, native folder cancellation/selection and long-path tooltip; worktree creation and the narrow/language/theme variants are separate sessions.",
+    "checks": [
+      "The existing current Git checkout is visibly selected before search.",
+      "An actual unmatched query is visible in the repository search editor.",
+      "The right side of the entire Add new repo row shows hover and opens the genuine native folder dialog.",
+      "Cancelling the native dialog preserves the original selected repository.",
+      "A center-row click opens the folder dialog again; choosing the existing long nested checkout directory visibly replaces the path despite the former query.",
+      "Hovering the selected path reveals the full chosen directory in its tooltip.",
+      "Modal cancellation preserves original shell PID, nonexported marker and cwd; independent before/after Git status, HEAD and one-worktree inventory remain byte-identical.",
+      "Finish explicitly within 480 seconds; no session expiry and no overall product acceptance implied."
+    ],
+    "existing_directory_suffix": "crates/warpui_core/src/elements/flex"
+  },
+  "verdicts": {
+    "current_repository_visible": "pass005",
+    "actual_unmatched_search": "pass006",
+    "right_edge_full_row_hover_and_click": "pass007-008: full-width blue hover and genuine native Open window67 from x660",
+    "native_folder_cancellation_preserves_selection": "pass009: original selected path restored, screenshot byte-equal to005",
+    "center_full_row_click_opens_native_dialog": "pass011: genuine Open window81 from x500",
+    "actual_new_long_directory_selection": "pass012-015: existing nested Git directory chosen via genuine Open dialog; closed selection visibly changes despite former query",
+    "complete_selected_path_tooltip": "pass016: full chosen path through crates/warpui_core/src/elements/flex readable",
+    "unassisted_keyboard_focus_after_modal_cancel": "FAIL018: foreground type reported dispatched, actual terminal input remains blank; guard withheld Return; image byte-equal to017",
+    "assisted_backend_source_shell_return": "pass019 via explicit prompt click: source PID1457, nonexported marker/cwd unchanged; archived Git status/HEAD/one-worktree inventory independently byte-identical. Automatic keyboard focus remains failed.",
+    "other_locales_themes_narrow_and_worktree_creation": "not-run in this normal EN/Dark session",
+    "finish": "explicit finished marker present; no expiry; workflow success; own VM no longer listed",
+    "operator_elapsed_seconds": 378.296528,
+    "operator_budget_seconds": 480,
+    "product_acceptance": "partial; repository picker cases pass, genuine keyboard-focus failure remains; no overall pass"
+  },
+  "operator_budget": {
+    "expected_max_seconds": 480,
+    "actual_seconds": 378.296528,
+    "result": "pass"
+  },
+  "source_shell_and_git": {
+    "original_pid": 1457,
+    "same_nonexported_marker": true,
+    "same_working_directory": true,
+    "git_status_before_after_byte_identical_and_clean": true,
+    "git_head_before_after_byte_identical": true,
+    "git_worktree_inventory_before_after_byte_identical": true,
+    "worktree_count_before": 1,
+    "worktree_count_after": 1,
+    "fresh_return_screenshot": "019-assisted-return-output.png",
+    "terminal_click_required": true
+  },
+  "focus_probe": {
+    "source_sha": "28db964d5839a06089040fecb85166fad366448a",
+    "version": "1.2.54",
+    "frozen_at": "2026-10-31T02:42:52.621394+00:00",
+    "run_id": 41160181833,
+    "probe": "Keyboard focus after worktree-modal cancellation",
+    "expected": "After cancelling the modal, typing a harmless source-shell verification command without clicking the terminal should place that command in the original visible terminal input. Return then produces the original PID, nonexported marker and cwd.",
+    "guard": "Verify the entire command is visibly present before Return. If absent, do not dispatch Return; record the focus failure or inconclusive targeting separately from pointer/selection results. Any subsequent explicit prompt click is recorded as assisted backend verification, not an automatic-focus pass.",
+    "relation": "Follow-up to the observed unassisted input miss in the first 1.2.53 native session; no change to the previously frozen repository-picker criteria or test identities."
+  },
+  "focus_probe_result": {
+    "result": "FAIL",
+    "typed_observation": "018-unassisted-return-typed.png",
+    "unassisted_image_byte_equal_to_cancelled_modal_image": true,
+    "return_dispatched_before_assisting_prompt_click": false,
+    "assisted_return_counted_as_automatic_focus_pass": false
+  },
+  "product_acceptance": "partial: EN/Dark/normal repository selector and real folder cancel/select/full-path tooltip pass; native automatic keyboard-focus failure after modal cancellation remains"
+}

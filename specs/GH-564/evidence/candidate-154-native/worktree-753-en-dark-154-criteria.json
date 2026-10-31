@@ -1,0 +1,23 @@
+{
+  "issue": 753,
+  "source_sha": "28db964d5839a06089040fecb85166fad366448a",
+  "version": "1.2.54",
+  "dmg_sha256": "259cd20b19f163898e809ca17ebc25ac33fedf86602f96df69b093983e456da2",
+  "frozen_at": "2026-10-31T02:28:35.307086+00:00",
+  "locale": "en",
+  "theme": "Zaplex Dark",
+  "window": "normal (1024x678)",
+  "operator_budget_seconds": 480,
+  "scope": "Real full-row repository action, native folder cancellation/selection and long-path tooltip; worktree creation and the narrow/language/theme variants are separate sessions.",
+  "checks": [
+    "The existing current Git checkout is visibly selected before search.",
+    "An actual unmatched query is visible in the repository search editor.",
+    "The right side of the entire Add new repo row shows hover and opens the genuine native folder dialog.",
+    "Cancelling the native dialog preserves the original selected repository.",
+    "A center-row click opens the folder dialog again; choosing the existing long nested checkout directory visibly replaces the path despite the former query.",
+    "Hovering the selected path reveals the full chosen directory in its tooltip.",
+    "Modal cancellation preserves original shell PID, nonexported marker and cwd; independent before/after Git status, HEAD and one-worktree inventory remain byte-identical.",
+    "Finish explicitly within 480 seconds; no session expiry and no overall product acceptance implied."
+  ],
+  "existing_directory_suffix": "crates/warpui_core/src/elements/flex"
+}
