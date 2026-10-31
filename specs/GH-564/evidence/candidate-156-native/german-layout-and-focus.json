@@ -1,0 +1,196 @@
+{
+  "run_id": 41196800714,
+  "app_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+  "harness_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+  "version": "1.2.56",
+  "dmg_sha256": "2e0dbbbdd1f67a41e2ccf73507cac7bba92e5c986a7f1b74d377c2ed520e7e02",
+  "artifact_id": 13041019734,
+  "archive_sha256": "5281d0b004b2f369d273e414fb5e78143e5dfe43eec523d957052f843d6c4ee0",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "4d33bca740fd17feba3040f28e9b1fcef76e0b5f3fa3fe43593e64b093fc60e1"
+    },
+    {
+      "file": "002-language-picker.png",
+      "sha256": "650230c9d052a557f6a607d92e710ee9da7670586ba871dfe1303dc671829f9f"
+    },
+    {
+      "file": "003-german-selected.png",
+      "sha256": "8a6708aa333d8c323a993e672cef748054e49fdb31b69c893ffcfe3639cc7bc2"
+    },
+    {
+      "file": "004-after-german-restart.png",
+      "sha256": "4e15ef165ef1a8cde710e0cd5c63e8f7df724d5674b7e3a35e86795f7756b062"
+    },
+    {
+      "file": "005-c-baseline-output.png",
+      "sha256": "e189b312b7ebdffbbfb08277c16b4ac218345ca9acde1b4856119e122f8db461"
+    },
+    {
+      "file": "006-dark-normal-tooltip.png",
+      "sha256": "66cb844d1a79c8f31f96bcafea35e265fd102ed1ef284eaa913f6f2b65ff7c37"
+    },
+    {
+      "file": "007-dark-normal-footer.png",
+      "sha256": "08b09eb026baba1f8f3f4c227c3d05cd387e98c2847b47224d301190bbd6f9fa"
+    },
+    {
+      "file": "007b-german-plus-menu.png",
+      "sha256": "a4de6670410aa3cd8d033ccd9dbddb7941b427e7d0a1f77f68b9a5573675810e"
+    },
+    {
+      "file": "007c-german-worktree-menu.png",
+      "sha256": "d7f385b465ac5e7b89fd32f742687cc5df0fce949c3307bca6336861dfdeceea"
+    },
+    {
+      "file": "008a-dark-normal-tooltip.png",
+      "sha256": "c2dcdf125c727f0835f4d37958295764907e9e1d6aafba8ced5ae6385cd46d5c"
+    },
+    {
+      "file": "008b-dark-normal-footer.png",
+      "sha256": "85156b0bdd17cdd613d92b40eb3f219af6e06fbbf18418e86b720291d2d390c0"
+    },
+    {
+      "file": "008c-dark-normal-open.png",
+      "sha256": "1e5689d68ec6346edfc6d0c4fc63b8273014912839be2f4072d84ee43079fb1b"
+    },
+    {
+      "file": "008c-dark-normal-cancel.png",
+      "sha256": "0dcb5d16a11fc8b894bcfef10c15d099c7fdac1f7f8b5db3737f0e206da83fa2"
+    },
+    {
+      "file": "009-c-cancel-output.png",
+      "sha256": "32a5761d4c8f922572a035cfc2ffaaf761a3a4b8e7b3eafcf9c5c69b9e3007a8"
+    },
+    {
+      "file": "011-dark-narrow-tooltip.png",
+      "sha256": "0639d29c8d1b82f846212543a135045883f4d040e68c6dc16910270cc92767a4"
+    },
+    {
+      "file": "012-dark-narrow-footer.png",
+      "sha256": "c6839b72f2f0ec9ee960750843c3406b6052e093a56c468095000590cb6551d4"
+    },
+    {
+      "file": "013-dark-narrow-open.png",
+      "sha256": "1e5689d68ec6346edfc6d0c4fc63b8273014912839be2f4072d84ee43079fb1b"
+    },
+    {
+      "file": "013-dark-narrow-cancel.png",
+      "sha256": "1073bfb2bd9461e5fde1e00f6e38155d1c0f4a1b48d746ac491b0d59dc65a516"
+    },
+    {
+      "file": "014-light-picker.png",
+      "sha256": "a48f439ff3e82577c2272c3f2731c4079056fe33dfa5bd549101f9c68db600c9"
+    },
+    {
+      "file": "017-light-normal-tooltip.png",
+      "sha256": "489c76e151a44aef718a15db9fc86db1969fd4ef3758a065f476fa4b5d9b02d2"
+    },
+    {
+      "file": "018-light-normal-footer.png",
+      "sha256": "09987df6592b8c1584ac0429832b34d09707656db3e0bc0b5e3d80e834e0cc4c"
+    },
+    {
+      "file": "019-light-normal-open.png",
+      "sha256": "1e5689d68ec6346edfc6d0c4fc63b8273014912839be2f4072d84ee43079fb1b"
+    },
+    {
+      "file": "019-light-normal-cancel.png",
+      "sha256": "61ce245ca85e0adc8b7c8065b11400db398bbd85dba7771f987316df032c38e1"
+    },
+    {
+      "file": "023-c-escape-output.png",
+      "sha256": "5bc129451689c8d904d463a04b5e0ce22a6d366b589a2b099f521cc4a798b1bc"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 32,
+  "operator_elapsed_seconds": 485.756467,
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "issue": 757,
+    "scope": "C-de-layout-and-focus",
+    "app_source_sha": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "harness_source_sha": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "expected_version": "1.2.56",
+    "frozen_at": "2026-10-31T08:20:52.930420+00:00",
+    "operator_budget_seconds_exclusive": 480,
+    "qualified_artifact_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "checks": [
+      "Select German in this ephemeral app instance and restart the owned app. Establish a new post-restart original-shell baseline with actual PID, nonexported WT156C marker, cwd and Git state; do not claim shell survival across the restart.",
+      "For German Dark at normal and actual narrow widths, verify visible repository identity, readable full-path tooltip and full-width footer hover/click opening the genuine folder dialog. Native cancellation preserves selection.",
+      "Switch to Light and perform the same repository/tooltip/footer/native-cancellation checks at normal and actual narrow widths.",
+      "After Cancel and Escape from focused worktree modals, type and execute harmless shell probes without any assisting prompt click. Compare the actual PID/WT156C/cwd with the post-restart baseline and verify unchanged clean source checkout and worktree count."
+    ],
+    "evidence": [
+      "Fresh viewed screenshots and recorded real GUI actions, no inferred screenshot verdicts.",
+      "Independently verified unchanged app/DMG identity, archived action/image byte equality, explicit finish and no expiry.",
+      "A missing or failed criterion stays missing or failed; no global product acceptance inferred from a bounded scope."
+    ]
+  },
+  "verdicts": {
+    "scope_status": "failed/incomplete; no C pass",
+    "locale": "German after actual owned-app restart",
+    "themes": [
+      "Zaplex Dark",
+      "Light"
+    ],
+    "window_points": [
+      [
+        1024,
+        678
+      ],
+      [
+        480,
+        678
+      ]
+    ],
+    "post_restart_shell_pid": 1839,
+    "nonexported_marker": "WT156C=kept",
+    "dark_normal_and_narrow_repository_tooltip_footer_native_dialog_cancel_observed": true,
+    "light_normal_repository_tooltip_footer_native_dialog_cancel_observed": true,
+    "light_narrow": "not-run: remaining operator budget insufficient after correcting the locale-specific menu coordinates; no pass inferred",
+    "mouse_cancel_dark_normal_unassisted_source_shell_probe": true,
+    "actual_escape_light_normal_unassisted_source_shell_probe": true,
+    "new_defect": "RepoPicker footer remains + Add new repo... in the genuinely German app after restart; observed Dark normal/narrow and Light normal. Production source contains hardcoded ADD_NEW_REPO_LABEL.",
+    "all_frozen_native_criteria_observed": false,
+    "operator_budget_seconds_exclusive": 480,
+    "operator_budget_passed": false,
+    "before_first_action_through_last_seconds": 488.021776,
+    "operator_notes": [
+      "Initial private helper used English plus-menu coordinates. Original captures showed no modal. A harmless unmatched query reached terminal input but was erased with Ctrl-U without Return. Fresh actual German menu screenshots established correct coordinates; only later real modal captures count as dialog evidence.",
+      "Cleanup exceeded the unchanged exclusive budget by 8.021776 seconds. This remains a separate failure and is not waived."
+    ],
+    "genuine_agent_profiles": "not available; no inference",
+    "release": "no release or tag",
+    "theme_description_clips_with_picker_sidebar": {
+      "observed_file": "014-light-picker.png",
+      "issue": 760,
+      "status": "fail: right-hand part of German description visibly clipped; horizontal reachability not tested"
+    }
+  },
+  "native_scope_passed": false,
+  "operator_budget_limit_seconds_exclusive": 480,
+  "operator_budget_passed": false,
+  "before_first_action_through_last_seconds": 488.021776,
+  "criteria_sha256": "087aba1f04c3ee5aa55a8eb4a0f004384ec8e4cafac9532d40b2590a79cbbe77",
+  "criteria_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6541101187",
+  "criteria_hash_updated_before_native_started": true,
+  "all_local_facts_byte_identical_to_archive": 1,
+  "source_comparison": {
+    "post_restart_shell_pid": 1839,
+    "marker_preserved": true,
+    "cwd_head_common_clean_status_worktree_inventory_preserved": true,
+    "worktree_count": 1,
+    "snapshot_sha256": {
+      "005-c-baseline-facts.txt": "363dbf8fe79f771ab75cda3bc57e9e183716d5e2cac6d44b447eed051e5ab203",
+      "009-c-cancel-facts.txt": "363dbf8fe79f771ab75cda3bc57e9e183716d5e2cac6d44b447eed051e5ab203",
+      "023-c-escape-facts.txt": "363dbf8fe79f771ab75cda3bc57e9e183716d5e2cac6d44b447eed051e5ab203"
+    }
+  },
+  "native_run_url": "https://github.com/byte5ai/zaplex/actions/runs/41196800714",
+  "defect_issues": [
+    "https://github.com/byte5ai/zaplex/issues/759",
+    "https://github.com/byte5ai/zaplex/issues/760"
+  ]
+}
