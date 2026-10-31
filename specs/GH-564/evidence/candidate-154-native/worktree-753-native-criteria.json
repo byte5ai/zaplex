@@ -1,0 +1,19 @@
+{
+  "issue": 753,
+  "expected_version": "1.2.54",
+  "source_sha": "28db964d5839a06089040fecb85166fad366448a",
+  "frozen_at": "2026-10-30T23:19:29.785205+00:00",
+  "checks": [
+    "After actual unmatched repository search, center/right areas of Add new repo show hover and open the genuine native folder dialog.",
+    "Real native folder cancellation keeps the original displayed/effective repository.",
+    "Choosing a different existing Git directory visibly replaces the selected path before any submission; the full long path is readable in its tooltip.",
+    "Repository identity and footer interaction work in English/German, Dark/Light, including a narrow window.",
+    "A terminal worktree is opened through UI with the selected root repository and branch; independent Git facts prove one additional worktree, expected HEAD/common directory and a distinct shell.",
+    "Fresh output from the original tab proves the original PID/nonexported marker/cwd and clean source checkout."
+  ],
+  "limits": [
+    "No subscription/managed agent acceptance is implied.",
+    "No release/tag authorization.",
+    "Each native session finishes explicitly within its predeclared 480-second budget; no weakening after failure."
+  ]
+}

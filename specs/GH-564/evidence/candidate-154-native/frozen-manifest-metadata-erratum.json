@@ -1,0 +1,31 @@
+{
+  "verified_at": "2026-10-31T00:20:46.584674+00:00",
+  "frozen_manifest": "mandatory-package-cases-154.json",
+  "frozen_manifest_sha256": "fc47c43ca31fec878ca178fceed5dc85d4624fa06ce00e4957b6659f869ac602",
+  "cause": "Three provenance annotations were copied from the 1.2.52 baseline while baseline_run and case inventory were correctly updated to the independently checked 1.2.53 baseline.",
+  "corrections": {
+    "baseline_source": {
+      "frozen_annotation": "7d16fee989aea6d4ab8b0727478143f5064fb9bd",
+      "correct_baseline_value": "3fe124f00d7615398309753415639465d42b1450"
+    },
+    "baseline_package_job": {
+      "frozen_annotation": 124256132101,
+      "correct_baseline_value": 124300892055
+    },
+    "baseline_run_conclusion": {
+      "frozen_annotation": "cancelled",
+      "correct_baseline_value": "success"
+    }
+  },
+  "correct_baseline_run": 41119368489,
+  "correct_baseline_package_artifact": 13011196310,
+  "correct_baseline_junit_sha256": "9f9842c96e742a59fd598017ec401755226b46982164dd9c4293837721ad98da",
+  "expected_cases_exactly_actual_153_baseline_plus_new_mouse_case": true,
+  "actual_154_junit_matches_unchanged_frozen_case_set": true,
+  "baseline_cases": 4403,
+  "expected_and_actual_154_cases": 4404,
+  "frozen_manifest_modified": false,
+  "case_selection_changed_after_results": false,
+  "new_test_run_required": false,
+  "reason_no_new_test_run": "Only copy-forward provenance annotations are corrected; source/version, all expected case identities/count and pre-execution public hash remain unchanged."
+}

@@ -1,0 +1,31 @@
+{
+  "run_id": 41143783370,
+  "job_id": 124375878398,
+  "source": "28db964d5839a06089040fecb85166fad366448a",
+  "version": "1.2.54",
+  "verified_at": "2026-10-31T00:09:34.062671+00:00",
+  "flaky_or_rerun_failure_records": 0,
+  "artifact_id": 13022405482,
+  "archive_sha256": "d66f8a7fdbe12ac4b44545c771808f7829406ecb63e5ee41b475983fddb2b933",
+  "junit_sha256": "cc8876cd6a92b06db2d3f5e00186381bc1ec3a0d84e8700f98208d4e6e28dc4b",
+  "testcases": 4404,
+  "failed": 0,
+  "skipped": 0,
+  "new_case_matches": {
+    "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository": 1,
+    "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch": 1,
+    "tab_configs::repo_picker::tests::repository_picker_add_repo_row_accepts_mouse_clicks_across_its_width": 1,
+    "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects": 1,
+    "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search": 1,
+    "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path": 1,
+    "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection": 1,
+    "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen": 1,
+    "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity": 1
+  },
+  "frozen_expected_sha256": "fc47c43ca31fec878ca178fceed5dc85d4624fa06ce00e4957b6659f869ac602",
+  "frozen_at": "2026-10-30T23:19:29.785205+00:00",
+  "baseline_run": 41119368489,
+  "case_inventory_sha256": "e63756cd31f795b0010e5f0a014b966f5e3b7e11bf2d0ae5c8ff252c957b57f9",
+  "frozen_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6535567417",
+  "frozen_hash_comment_updated_before_job_started": true
+}

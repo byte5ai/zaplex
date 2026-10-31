@@ -1,0 +1,25 @@
+{
+  "source_sha": "28db964d5839a06089040fecb85166fad366448a",
+  "expected_count": 16,
+  "expected_case_ids": [
+    "NavigationTests/testCancelSplitKeepsOriginalShell",
+    "NavigationTests/testClosingTabPreservesOriginalShell",
+    "NavigationTests/testSettingsReturnToOriginalShell",
+    "NavigationTests/testSplitDown",
+    "NavigationTests/testSplitLeft",
+    "NavigationTests/testSplitRight",
+    "NavigationTests/testSplitUp",
+    "NavigationTests/testTabsKeepIndependentShells",
+    "SmokeTests/testNativeCloseButtonClosesWindow",
+    "SmokeTests/testNewWindowRunsItsOwnShell",
+    "SmokeTests/testRelaunchAcceptsTerminalInput",
+    "SmokeTests/testTerminalExecutesAndRendersOutput",
+    "SurfaceTests/testConnectionsPanelKeepsTerminalUsable",
+    "SurfaceTests/testFileManagerUsesPaneDirectoryAndReturnsToShell",
+    "SurfaceTests/testNarrowFileManagerKeepsAllActionsVisible",
+    "SurfaceTests/testWindowMinimumSizePreservesOriginalShell"
+  ],
+  "version": "1.2.54",
+  "basis": "Sixteen GUI test identities unchanged against the checked 1.2.53 suite, frozen before 1.2.54 execution.",
+  "frozen_at": "2026-10-30T23:19:29.785205+00:00"
+}
