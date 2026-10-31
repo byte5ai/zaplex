@@ -1,0 +1,150 @@
+{
+  "run_id": 41194592925,
+  "app_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+  "harness_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+  "version": "1.2.56",
+  "dmg_sha256": "2e0dbbbdd1f67a41e2ccf73507cac7bba92e5c986a7f1b74d377c2ed520e7e02",
+  "artifact_id": 13040411374,
+  "archive_sha256": "87f053a8d7dc9a304cfdeaf70a272118a57f6dc8e6a0c5374144ed4f202ea0a8",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "2317bf4db783ff9f2f300c71c4d2603b2d8ce3d5e7147bf0604daa9758c8e46d"
+    },
+    {
+      "file": "002-a-baseline-output.png",
+      "sha256": "be9132a45712c837f1328f8510dd9b17a6e752bbf47c9ad0256439844058761a"
+    },
+    {
+      "file": "003-current-repository.png",
+      "sha256": "582159a5a7300f7c381688a428a6c44f82eef4e4005d561be92214e99767e782"
+    },
+    {
+      "file": "004-unmatched-right-hover.png",
+      "sha256": "c30ad508e6b39323b530cea07b18ac76697d8282e8e5a7e0766791ff74ef6234"
+    },
+    {
+      "file": "005-native-open-right.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "006-folder-cancelled.png",
+      "sha256": "582159a5a7300f7c381688a428a6c44f82eef4e4005d561be92214e99767e782"
+    },
+    {
+      "file": "007-modal-cancelled.png",
+      "sha256": "e3c028d2b8ed5a111e14912701136918012acb4d6bed014aa3892dbd555e0e22"
+    },
+    {
+      "file": "008-a-cancel-output.png",
+      "sha256": "f4059fc0ad2af7f571004b6577855e78dce1bab2007cd514fe5603f79832d0f1"
+    },
+    {
+      "file": "009-search-reopened.png",
+      "sha256": "dc5690fe2be480ca615504cbd24303ed8e3cb5d76dd13cb4d5d81a313b53f63e"
+    },
+    {
+      "file": "010-native-open-center.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "011-goto-sheet.png",
+      "sha256": "f7d18365debb2a253f48feeda9c264fbd922a1260d4387c2192bfbdd4302829e"
+    },
+    {
+      "file": "012-goto-path.png",
+      "sha256": "a0a1a3c1da9cdeac1492ff40f7146c54b77e762428ae21c851772fafc967ae3e"
+    },
+    {
+      "file": "013-folder-selection.png",
+      "sha256": "89804820cdf74efa276aca9eaeb62f5a0314d2535bd9553fe013875ce9750a28"
+    },
+    {
+      "file": "014-chosen-long-repository.png",
+      "sha256": "0582f508d3a7cda2f3b7421a2f8610750e6005e8ab22dc5b48feaea8c7f4bb26"
+    },
+    {
+      "file": "015-full-path-tooltip.png",
+      "sha256": "7958c8cc01ee21edead6390b87f1baf051ffa770c8c17de188dc8990c1ca82d1"
+    },
+    {
+      "file": "016-modal-escaped.png",
+      "sha256": "f4059fc0ad2af7f571004b6577855e78dce1bab2007cd514fe5603f79832d0f1"
+    },
+    {
+      "file": "017-a-escape-output.png",
+      "sha256": "8d7a78a7b27a0f3559a29f62d662378d3964c9fe9627b63d401c3c7b2f1e54dd"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 21,
+  "operator_elapsed_seconds": 377.898418,
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "issue": 757,
+    "scope": "A-en-dark-focus-and-path",
+    "app_source_sha": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "harness_source_sha": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "expected_version": "1.2.56",
+    "frozen_at": "2026-10-31T08:20:52.930420+00:00",
+    "operator_budget_seconds_exclusive": 480,
+    "qualified_artifact_source": "73016d8854d2fb784c1b247fad48d468948671d5",
+    "checks": [
+      "Fresh English Dark normal-window baseline: actual original shell PID, nonexported WT156A marker, cwd, Git HEAD, clean status and one worktree.",
+      "The current Git repository is visible before editing. An actual unmatched query plus a click on the right side of the full-width Add repository row opens the genuine native folder dialog.",
+      "Cancel the native folder dialog and verify the displayed/effective repository is preserved. Cancel the worktree modal, then type and execute a harmless source-shell probe without any assisting prompt click; verify the original PID/marker/cwd and Git state.",
+      "Reopen the worktree modal, choose the existing long nested Git directory via the genuine native folder dialog, verify its displayed nonblank path and readable full-path tooltip, then Escape from the focused modal.",
+      "Type and execute the second harmless source-shell probe without any assisting prompt click; verify original PID/marker/cwd and no new worktree."
+    ],
+    "evidence": [
+      "Fresh viewed screenshots and recorded real GUI actions, no inferred screenshot verdicts.",
+      "Independently verified unchanged app/DMG identity, archived action/image byte equality, explicit finish and no expiry.",
+      "A missing or failed criterion stays missing or failed; no global product acceptance inferred from a bounded scope."
+    ]
+  },
+  "verdicts": {
+    "scope_status": "passed observed scope; integrity/budget verified separately",
+    "locale": "English",
+    "theme": "Zaplex Dark",
+    "window_points": [
+      1024,
+      678
+    ],
+    "original_shell_pid": 1454,
+    "nonexported_marker": "WT156A=kept",
+    "current_repository_visible": true,
+    "actual_unmatched_query_and_full_row_right_hover_click_native_dialog": true,
+    "native_folder_cancel_preserves_selection": true,
+    "modal_cancel_unassisted_terminal_input": true,
+    "actual_different_long_folder_selection_and_readable_full_tooltip": true,
+    "escape_after_folder_selection_closes_modal": true,
+    "escape_unassisted_terminal_input": true,
+    "original_pid_marker_cwd_head_common_dir_clean_status_and_worktree_inventory_preserved": true,
+    "worktree_count_before_and_after": 1,
+    "operator_budget_seconds_exclusive": 480,
+    "before_first_action_through_last_seconds": 380.486513,
+    "native_worktree_submission": "not in this scope; follows in B",
+    "other_locale_theme_width_variants": "not in this scope; follow in B/C",
+    "genuine_agent_profiles": "not available; not inferred",
+    "release": "no release or tag"
+  },
+  "native_scope_passed": true,
+  "operator_budget_limit_seconds_exclusive": 480,
+  "operator_budget_passed": true,
+  "before_first_action_through_last_seconds": 380.486513,
+  "criteria_sha256": "2c147259a7914d3ec597fa04508aee5e2942d199efd8514fc9ada1c0e2697546",
+  "criteria_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6541101187",
+  "criteria_hash_updated_before_native_started": true,
+  "all_local_facts_byte_identical_to_archive": true,
+  "source_comparison": {
+    "pid": 1454,
+    "marker_preserved": true,
+    "cwd_head_common_clean_status_worktree_inventory_preserved": true,
+    "worktree_count": 1,
+    "snapshot_sha256": {
+      "002-a-baseline-facts.txt": "6172e4b1545bc67d15a4dadcdc5ddbbf6104a509e0fbd3bd8cf632fccf929c75",
+      "008-a-cancel-facts.txt": "6172e4b1545bc67d15a4dadcdc5ddbbf6104a509e0fbd3bd8cf632fccf929c75",
+      "017-a-escape-facts.txt": "6172e4b1545bc67d15a4dadcdc5ddbbf6104a509e0fbd3bd8cf632fccf929c75"
+    }
+  },
+  "native_run_url": "https://github.com/byte5ai/zaplex/actions/runs/41194592925"
+}
