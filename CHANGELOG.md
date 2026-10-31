@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.57] — 2026-10-31
+
+- Repository-Hinzufügen im Worktree-Dialog verwendet die vorhandene Übersetzung; die Erklärung zur Betriebssystem-Theme-Synchronisierung bricht bei geöffneter Theme-Auswahl lesbar um (#759, #760).
+
 ## [1.2.56] — 2026-10-31
 
 - Repository-Auswahl: Nach dem Schließen des Suchmenüs sowie nach Ordnerwahl oder Ordnerabbruch erreicht Escape wieder den Worktree-Dialog; der Fokus anderer Eingabefelder bleibt erhalten (#757).
