@@ -1,0 +1,168 @@
+{
+  "run_id": 41178847206,
+  "app_source": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "harness_source": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "version": "1.2.55",
+  "dmg_sha256": "e028a04afcd695af8f220dc30973ced32a33924280dadff72fb297fcbd65caf2",
+  "artifact_id": 13034304103,
+  "archive_sha256": "5cd055589a94f89ed5cdefeaaeb5a660e1807b5abc61cff8e57f6b7cd865fa73",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "2317bf4db783ff9f2f300c71c4d2603b2d8ce3d5e7147bf0604daa9758c8e46d"
+    },
+    {
+      "file": "002-a-baseline-output.png",
+      "sha256": "0d07c88ad997123770f39ac3e54b5f5cf4fce2902ef331a49e22c3a6dd6aac90"
+    },
+    {
+      "file": "003-menu.png",
+      "sha256": "a33b12f641d139529f74e2da837e1d3f3612d3ba97e83dfe26db6bcc80dc65f0"
+    },
+    {
+      "file": "004-submenu.png",
+      "sha256": "b351404b793728494d5bdc47e43317919e9c8dde3b0c87696c821423c7a6fadd"
+    },
+    {
+      "file": "005-current-repository.png",
+      "sha256": "0ee0ce0ee5d6bab2fb03afdc12e8ce074a9dd1b79f52fb7e4ba889209aed5011"
+    },
+    {
+      "file": "006-unmatched-search.png",
+      "sha256": "2bb1442f40c67cbde082b12cb9f8fcaac938aeebaf19625a2aea4c3025ae3f6b"
+    },
+    {
+      "file": "007-right-row-hover.png",
+      "sha256": "2133c81ceb6fd14aa95432c1c030216f297a86cbf4bec7de75c26bed3a0d0a30"
+    },
+    {
+      "file": "008-native-open-right.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "009-folder-cancelled.png",
+      "sha256": "0ee0ce0ee5d6bab2fb03afdc12e8ce074a9dd1b79f52fb7e4ba889209aed5011"
+    },
+    {
+      "file": "010-modal-cancelled.png",
+      "sha256": "1b4da4224f28ebbafbb399dad8f2f319f3940f4d70edd954ffd57e76a84d37a4"
+    },
+    {
+      "file": "011-a-cancel-output.png",
+      "sha256": "505b231c812d32a9be9498a738dba2e2139d3af619f3ac2bd247eb157c7e47d0"
+    },
+    {
+      "file": "012-modal-reopened.png",
+      "sha256": "1713a73e9594e65fe91cb29a497618f434ca3ad4d5980da5f8fb331414e83a01"
+    },
+    {
+      "file": "013-search-reopened.png",
+      "sha256": "12bef72bea3bc2a9c205560ea709197f97593ba0ec7aacae3bca0f8db7bb03a1"
+    },
+    {
+      "file": "014-native-open-center.png",
+      "sha256": "fc721e29f169fea5349f1cf2b121cf614f8468926cb98b9b506c8fe83bcc39b9"
+    },
+    {
+      "file": "015-goto-sheet.png",
+      "sha256": "41f1741f8399b40270ed0e3a8ec3953253b4962228742a88232d6b21172f4216"
+    },
+    {
+      "file": "016-goto-path.png",
+      "sha256": "04d80c40c7b8532ccfc9b5f037e28d30ac22138d1e9ca558aaf6c9153d4ac8c7"
+    },
+    {
+      "file": "017-folder-selection.png",
+      "sha256": "89804820cdf74efa276aca9eaeb62f5a0314d2535bd9553fe013875ce9750a28"
+    },
+    {
+      "file": "018-chosen-long-repository.png",
+      "sha256": "c31c4f9b62a3bc33867ba83903d77662e64d51140c9f788c1e750b41590d1c82"
+    },
+    {
+      "file": "019-full-path-tooltip.png",
+      "sha256": "ccca0ea088ce746255a6ace7a415713dcb6b93b2c73be9d83faad7f48ad89486"
+    },
+    {
+      "file": "020-modal-escaped.png",
+      "sha256": "ccca0ea088ce746255a6ace7a415713dcb6b93b2c73be9d83faad7f48ad89486"
+    },
+    {
+      "file": "021-a-escape-typed.png",
+      "sha256": "ccca0ea088ce746255a6ace7a415713dcb6b93b2c73be9d83faad7f48ad89486"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 24,
+  "operator_elapsed_seconds": 506.817675,
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "issue": 755,
+    "scope": "A-en-dark-focus-and-path",
+    "app_source_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+    "harness_source_sha": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+    "expected_version": "1.2.55",
+    "qualified_artifact_run": 41166591979,
+    "frozen_at": "2026-10-31T04:23:22.328839+00:00",
+    "operator_budget_seconds_exclusive": 480,
+    "checks": [
+      "Fresh English Dark normal-window baseline: actual original shell PID, nonexported WT155A marker, cwd, Git HEAD, clean status and one worktree.",
+      "The current Git repository is visible before editing. An actual unmatched query plus a click on the right side of the full-width Add repository row opens the genuine native folder dialog.",
+      "Cancel the native folder dialog and verify the displayed/effective repository is preserved. Cancel the worktree modal, then type and execute a harmless source-shell probe without any assisting prompt click; verify the original PID/marker/cwd and Git state.",
+      "Reopen the worktree modal, choose the existing long nested Git directory via the genuine native folder dialog, verify its displayed nonblank path and readable full-path tooltip, then Escape from the focused modal.",
+      "Type and execute the second harmless source-shell probe without any assisting prompt click; verify original PID/marker/cwd and no new worktree."
+    ],
+    "evidence": [
+      "Fresh viewed screenshots and recorded real GUI actions, no inferred screenshot verdicts.",
+      "Independently verified unchanged app/DMG identity, archived action/image byte equality, explicit finish and no expiry.",
+      "A missing or failed criterion stays missing or failed; no global product acceptance inferred from a bounded scope."
+    ]
+  },
+  "verdicts": {
+    "scope_status": "failed",
+    "locale": "English",
+    "theme": "Zaplex Dark",
+    "window_points": [
+      1024,
+      678
+    ],
+    "original_shell_pid_observed": 1445,
+    "nonexported_marker_observed": "WT155A=kept",
+    "baseline_and_cancel_head": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+    "baseline_and_cancel_worktree_count": 1,
+    "current_repository_visible": "passed",
+    "actual_unmatched_query_and_full_row_right_hover_click_native_folder_dialog": "passed",
+    "native_folder_cancellation_preserves_displayed_repository": "passed; exact image equality 005/009",
+    "modal_cancel_unassisted_terminal_typing": "passed observed subcase; fresh output 011, no assisting prompt click",
+    "actual_long_folder_selection_and_complete_tooltip": "passed observed subcase; 018/019",
+    "escape_after_native_folder_selection": "failed; modal remains visible, screenshots 019/020/021 byte-identical",
+    "escape_terminal_probe": "failed before Return; unique probe command absent from actual input, guarded helper stopped without Return",
+    "operator_budget": "failed; exclusive 480-second limit exceeded, retain exact elapsed in independent receipt",
+    "native_scope_B_and_C": "not run on this known-failing candidate",
+    "harness_observations": [
+      "Initial long baseline typing returned INTERACTION_FAILED/timeout after dispatch. No retry: actual full typed command was observed, then Return produced the fresh baseline output.",
+      "Two local image-read attempts occurred before capture subprocesses finished; subsequently awaited those same subprocesses and reviewed the actual completed captures. No product verdict was taken from a missing image."
+    ],
+    "release": "no release or tag"
+  },
+  "archive_integrity_verified": true,
+  "native_scope_passed": false,
+  "operator_budget_limit_seconds_exclusive": 480,
+  "operator_budget_passed": false,
+  "before_first_action_through_last_seconds": 509.608823,
+  "escape_pressed_after_first_recorded_action_seconds": 412.636818,
+  "escape_failure_observed_within_budget": true,
+  "criteria_sha256": "114104a25e18275cda9ab1de0158c69c55ada327b41c0e18960277da9902943d",
+  "criteria_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6538958323",
+  "source_shell_comparison": {
+    "baseline_to_native_folder_cancel_and_modal_cancel": "same actual PID, nonexported marker, cwd, HEAD, Git common directory and worktree inventory; clean status; one worktree",
+    "baseline_snapshot_sha256": "5ae351303d0f3e8079e022e9318df77442a68d5e988b7e84463c13fd4b7a4150",
+    "cancel_snapshot_sha256": "430b2ff6463b1c8e004cdab391384b876d7b244f33042b1a2c84dc0d4e2b9d2c",
+    "escape_snapshot": "absent; guarded helper stopped before Return"
+  },
+  "native_run_url": "https://github.com/byte5ai/zaplex/actions/runs/41178847206",
+  "criteria_hash_updated_before_native_started": true,
+  "escape_failure_observation_elapsed_seconds": {
+    "020-modal-escaped.png": 414.531066,
+    "021-a-escape-typed.png": 431.812217
+  }
+}
