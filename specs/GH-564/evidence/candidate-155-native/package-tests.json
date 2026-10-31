@@ -1,0 +1,32 @@
+{
+  "run_id": 41166591979,
+  "job_id": 124442199306,
+  "source": "6da694e0ac4b16b5962c747ad6c64c7aa691c397",
+  "version": "1.2.55",
+  "verified_at": "2026-10-31T04:42:10.129300+00:00",
+  "flaky_or_rerun_failure_records": 0,
+  "artifact_id": 13030427298,
+  "archive_sha256": "d6b177c5d833d69aa35523a766ccdbb56bb60b0dc7de0e1856bb6e5cf4fdb50f",
+  "junit_sha256": "f9000d1f4fb327026b03293536b3d68297b7258ef95a83c47e862325cd147ef1",
+  "testcases": 4405,
+  "failed": 0,
+  "skipped": 0,
+  "new_case_matches": {
+    "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository": 1,
+    "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch": 1,
+    "tab_configs::repo_picker::tests::repository_picker_add_repo_row_accepts_mouse_clicks_across_its_width": 1,
+    "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects": 1,
+    "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search": 1,
+    "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path": 1,
+    "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection": 1,
+    "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen": 1,
+    "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity": 1,
+    "workspace::view::tests::worktree_modal_focus_tests::worktree_modal_cancel_restores_original_tab_focus": 1
+  },
+  "frozen_expected_sha256": "8570c3bc061a5146903f2c777f76f9f683cd8e1541780144c46483f4f5f6f441",
+  "frozen_at": "2026-10-31T03:58:01.754873+00:00",
+  "baseline_run": 41143783370,
+  "case_inventory_sha256": "7bf1d70a4febfbfb6289dbf9de4c43cde88598ab3d1805f8f8c1089b42981ac7",
+  "frozen_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6538709107",
+  "frozen_hash_comment_updated_before_job_started": true
+}
