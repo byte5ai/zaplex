@@ -1,0 +1,153 @@
+{
+  "issues": [
+    759,
+    760
+  ],
+  "base": "8d7545a7fbc06cccfcedb08ae091440de785d534",
+  "version": "1.2.57",
+  "verified_at": "2026-10-31T13:13:59.496991+00:00",
+  "local_platform": "Linux",
+  "production_sources": {
+    "app/src/tab_configs/repo_picker.rs": "a7df1def3da46ceb94d34cbd699f3b13db6c35e473f6e0b74957c950c02ffb0a",
+    "app/src/settings_view/appearance_page.rs": "72f9750b33026a015ba6e9ab84acb47999647509902b75bea40c5d6312d6d4c7"
+  },
+  "red_evidence": {
+    "kind": "Actual 1.2.56 native observations, not the invalid unit-test draft",
+    "run_id": 41196800714,
+    "artifact_id": 13041019734,
+    "archive_sha256": "5281d0b004b2f369d273e414fb5e78143e5dfe43eec523d957052f843d6c4ee0",
+    "whole_original_scope_passed": false,
+    "original_budget_failure_unchanged": true,
+    "defect_frames_observed_within_original_cutoff": [
+      {
+        "file": "008b-dark-normal-footer.png",
+        "sha256": "85156b0bdd17cdd613d92b40eb3f219af6e06fbbf18418e86b720291d2d390c0",
+        "seconds_from_actual_scope_start": 220.269251
+      },
+      {
+        "file": "012-dark-narrow-footer.png",
+        "sha256": "c6839b72f2f0ec9ee960750843c3406b6052e093a56c468095000590cb6551d4",
+        "seconds_from_actual_scope_start": 307.558532
+      },
+      {
+        "file": "018-light-normal-footer.png",
+        "sha256": "09987df6592b8c1584ac0429832b34d09707656db3e0bc0b5e3d80e834e0cc4c",
+        "seconds_from_actual_scope_start": 407.985546
+      },
+      {
+        "file": "014-light-picker.png",
+        "sha256": "a48f439ff3e82577c2272c3f2731c4079056fe33dfa5bd549101f9c68db600c9",
+        "seconds_from_actual_scope_start": 346.77504
+      }
+    ]
+  },
+  "targeted_behavior_tests": {
+    "executed": 13,
+    "failed": 0,
+    "ignored": 0,
+    "case_ids": [
+      "tab_configs::repo_picker::tests::repository_picker_displays_new_folder_after_an_unmatched_search",
+      "tab_configs::repo_picker::tests::repository_picker_replaces_displayed_and_effective_selection",
+      "tab_configs::repo_picker::tests::repository_picker_empty_default_does_not_select_an_empty_path",
+      "tab_configs::repo_picker::tests::repository_picker_without_a_path_has_no_selection_or_displayed_identity",
+      "tab_configs::repo_picker::tests::repository_picker_displays_current_repo_without_saved_projects",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_repository_picker_escape_closes_filter_before_modal",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_without_repository_rejects_submission_even_with_a_branch",
+      "tab_configs::repo_picker::tests::repository_picker_requesting_another_repo_preserves_selection_until_chosen",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_submits_the_displayed_current_or_newly_selected_repository",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_repository_picker_close_preserves_other_editor_focus",
+      "tab_configs::repo_picker::tests::repository_picker_add_repo_row_accepts_mouse_clicks_across_its_width",
+      "tab_configs::new_worktree_modal::tests::worktree_modal_repository_picker_escape_after_folder_result_closes_modal",
+      "workspace::view::tests::worktree_modal_focus_tests::worktree_modal_cancel_restores_original_tab_focus"
+    ],
+    "log_sha256": "78988bc4d94bb501c74922558107f3067ddd324f902c49c298866462f4d14290"
+  },
+  "checks": {
+    "targeted-tests": {
+      "exit": 0,
+      "started_at": "2026-10-31T12:57:15.151407+00:00",
+      "finished_at": "2026-10-31T13:03:07.947586+00:00",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "warp",
+        "--lib",
+        "--",
+        "repository_picker",
+        "worktree_modal_"
+      ],
+      "log_sha256": "78988bc4d94bb501c74922558107f3067ddd324f902c49c298866462f4d14290"
+    },
+    "cargo-check": {
+      "exit": 0,
+      "started_at": "2026-10-31T13:03:07.948813+00:00",
+      "finished_at": "2026-10-31T13:05:55.279228+00:00",
+      "command": [
+        "cargo",
+        "check",
+        "--locked"
+      ],
+      "log_sha256": "3045f227e00299ab11b9175d45c103ed49903bfaf77e84951553f28c3fd26932"
+    },
+    "clippy": {
+      "exit": 0,
+      "started_at": "2026-10-31T13:05:55.280081+00:00",
+      "finished_at": "2026-10-31T13:09:04.174829+00:00",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--bin",
+        "zaplex",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log_sha256": "3896eecdc2015bd535be5830eb3162b1854ebf0724b3866459694cd5fac1ad2c"
+    }
+  },
+  "phase_a": {
+    "passed": 13,
+    "failed": 0,
+    "scope": "Metadata/readiness gates; not native product acceptance",
+    "log_sha256": "9e6a3178957ea1782776dc1288c1383f5d45e939f0b9b89a52ac4aa14a111325"
+  },
+  "format": {
+    "picker_rustfmt_exit": 0,
+    "appearance_base": {
+      "exit": 1,
+      "preexisting_diagnostics": true
+    },
+    "appearance_current": {
+      "exit": 1,
+      "preexisting_diagnostics": true
+    },
+    "appearance_diagnostics_unchanged": true,
+    "appearance_changed_expression_is_canonical": true,
+    "appearance_diff_is_only_the_intended_paragraph_call": true
+  },
+  "catalog_parity": {
+    "critical_prefixes": [
+      "cockpit-",
+      "workspace-new-session",
+      "workspace-new-worktree-config",
+      "workspace-new-tab-config",
+      "workspace-reopen-closed-session",
+      "workspace-favorites",
+      "workspace-favorite-",
+      "workspace-left-panel",
+      "terminal-input-",
+      "terminal-zero-state-",
+      "server-file-browser-menu-",
+      "git-dialog-"
+    ],
+    "missing_critical_keys": [],
+    "shared_repository_action_in_both_catalogs": true,
+    "method": "Read-only equivalent of scripts/check-i18n-parity.sh key/prefix comparison"
+  },
+  "new_binary_native_footer_and_wrapping_checks": "pending after the new qualified DMG",
+  "new_unit_test_cases": 0,
+  "invalid_unit_draft_excluded": true
+}
