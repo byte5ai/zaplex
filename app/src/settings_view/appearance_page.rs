@@ -3330,7 +3330,7 @@ impl SettingsWidget for ThemeSelectWidget {
             .with_child(
                 appearance
                     .ui_builder()
-                    .span(crate::t!("settings-appearance-theme-sync-os-description"))
+                    .paragraph(crate::t!("settings-appearance-theme-sync-os-description"))
                     .with_style(
                         UiComponentStyles::default().set_margin(Coords::default().bottom(10.)),
                     )

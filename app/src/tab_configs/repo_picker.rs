@@ -15,15 +15,12 @@ use crate::{
 
 const DEFAULT_DROPDOWN_WIDTH: f32 = 380.;
 
-/// Label for the sticky "Add new repo..." footer at the bottom of the picker.
-const ADD_NEW_REPO_LABEL: &str = "+ Add new repo...";
-
 /// A filterable dropdown showing the current repo, with a
-/// sticky "+ Add new repo..." footer that is always visible even when scrolling.
+/// localized add-repository footer that is always visible even when scrolling.
 ///
 /// Emits:
 /// - [`RepoPickerEvent::Selected`] when the user picks a repo path.
-/// - [`RepoPickerEvent::RequestAddRepo`] when the user clicks "+ Add new repo...".
+/// - [`RepoPickerEvent::RequestAddRepo`] when the user clicks the add-repository footer.
 pub struct RepoPicker {
     dropdown: ViewHandle<FilterableDropdown<RepoPickerAction>>,
     /// The currently selected repo path.
@@ -111,9 +108,13 @@ impl RepoPicker {
                     Hoverable::new(mouse_state_clone, move |_| {
                         ConstrainedBox::new(
                             Container::new(
-                                Text::new_inline(ADD_NEW_REPO_LABEL, font_family, font_size)
-                                    .with_color(text_color.into())
-                                    .finish(),
+                                Text::new_inline(
+                                    crate::t!("workspace-add-new-repo"),
+                                    font_family,
+                                    font_size,
+                                )
+                                .with_color(text_color.into())
+                                .finish(),
                             )
                             .with_horizontal_padding(8.)
                             .with_vertical_padding(6.)
