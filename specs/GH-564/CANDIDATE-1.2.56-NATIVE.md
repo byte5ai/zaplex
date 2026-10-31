@@ -144,8 +144,10 @@ sind bytegleich zum Originalarchiv. Alle drei archivierten tatsächlichen
 Git-/Shell-Snapshots wurden unabhängig verglichen, die zusätzlich live abgefragte
 Baseline ist bytegleich. Der
 [maschinenlesbare C-Nachweis](evidence/candidate-156-native/german-layout-and-focus.json)
-bewahrt die Fehler, fehlende Variante und exakten Zeiten. Der folgende
-Korrekturbatch ändert den Status dieses 1.2.56-Laufs nicht.
+bewahrt die Fehler, fehlende Variante und exakten Zeiten. Ein späterer
+Korrekturbatch würde den Status dieses 1.2.56-Laufs nicht ändern. Die beiden
+Textkorrekturen sind als Folgearbeiten erfasst; ein weiterer DMG-Batch wurde
+nicht gestartet.
 
 ## Aussagegrenzen
 
