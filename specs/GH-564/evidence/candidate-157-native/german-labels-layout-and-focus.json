@@ -1,0 +1,188 @@
+{
+  "run_id": 41228055254,
+  "app_source": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "harness_source": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "version": "1.2.57",
+  "dmg_sha256": "8715686dee80ffdd61921a32e31f4e080dcffc339d09249ca365de38edc517b4",
+  "artifact_id": 13053052669,
+  "archive_sha256": "03b142d5cb662255f8256fd8cbe4f38699c5307e45b9721aa25b9e76f6935aee",
+  "reviewed_images": [
+    {
+      "file": "001-initial.png",
+      "sha256": "2317bf4db783ff9f2f300c71c4d2603b2d8ce3d5e7147bf0604daa9758c8e46d"
+    },
+    {
+      "file": "002-language-menu.png",
+      "sha256": "650230c9d052a557f6a607d92e710ee9da7670586ba871dfe1303dc671829f9f"
+    },
+    {
+      "file": "003-language-changed.png",
+      "sha256": "8a6708aa333d8c323a993e672cef748054e49fdb31b69c893ffcfe3639cc7bc2"
+    },
+    {
+      "file": "004-after-restart.png",
+      "sha256": "83f4d26cc88df7659261a23acbc6d9b3f2cd246c26dbfff0e0fa49c49f826b87"
+    },
+    {
+      "file": "005-de-baseline-output.png",
+      "sha256": "d41ac7c5ef20d11b67aed537b303d1a3ba6c4921848661eb4fb6f871126f2e71"
+    },
+    {
+      "file": "006-dark-normal-tooltip.png",
+      "sha256": "a1075e9d449fb2aaded91e6cd72763014d0d78eecc404309e4443b9a24ac2f87"
+    },
+    {
+      "file": "007-dark-normal-footer.png",
+      "sha256": "4df1a7811f0e7e8ddbe6dce54f47f80efad35324638d451d989f62dc8e263e87"
+    },
+    {
+      "file": "008-dark-normal-open.png",
+      "sha256": "1e5689d68ec6346edfc6d0c4fc63b8273014912839be2f4072d84ee43079fb1b"
+    },
+    {
+      "file": "008-dark-normal-cancel.png",
+      "sha256": "38c0bb0e347132258094bd24c2f7de4cc11d76b457bd6a799eb899491e9936a9"
+    },
+    {
+      "file": "009-de-cancel-output.png",
+      "sha256": "9e3eb2b509fdbe0aaa380e8980b2bd8484dbe696dc9a27af19aa17da569c4571"
+    },
+    {
+      "file": "011-dark-narrow-tooltip.png",
+      "sha256": "4c14900c4c55c0ae0b928c9191255c34db542aba7c766e1ad6b50084b7b29fc8"
+    },
+    {
+      "file": "012-dark-narrow-footer.png",
+      "sha256": "ad37b7d884f3fae02817beec23f47606a32db7e11c41eea43a49dc37122e184d"
+    },
+    {
+      "file": "013-dark-narrow-open.png",
+      "sha256": "1e5689d68ec6346edfc6d0c4fc63b8273014912839be2f4072d84ee43079fb1b"
+    },
+    {
+      "file": "013-dark-narrow-cancel.png",
+      "sha256": "fd7fd7130f458c0a7140611007c023e1cf2a1a56154ecfcba8cb0d0a53e904b5"
+    },
+    {
+      "file": "014-light-picker.png",
+      "sha256": "146f93595499d8a59006410e02f47ba8adf7d098303bf76db18cdcd96e831581"
+    },
+    {
+      "file": "015-light-selected.png",
+      "sha256": "a3fc7e7644a949d55ea11b59041725c70b0612fe12ed2200836c4ab6c7cdb2c3"
+    },
+    {
+      "file": "017-light-normal-tooltip.png",
+      "sha256": "f6948f622b7dbf4121c0c8fa90ed831cb7e2198c37536461c12fa9bff2708213"
+    },
+    {
+      "file": "018-light-normal-footer.png",
+      "sha256": "f45fb98b36a42f17c4ea5366db47e05055291ff016bf2b62b6ea0a6cb0ce2491"
+    },
+    {
+      "file": "019-light-normal-open.png",
+      "sha256": "1e5689d68ec6346edfc6d0c4fc63b8273014912839be2f4072d84ee43079fb1b"
+    },
+    {
+      "file": "019-light-normal-cancel.png",
+      "sha256": "5ef13babec4d8cfae815c35611844bd6a9bbc5ffb8846a1ae3918a3a82ad5c84"
+    },
+    {
+      "file": "020-light-narrow-tooltip.png",
+      "sha256": "57f47cf2241030b0db84f9b2a80aae8be260b2c070255191dc9a611827981d82"
+    },
+    {
+      "file": "021-light-narrow-footer.png",
+      "sha256": "be12575cd134449679292c62d38f636d1b38a2e026587ae985d13301a85e9d19"
+    },
+    {
+      "file": "022-light-narrow-open.png",
+      "sha256": "1e5689d68ec6346edfc6d0c4fc63b8273014912839be2f4072d84ee43079fb1b"
+    },
+    {
+      "file": "022-light-narrow-cancel.png",
+      "sha256": "2c11e97b91f9c0f3ec3e8f238b3f13f0e310a8e6d7ce859530d34dbab63d90a3"
+    },
+    {
+      "file": "023-de-escape-output.png",
+      "sha256": "e7ba24ca979b15db0d0208a4a6d552dc734c0d50ffe0c5d109ec7a804d8ec7ae"
+    }
+  ],
+  "all_local_images_byte_identical_to_archive": 32,
+  "operator_elapsed_seconds": 352.317697,
+  "finish": "Explicit finished marker; no session expiry; workflow success",
+  "criteria": {
+    "issues": [
+      759,
+      760
+    ],
+    "scope": "DE-label-layout-and-focus",
+    "app_source_sha": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+    "harness_source_sha": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+    "expected_version": "1.2.57",
+    "frozen_at": "2026-10-31T13:19:04.520971+00:00",
+    "operator_budget_seconds_exclusive": 480,
+    "qualified_artifact_source": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+    "checks": [
+      "Select German in the fresh owned app and completely restart it. Establish a new post-restart original-shell baseline with actual PID, nonexported WT157DE marker, cwd, expected clean HEAD/common directory and exactly one worktree; no shell-survival claim across restart.",
+      "German Dark at actual 1024x678 and 480x678 points: repository identity and complete path tooltip are readable; the real footer reads + Neues Repository hinzuf\u00fcgen, highlights across its full width and opens a genuine native folder dialog when clicked on the right; cancellation preserves selection.",
+      "Mouse-Cancel from the focused normal Dark modal restores unassisted typing in the same post-restart shell; a fresh snapshot preserves actual PID/WT157DE/cwd and all clean Git/worktree facts.",
+      "Switch through the real theme picker to Light. With its sidebar open the complete German OS-theme explanation remains visible through its final words, wrapping within the available settings width.",
+      "German Light at actual 1024x678 and 480x678 points: the same readable identity/full tooltip and canonical + Neues Repository hinzuf\u00fcgen footer, full-row hover/right-click opening the genuine native dialog, and preserved selection after native cancellation.",
+      "Actual Escape from the focused narrow Light modal restores unassisted terminal typing; a fresh snapshot preserves the same post-restart PID/WT157DE/cwd/HEAD/common directory/clean status and one-worktree inventory."
+    ],
+    "evidence": [
+      "Fresh actual screenshots viewed before product verdicts; failed or missing observations remain failed or missing.",
+      "Independent unchanged DMG/app/harness/version provenance, archive/image byte equality and actual Git/shell raw facts.",
+      "Exclusive 480-second scope budget starts before the first native query/action and includes language/theme changes, probes and explicit cleanup. Old 1.2.56 failures remain unchanged.",
+      "A bounded native pass is not complete product, agent-account or motion acceptance. No release/tag inferred."
+    ]
+  },
+  "verdicts": {
+    "all_frozen_native_criteria_observed": true,
+    "scope_status": "passed observed scope, archive, facts and budget",
+    "locale": "de",
+    "sizes": [
+      [
+        1024,
+        678
+      ],
+      [
+        480,
+        678
+      ]
+    ],
+    "themes": [
+      "Zaplex Dark",
+      "Light"
+    ],
+    "language_and_restart": "German selected through the visible Settings dropdown; actual Sprache ge\u00e4ndert dialog observed; owned app fully quit and relaunched. App PID changed from 1386 to 1901; new German terminal observed before baseline. No shell-survival claim across restart.",
+    "repository_footer": "Canonical + Neues Repository hinzuf\u00fcgen visible and readable in all four DE variants; whole-row hover; right-edge click opened a genuine native Open panel; native cancellation preserved the repository.",
+    "theme_description": "Complete German OS-theme description wraps to two lines and remains visible through 'tut.' with the chooser sidebar open in both Dark and Light.",
+    "source_shell": "New post-restart baseline PID 1951, nonexported WT157DE marker. Unassisted Mouse-Cancel in normal Dark and actual Escape in narrow Light preserved this PID/marker/cwd/clean expected HEAD/common Git directory and one-worktree inventory.",
+    "method": "Targeted native regression sequence with fresh images reviewed during capture and before verdict; no full product, agent-account or motion acceptance inferred."
+  },
+  "native_scope_passed": true,
+  "operator_budget_limit_seconds_exclusive": 480,
+  "operator_budget_passed": true,
+  "before_first_action_through_last_seconds": 354.524799,
+  "criteria_sha256": "2a7df6c0d2751898902d3395ef7ddcdb2e8c9604dcb61baed2fcd495d4eb4c21",
+  "criteria_hash_comment": "https://github.com/byte5ai/zaplex/issues/564#issuecomment-6543879721",
+  "criteria_hash_updated_before_native_started": true,
+  "all_local_facts_byte_identical_to_archive": 3,
+  "source_comparison": {
+    "original_shell_pid": 1951,
+    "marker_preserved_after_cancel_and_escape": true,
+    "cwd_head_common_clean_status_and_one_worktree_inventory_preserved_after_cancel_and_escape": true,
+    "worktrees_before": 1,
+    "snapshot_sha256": {
+      "005-de-baseline-facts.txt": "6acffbe52fdd3bd3a8911dbd7756f189a9bfaba98502367cb540d66466356603",
+      "009-de-cancel-facts.txt": "6acffbe52fdd3bd3a8911dbd7756f189a9bfaba98502367cb540d66466356603",
+      "023-de-escape-facts.txt": "6acffbe52fdd3bd3a8911dbd7756f189a9bfaba98502367cb540d66466356603"
+    },
+    "baseline_is_post_app_restart": true,
+    "no_shell_survival_claim_across_restart": true,
+    "worktrees_after": 1
+  },
+  "native_run_url": "https://github.com/byte5ai/zaplex/actions/runs/41228055254"
+}
