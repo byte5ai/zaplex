@@ -1,0 +1,29 @@
+{
+  "issues": [
+    759,
+    760
+  ],
+  "scope": "EN-label-layout-and-worktree",
+  "app_source_sha": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "harness_source_sha": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "expected_version": "1.2.57",
+  "frozen_at": "2026-10-31T13:19:04.520971+00:00",
+  "operator_budget_seconds_exclusive": 480,
+  "qualified_artifact_source": "51b6aa63fb8fe485bb4f3b2635883facf3514c07",
+  "checks": [
+    "Fresh English Dark baseline: real original shell PID, nonexported WT157EN marker, cwd, expected clean source HEAD/common directory and exactly one worktree.",
+    "English Dark at actual 1024x678 and 480x678 points: visible repository identity, readable full-path tooltip and canonical + Add new repo footer across its full width; a right-side hover/click opens a genuine native folder dialog and native cancellation preserves repository selection.",
+    "Mouse-Cancel from a focused normal Dark worktree modal restores unassisted terminal typing; a new real snapshot preserves original PID/marker/cwd/HEAD/common directory/clean status and one-worktree inventory.",
+    "Switch through the real theme picker to Light. With its sidebar open the complete English OS-theme explanation remains visible, including its final words, wrapping within the available settings width.",
+    "English Light at actual 1024x678 and 480x678 points: the same visible identity, full tooltip, canonical localized footer, whole-row hover/right-click, genuine native folder dialog and preserved selection after native cancellation.",
+    "Actual Escape from the focused narrow Light modal restores unassisted source typing; fresh real PID/marker/cwd/Git snapshot matches the original baseline.",
+    "Return to normal width and submit a real terminal worktree via the app. Without an assisting prompt click, type in the new tab and verify a different real shell PID with no source marker, expected HEAD/shared Git directory, clean status, exactly two worktrees and cwd equal to the newly created worktree.",
+    "Click the original tab and capture a fresh same-PID/WT157EN/cwd snapshot; source HEAD/common directory and clean status remain unchanged and the new worktree is registered exactly once."
+  ],
+  "evidence": [
+    "Fresh actual screenshots viewed before product verdicts; failed or missing observations remain failed or missing.",
+    "Independent unchanged DMG/app/harness/version provenance, archive/image byte equality and actual Git/shell raw facts.",
+    "Exclusive 480-second scope budget starts before the first native query/action and includes language/theme changes, probes and explicit cleanup. Old 1.2.56 failures remain unchanged.",
+    "A bounded native pass is not complete product, agent-account or motion acceptance. No release/tag inferred."
+  ]
+}
