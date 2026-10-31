@@ -11,8 +11,9 @@ use super::{RepoPicker, RepoPickerAction, RepoPickerEvent, DEFAULT_DROPDOWN_WIDT
 use crate::{
     appearance::Appearance,
     editor::{EditorAction, EditorView},
+    menu::Menu,
     test_util::terminal::initialize_app_for_terminal_view,
-    view_components::dropdown::DROPDOWN_PADDING,
+    view_components::dropdown::{DropdownAction, DROPDOWN_PADDING},
 };
 
 fn assert_selection(picker: &RepoPicker, app: &AppContext, expected: Option<&str>) {
@@ -108,6 +109,34 @@ fn repository_picker_empty_default_does_not_select_an_empty_path() {
             RepoPicker::new(Some(String::new()), ctx)
         });
         picker.read(&app, |picker, app| assert_selection(picker, app, None));
+    });
+}
+
+#[test]
+fn repository_picker_footer_uses_the_shared_repository_action_label() {
+    crate::i18n::init(Some("en"));
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window, picker) =
+            app.add_window(WindowStyle::NotStealFocus, |ctx| RepoPicker::new(None, ctx));
+        picker.update(&mut app, |picker, ctx| {
+            assert!(picker.toggle_dropdown(ctx));
+        });
+        let menus = app.read(|ctx| {
+            ctx.view_ids_for_window(window)
+                .into_iter()
+                .filter_map(|id| {
+                    ctx.view_with_id::<Menu<DropdownAction<RepoPickerAction>>>(window, id)
+                })
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(menus.len(), 1);
+        menus[0].read(&app, |menu, ctx| {
+            assert_eq!(
+                menu.render(ctx).debug_text_content().as_deref(),
+                Some(" + Add new repo")
+            );
+        });
     });
 }
 
