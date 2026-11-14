@@ -89,7 +89,8 @@ fn account_at(config_dir: &str, sessions: Vec<SessionSnapshot>) -> AccountUsage 
         sessions,
         idle_sessions: Vec::new(),
         status: AccountStatus::Live,
-        provenance: UsageProvenance::Estimate,
+        provenance_5h: UsageProvenance::Estimate,
+        provenance_week: UsageProvenance::Estimate,
     }
 }
 
@@ -234,6 +235,49 @@ fn degraded_scan_uses_unknown_usage_and_omits_private_collection_data() {
     assert!(document.attention[0].session_id.starts_with("session:"));
     assert_eq!(document.accounts[0].sessions[0].model, None);
     assert_eq!(document.accounts[0].sessions[0].context_tokens, None);
+}
+
+#[test]
+fn unknown_usage_windows_are_null_never_a_measured_zero() {
+    let mut partly_known = account_with(Vec::new());
+    partly_known.provenance_5h = UsageProvenance::Unknown;
+    partly_known.heat_week = 0.29;
+    partly_known.provenance_week = UsageProvenance::Real;
+    let mut blind = account_at("/home/tester/.codex-blind", Vec::new());
+    blind.account.key = "codex:blind".to_string();
+    blind.account.provider = Provider::Codex;
+    blind.provenance_5h = UsageProvenance::Unknown;
+    blind.provenance_week = UsageProvenance::Unknown;
+    let document = CockpitSnapshotDocument::from_local(CockpitSnapshot {
+        accounts: vec![partly_known, blind],
+        generated_at: generated_at(),
+        health: ScanHealth::Loaded,
+    });
+
+    let by_provider = |provider: &str| {
+        document
+            .accounts
+            .iter()
+            .find(|account| account.provider == provider)
+            .unwrap()
+    };
+    let partly_known = by_provider("claude");
+    assert_eq!(partly_known.usage_provenance, "real");
+    let usage = partly_known.usage.as_ref().unwrap();
+    assert_eq!(usage.heat_5h, None);
+    assert_eq!(usage.heat_week, Some(0.29));
+    let blind = by_provider("codex");
+    assert_eq!(blind.usage_provenance, "unknown");
+    assert_eq!(blind.usage.as_ref().unwrap().heat_week, None);
+
+    let encoded = serde_json::to_value(&document).unwrap();
+    assert!(
+        encoded["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|account| account["usage"]["heat_5h"].is_null())
+    );
 }
 
 #[test]

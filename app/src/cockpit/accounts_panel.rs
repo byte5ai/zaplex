@@ -20,7 +20,9 @@ use warpui::{
     AppContext, BlurContext, Entity, FocusContext, SingletonEntity, TypedActionView, View,
     ViewContext, ViewHandle,
 };
-use zaplex_cockpit::{cost_figure, heat_pct_label_with_provenance, AccountUsage, UsageProvenance};
+use zaplex_cockpit::{
+    cost_figure, heat_bar_fraction, heat_pct_label_with_provenance, AccountUsage, UsageProvenance,
+};
 
 use crate::cockpit::account_identity;
 use crate::cockpit::localize::{cost_text, unpriced_models_text};
@@ -290,7 +292,7 @@ impl CockpitAccountsPanel {
 
     /// A labelled heat bar: `5h [▓▓▓░░] 62%`, coloured by band. Estimate-driven
     /// bars carry a subtle `~` on the percentage (C3b provenance); real numbers
-    /// get no extra chrome.
+    /// get no extra chrome. An unknown window is an empty track reading `—`.
     fn heat_bar(
         &self,
         label: &str,
@@ -298,6 +300,7 @@ impl CockpitAccountsPanel {
         provenance: UsageProvenance,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        let fraction = heat_bar_fraction(fraction, provenance);
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
@@ -384,13 +387,13 @@ impl CockpitAccountsPanel {
             .with_child(self.heat_bar(
                 &crate::t!("cockpit-meter-5h"),
                 acct.heat,
-                acct.provenance,
+                acct.provenance_5h,
                 appearance,
             ))
             .with_child(self.heat_bar(
                 &crate::t!("cockpit-meter-week"),
                 acct.heat_week,
-                acct.provenance,
+                acct.provenance_week,
                 appearance,
             ));
 

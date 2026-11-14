@@ -6,7 +6,7 @@
 //!
 //! This crate is a **pure, headless-testable data layer**: no GUI and no network.
 //! Codex discovery reads local `auth.json` account metadata and decodes the
-//! unverified `id_token` payload for an email claim. Raw token strings are never
+//! unverified `id_token` payload for its email and plan claims. Raw token strings are never
 //! returned, persisted, logged, or sent over the network. Structured task titles
 //! are the one deliberate transcript-content projection: providers emit them
 //! through task tools, and session snapshots carry them for the Conductor. The
@@ -60,9 +60,9 @@ pub use fleet::{
     ProjectNode, RegisteredHost, RemoteHost, SeenTurns, SessionVerdict,
 };
 pub use format::{
-    binding_window, context_fill, context_window, cost_figure, format_tokens, heat_fill,
-    heat_pct_label_with_provenance, model_family, relative_age, reset_countdown, CostFigure,
-    HeatLevel, RelativeAge, ResetCountdown,
+    binding_window, context_fill, context_window, cost_figure, format_tokens, heat_bar_fraction,
+    heat_fill, heat_pct_label_with_provenance, model_family, relative_age, reset_countdown,
+    BindingWindow, CostFigure, HeatLevel, RelativeAge, ResetCountdown,
 };
 pub use guardrails::{
     failed_toast, guardrail_target, kill_confirm_message, no_remote_connection_toast,
@@ -134,7 +134,8 @@ pub const IDLE_SESSION_LIMIT: usize = 50;
 /// retained as the account pin. `claude_config_dir_env` is handled equivalently.
 ///
 /// `now` is explicit so windowing is deterministic and testable. `budget_5h` /
-/// `budget_week` size the two heats (0 = disable). This is the crate's single
+/// `budget_week` size the two Claude heat estimates (0 = plan-tier estimate);
+/// Codex heat comes from the rate limits its rollouts record. This is the crate's single
 /// I/O entry point; the app's `CockpitModel` calls it off the main thread on
 /// file-watch/reconcile ticks.
 pub fn build_snapshot(
@@ -260,18 +261,8 @@ fn build_snapshot_with_claude_discovery(
     let codex_discovery = discover_codex_accounts(home, codex_home);
     degraded.extend(codex_discovery.issues);
     for account in codex_discovery.accounts {
-        let (entries, usage_io_error) =
+        let codex_usage =
             codex::usage_for_account_with_cache(&account, since, &mut transcript_cache.codex_usage);
-        let b5h = if budget_5h > 0 {
-            budget_5h
-        } else {
-            DEFAULT_BUDGET_5H
-        };
-        let bwk = if budget_week > 0 {
-            budget_week
-        } else {
-            DEFAULT_BUDGET_WEEK
-        };
         // Codex agent-sessions (Step 8 parity): transcript-inferred, no
         // registry/pid (see `codex_sessions`). Attached so they flow into the
         // unified Agent-Inventory exactly like Claude's — one walk, so the live
@@ -283,7 +274,7 @@ fn build_snapshot_with_claude_discovery(
             IDLE_SESSION_LIMIT,
             &mut transcript_cache.codex_rollouts,
         );
-        if usage_io_error || scan.io_error {
+        if codex_usage.io_error || scan.io_error {
             degraded.push(format!("{}: transcript history unreadable", account.label));
         }
         let stamp = |mut s: SessionSnapshot| {
@@ -292,7 +283,10 @@ fn build_snapshot_with_claude_discovery(
         };
         let live: Vec<SessionSnapshot> = scan.live.into_iter().map(stamp).collect();
         let idle: Vec<SessionSnapshot> = scan.idle.into_iter().map(stamp).collect();
-        let usage = build_account_usage(account, entries, now, b5h, bwk, pricing);
+        // Heat comes from Codex's own rate-limit report, never from a token
+        // budget: budgets size Claude windows and say nothing about Codex quotas.
+        let mut usage = build_account_usage(account, codex_usage.entries, now, 0, 0, pricing);
+        codex::apply_rate_limits(&mut usage, codex_usage.rate_limits.as_ref(), now);
         accounts.push(windows::with_idle_sessions(
             windows::with_sessions(usage, live),
             idle,

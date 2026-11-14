@@ -34,7 +34,8 @@ fn usage(
         sessions: Vec::new(),
         idle_sessions: Vec::new(),
         status,
-        provenance,
+        provenance_5h: provenance,
+        provenance_week: provenance,
     }
 }
 
@@ -152,5 +153,64 @@ fn failed_account_scan_is_excluded_from_freest_routing() {
         )
         .is_none(),
         "a degraded snapshot must not auto-route"
+    );
+}
+
+fn codex(key: &str, heat_5h: Option<f64>, heat_week: Option<f64>) -> AccountUsage {
+    let mut account = usage(
+        Provider::Codex,
+        key,
+        0.0,
+        AccountStatus::Live,
+        UsageProvenance::Real,
+    );
+    let window = |heat: Option<f64>| match heat {
+        Some(heat) => (heat, UsageProvenance::Real),
+        None => (0.0, UsageProvenance::Unknown),
+    };
+    (account.heat, account.provenance_5h) = window(heat_5h);
+    (account.heat_week, account.provenance_week) = window(heat_week);
+    account
+}
+
+#[test]
+fn routing_prefers_the_account_with_lower_measured_usage() {
+    let accts = vec![
+        codex("codex:default", None, Some(0.6)),
+        codex("codex:work", None, Some(0.3)),
+    ];
+    let pick = pick_freest(Provider::Codex, &accts).unwrap();
+    assert_eq!(pick.account.key, "codex:work");
+}
+
+#[test]
+fn unknown_usage_ranks_after_known_usage() {
+    let accts = vec![
+        codex("codex:blind", None, None),
+        codex("codex:half", None, Some(0.1)),
+        codex("codex:busy", Some(0.5), Some(0.7)),
+    ];
+    let ranked: Vec<&str> = rank_by_freeness(Provider::Codex, &accts)
+        .iter()
+        .map(|u| u.account.key.as_str())
+        .collect();
+    assert_eq!(ranked, ["codex:busy", "codex:half", "codex:blind"]);
+}
+
+#[test]
+fn binding_window_and_budget_ignore_unknown_windows() {
+    let mut acct = codex("codex:default", None, Some(0.2));
+    // A stale value left in an unknown window must not count.
+    acct.heat = 1.5;
+    let binding = crate::binding_window(&acct);
+    assert_eq!(binding.label, "wk");
+    assert!((binding.fraction - 0.2).abs() < 1e-9);
+    assert_eq!(binding.provenance, UsageProvenance::Real);
+    assert!(!is_over_budget(&acct));
+
+    let blind = codex("codex:blind", None, None);
+    assert_eq!(
+        crate::binding_window(&blind).provenance,
+        UsageProvenance::Unknown
     );
 }

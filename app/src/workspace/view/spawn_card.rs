@@ -86,9 +86,27 @@ struct RemoteAccountOption {
     label: String,
     email: Option<String>,
     provider_account_id: Option<String>,
-    capacity_5h: f64,
-    capacity_week: f64,
-    capacity_known: bool,
+    /// Remaining capacity per window; `None` when that window is unknown.
+    capacity_5h: Option<f64>,
+    capacity_week: Option<f64>,
+}
+
+impl RemoteAccountOption {
+    /// Remaining capacity of the fullest known window, the one that gates a
+    /// launch. `None` when no window is known.
+    fn binding_capacity(&self) -> Option<f64> {
+        [self.capacity_5h, self.capacity_week]
+            .into_iter()
+            .flatten()
+            .reduce(f64::min)
+    }
+
+    fn unknown_windows(&self) -> usize {
+        [self.capacity_5h, self.capacity_week]
+            .into_iter()
+            .filter(Option::is_none)
+            .count()
+    }
 }
 
 /// The account options for one provider, plus its precomputed freest pick.
@@ -1374,14 +1392,9 @@ impl SpawnCard {
             ));
         }
         for (index, account) in options.remote_accounts.iter().enumerate() {
-            let label = if account.capacity_known {
-                format!(
-                    "{} ({:.0}% free)",
-                    account.label,
-                    account.capacity_5h * 100.0
-                )
-            } else {
-                account.label.clone()
+            let label = match account.binding_capacity() {
+                Some(capacity) => format!("{} ({:.0}% free)", account.label, capacity * 100.0),
+                None => account.label.clone(),
             };
             chips.push(self.chip(
                 &format!("remote-acct-{index}"),
@@ -1420,14 +1433,26 @@ impl SpawnCard {
         options
             .remote_accounts
             .iter()
-            .filter(|account| account.capacity_known)
-            .max_by(|left, right| {
-                left.capacity_5h
-                    .min(left.capacity_week)
-                    .total_cmp(&right.capacity_5h.min(right.capacity_week))
-                    .then_with(|| left.capacity_5h.total_cmp(&right.capacity_5h))
-                    .then_with(|| left.capacity_week.total_cmp(&right.capacity_week))
+            .filter_map(|account| Some((account, account.binding_capacity()?)))
+            // An unknown window is never presumed free: fewer unknown windows
+            // win first, then the most remaining capacity.
+            .max_by(|(left, left_capacity), (right, right_capacity)| {
+                right
+                    .unknown_windows()
+                    .cmp(&left.unknown_windows())
+                    .then_with(|| left_capacity.total_cmp(right_capacity))
+                    .then_with(|| {
+                        left.capacity_5h
+                            .unwrap_or(0.0)
+                            .total_cmp(&right.capacity_5h.unwrap_or(0.0))
+                    })
+                    .then_with(|| {
+                        left.capacity_week
+                            .unwrap_or(0.0)
+                            .total_cmp(&right.capacity_week.unwrap_or(0.0))
+                    })
             })
+            .map(|(account, _)| account)
     }
 
     fn remote_options_for_selected_host(&self) -> Option<&ProviderOptions> {
@@ -1611,9 +1636,15 @@ impl SpawnCard {
                         },
                         email: (!account.email.is_empty()).then_some(account.email),
                         provider_account_id: account.provider_account_id,
-                        capacity_5h: account.capacity_5h,
-                        capacity_week: account.capacity_week,
-                        capacity_known: account.capacity_known,
+                        // Older daemons send only the account-wide flag.
+                        capacity_5h: account
+                            .capacity_5h_known
+                            .unwrap_or(account.capacity_known)
+                            .then_some(account.capacity_5h),
+                        capacity_week: account
+                            .capacity_week_known
+                            .unwrap_or(account.capacity_known)
+                            .then_some(account.capacity_week),
                     })
                     .collect();
                 options.remote_account_discovery = RemoteAccountDiscoveryState::Ready {

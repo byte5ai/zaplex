@@ -53,7 +53,8 @@ fn usage(account: Account) -> AccountUsage {
         sessions: Vec::new(),
         idle_sessions: Vec::new(),
         status: AccountStatus::Offline,
-        provenance: UsageProvenance::Estimate,
+        provenance_5h: UsageProvenance::Estimate,
+        provenance_week: UsageProvenance::Estimate,
     }
 }
 
@@ -443,4 +444,79 @@ fn model_discovery_route_rejects_changed_or_blank_provider_identity() {
     )
     .is_err());
     assert!(resolve_agent_model_route(&account_cache, &selected, Some("   ")).is_err());
+}
+
+fn codex_workspace(key: &str, config_dir: &str, workspace: &str) -> AccountUsage {
+    let mut discovered = account(key, config_dir);
+    discovered.provider = Provider::Codex;
+    discovered.provider_account_id = Some(workspace.to_string());
+    discovered.is_default = key == "codex:default";
+    let mut usage = usage(discovered);
+    usage.heat = 0.0;
+    usage.provenance_5h = UsageProvenance::Unknown;
+    usage.heat_week = 0.29;
+    usage.provenance_week = UsageProvenance::Real;
+    usage
+}
+
+#[test]
+fn two_codex_workspaces_of_one_login_are_two_routable_accounts() {
+    let scan = inventory_from_snapshot(CockpitSnapshot {
+        accounts: vec![
+            codex_workspace("codex:default", "/daemon/.codex", "workspace-a"),
+            codex_workspace("codex:work", "/daemon/.codex-work", "workspace-b"),
+        ],
+        generated_at: chrono::Utc::now(),
+        health: ScanHealth::Loaded,
+    });
+
+    assert_eq!(scan.inventory.health, "loaded");
+    assert_eq!(scan.inventory.accounts.len(), 2);
+    assert_eq!(scan.routes.len(), 2);
+    let pins: Vec<Option<PathBuf>> = {
+        let mut pins: Vec<_> = scan
+            .routes
+            .values()
+            .map(|target| target.config_dir.clone())
+            .collect();
+        pins.sort();
+        pins
+    };
+    assert_eq!(pins, [None, Some(PathBuf::from("/daemon/.codex-work"))]);
+}
+
+#[test]
+fn unknown_usage_window_is_reported_without_a_routable_capacity() {
+    let scan = inventory_from_snapshot(CockpitSnapshot {
+        accounts: vec![codex_workspace(
+            "codex:default",
+            "/daemon/.codex",
+            "workspace-a",
+        )],
+        generated_at: chrono::Utc::now(),
+        health: ScanHealth::Loaded,
+    });
+
+    let remote = &scan.inventory.accounts[0];
+    // Older clients only read capacity_known and accept only real/estimate.
+    assert!(!remote.capacity_known);
+    assert_eq!(remote.usage_provenance, "real");
+    assert_eq!(remote.capacity_5h_known, Some(false));
+    assert_eq!(remote.capacity_week_known, Some(true));
+    assert!((remote.capacity_week - 0.71).abs() < 1e-9);
+}
+
+#[test]
+fn degraded_inventory_knows_no_window() {
+    let scan = inventory_from_snapshot(CockpitSnapshot {
+        accounts: vec![usage(account("claude:work", "/daemon/.claude-work"))],
+        generated_at: chrono::Utc::now(),
+        health: ScanHealth::Degraded("unreadable".to_string()),
+    });
+
+    let remote = &scan.inventory.accounts[0];
+    assert!(!remote.capacity_known);
+    assert_eq!(remote.capacity_5h_known, Some(false));
+    assert_eq!(remote.capacity_week_known, Some(false));
+    assert_eq!(remote.usage_provenance, "estimate");
 }

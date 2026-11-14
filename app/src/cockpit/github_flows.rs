@@ -340,7 +340,7 @@ pub fn analysis_accounts(snapshot: &CockpitSnapshot) -> Vec<GitHubAnalysisAccoun
             provider: usage.account.provider,
             provider_account_id: usage.account.provider_account_id.clone(),
             config_dir: (!usage.account.is_default).then(|| usage.account.config_dir.clone()),
-            binding_percent: (zaplex_cockpit::binding_window(usage).0.max(0.) * 100.).round()
+            binding_percent: (zaplex_cockpit::binding_window(usage).fraction.max(0.) * 100.).round()
                 as u32,
             over_budget: zaplex_cockpit::is_over_budget(usage),
             working: matches!(usage.status, AccountStatus::Working),
@@ -373,13 +373,13 @@ pub fn automatic_analysis_account(
                 })
                 .then_with(|| {
                     zaplex_cockpit::binding_window(usage_a)
-                        .0
-                        .partial_cmp(&zaplex_cockpit::binding_window(usage_b).0)
+                        .fraction
+                        .partial_cmp(&zaplex_cockpit::binding_window(usage_b).fraction)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .then_with(|| {
-                    analysis_provenance_rank(usage_a.provenance)
-                        .cmp(&analysis_provenance_rank(usage_b.provenance))
+                    analysis_provenance_rank(usage_a.known_provenance())
+                        .cmp(&analysis_provenance_rank(usage_b.known_provenance()))
                 })
                 .then_with(|| candidate_a.key.cmp(&candidate_b.key))
         })
@@ -390,6 +390,7 @@ fn analysis_provenance_rank(provenance: UsageProvenance) -> u8 {
     match provenance {
         UsageProvenance::Real => 0,
         UsageProvenance::Estimate => 1,
+        UsageProvenance::Unknown => 2,
     }
 }
 

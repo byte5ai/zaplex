@@ -308,8 +308,14 @@ fn running_claude_config_dirs() -> ProcessAccountDiscovery {
 }
 
 fn is_excluded(dir_name: &str) -> bool {
+    is_excluded_sibling(".claude-", dir_name)
+}
+
+/// Whether a `<prefix><name>` home sibling is a backup/scratch copy rather than
+/// an account root. Shared by the Claude and Codex sibling scans.
+pub(crate) fn is_excluded_sibling(prefix: &str, dir_name: &str) -> bool {
     dir_name
-        .strip_prefix(".claude-")
+        .strip_prefix(prefix)
         .unwrap_or(dir_name)
         .split(|character: char| !character.is_ascii_alphanumeric())
         .any(|token| EXCLUDE_FRAGMENTS.contains(&token) || token == "memory")

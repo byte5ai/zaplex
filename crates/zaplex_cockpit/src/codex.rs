@@ -5,9 +5,9 @@
 //! each JSONL line for a token-usage object rather than assuming a fixed path.
 //!
 //! Privacy: reads local `auth.json` account metadata, including the auth form,
-//! and decodes the **unverified** `id_token` JWT payload for an `email` claim.
-//! Raw token and API-key strings are never returned, persisted, logged, or sent
-//! over the network.
+//! and decodes the **unverified** `id_token` JWT payload for its `email` and
+//! plan claims. Raw token and API-key strings are never returned, persisted,
+//! logged, or sent over the network.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -19,7 +19,7 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use crate::transcript::{file_fingerprint, FileFingerprint};
-use crate::types::{Account, Provider, UsageEntry};
+use crate::types::{Account, AccountUsage, Provider, UsageEntry, UsageProvenance};
 
 /// Result of account-root discovery before rollout/session scanning.
 #[derive(Debug, Default)]
@@ -43,13 +43,65 @@ fn find<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
 }
 
 /// Decode the (unverified) payload of a JWT and return its claims object. Never used
-/// for auth — only to read a display `email` claim. Returns `None` on any malformation.
+/// for auth — only to read the display `email` and plan claims. Returns `None` on
+/// any malformation.
 fn jwt_payload(token: &str) -> Option<Value> {
     let payload_b64 = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload_b64)
         .ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+/// The id_token claim namespace OpenAI puts its account claims under.
+const OPENAI_AUTH_CLAIMS: &str = "https://api.openai.com/auth";
+
+/// The raw `chatgpt_plan_type` claim: namespaced under [`OPENAI_AUTH_CLAIMS`] in
+/// current tokens, accepted top-level as well.
+fn plan_type_claim(claims: &Value) -> Option<&str> {
+    claims
+        .get(OPENAI_AUTH_CLAIMS)
+        .and_then(|auth| auth.get("chatgpt_plan_type"))
+        .or_else(|| claims.get("chatgpt_plan_type"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|plan| !plan.is_empty())
+}
+
+/// Readable label for a raw ChatGPT plan type, e.g. `prolite` -> "Pro Lite".
+/// Unknown values are title-cased (`free_workspace` -> "Free Workspace") rather
+/// than dropped, so a new plan still tells two workspaces apart.
+pub(crate) fn plan_label(raw: &str) -> String {
+    let plan = raw.trim().to_ascii_lowercase();
+    let known = match plan.as_str() {
+        "pro" => Some("Pro"),
+        "plus" => Some("Plus"),
+        "prolite" => Some("Pro Lite"),
+        "team" => Some("Team"),
+        "enterprise" => Some("Enterprise"),
+        "edu" => Some("Edu"),
+        "free" => Some("Free"),
+        business
+            if business.starts_with("business") || business.starts_with("self_serve_business") =>
+        {
+            Some("Business")
+        }
+        _ => None,
+    };
+    if let Some(label) = known {
+        return label.to_string();
+    }
+    plan.split(['_', '-', ' '])
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn account_key(codex_home: &Path, home: &Path, is_default: bool) -> String {
@@ -88,6 +140,11 @@ fn account_from_root(
             .and_then(|e| e.as_str())
             .map(|s| s.to_string())
     });
+    let plan_tier = claims
+        .as_ref()
+        .and_then(plan_type_claim)
+        .map(plan_label)
+        .filter(|label| !label.is_empty());
     let account_id = auth
         .get("tokens")
         .and_then(|tokens| tokens.get("account_id"))
@@ -129,31 +186,64 @@ fn account_from_root(
             org: None,
             role: None,
             // Provider ≠ plan (WS4 S2): `auth_mode` ("chatgpt" / "apikey") is *how* you
-            // authenticate, not a subscription plan. Leaking it into `plan_tier` made
-            // the sidebar render "Codex · chatgpt" (provider in the plan slot). Codex
-            // exposes no plan claim yet, so the plan is honestly unknown (`None`).
-            plan_tier: None,
+            // authenticate, not a subscription plan. The plan comes from the
+            // id_token's `chatgpt_plan_type` claim; without it it stays unknown.
+            plan_tier,
             is_default,
         },
         account_id,
     )))
 }
 
-/// Discover Codex accounts from the documented default `~/.codex` root and an
+/// Discover Codex accounts from the documented default `~/.codex` root, the
+/// sorted `~/.codex-*` siblings (each a `CODEX_HOME` of its own), and an
 /// optional root pinned by `$CODEX_HOME`.
 ///
 /// Existing roots are canonicalized, then aliases are deduplicated by canonical
 /// path or the stable `account_id` in `auth.json`. Codex itself still exposes one
-/// account per root; this function merely unions the deterministic roots.
+/// account per root; this function merely unions the deterministic roots. Two
+/// workspaces of one login carry distinct `account_id`s and stay two accounts.
 pub fn discover_account_roots(home: &Path, codex_home_env: Option<&Path>) -> AccountDiscovery {
     let default_root = home.join(".codex");
     let mut candidates: Vec<(PathBuf, bool, bool)> = vec![(default_root.clone(), true, false)];
+    let mut issues = Vec::new();
+    match fs::read_dir(home) {
+        Ok(read) => {
+            let mut siblings = Vec::new();
+            for entry in read {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        issues.push("Codex account directory entry is unreadable".to_string());
+                        continue;
+                    }
+                };
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else { continue };
+                if !name.starts_with(".codex-")
+                    || crate::claude::is_excluded_sibling(".codex-", name)
+                {
+                    continue;
+                }
+                match entry.file_type() {
+                    Ok(kind) if kind.is_dir() || kind.is_symlink() => siblings.push(entry.path()),
+                    Ok(_) => {}
+                    Err(_) => issues.push("Codex account root is unreadable".to_string()),
+                }
+            }
+            siblings.sort();
+            candidates.extend(siblings.into_iter().map(|path| (path, false, false)));
+        }
+        Err(_) if !matches!(home.try_exists(), Ok(false)) => {
+            issues.push("Codex accounts: home directory unreadable".to_string());
+        }
+        Err(_) => {}
+    }
     if let Some(root) = codex_home_env {
         candidates.push((root.to_path_buf(), root == default_root.as_path(), true));
     }
 
     let mut accounts = Vec::new();
-    let mut issues = Vec::new();
     let mut seen_roots = HashSet::new();
     let mut seen_identities = HashSet::new();
     let mut seen_keys = HashSet::new();
@@ -281,6 +371,138 @@ fn token_count_info(v: &Value) -> Option<&Value> {
     Some(payload.get("info").unwrap_or(payload))
 }
 
+/// `window_minutes` of the rolling 5-hour window.
+const FIVE_HOUR_WINDOW_MINUTES: u64 = 300;
+/// `window_minutes` of the rolling weekly window.
+const WEEK_WINDOW_MINUTES: u64 = 10_080;
+/// The `limit_id` of the account-wide Codex limit. Other ids name separate
+/// limits and must not stand in for the account's position.
+const ACCOUNT_LIMIT_ID: &str = "codex";
+
+/// One rate-limit window as Codex recorded it (`primary` / `secondary`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RateLimitWindow {
+    pub used_percent: f64,
+    pub window_minutes: u64,
+    pub resets_at: Option<DateTime<Utc>>,
+}
+
+/// The rate-limit position Codex recorded with one `token_count` event: the
+/// provider's own figures, not an estimate.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RateLimitSnapshot {
+    /// Timestamp of the rollout line that carried it.
+    pub observed_at: DateTime<Utc>,
+    pub windows: Vec<RateLimitWindow>,
+}
+
+impl RateLimitSnapshot {
+    fn window(&self, window_minutes: u64) -> Option<&RateLimitWindow> {
+        self.windows
+            .iter()
+            .find(|window| window.window_minutes == window_minutes)
+    }
+}
+
+fn rate_limit_window(value: &Value) -> Option<RateLimitWindow> {
+    let used_percent = value.get("used_percent").and_then(Value::as_f64)?;
+    let window_minutes = value.get("window_minutes").and_then(Value::as_u64)?;
+    let resets_at = value
+        .get("resets_at")
+        .and_then(Value::as_i64)
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0));
+    used_percent.is_finite().then_some(RateLimitWindow {
+        used_percent,
+        window_minutes,
+        resets_at,
+    })
+}
+
+/// The account-wide `rate_limits` of a `token_count` payload, if it carries one.
+fn rate_limit_snapshot(payload: &Value, observed_at: DateTime<Utc>) -> Option<RateLimitSnapshot> {
+    let limits = payload
+        .get("rate_limits")
+        .filter(|limits| limits.is_object())?;
+    if limits
+        .get("limit_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id != ACCOUNT_LIMIT_ID)
+    {
+        return None;
+    }
+    let windows = ["primary", "secondary"]
+        .into_iter()
+        .filter_map(|slot| limits.get(slot).and_then(rate_limit_window))
+        .collect();
+    Some(RateLimitSnapshot {
+        observed_at,
+        windows,
+    })
+}
+
+/// Set an account's 5h and weekly heat from Codex's own rate-limit report.
+///
+/// A window is known only when the latest report carries it and its reset lies
+/// after `now`; its heat is then `used_percent / 100`, real, with the reported
+/// reset. Every other window is [`UsageProvenance::Unknown`] — Codex usage is
+/// never estimated against a token budget, whose scale has nothing to do with
+/// Codex's quotas.
+pub fn apply_rate_limits(
+    usage: &mut AccountUsage,
+    snapshot: Option<&RateLimitSnapshot>,
+    now: DateTime<Utc>,
+) {
+    let known = |window_minutes: u64| {
+        snapshot
+            .and_then(|snapshot| snapshot.window(window_minutes))
+            .and_then(|window| {
+                let resets_at = window.resets_at.filter(|resets_at| *resets_at > now)?;
+                Some((window.used_percent / 100.0, resets_at))
+            })
+    };
+    match known(FIVE_HOUR_WINDOW_MINUTES) {
+        Some((heat, resets_at)) => {
+            usage.heat = heat;
+            usage.reset5h = Some(resets_at);
+            usage.provenance_5h = UsageProvenance::Real;
+        }
+        None => {
+            usage.heat = 0.0;
+            usage.reset5h = None;
+            usage.provenance_5h = UsageProvenance::Unknown;
+        }
+    }
+    match known(WEEK_WINDOW_MINUTES) {
+        Some((heat, resets_at)) => {
+            usage.heat_week = heat;
+            usage.reset_week = Some(resets_at);
+            usage.provenance_week = UsageProvenance::Real;
+        }
+        None => {
+            usage.heat_week = 0.0;
+            usage.reset_week = None;
+            usage.provenance_week = UsageProvenance::Unknown;
+        }
+    }
+    // Codex reports no per-model sublimits.
+    usage.heat_opus = None;
+    usage.heat_sonnet = None;
+}
+
+/// The more recent of two rate-limit reports; a later line wins a tie.
+fn latest_rate_limits(
+    current: Option<RateLimitSnapshot>,
+    candidate: Option<RateLimitSnapshot>,
+) -> Option<RateLimitSnapshot> {
+    match (current, candidate) {
+        (Some(current), Some(candidate)) if candidate.observed_at < current.observed_at => {
+            Some(current)
+        }
+        (current, None) => current,
+        (_, candidate) => candidate,
+    }
+}
+
 fn usage_entry(
     counts: TokenCounts,
     ts: DateTime<Utc>,
@@ -342,13 +564,20 @@ fn confirmed_usage(
 /// advances. `file_date` (from the `YYYY/MM/DD` path) is the timestamp fallback
 /// when a line carries none.
 pub fn parse_transcript(path: &Path, file_date: DateTime<Utc>) -> Vec<UsageEntry> {
-    read_transcript_usage(path, file_date).unwrap_or_default()
+    read_transcript_usage(path, file_date)
+        .map(|usage| usage.entries)
+        .unwrap_or_default()
 }
 
-fn read_transcript_usage(
-    path: &Path,
-    file_date: DateTime<Utc>,
-) -> std::io::Result<Vec<UsageEntry>> {
+/// What one rollout contributes to its account's usage.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct RolloutUsage {
+    entries: Vec<UsageEntry>,
+    /// The rollout's most recent account-wide rate-limit report.
+    rate_limits: Option<RateLimitSnapshot>,
+}
+
+fn read_transcript_usage(path: &Path, file_date: DateTime<Utc>) -> std::io::Result<RolloutUsage> {
     let content = fs::read_to_string(path)?;
     let mut current_model = String::from("unknown");
     let mut current_ts = file_date;
@@ -357,6 +586,7 @@ fn read_transcript_usage(
     // way here would stamp spend with an id no session row carries.
     let mut session_id = crate::codex_sessions::session_id_from_path(path);
     let mut entries = Vec::new();
+    let mut rate_limits = None;
     let mut previous_total = None;
 
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
@@ -380,13 +610,19 @@ fn read_transcript_usage(
         let Some(info) = token_count_info(&v) else {
             continue;
         };
+        if let Some(payload) = v.get("payload") {
+            rate_limits = latest_rate_limits(rate_limits, rate_limit_snapshot(payload, current_ts));
+        }
         if let Some(counts) = confirmed_usage(info, &mut previous_total) {
             if let Some(entry) = usage_entry(counts, current_ts, &current_model, &session_id) {
                 entries.push(entry);
             }
         }
     }
-    Ok(entries)
+    Ok(RolloutUsage {
+        entries,
+        rate_limits,
+    })
 }
 
 /// Derive a coarse timestamp (midday UTC) from a `sessions/YYYY/MM/DD/` path, used as
@@ -414,7 +650,7 @@ struct CachedCodexUsage {
     /// The timestamp fallback the entries were parsed with. A rollout outside
     /// the dated layout falls back to the scan cutoff, which moves every scan.
     file_date: DateTime<Utc>,
-    entries: Vec<UsageEntry>,
+    usage: RolloutUsage,
     last_used: u64,
 }
 
@@ -434,7 +670,7 @@ impl CodexUsageCache {
         &mut self,
         path: &Path,
         file_date: DateTime<Utc>,
-    ) -> std::io::Result<Vec<UsageEntry>> {
+    ) -> std::io::Result<RolloutUsage> {
         let fingerprint = match file_fingerprint(path) {
             Ok(fingerprint) => fingerprint,
             Err(error) => {
@@ -446,11 +682,11 @@ impl CodexUsageCache {
         if let Some(cached) = self.entries.get_mut(path) {
             if cached.fingerprint == fingerprint && cached.file_date == file_date {
                 cached.last_used = self.clock;
-                return Ok(cached.entries.clone());
+                return Ok(cached.usage.clone());
             }
         }
-        let entries = match read_transcript_usage(path, file_date) {
-            Ok(entries) => entries,
+        let usage = match read_transcript_usage(path, file_date) {
+            Ok(usage) => usage,
             Err(error) => {
                 self.entries.remove(path);
                 return Err(error);
@@ -465,11 +701,11 @@ impl CodexUsageCache {
             CachedCodexUsage {
                 fingerprint,
                 file_date,
-                entries: entries.clone(),
+                usage: usage.clone(),
                 last_used: self.clock,
             },
         );
-        Ok(entries)
+        Ok(usage)
     }
 
     /// Forgets rollouts under `sessions` that a complete walk no longer saw,
@@ -500,16 +736,29 @@ impl CodexUsageCache {
 /// `sessions/` dir — see [`crate::claude::usage_for_account`] for why the caller then
 /// marks the snapshot degraded.
 pub fn usage_for_account(account: &Account, since: DateTime<Utc>) -> (Vec<UsageEntry>, bool) {
-    usage_for_account_with_cache(account, since, &mut CodexUsageCache::default())
+    let usage = usage_for_account_with_cache(account, since, &mut CodexUsageCache::default());
+    (usage.entries, usage.io_error)
+}
+
+/// One account's rollout scan: spend entries plus its latest rate-limit report.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CodexAccountUsage {
+    pub(crate) entries: Vec<UsageEntry>,
+    /// The most recent report across the account's rollouts touched since the
+    /// cutoff. An older one has passed even its weekly reset.
+    pub(crate) rate_limits: Option<RateLimitSnapshot>,
+    /// See [`usage_for_account`].
+    pub(crate) io_error: bool,
 }
 
 pub(crate) fn usage_for_account_with_cache(
     account: &Account,
     since: DateTime<Utc>,
     cache: &mut CodexUsageCache,
-) -> (Vec<UsageEntry>, bool) {
+) -> CodexAccountUsage {
     let sessions = account.config_dir.join("sessions");
     let mut entries = Vec::new();
+    let mut rate_limits = None;
     let mut io_error = false;
     let mut seen = HashSet::new();
     for result in WalkDir::new(&sessions) {
@@ -547,12 +796,19 @@ pub(crate) fn usage_for_account_with_cache(
         let file_date = date_from_path(file.path()).unwrap_or(since);
         seen.insert(file.path().to_path_buf());
         match cache.parse_file(file.path(), file_date) {
-            Ok(parsed) => entries.extend(parsed.into_iter().filter(|entry| entry.ts >= since)),
+            Ok(parsed) => {
+                entries.extend(parsed.entries.into_iter().filter(|entry| entry.ts >= since));
+                rate_limits = latest_rate_limits(rate_limits, parsed.rate_limits);
+            }
             Err(_) => io_error = true,
         }
     }
     cache.finish_walk(&sessions, &seen, !io_error);
-    (entries, io_error)
+    CodexAccountUsage {
+        entries,
+        rate_limits,
+        io_error,
+    }
 }
 
 #[cfg(test)]

@@ -148,8 +148,11 @@ pub struct UsageDocument {
     pub week: UsageWindowDocument,
     pub reset_5h: Option<DateTime<Utc>>,
     pub reset_week: Option<DateTime<Utc>>,
-    pub heat_5h: f64,
-    pub heat_week: f64,
+    /// Utilization fraction of the window; `null` when the window is unknown.
+    #[serde(default)]
+    pub heat_5h: Option<f64>,
+    #[serde(default)]
+    pub heat_week: Option<f64>,
     pub heat_opus: Option<f64>,
     pub heat_sonnet: Option<f64>,
 }
@@ -683,7 +686,7 @@ fn account_document(
         .to_string(),
         status: account_status_name(usage.status).to_string(),
         usage_provenance: if usage_available {
-            provenance_name(usage.provenance).to_string()
+            provenance_name(usage.known_provenance()).to_string()
         } else {
             "unknown".to_string()
         },
@@ -693,8 +696,8 @@ fn account_document(
             week: window_document(&usage.week),
             reset_5h: usage.reset5h,
             reset_week: usage.reset_week,
-            heat_5h: usage.heat,
-            heat_week: usage.heat_week,
+            heat_5h: usage.known_heat_5h(),
+            heat_week: usage.known_heat_week(),
             heat_opus: usage.heat_opus,
             heat_sonnet: usage.heat_sonnet,
         }),
@@ -1092,6 +1095,7 @@ fn provenance_name(provenance: UsageProvenance) -> &'static str {
     match provenance {
         UsageProvenance::Real => "real",
         UsageProvenance::Estimate => "estimate",
+        UsageProvenance::Unknown => "unknown",
     }
 }
 

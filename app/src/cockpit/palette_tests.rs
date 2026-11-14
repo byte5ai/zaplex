@@ -76,7 +76,8 @@ fn account(
         sessions: Vec::new(),
         idle_sessions,
         status: AccountStatus::Offline,
-        provenance: UsageProvenance::Real,
+        provenance_5h: UsageProvenance::Real,
+        provenance_week: UsageProvenance::Real,
     }
 }
 

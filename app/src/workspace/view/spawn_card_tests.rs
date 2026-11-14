@@ -456,9 +456,8 @@ fn remote_provider_for_node(
                 label: (*email).to_string(),
                 email: Some((*email).to_string()),
                 provider_account_id: Some(format!("provider-{account_id}")),
-                capacity_5h: *capacity_5h,
-                capacity_week: *capacity_week,
-                capacity_known: true,
+                capacity_5h: Some(*capacity_5h),
+                capacity_week: Some(*capacity_week),
             },
         )
         .collect();
@@ -882,6 +881,46 @@ fn freest_remote_account_is_scoped_to_the_selected_host() {
             .map(|account| account.route.account_id.as_str()),
         Some("node-b-second")
     );
+}
+
+#[test]
+fn freest_remote_account_never_presumes_an_unknown_window_free() {
+    let mut claude = remote_provider_for_node(
+        true,
+        "claude",
+        "node-a",
+        &[
+            ("known", "known@example.com", 0.3, 0.3),
+            ("half-known", "half@example.com", 0.9, 0.9),
+            ("blind", "blind@example.com", 0.0, 0.0),
+        ],
+    );
+    claude.remote_accounts[1].capacity_5h = None;
+    claude.remote_accounts[2].capacity_5h = None;
+    claude.remote_accounts[2].capacity_week = None;
+    let mut card = remote_claude_card(
+        claude,
+        vec![host("node-a", "alpha")],
+        HostChoice::Remote(0),
+        AccountChoice::Freest,
+    );
+
+    assert_eq!(
+        card.freest_remote_account()
+            .map(|account| account.route.account_id.as_str()),
+        Some("known")
+    );
+
+    card.cfg.claude.remote_accounts.remove(0);
+    assert_eq!(
+        card.freest_remote_account()
+            .map(|account| account.route.account_id.as_str()),
+        Some("half-known"),
+        "a known window still routes when the other one is unknown"
+    );
+
+    card.cfg.claude.remote_accounts.remove(0);
+    assert!(card.freest_remote_account().is_none());
 }
 
 #[test]

@@ -47,7 +47,7 @@ define_settings_group!(CockpitSettings,
             private: false,
             storage_key: "CockpitBudget5h",
             toml_path: "cockpit.budget_5h",
-            description: "Per-5h-block token budget used for heat (0 = built-in estimate).",
+            description: "Per-5h-block token budget for Claude heat estimates (0 = built-in estimate).",
         },
         budget_week: CockpitBudgetWeek {
             type: u32,

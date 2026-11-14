@@ -387,7 +387,8 @@ fn analysis_usage(
         sessions: Vec::new(),
         idle_sessions: Vec::new(),
         status,
-        provenance,
+        provenance_5h: provenance,
+        provenance_week: provenance,
     }
 }
 

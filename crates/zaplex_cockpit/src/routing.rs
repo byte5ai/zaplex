@@ -18,14 +18,16 @@ use crate::types::{AccountStatus, AccountUsage, CockpitSnapshot, Provider, Usage
 pub const OVER_BUDGET_HEAT: f64 = 1.0;
 
 /// Pick the freest account of `provider` to launch onto. Ranking, best first:
-/// 1. **under budget** (binding-window heat < [`OVER_BUDGET_HEAT`]) before over-budget,
-/// 2. **not actively working** before working,
-/// 3. **lower binding-window heat** (fullest of 5h / week / Opus / Sonnet),
-/// 4. **real** usage before local **estimate** (more trustworthy).
+/// 1. **fewer unknown windows** (5h / week) first — an account whose usage is
+///    unknown is never presumed free, so it ranks after every known one,
+/// 2. **under budget** (binding-window heat < [`OVER_BUDGET_HEAT`]) before over-budget,
+/// 3. **not actively working** before working,
+/// 4. **lower binding-window heat** (fullest known of 5h / week / Opus / Sonnet),
+/// 5. **real** usage before local **estimate** (more trustworthy).
 ///
 /// Returns `None` only when no account for `provider` exists. The returned
-/// [`AccountUsage`] carries `heat` / `provenance` so the caller can decide
-/// whether to warn before launching onto an over-budget account.
+/// [`AccountUsage`] carries the heats and their provenance so the caller can
+/// decide whether to warn before launching onto an over-budget account.
 pub fn pick_freest(provider: Provider, accounts: &[AccountUsage]) -> Option<&AccountUsage> {
     accounts
         .iter()
@@ -67,12 +69,12 @@ pub fn is_over_budget(usage: &AccountUsage) -> bool {
     binding_heat(usage) >= OVER_BUDGET_HEAT
 }
 
-/// The account's binding-window utilization — the fullest of 5h / week / Opus /
-/// Sonnet — i.e. the fraction that actually gates a launch. Ranking on 5h alone
-/// would pick an account that is calm short-term but already at its weekly/Opus
-/// cap (Codex gate).
+/// The account's binding-window utilization — the fullest known of 5h / week /
+/// Opus / Sonnet — i.e. the fraction that actually gates a launch. Ranking on
+/// 5h alone would pick an account that is calm short-term but already at its
+/// weekly/Opus cap (Codex gate).
 fn binding_heat(u: &AccountUsage) -> f64 {
-    crate::binding_window(u).0
+    crate::binding_window(u).fraction
 }
 
 /// Total ordering used by both [`pick_freest`] and [`rank_by_freeness`]. Lower =
@@ -80,25 +82,28 @@ fn binding_heat(u: &AccountUsage) -> f64 {
 /// (heat is never NaN here — it is a computed ratio, defaulting to 0.0).
 fn cmp_freeness(a: &AccountUsage, b: &AccountUsage) -> Ordering {
     let working = |u: &AccountUsage| matches!(u.status, AccountStatus::Working);
-    // 1. under budget before over budget (false < true)
-    is_over_budget(a)
-        .cmp(&is_over_budget(b))
-        // 2. not-working before working
+    // 1. known before unknown: an unknown window's heat of 0.0 means nothing
+    a.unknown_window_count()
+        .cmp(&b.unknown_window_count())
+        // 2. under budget before over budget (false < true)
+        .then_with(|| is_over_budget(a).cmp(&is_over_budget(b)))
+        // 3. not-working before working
         .then_with(|| working(a).cmp(&working(b)))
-        // 3. lower binding-window heat first (fullest of 5h / week / Opus / Sonnet)
+        // 4. lower binding-window heat first (fullest of 5h / week / Opus / Sonnet)
         .then_with(|| {
             binding_heat(a)
                 .partial_cmp(&binding_heat(b))
                 .unwrap_or(Ordering::Equal)
         })
-        // 4. real before estimate
-        .then_with(|| prov_rank(a.provenance).cmp(&prov_rank(b.provenance)))
+        // 5. real before estimate
+        .then_with(|| prov_rank(a.known_provenance()).cmp(&prov_rank(b.known_provenance())))
 }
 
 fn prov_rank(p: UsageProvenance) -> u8 {
     match p {
         UsageProvenance::Real => 0,
         UsageProvenance::Estimate => 1,
+        UsageProvenance::Unknown => 2,
     }
 }
 

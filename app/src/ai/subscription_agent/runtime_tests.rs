@@ -142,7 +142,8 @@ fn local_usage(provider: Provider, id: &str, heat: f64) -> AccountUsage {
         sessions: Vec::new(),
         idle_sessions: Vec::new(),
         status: AccountStatus::Live,
-        provenance: UsageProvenance::Real,
+        provenance_5h: UsageProvenance::Real,
+        provenance_week: UsageProvenance::Real,
     }
 }
 
