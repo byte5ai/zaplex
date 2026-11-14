@@ -359,8 +359,7 @@ fn analysis_usage(
     key: &str,
     heat: f64,
     status: AccountStatus,
-    provenance_5h: UsageProvenance,
-    provenance_week: UsageProvenance,
+    provenance: UsageProvenance,
 ) -> AccountUsage {
     AccountUsage {
         account: Account {
