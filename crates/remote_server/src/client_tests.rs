@@ -1450,6 +1450,8 @@ async fn list_agent_accounts_round_trip_contains_no_config_path_field() {
                 health: "loaded".to_string(),
                 usage_provenance: "estimate".to_string(),
                 provider_account_id: Some("provider-account-42".to_string()),
+                capacity_5h_known: Some(true),
+                capacity_week_known: Some(true),
             }],
             health: "loaded".to_string(),
             health_message: String::new(),

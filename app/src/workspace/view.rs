@@ -25167,22 +25167,23 @@ impl Workspace {
     /// card then launches under the provider's default login.
     /// One account, as the Spawn-Karte needs it.
     ///
-    /// The heat is the **binding window** (`binding_window`) — the fullest of
-    /// 5h / week / Opus / Sonnet — not the 5h block: an account whose weekly or
+    /// The heat is the **binding window** (`binding_window`) — the fullest known
+    /// of 5h / week / Opus / Sonnet — not the 5h block: an account whose weekly or
     /// Opus sublimit is the real cap must not read calm here. Carried as both the
-    /// formatted label (with `~` for an estimate) and the raw fraction, so the
-    /// card can colour by the one utilisation rule rather than parse its own
-    /// string back.
+    /// formatted label (with `~` for an estimate, `—` when unknown) and the raw
+    /// fraction, so the card can colour by the one utilisation rule rather than
+    /// parse its own string back.
     fn spawn_card_account_option(a: &zaplex_cockpit::AccountUsage) -> spawn_card::AccountOption {
+        let binding = zaplex_cockpit::binding_window(a);
         spawn_card::AccountOption {
             label: a.account.label.clone(),
             config_dir: a.account.config_dir.clone(),
             is_default: a.account.is_default,
             heat_label: zaplex_cockpit::heat_pct_label_with_provenance(
-                zaplex_cockpit::binding_window(a).0,
-                a.provenance,
+                binding.fraction,
+                binding.provenance,
             ),
-            heat: zaplex_cockpit::binding_window(a).0,
+            heat: zaplex_cockpit::heat_bar_fraction(binding.fraction, binding.provenance),
             plan: a.account.plan_tier.clone(),
             provider: a.account.provider,
         }
@@ -25269,12 +25270,13 @@ impl Workspace {
         }
         if let Some(f) = zaplex_cockpit::pick_freest_checked(provider, snapshot) {
             opts.freest = Some(Self::spawn_card_account_option(f));
+            let binding = zaplex_cockpit::binding_window(f);
             opts.freest_label = Some(format!(
                 "{} ({})",
                 f.account.label,
                 zaplex_cockpit::heat_pct_label_with_provenance(
-                    zaplex_cockpit::binding_window(f).0,
-                    f.provenance,
+                    binding.fraction,
+                    binding.provenance
                 )
             ));
             // Only a non-default account needs a config-dir pin; the default

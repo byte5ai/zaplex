@@ -53,6 +53,25 @@ fn provenance_marks_estimates_only() {
     );
 }
 
+#[test]
+fn unknown_window_draws_an_empty_bar() {
+    use crate::types::UsageProvenance;
+    assert_eq!(heat_bar_fraction(0.4, UsageProvenance::Unknown), 0.0);
+    assert_eq!(heat_bar_fraction(0.4, UsageProvenance::Real), 0.4);
+    assert_eq!(heat_bar_fraction(0.4, UsageProvenance::Estimate), 0.4);
+}
+
+#[test]
+fn unknown_window_reads_as_a_dash_never_a_number() {
+    use crate::types::UsageProvenance;
+    for fraction in [0.0, 0.29] {
+        assert_eq!(
+            heat_pct_label_with_provenance(fraction, UsageProvenance::Unknown),
+            "\u{2014}"
+        );
+    }
+}
+
 fn window(cost_usd: f64, unpriced_models: &[&str]) -> WindowTotals {
     WindowTotals {
         has_unpriced_usage: !unpriced_models.is_empty(),

@@ -225,6 +225,23 @@ fn newer_client_decodes_missing_provider_account_identity_as_none() {
 }
 
 #[test]
+fn per_window_capacity_flags_stay_compatible_both_ways() {
+    let current = AgentAccountInfo {
+        provider: "codex".to_string(),
+        account_id: "daemon-opaque-route".to_string(),
+        capacity_5h_known: Some(false),
+        capacity_week_known: Some(true),
+        ..Default::default()
+    };
+    let legacy = LegacyAgentAccountInfo::decode(current.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(legacy.account_id, "daemon-opaque-route");
+
+    let decoded = AgentAccountInfo::decode(legacy.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(decoded.capacity_5h_known, None);
+    assert_eq!(decoded.capacity_week_known, None);
+}
+
+#[test]
 fn older_client_ignores_new_pty_binding_field() {
     let current = AgentSessionInfo {
         session_id: "agent-1".to_string(),

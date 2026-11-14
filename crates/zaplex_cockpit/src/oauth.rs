@@ -158,7 +158,8 @@ pub fn apply_oauth_usage(
         if real.seven_day.resets_at.is_some() {
             acct.reset_week = real.seven_day.resets_at;
         }
-        acct.provenance = UsageProvenance::Real;
+        acct.provenance_5h = UsageProvenance::Real;
+        acct.provenance_week = UsageProvenance::Real;
     }
 }
 

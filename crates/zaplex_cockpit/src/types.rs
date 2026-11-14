@@ -378,11 +378,14 @@ pub enum AccountStatus {
     Offline,
 }
 
-/// Where an account's heat/reset numbers come from.
+/// Where one rate-limit window's heat/reset numbers come from.
 ///
-/// The cockpit prefers the provider's **real** rate-limit position (OAuth usage
-/// endpoint, C3b) and falls back to the local transcript-based **estimate**
-/// whenever the real number is unavailable — honest degradation, visibly marked.
+/// The cockpit prefers the provider's **real** rate-limit position (Claude:
+/// OAuth usage endpoint, C3b; Codex: the `rate_limits` its rollouts record).
+/// Claude falls back to the local transcript-based **estimate** whenever the
+/// real number is unavailable — honest degradation, visibly marked. A window
+/// without any data basis is **unknown**: it must never render or route as a
+/// measured zero.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UsageProvenance {
     /// Real utilization reported by the provider for this account.
@@ -390,6 +393,10 @@ pub enum UsageProvenance {
     /// Derived locally from transcript token counts vs. a budget guess.
     #[default]
     Estimate,
+    /// No usable figure: the provider reported no such window, or its last
+    /// report is older than the window's reset. The window's heat is `0.0`
+    /// and carries no meaning.
+    Unknown,
 }
 
 /// Per-account usage across the cockpit's windows, plus derived reset times + heat.
@@ -422,10 +429,11 @@ pub struct AccountUsage {
     pub reset5h: Option<DateTime<Utc>>,
     /// When the current 7d block resets, if a block is active.
     pub reset_week: Option<DateTime<Utc>>,
-    /// `block5h.work / budget_5h`, clamped at 0; may exceed 1.0 (over budget).
+    /// 5-hour utilization fraction; may exceed 1.0 (over budget). Meaningful
+    /// only when [`Self::provenance_5h`] is not [`UsageProvenance::Unknown`].
     pub heat: f64,
-    /// `week.work / budget_week` — the slower weekly budget's heat; same
-    /// semantics as `heat` (may exceed 1.0).
+    /// Weekly utilization fraction; same semantics as `heat`, qualified by
+    /// [`Self::provenance_week`].
     pub heat_week: f64,
     /// 7-day **Opus** sublimit utilization (Max plans), same fraction scale as
     /// `heat`. `Some` only for real OAuth accounts whose plan reports it — often
@@ -460,11 +468,60 @@ pub struct AccountUsage {
     /// Coarse activity status derived from `sessions` — dormant sessions do not
     /// make an account "live".
     pub status: AccountStatus,
-    /// Whether `heat`/`heat_week`/resets are the provider's real numbers or the
-    /// local estimate (see [`UsageProvenance`]). Token/cost totals are always
-    /// transcript-derived — they measure spend, not rate-limit position.
+    /// Where `heat` and `reset5h` come from (see [`UsageProvenance`]). Token/cost
+    /// totals are always transcript-derived — they measure spend, not
+    /// rate-limit position.
     #[serde(default)]
-    pub provenance: UsageProvenance,
+    pub provenance_5h: UsageProvenance,
+    /// Where `heat_week`, `reset_week` and the weekly per-model sublimits come
+    /// from.
+    #[serde(default)]
+    pub provenance_week: UsageProvenance,
+}
+
+impl AccountUsage {
+    /// The 5-hour heat, or `None` when that window is unknown.
+    pub fn known_heat_5h(&self) -> Option<f64> {
+        (self.provenance_5h != UsageProvenance::Unknown).then_some(self.heat)
+    }
+
+    /// The weekly heat, or `None` when that window is unknown.
+    pub fn known_heat_week(&self) -> Option<f64> {
+        (self.provenance_week != UsageProvenance::Unknown).then_some(self.heat_week)
+    }
+
+    /// Number of the two rate-limit windows (5h, week) without a usable figure.
+    pub fn unknown_window_count(&self) -> usize {
+        [self.provenance_5h, self.provenance_week]
+            .into_iter()
+            .filter(|provenance| *provenance == UsageProvenance::Unknown)
+            .count()
+    }
+
+    /// The account-level provenance of its known windows: `Unknown` when no
+    /// window is known, `Estimate` when any known window is estimated, `Real`
+    /// otherwise. Which windows are unknown is told by
+    /// [`Self::unknown_window_count`] and the per-window fields.
+    pub fn known_provenance(&self) -> UsageProvenance {
+        let known = [self.provenance_5h, self.provenance_week]
+            .into_iter()
+            .filter(|provenance| *provenance != UsageProvenance::Unknown);
+        let mut summary = UsageProvenance::Unknown;
+        for provenance in known {
+            match provenance {
+                UsageProvenance::Estimate => return UsageProvenance::Estimate,
+                UsageProvenance::Real => summary = UsageProvenance::Real,
+                UsageProvenance::Unknown => {}
+            }
+        }
+        summary
+    }
+
+    /// Whether any window shows an estimate (and so needs the `~` legend).
+    pub fn shows_estimate(&self) -> bool {
+        self.provenance_5h == UsageProvenance::Estimate
+            || self.provenance_week == UsageProvenance::Estimate
+    }
 }
 
 /// Load health of a [`CockpitSnapshot`]. Lets a reader tell "no accounts because

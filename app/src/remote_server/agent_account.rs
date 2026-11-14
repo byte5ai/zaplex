@@ -16,7 +16,7 @@ use instant::Instant;
 use sha2::{Digest as _, Sha256};
 use zaplex_cockpit::{
     Account, CockpitSnapshot, Provider, ScanHealth, SessionSnapshot, TranscriptScanCache,
-    UsageProvenance, DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK,
+    DEFAULT_BUDGET_5H, DEFAULT_BUDGET_WEEK,
 };
 
 use crate::ai::subscription_agent::{
@@ -221,7 +221,8 @@ fn provider_name(provider: Provider) -> Option<&'static str> {
 }
 
 /// Derive an opaque, deterministic id from the provider and normalized account
-/// identity. Email + organization survive config-root renames and are preferred;
+/// identity. Email + organization (and a Codex workspace's `account_id`)
+/// survive config-root renames and are preferred;
 /// the provider-owned stable key is only the fallback for accounts without an
 /// identity claim. Collisions remain fail-closed when the inventory is built.
 fn stable_account_id(account: &Account) -> String {
@@ -237,6 +238,14 @@ fn stable_account_id(account: &Account) -> String {
         .map(str::trim)
         .filter(|organization| !organization.is_empty())
         .map(str::to_ascii_lowercase);
+    // One Codex login spans several workspaces: the same email, a distinct
+    // provider `account_id` each. Without it those accounts would share one id
+    // and collide out of the inventory.
+    let workspace = account
+        .provider_account_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| account.provider == Provider::Codex && !id.is_empty());
     let mut digest = Sha256::new();
     digest.update(b"zaplex-agent-account-route-v1\0");
     digest.update(account.provider.as_str().as_bytes());
@@ -248,6 +257,10 @@ fn stable_account_id(account: &Account) -> String {
             digest.update(b"\0");
             if let Some(organization) = organization {
                 digest.update(organization.as_bytes());
+            }
+            if let Some(workspace) = workspace {
+                digest.update(b"\0workspace\0");
+                digest.update(workspace.as_bytes());
             }
         }
         None => {
@@ -408,8 +421,8 @@ fn unique_account_routes<'a>(accounts: impl IntoIterator<Item = &'a Account>) ->
 }
 
 fn inventory_from_snapshot(snapshot: CockpitSnapshot) -> AccountInventoryScan {
-    let capacity_known = snapshot.health.is_loaded();
-    let account_health = if capacity_known { "loaded" } else { "degraded" };
+    let loaded = snapshot.health.is_loaded();
+    let account_health = if loaded { "loaded" } else { "degraded" };
     let routes = unique_account_routes(snapshot.accounts.iter().map(|usage| &usage.account));
     let mut identity_collision = false;
     let mut accounts = Vec::new();
@@ -424,6 +437,8 @@ fn inventory_from_snapshot(snapshot: CockpitSnapshot) -> AccountInventoryScan {
             identity_collision = true;
             continue;
         }
+        let capacity_5h_known = loaded && usage.known_heat_5h().is_some();
+        let capacity_week_known = loaded && usage.known_heat_week().is_some();
         accounts.push(AgentAccountInfo {
             provider: key.provider,
             account_id: key.account_id,
@@ -434,14 +449,21 @@ fn inventory_from_snapshot(snapshot: CockpitSnapshot) -> AccountInventoryScan {
             is_default: usage.account.is_default,
             capacity_5h: remaining_capacity(usage.heat),
             capacity_week: remaining_capacity(usage.heat_week),
-            capacity_known,
+            // Older clients know only this flag: an account with an unknown
+            // window must neither route nor show a capacity there.
+            capacity_known: capacity_5h_known && capacity_week_known,
             health: account_health.to_string(),
-            usage_provenance: match usage.provenance {
-                UsageProvenance::Real => "real",
-                UsageProvenance::Estimate => "estimate",
+            // Older clients reject any other value, so an unknown window is
+            // carried by the capacity flags, not by this string.
+            usage_provenance: if usage.shows_estimate() {
+                "estimate"
+            } else {
+                "real"
             }
             .to_string(),
             provider_account_id: usage.account.provider_account_id.clone(),
+            capacity_5h_known: Some(capacity_5h_known),
+            capacity_week_known: Some(capacity_week_known),
         });
     }
 

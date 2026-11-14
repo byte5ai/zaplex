@@ -191,7 +191,8 @@ fn apply_marks_matching_claude_accounts_real_and_leaves_the_rest_estimated() {
     apply_oauth_usage(&mut snapshot, &by_dir);
 
     let matched = &snapshot.accounts[0];
-    assert_eq!(matched.provenance, UsageProvenance::Real);
+    assert_eq!(matched.provenance_5h, UsageProvenance::Real);
+    assert_eq!(matched.provenance_week, UsageProvenance::Real);
     assert!((matched.heat - 0.34).abs() < 1e-9);
     assert!((matched.heat_week - 0.61).abs() < 1e-9);
     assert_eq!(
@@ -204,8 +205,10 @@ fn apply_marks_matching_claude_accounts_real_and_leaves_the_rest_estimated() {
     assert_eq!(matched.heat_sonnet, Some(0.55));
 
     // Unmatched Claude account and the Codex account keep the estimate.
-    assert_eq!(snapshot.accounts[1].provenance, UsageProvenance::Estimate);
-    assert_eq!(snapshot.accounts[2].provenance, UsageProvenance::Estimate);
+    for unmatched in &snapshot.accounts[1..] {
+        assert_eq!(unmatched.provenance_5h, UsageProvenance::Estimate);
+        assert_eq!(unmatched.provenance_week, UsageProvenance::Estimate);
+    }
 }
 
 #[test]
@@ -228,7 +231,7 @@ fn apply_without_reset_keeps_the_estimated_reset() {
 
     apply_oauth_usage(&mut snapshot, &by_dir);
 
-    assert_eq!(snapshot.accounts[0].provenance, UsageProvenance::Real);
+    assert_eq!(snapshot.accounts[0].provenance_5h, UsageProvenance::Real);
     assert!((snapshot.accounts[0].heat - 0.9).abs() < 1e-9);
     assert_eq!(snapshot.accounts[0].reset5h, estimated_reset);
 }
@@ -273,12 +276,13 @@ fn binding_window_surfaces_a_full_opus_sublimit_over_a_calm_5h() {
     let by_dir: HashMap<PathBuf, _> = [(PathBuf::from("/home/u/.claude"), real)].into();
     apply_oauth_usage(&mut snapshot, &by_dir);
 
-    let (frac, label) = crate::binding_window(&snapshot.accounts[0]);
+    let binding = crate::binding_window(&snapshot.accounts[0]);
     assert!(
-        (frac - 0.91).abs() < 1e-9,
+        (binding.fraction - 0.91).abs() < 1e-9,
         "binding window is the Opus sublimit"
     );
-    assert_eq!(label, "opus");
+    assert_eq!(binding.label, "opus");
+    assert_eq!(binding.provenance, UsageProvenance::Real);
 }
 
 #[test]
@@ -292,7 +296,7 @@ fn binding_window_prefers_week_over_5h_when_week_is_fuller() {
     )]);
     snapshot.accounts[0].heat = 0.30;
     snapshot.accounts[0].heat_week = 0.80;
-    let (frac, label) = crate::binding_window(&snapshot.accounts[0]);
-    assert!((frac - 0.80).abs() < 1e-9);
-    assert_eq!(label, "wk");
+    let binding = crate::binding_window(&snapshot.accounts[0]);
+    assert!((binding.fraction - 0.80).abs() < 1e-9);
+    assert_eq!(binding.label, "wk");
 }

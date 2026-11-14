@@ -204,7 +204,8 @@ pub fn build_account_usage(
         sessions: Vec::new(),
         idle_sessions: Vec::new(),
         status: crate::types::AccountStatus::Offline,
-        provenance: crate::types::UsageProvenance::Estimate,
+        provenance_5h: crate::types::UsageProvenance::Estimate,
+        provenance_week: crate::types::UsageProvenance::Estimate,
     }
 }
 

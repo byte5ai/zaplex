@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 
-use crate::types::WindowTotals;
+use crate::types::{AccountUsage, UsageProvenance, WindowTotals};
 
 /// Heat band, matching the claudeplex-desktop `LoadBar` thresholds. Input is the heat
 /// *fraction* (work / budget), where 1.0 == 100% of budget.
@@ -75,20 +75,40 @@ pub(crate) fn heat_pct_label(fraction: f64) -> String {
     format!("{}\u{202f}%", (fraction * 100.0).round() as i64)
 }
 
+/// The value shown for a window without a usable figure: a dash, never a number.
+pub const UNKNOWN_HEAT_LABEL: &str = "\u{2014}";
+
 /// Percent label with provenance (C3b): real numbers get no extra chrome,
 /// estimates carry a subtle `~` prefix — 0.62 -> "62%" (real) / "~62%" (estimate).
-pub fn heat_pct_label_with_provenance(
-    fraction: f64,
-    provenance: crate::types::UsageProvenance,
-) -> String {
+/// An unknown window reads as [`UNKNOWN_HEAT_LABEL`] whatever `fraction` holds.
+pub fn heat_pct_label_with_provenance(fraction: f64, provenance: UsageProvenance) -> String {
     match provenance {
-        crate::types::UsageProvenance::Real => heat_pct_label(fraction),
-        crate::types::UsageProvenance::Estimate => format!("~{}", heat_pct_label(fraction)),
+        UsageProvenance::Real => heat_pct_label(fraction),
+        UsageProvenance::Estimate => format!("~{}", heat_pct_label(fraction)),
+        UsageProvenance::Unknown => UNKNOWN_HEAT_LABEL.to_string(),
     }
 }
 
+/// The fraction a heat bar fills: an unknown window's stored heat carries no
+/// meaning, so its track stays empty instead of drawing a measured level.
+pub fn heat_bar_fraction(fraction: f64, provenance: UsageProvenance) -> f64 {
+    match provenance {
+        UsageProvenance::Real | UsageProvenance::Estimate => fraction,
+        UsageProvenance::Unknown => 0.0,
+    }
+}
+
+/// An account's binding rate-limit window: see [`binding_window`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BindingWindow {
+    pub fraction: f64,
+    /// Short window label: `5h`, `wk`, `opus` or `sonnet`.
+    pub label: &'static str,
+    pub provenance: UsageProvenance,
+}
+
 /// The **binding** rate-limit window for an account — the fullest one, i.e. the
-/// limit the user actually hits first — as `(fraction, short label)`.
+/// limit the user actually hits first.
 ///
 /// A Max plan enforces several windows at once (rolling 5h, rolling 7-day, and
 /// per-model 7-day sublimits). The headline number should be whichever is
@@ -96,21 +116,36 @@ pub fn heat_pct_label_with_provenance(
 /// really is (e.g. showing a calm 5h `71%` while the Opus weekly sits at `91%`).
 /// Real OAuth accounts include the Opus/Sonnet sublimits; estimates only know
 /// 5h vs. week (the sublimits are `None`), so they degrade to `max(5h, week)`.
-pub fn binding_window(acct: &crate::types::AccountUsage) -> (f64, &'static str) {
-    let mut binding = (acct.heat, "5h");
-    let mut consider = |frac: f64, label: &'static str| {
-        if frac > binding.0 {
-            binding = (frac, label);
+/// Unknown windows are skipped; when no window is known the result is the 5h
+/// window with [`UsageProvenance::Unknown`] and a meaningless `0.0` fraction.
+pub fn binding_window(acct: &AccountUsage) -> BindingWindow {
+    let mut binding: Option<BindingWindow> = None;
+    let mut consider = |fraction: f64, label: &'static str, provenance: UsageProvenance| {
+        if provenance == UsageProvenance::Unknown {
+            return;
+        }
+        if binding.is_none_or(|current| fraction > current.fraction) {
+            binding = Some(BindingWindow {
+                fraction,
+                label,
+                provenance,
+            });
         }
     };
-    consider(acct.heat_week, "wk");
+    consider(acct.heat, "5h", acct.provenance_5h);
+    consider(acct.heat_week, "wk", acct.provenance_week);
+    // The per-model sublimits are weekly windows from the same report.
     if let Some(opus) = acct.heat_opus {
-        consider(opus, "opus");
+        consider(opus, "opus", acct.provenance_week);
     }
     if let Some(sonnet) = acct.heat_sonnet {
-        consider(sonnet, "sonnet");
+        consider(sonnet, "sonnet", acct.provenance_week);
     }
-    binding
+    binding.unwrap_or(BindingWindow {
+        fraction: 0.0,
+        label: "5h",
+        provenance: UsageProvenance::Unknown,
+    })
 }
 
 /// The model's usable context window in tokens: 1M for the Opus/Sonnet 1M-beta,

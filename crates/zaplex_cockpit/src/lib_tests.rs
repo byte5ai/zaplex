@@ -146,6 +146,93 @@ fn live_scan_reports_running_sessions_without_dormant_history() {
     );
 }
 
+/// Codex heat comes from Codex's rate-limit report only: explicit token budgets
+/// (the daemon passes the Claude defaults) must not turn transcript spend into a
+/// Codex percentage, and a `~/.codex-*` sibling is an account in both the full
+/// snapshot and the daemon's live scan.
+#[test]
+fn codex_accounts_ignore_token_budgets_and_include_home_siblings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let codex_home = home.join(".codex");
+    let now = Utc::now();
+    let resets_at = (now + chrono::Duration::days(3)).timestamp();
+    for (root, account_id, rate_limits) in [
+        (codex_home.clone(), "acc-default", serde_json::Value::Null),
+        (
+            home.join(".codex-work"),
+            "acc-work",
+            serde_json::json!({
+                "limit_id": "codex",
+                "primary": {"used_percent": 29.0, "window_minutes": 10080, "resets_at": resets_at},
+                "secondary": null,
+            }),
+        ),
+    ] {
+        fs::create_dir_all(root.join("sessions/2026/11/14")).unwrap();
+        fs::write(
+            root.join("auth.json"),
+            format!(r#"{{"auth_mode":"chatgpt","tokens":{{"account_id":"{account_id}"}}}}"#),
+        )
+        .unwrap();
+        let line = serde_json::json!({
+            "type": "event_msg",
+            "timestamp": now.to_rfc3339(),
+            "payload": {
+                "type": "token_count",
+                "info": {"last_token_usage": {"input_tokens": 15_000_000, "output_tokens": 5}},
+                "rate_limits": rate_limits,
+            },
+        });
+        fs::write(
+            root.join("sessions/2026/11/14/rollout-a.jsonl"),
+            line.to_string() + "\n",
+        )
+        .unwrap();
+    }
+
+    let snapshot = build_snapshot_with_claude_discovery(
+        &home,
+        &codex_home,
+        None,
+        now,
+        DEFAULT_BUDGET_5H,
+        DEFAULT_BUDGET_WEEK,
+        &PricingTable::default(),
+        &mut TranscriptScanCache::default(),
+        claude::discover_accounts_without_process_scan,
+    );
+    let live = scan_live_sessions_with_claude_discovery(
+        &home,
+        &codex_home,
+        None,
+        now,
+        &mut TranscriptScanCache::default(),
+        claude::discover_accounts_without_process_scan,
+    );
+
+    let keys: Vec<&str> = snapshot
+        .accounts
+        .iter()
+        .map(|usage| usage.account.key.as_str())
+        .collect();
+    assert_eq!(keys, ["codex:default", "codex:work"]);
+    let live_keys: Vec<&str> = live
+        .accounts
+        .iter()
+        .map(|account| account.key.as_str())
+        .collect();
+    assert_eq!(live_keys, keys);
+
+    let default = &snapshot.accounts[0];
+    assert_eq!(default.provenance_5h, UsageProvenance::Unknown);
+    assert_eq!(default.provenance_week, UsageProvenance::Unknown);
+    assert_eq!(default.block5h.input, 15_000_000);
+    let work = &snapshot.accounts[1];
+    assert_eq!(work.provenance_5h, UsageProvenance::Unknown);
+    assert_eq!(work.known_heat_week(), Some(0.29));
+}
+
 #[test]
 fn non_test_sources_use_file_backed_test_modules() {
     let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

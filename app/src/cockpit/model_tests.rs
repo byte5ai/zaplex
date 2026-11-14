@@ -122,7 +122,8 @@ fn dormant_account_history_never_enters_local_tree() {
         sessions: vec![live],
         idle_sessions: vec![dormant],
         status: zaplex_cockpit::AccountStatus::Live,
-        provenance: zaplex_cockpit::UsageProvenance::Estimate,
+        provenance_5h: zaplex_cockpit::UsageProvenance::Estimate,
+        provenance_week: zaplex_cockpit::UsageProvenance::Estimate,
     };
     let resumable = raw_row("antigravity-resume", zaplex_cockpit::SessionState::Idle);
 
@@ -1562,7 +1563,8 @@ fn account_rows_hide_external_sessions_and_carry_the_projected_attention() {
         sessions: vec![row, external],
         idle_sessions: Vec::new(),
         status: zaplex_cockpit::AccountStatus::Live,
-        provenance: zaplex_cockpit::UsageProvenance::Estimate,
+        provenance_5h: zaplex_cockpit::UsageProvenance::Estimate,
+        provenance_week: zaplex_cockpit::UsageProvenance::Estimate,
     });
     snapshot.accounts[0].today.messages = 7;
 
@@ -1670,7 +1672,8 @@ fn local_terminal_links_are_keyed_like_inventory_rows() {
         sessions: vec![codex.clone()],
         idle_sessions: Vec::new(),
         status: zaplex_cockpit::AccountStatus::Live,
-        provenance: zaplex_cockpit::UsageProvenance::Estimate,
+        provenance_5h: zaplex_cockpit::UsageProvenance::Estimate,
+        provenance_week: zaplex_cockpit::UsageProvenance::Estimate,
     });
 
     let links = local_terminal_links(&snapshot);

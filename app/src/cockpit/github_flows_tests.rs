@@ -359,7 +359,8 @@ fn analysis_usage(
     key: &str,
     heat: f64,
     status: AccountStatus,
-    provenance: UsageProvenance,
+    provenance_5h: UsageProvenance,
+    provenance_week: UsageProvenance,
 ) -> AccountUsage {
     AccountUsage {
         account: Account {
@@ -387,7 +388,8 @@ fn analysis_usage(
         sessions: Vec::new(),
         idle_sessions: Vec::new(),
         status,
-        provenance,
+        provenance_5h: provenance,
+        provenance_week: provenance,
     }
 }
 

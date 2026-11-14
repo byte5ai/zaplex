@@ -16,7 +16,9 @@ fn fake_jwt(payload_json: &str) -> String {
 fn discovers_account_and_reads_email_from_id_token_without_storing_tokens() {
     let tmp = tempfile::tempdir().unwrap();
     let codex_home = tmp.path();
-    let jwt = fake_jwt(r#"{"email":"c@example.com","chatgpt_plan_type":"pro"}"#);
+    let jwt = fake_jwt(
+        r#"{"email":"c@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"pro"}}"#,
+    );
     write(
         &codex_home.join("auth.json"),
         &format!(
@@ -32,8 +34,8 @@ fn discovers_account_and_reads_email_from_id_token_without_storing_tokens() {
     assert_eq!(a.provider_account_id.as_deref(), Some("acc_1"));
     assert_eq!(a.email.as_deref(), Some("c@example.com"));
     assert_eq!(a.label, "c@example.com");
-    // Provider ≠ plan (WS4 S2): auth_mode is not a plan tier; Codex exposes no plan.
-    assert_eq!(a.plan_tier, None);
+    // Provider ≠ plan (WS4 S2): the plan is the id_token claim, never auth_mode.
+    assert_eq!(a.plan_tier.as_deref(), Some("Pro"));
     assert!(a.is_default);
 }
 
@@ -637,12 +639,12 @@ fn codex_usage_cache_parses_unchanged_rollouts_once_and_follows_changes() {
 
     let first = usage_for_account_with_cache(&account, since, &mut cache);
     let unchanged = usage_for_account_with_cache(&account, since, &mut cache);
-    assert_eq!(first, unchanged);
-    assert_eq!(first.0.len(), 1);
+    assert_eq!(first.entries, unchanged.entries);
+    assert_eq!(first.entries.len(), 1);
     assert_eq!(cache.parse_count, 1);
 
     write(&rollout, &(token_count_line(10) + &token_count_line(20)));
-    let (changed, _) = usage_for_account_with_cache(&account, since, &mut cache);
+    let changed = usage_for_account_with_cache(&account, since, &mut cache).entries;
     assert_eq!(
         changed.iter().map(|entry| entry.input).collect::<Vec<_>>(),
         [10, 20]
@@ -650,9 +652,9 @@ fn codex_usage_cache_parses_unchanged_rollouts_once_and_follows_changes() {
     assert_eq!(cache.parse_count, 2);
 
     fs::remove_file(&rollout).unwrap();
-    let (deleted, io_error) = usage_for_account_with_cache(&account, since, &mut cache);
-    assert!(!io_error);
-    assert!(deleted.is_empty());
+    let deleted = usage_for_account_with_cache(&account, since, &mut cache);
+    assert!(!deleted.io_error);
+    assert!(deleted.entries.is_empty());
     assert!(cache.entries.is_empty());
 }
 
@@ -724,4 +726,449 @@ fn the_file_name_fallback_matches_the_one_discovery_uses() {
         crate::codex_sessions::session_id_from_path(&path),
         "both sides derive the fallback id from the same function"
     );
+}
+
+fn subscription_auth(account_id: &str, email: &str, plan_type: &str) -> String {
+    let jwt = fake_jwt(
+        &serde_json::json!({
+            "email": email,
+            "https://api.openai.com/auth": {"chatgpt_plan_type": plan_type},
+        })
+        .to_string(),
+    );
+    format!(
+        r#"{{"auth_mode":"chatgpt","tokens":{{"account_id":"{account_id}","id_token":"{jwt}","access_token":"SECRET"}}}}"#
+    )
+}
+
+#[test]
+fn codex_home_siblings_are_discovered_in_stable_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    write(
+        &home.join(".codex/auth.json"),
+        &subscription_auth("acc-default", "me@example.com", "pro"),
+    );
+    // Two workspaces of one login: same email, distinct account ids and plans.
+    write(
+        &home.join(".codex-zeta/auth.json"),
+        &subscription_auth("acc-zeta", "me@example.com", "self_serve_business_prolite"),
+    );
+    write(
+        &home.join(".codex-alpha/auth.json"),
+        &subscription_auth("acc-alpha", "other@example.com", "prolite"),
+    );
+
+    let discovery = discover_account_roots(&home, None);
+
+    assert!(discovery.issues.is_empty(), "{:?}", discovery.issues);
+    let found: Vec<(&str, Option<&str>, Option<&str>)> = discovery
+        .accounts
+        .iter()
+        .map(|account| {
+            (
+                account.key.as_str(),
+                account.email.as_deref(),
+                account.plan_tier.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("codex:default", Some("me@example.com"), Some("Pro")),
+            ("codex:alpha", Some("other@example.com"), Some("Pro Lite")),
+            ("codex:zeta", Some("me@example.com"), Some("Business")),
+        ]
+    );
+    // Every sibling is pinned through its own CODEX_HOME; the default is not.
+    let pins: Vec<Option<String>> = discovery
+        .accounts
+        .iter()
+        .map(Account::config_dir_pin)
+        .collect();
+    let canonical = |name: &str| {
+        Some(
+            fs::canonicalize(home.join(name))
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    assert_eq!(
+        pins,
+        [None, canonical(".codex-alpha"), canonical(".codex-zeta")]
+    );
+}
+
+#[test]
+fn api_key_empty_and_backup_codex_siblings_yield_no_account() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    write(
+        &home.join(".codex-api/auth.json"),
+        r#"{"auth_mode":"apikey","OPENAI_API_KEY":"sk-test-only"}"#,
+    );
+    fs::create_dir_all(home.join(".codex-empty")).unwrap();
+    write(
+        &home.join(".codex-backup/auth.json"),
+        &subscription_auth("acc-backup", "me@example.com", "pro"),
+    );
+    write(&home.join(".codex-file"), "not a directory");
+
+    let discovery = discover_account_roots(&home, None);
+
+    assert!(discovery.issues.is_empty(), "{:?}", discovery.issues);
+    assert!(discovery.accounts.is_empty(), "{:?}", discovery.accounts);
+}
+
+#[test]
+fn codex_home_pinned_to_a_sibling_is_one_account_with_its_pin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let sibling = home.join(".codex-work");
+    write(
+        &sibling.join("auth.json"),
+        &subscription_auth("acc-work", "me@example.com", "team"),
+    );
+
+    let discovery = discover_account_roots(&home, Some(&sibling));
+
+    assert!(discovery.issues.is_empty(), "{:?}", discovery.issues);
+    assert_eq!(discovery.accounts.len(), 1);
+    let account = &discovery.accounts[0];
+    assert_eq!(account.key, "codex:work");
+    assert_eq!(account.plan_tier.as_deref(), Some("Team"));
+    assert_eq!(
+        account.config_dir_pin(),
+        Some(
+            fs::canonicalize(&sibling)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        )
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_sibling_symlink_to_the_default_root_is_deduplicated() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    write(
+        &home.join(".codex/auth.json"),
+        &subscription_auth("acc-default", "me@example.com", "pro"),
+    );
+    symlink(home.join(".codex"), home.join(".codex-link")).unwrap();
+
+    let discovery = discover_account_roots(&home, None);
+
+    assert!(discovery.issues.is_empty(), "{:?}", discovery.issues);
+    assert_eq!(discovery.accounts.len(), 1);
+    assert_eq!(discovery.accounts[0].key, "codex:default");
+}
+
+#[test]
+fn plan_claim_is_read_namespaced_or_top_level_and_missing_stays_unknown() {
+    let plan_of = |payload: &str| {
+        let tmp = tempfile::tempdir().unwrap();
+        let jwt = fake_jwt(payload);
+        write(
+            &tmp.path().join("auth.json"),
+            &format!(r#"{{"auth_mode":"chatgpt","tokens":{{"id_token":"{jwt}"}}}}"#),
+        );
+        discover_accounts(tmp.path())
+            .into_iter()
+            .next()
+            .unwrap()
+            .plan_tier
+    };
+
+    assert_eq!(
+        plan_of(r#"{"email":"a@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":"plus"}}"#)
+            .as_deref(),
+        Some("Plus")
+    );
+    assert_eq!(
+        plan_of(r#"{"email":"a@example.com","chatgpt_plan_type":"enterprise"}"#).as_deref(),
+        Some("Enterprise")
+    );
+    assert_eq!(plan_of(r#"{"email":"a@example.com"}"#), None);
+    assert_eq!(
+        plan_of(
+            r#"{"email":"a@example.com","https://api.openai.com/auth":{"chatgpt_plan_type":" "}}"#
+        ),
+        None
+    );
+}
+
+#[test]
+fn plan_labels_are_readable() {
+    let cases = [
+        ("pro", "Pro"),
+        ("plus", "Plus"),
+        ("prolite", "Pro Lite"),
+        ("team", "Team"),
+        ("business", "Business"),
+        ("self_serve_business", "Business"),
+        ("self_serve_business_prolite", "Business"),
+        ("enterprise", "Enterprise"),
+        ("edu", "Edu"),
+        ("free", "Free"),
+        ("PRO", "Pro"),
+        ("free_workspace", "Free Workspace"),
+    ];
+    for (raw, label) in cases {
+        assert_eq!(plan_label(raw), label, "{raw}");
+    }
+}
+
+fn rate_limit_line(
+    timestamp: &str,
+    primary: serde_json::Value,
+    secondary: serde_json::Value,
+) -> String {
+    serde_json::json!({
+        "type": "event_msg",
+        "timestamp": timestamp,
+        "payload": {
+            "type": "token_count",
+            "info": {"last_token_usage": {"input_tokens": 50_000_000, "output_tokens": 5}},
+            "rate_limits": {
+                "limit_id": "codex",
+                "primary": primary,
+                "secondary": secondary,
+                "plan_type": "pro",
+            },
+        },
+    })
+    .to_string()
+        + "\n"
+}
+
+fn ts(raw: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(raw)
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+fn codex_account(root: &Path) -> Account {
+    write(
+        &root.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"account_id":"account-1"}}"#,
+    );
+    discover_accounts(root).into_iter().next().unwrap()
+}
+
+/// Usage of `account` at `now`, through the same scan and rate-limit merge the
+/// snapshot builder uses.
+fn codex_usage_at(account: &Account, now: DateTime<Utc>) -> AccountUsage {
+    let scan = usage_for_account_with_cache(
+        account,
+        now - chrono::Duration::days(7),
+        &mut CodexUsageCache::default(),
+    );
+    let mut usage = crate::windows::build_account_usage(
+        account.clone(),
+        scan.entries,
+        now,
+        0,
+        0,
+        &crate::pricing::PricingTable::default(),
+    );
+    apply_rate_limits(&mut usage, scan.rate_limits.as_ref(), now);
+    usage
+}
+
+fn set_mtime(path: &Path, at: DateTime<Utc>) {
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(at.into())
+        .unwrap();
+}
+
+#[test]
+fn weekly_primary_window_is_real_and_missing_5h_window_is_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let account = codex_account(tmp.path());
+    let now = ts("2026-11-14T12:00:00Z");
+    let resets_at = ts("2026-11-18T09:00:00Z");
+    let rollout = tmp.path().join("sessions/2026/11/14/rollout-a.jsonl");
+    write(
+        &rollout,
+        &rate_limit_line(
+            "2026-11-14T11:00:00Z",
+            serde_json::json!({"used_percent": 29.0, "window_minutes": 10080, "resets_at": resets_at.timestamp()}),
+            serde_json::Value::Null,
+        ),
+    );
+    set_mtime(&rollout, now);
+
+    let usage = codex_usage_at(&account, now);
+
+    assert_eq!(usage.provenance_week, UsageProvenance::Real);
+    assert!((usage.heat_week - 0.29).abs() < 1e-9, "{}", usage.heat_week);
+    assert_eq!(usage.reset_week, Some(resets_at));
+    assert_eq!(usage.provenance_5h, UsageProvenance::Unknown);
+    assert_eq!(usage.known_heat_5h(), None);
+    assert_eq!(usage.reset5h, None);
+    assert_eq!(usage.heat_opus, None);
+    assert_eq!(usage.heat_sonnet, None);
+    // The spend is still counted; it just no longer sizes a heat.
+    assert_eq!(usage.week.input, 50_000_000);
+}
+
+#[test]
+fn both_windows_map_by_window_minutes_regardless_of_slot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let account = codex_account(tmp.path());
+    let now = ts("2026-11-14T12:00:00Z");
+    let rollout = tmp.path().join("sessions/2026/11/14/rollout-a.jsonl");
+    write(
+        &rollout,
+        &rate_limit_line(
+            "2026-11-14T11:00:00Z",
+            serde_json::json!({"used_percent": 80.0, "window_minutes": 10080, "resets_at": ts("2026-11-18T09:00:00Z").timestamp()}),
+            serde_json::json!({"used_percent": 12.5, "window_minutes": 300, "resets_at": ts("2026-11-14T14:00:00Z").timestamp()}),
+        ),
+    );
+    set_mtime(&rollout, now);
+
+    let usage = codex_usage_at(&account, now);
+
+    assert_eq!(usage.provenance_5h, UsageProvenance::Real);
+    assert!((usage.heat - 0.125).abs() < 1e-9);
+    assert_eq!(usage.reset5h, Some(ts("2026-11-14T14:00:00Z")));
+    assert_eq!(usage.provenance_week, UsageProvenance::Real);
+    assert!((usage.heat_week - 0.80).abs() < 1e-9);
+}
+
+#[test]
+fn rollout_without_rate_limits_leaves_both_windows_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let account = codex_account(tmp.path());
+    let now = ts("2026-11-14T12:00:00Z");
+    let rollout = tmp.path().join("sessions/2026/11/14/rollout-a.jsonl");
+    // Heavy spend, but no rate-limit report: no token budget may turn it into heat.
+    let line = serde_json::json!({
+        "type": "event_msg",
+        "timestamp": "2026-11-14T11:00:00Z",
+        "payload": {
+            "type": "token_count",
+            "info": {"last_token_usage": {"input_tokens": 50_000_000, "output_tokens": 5}},
+            "rate_limits": null,
+        },
+    });
+    write(&rollout, &(line.to_string() + "\n"));
+    set_mtime(&rollout, now);
+
+    let usage = codex_usage_at(&account, now);
+
+    assert_eq!(usage.provenance_5h, UsageProvenance::Unknown);
+    assert_eq!(usage.provenance_week, UsageProvenance::Unknown);
+    assert_eq!(usage.known_heat_5h(), None);
+    assert_eq!(usage.known_heat_week(), None);
+    assert_eq!(usage.block5h.input, 50_000_000);
+}
+
+#[test]
+fn rate_limit_window_past_its_reset_is_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let account = codex_account(tmp.path());
+    let now = ts("2026-11-14T12:00:00Z");
+    let rollout = tmp.path().join("sessions/2026/11/14/rollout-a.jsonl");
+    write(
+        &rollout,
+        &rate_limit_line(
+            "2026-11-14T06:00:00Z",
+            serde_json::json!({"used_percent": 90.0, "window_minutes": 300, "resets_at": ts("2026-11-14T10:00:00Z").timestamp()}),
+            // No reset at all: just as unusable.
+            serde_json::json!({"used_percent": 40.0, "window_minutes": 10080}),
+        ),
+    );
+    set_mtime(&rollout, now);
+
+    let usage = codex_usage_at(&account, now);
+
+    assert_eq!(usage.provenance_5h, UsageProvenance::Unknown);
+    assert_eq!(usage.provenance_week, UsageProvenance::Unknown);
+    assert_eq!(usage.reset5h, None);
+    assert_eq!(usage.reset_week, None);
+}
+
+#[test]
+fn latest_rate_limit_report_wins_across_rollouts_by_line_time() {
+    let tmp = tempfile::tempdir().unwrap();
+    let account = codex_account(tmp.path());
+    let now = ts("2026-11-14T12:00:00Z");
+    let week = |used: f64| serde_json::json!({"used_percent": used, "window_minutes": 10080, "resets_at": ts("2026-11-18T09:00:00Z").timestamp()});
+    // The newer report sits in the rollout that sorts and is touched first.
+    let newer = tmp.path().join("sessions/2026/11/13/rollout-a.jsonl");
+    write(
+        &newer,
+        &rate_limit_line("2026-11-14T11:30:00Z", week(31.0), serde_json::Value::Null),
+    );
+    set_mtime(&newer, now - chrono::Duration::hours(2));
+    let older = tmp.path().join("sessions/2026/11/14/rollout-b.jsonl");
+    write(
+        &older,
+        &(rate_limit_line("2026-11-14T08:00:00Z", week(20.0), serde_json::Value::Null)
+            + &rate_limit_line("2026-11-14T09:00:00Z", week(25.0), serde_json::Value::Null)),
+    );
+    set_mtime(&older, now);
+
+    let usage = codex_usage_at(&account, now);
+
+    assert!((usage.heat_week - 0.31).abs() < 1e-9, "{}", usage.heat_week);
+    // The walk order of the two rollouts is the file system's; the merge must
+    // not depend on it.
+    let report = |at: &str| RateLimitSnapshot {
+        observed_at: ts(at),
+        windows: Vec::new(),
+    };
+    let (old, new) = (
+        report("2026-11-14T08:00:00Z"),
+        report("2026-11-14T11:30:00Z"),
+    );
+    assert_eq!(
+        latest_rate_limits(Some(old.clone()), Some(new.clone())),
+        Some(new.clone())
+    );
+    assert_eq!(latest_rate_limits(Some(new.clone()), Some(old)), Some(new));
+}
+
+#[test]
+fn rate_limits_of_another_limit_id_are_ignored() {
+    let tmp = tempfile::tempdir().unwrap();
+    let account = codex_account(tmp.path());
+    let now = ts("2026-11-14T12:00:00Z");
+    let rollout = tmp.path().join("sessions/2026/11/14/rollout-a.jsonl");
+    let account_wide = rate_limit_line(
+        "2026-11-14T10:00:00Z",
+        serde_json::json!({"used_percent": 40.0, "window_minutes": 10080, "resets_at": ts("2026-11-18T09:00:00Z").timestamp()}),
+        serde_json::Value::Null,
+    );
+    let other_limit = serde_json::json!({
+        "type": "event_msg",
+        "timestamp": "2026-11-14T11:00:00Z",
+        "payload": {
+            "type": "token_count",
+            "info": null,
+            "rate_limits": {
+                "limit_id": "codex_other_model",
+                "primary": {"used_percent": 99.0, "window_minutes": 10080, "resets_at": ts("2026-11-18T09:00:00Z").timestamp()},
+                "secondary": null,
+            },
+        },
+    });
+    write(&rollout, &(account_wide + &other_limit.to_string() + "\n"));
+    set_mtime(&rollout, now);
+
+    let usage = codex_usage_at(&account, now);
+
+    assert!((usage.heat_week - 0.40).abs() < 1e-9, "{}", usage.heat_week);
 }

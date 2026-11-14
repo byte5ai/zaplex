@@ -32,10 +32,10 @@ use warpui::{
     ViewHandle,
 };
 use zaplex_cockpit::{
-    cost_figure, format_tokens, heat_pct_label_with_provenance, host_ident, host_key, relative_age,
-    reset_countdown, session_glyph, session_key, AccountStatus, AccountUsage, CostFigure,
-    FleetTree, PricingSource, Provider, SessionSnapshot, SessionState, UsageProvenance,
-    WindowTotals,
+    cost_figure, format_tokens, heat_bar_fraction, heat_pct_label_with_provenance, host_ident,
+    host_key, relative_age, reset_countdown, session_glyph, session_key, AccountStatus,
+    AccountUsage, CostFigure, FleetTree, PricingSource, Provider, SessionSnapshot, SessionState,
+    UsageProvenance, WindowTotals,
 };
 
 use crate::cockpit::account_identity;
@@ -1350,7 +1350,7 @@ impl CockpitPaneView {
 
     /// A labelled heat bar (roomier than the sidebar variant). Estimate-driven
     /// bars carry a subtle `~` on the percentage (C3b provenance); real numbers
-    /// get no extra chrome.
+    /// get no extra chrome. An unknown window is an empty track reading `—`.
     fn heat_bar(
         &self,
         label: &str,
@@ -1358,6 +1358,7 @@ impl CockpitPaneView {
         provenance: UsageProvenance,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        let fraction = heat_bar_fraction(fraction, provenance);
         let theme = appearance.theme();
         let family = appearance.ui_font_family();
         let size = appearance.ui_font_body();
@@ -3134,19 +3135,25 @@ impl CockpitPaneView {
         // own reset directly under its meter, starting at the track's edge, so
         // the window label above names it (#160 UI addendum).
         let meters = [
-            (crate::t!("cockpit-meter-5h"), acct.heat, acct.reset5h),
+            (
+                crate::t!("cockpit-meter-5h"),
+                acct.heat,
+                acct.provenance_5h,
+                acct.reset5h,
+            ),
             (
                 crate::t!("cockpit-meter-week"),
                 acct.heat_week,
+                acct.provenance_week,
                 acct.reset_week,
             ),
         ];
-        for (label, fraction, reset) in meters {
+        for (label, fraction, provenance, reset) in meters {
             let mut quota = Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_spacing(2.0)
-                .with_child(self.heat_bar(&label, fraction, acct.provenance, appearance));
+                .with_child(self.heat_bar(&label, fraction, provenance, appearance));
             if let Some(reset) = reset_countdown(reset, now) {
                 quota = quota.with_child(
                     Container::new(Self::text(
@@ -3166,7 +3173,12 @@ impl CockpitPaneView {
         // the fleet card does.
         for (label, sublimit) in [("opus", acct.heat_opus), ("sonnet", acct.heat_sonnet)] {
             if let Some(fraction) = sublimit {
-                col = col.with_child(self.heat_bar(label, fraction, acct.provenance, appearance));
+                col = col.with_child(self.heat_bar(
+                    label,
+                    fraction,
+                    acct.provenance_week,
+                    appearance,
+                ));
             }
         }
 
@@ -3298,23 +3310,23 @@ impl CockpitPaneView {
             .with_child(self.heat_bar(
                 &crate::t!("cockpit-meter-5h"),
                 acct.heat,
-                acct.provenance,
+                acct.provenance_5h,
                 appearance,
             ))
             .with_child(self.heat_bar(
                 &crate::t!("cockpit-meter-week"),
                 acct.heat_week,
-                acct.provenance,
+                acct.provenance_week,
                 appearance,
             ));
         // 7-day per-model sublimits (Max plans) when the endpoint reports them —
         // often the binding constraint, so the dashboard shows them explicitly
         // next to 5h/wk (Codex #6).
         if let Some(opus) = acct.heat_opus {
-            col = col.with_child(self.heat_bar("opus", opus, acct.provenance, appearance));
+            col = col.with_child(self.heat_bar("opus", opus, acct.provenance_week, appearance));
         }
         if let Some(sonnet) = acct.heat_sonnet {
-            col = col.with_child(self.heat_bar("sonnet", sonnet, acct.provenance, appearance));
+            col = col.with_child(self.heat_bar("sonnet", sonnet, acct.provenance_week, appearance));
         }
         col = col.with_child(matrix);
         // Live sessions (C3a), waiting-first (the spine pre-sorts): the
@@ -3733,7 +3745,7 @@ impl View for CockpitPaneView {
                             // C3b: the ~ marker needs its explanation wherever it is
                             // visible — this pane showed estimates unexplained while
                             // only the fleet dashboard carried the legend (audit P0.6).
-                            if acct.provenance == UsageProvenance::Estimate {
+                            if acct.shows_estimate() {
                                 col = col.with_child(
                                     Container::new(Self::text(
                                         crate::t!(
@@ -3867,11 +3879,7 @@ impl View for CockpitPaneView {
             }
             // C3b: explain the ~ marker whenever any bar shows an estimate
             // (real numbers stay unmarked — no chrome for the good case).
-            if snapshot
-                .accounts
-                .iter()
-                .any(|a| a.provenance == UsageProvenance::Estimate)
-            {
+            if snapshot.accounts.iter().any(AccountUsage::shows_estimate) {
                 col = col.with_child(Self::text(
                     crate::t!(
                         "cockpit-pane-provenance-legend",

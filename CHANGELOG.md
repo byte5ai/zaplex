@@ -2,6 +2,11 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.58] — 2026-11-14
+
+- KI-Konten erkennen Codex-Konten in `~/.codex-*` (je ein eigenes `CODEX_HOME`) neben `~/.codex` und `$CODEX_HOME`, lokal und auf Remote-Hosts; zwei Workspaces derselben Anmeldung bleiben zwei Konten und sind über den Plan aus dem `id_token` unterscheidbar (#764).
+- Codex-Verbrauch kommt aus den `rate_limits` der Codex-Rollouts statt aus Claude-Budgets: 5-h- und Wochenbalken zeigen den gemessenen Wert mit Reset, ein nicht gemeldetes oder abgelaufenes Fenster bleibt leer mit „—“. Routing auf das freieste Konto stellt unbekannte Fenster hinter bekannte; Remote-Inventar und `zaplex cockpit snapshot --json` melden unbekannte Fenster als unbekannt (#766).
+
 ## [1.2.57] — 2026-10-31
 
 - Repository-Hinzufügen im Worktree-Dialog verwendet die vorhandene Übersetzung; die Erklärung zur Betriebssystem-Theme-Synchronisierung bricht bei geöffneter Theme-Auswahl lesbar um (#759, #760).

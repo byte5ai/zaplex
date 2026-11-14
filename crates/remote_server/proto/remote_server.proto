@@ -1383,18 +1383,27 @@ message AgentAccountInfo {
   string plan_tier = 6;
   bool is_default = 7;
   // Remaining capacity fractions in [0, 1]. They are safe for routing only
-  // when capacity_known is true.
+  // when capacity_known is true, or per window when its capacity_*_known
+  // flag below is true.
   double capacity_5h = 8;
   double capacity_week = 9;
+  // True only when the inventory loaded and both windows are known.
   bool capacity_known = 10;
   // "loaded" or "degraded". Unknown future values must be treated degraded.
   string health = 11;
-  // "real" or "estimate"; descriptive only, never a credential.
+  // "real" or "estimate": the source of the known windows; descriptive only,
+  // never a credential. Unknown windows are reported by the flags below and
+  // by capacity_known = false.
   string usage_provenance = 12;
   // Stable identity reported by the provider for the authenticated account.
   // Optional for compatibility with older daemons and accounts whose provider
   // does not expose an identity. This is metadata, never a token or host path.
   optional string provider_account_id = 13;
+  // Per-window knowledge: false means the provider reported no usable figure
+  // for that window and its capacity value carries no meaning. Absent from
+  // older daemons; readers then apply capacity_known to both windows.
+  optional bool capacity_5h_known = 14;
+  optional bool capacity_week_known = 15;
 }
 
 message AgentAccountInventory {
