@@ -167,7 +167,7 @@ pub use init::{
     init, CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
     TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
 };
-pub use inline_banner::{NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction};
+pub use inline_banner::NotificationsErrorBannerAction;
 #[cfg(feature = "local_fs")]
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
@@ -177,14 +177,11 @@ use warpui::elements::{shimmering_text::ShimmeringTextStateHandle, ChildView};
 use warpui::fonts::Properties;
 use warpui::{ViewHandle, WeakModelHandle};
 
-use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::AIConversationId;
 
 #[cfg(any(test, feature = "integration_tests"))]
 use crate::ai::agent::UserQueryMode;
-use crate::ai::agent::{
-    AIAgentActionType, AIAgentOutputStatus, AIAgentTextSection, EntrypointType,
-    FinishedAIAgentOutput, RenderableAIError, StaticQueryType,
-};
+use crate::ai::agent::{AIAgentActionType, EntrypointType, RenderableAIError, StaticQueryType};
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
@@ -279,13 +276,9 @@ use crate::terminal::model::session::{Session, SessionId};
 use crate::terminal::model::{ObfuscateSecrets, RespectObfuscatedSecrets, SecretHandle};
 use crate::terminal::recorder::PtyRecorder;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
+use crate::terminal::session_settings::SessionSettingsChangedEvent;
 use crate::terminal::session_settings::ToolbarChipSelection;
-use crate::terminal::session_settings::{
-    NotificationsMode, NotificationsSettings, SessionSettings,
-};
-use crate::terminal::session_settings::{
-    SessionSettingsChangedEvent, DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION,
-};
+use crate::terminal::session_settings::{NotificationsMode, SessionSettings};
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionStatus,
@@ -435,13 +428,12 @@ use crate::resource_center::{
 };
 use crate::server::telemetry::{
     self, AgentModeAttachContextMethod, AgentModeEntrypoint, AgentModeRewindEntrypoint,
-    InteractionSource, LinkOpenMethod, NotificationAgentVariant, PaletteSource,
-    PromptSuggestionViewType, SecretInteraction, SlowBootstrapInfo, ToggleBlockFilterSource,
-    WorkflowTelemetryMetadata,
+    InteractionSource, LinkOpenMethod, PaletteSource, PromptSuggestionViewType, SecretInteraction,
+    SlowBootstrapInfo, ToggleBlockFilterSource, WorkflowTelemetryMetadata,
 };
 use crate::server::telemetry::{
-    CommandCorrectionAcceptedType, CommandCorrectionEvent, NotificationsTurnedOnSource,
-    SaveAsWorkflowModalSource, TelemetryEvent,
+    CommandCorrectionAcceptedType, CommandCorrectionEvent, SaveAsWorkflowModalSource,
+    TelemetryEvent,
 };
 use crate::session_management::{CommandContext, SessionNavigationPromptElements};
 use crate::terminal::alt_screen::alt_screen_element::AltScreenElement;
@@ -479,8 +471,7 @@ use crate::terminal::view::inline_banner::{
     render_agent_mode_setup_banner, render_cli_agent_restore_banner,
     AgentModeSetupSpeedbumpBannerAction, AgentModeSetupSpeedbumpBannerState,
     AliasExpansionBannerState, CLIAgentRestoreBannerAction, CLIAgentRestoreBannerState,
-    NotificationsDiscoveryBannerState, NotificationsErrorBannerState, PromptSuggestionBannerState,
-    VimModeBannerState,
+    NotificationsErrorBannerState, PromptSuggestionBannerState, VimModeBannerState,
 };
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::terminal::waterfall_gap_element::WaterfallGapElement;
@@ -557,12 +548,12 @@ use bookmarks::render_floating_block_snapshot;
 use command_corrections::rules::generic::history::History as CommandCorrectionsHistoryRule;
 use init::{INPUT_BOX_VISIBLE_KEY, TOGGLE_BLOCK_FILTER_KEYBINDING};
 use inline_banner::{
-    render_alias_expansion_banner, render_inline_notifications_discovery_banner,
-    render_inline_notifications_error_banner, render_inline_shared_session_ended_banner,
-    render_inline_shared_session_started_banner, render_inline_ssh_wrapper_banner,
-    render_open_in_warp_banner, render_shell_process_terminated_banner, render_vim_mode_banner,
-    AliasExpansionBanner, AliasExpansionBannerAction, OpenInWarpBannerState, SSHBannerAction,
-    SSHBannerState, VimModeBannerAction,
+    render_alias_expansion_banner, render_inline_notifications_error_banner,
+    render_inline_shared_session_ended_banner, render_inline_shared_session_started_banner,
+    render_inline_ssh_wrapper_banner, render_open_in_warp_banner,
+    render_shell_process_terminated_banner, render_vim_mode_banner, AliasExpansionBanner,
+    AliasExpansionBannerAction, OpenInWarpBannerState, SSHBannerAction, SSHBannerState,
+    VimModeBannerAction,
 };
 use warp_core::command::ExitCode;
 
@@ -797,34 +788,15 @@ pub struct BlockNotification {
     pub body: String,
 }
 
-/// The reason for sending/discovering the notification
+/// The terminal event that sends an opt-in OS notification. Agent events
+/// never do; they reach the user only through the ambient signal and inbox.
 #[derive(Copy, Clone, Debug, Serialize)]
 pub enum NotificationsTrigger {
     LongRunningCommand(bool /* command_succeeded */, Duration),
-    AgentTaskCompleted(bool /* task_succeeded */),
-    NeedsAttention,
-    /// TODO: Remove this once desktop notifs are unflagged.
     PasswordPrompt,
 }
 
 impl NotificationsTrigger {
-    pub fn discovery_banner_copy(&self) -> &'static str {
-        match self {
-            NotificationsTrigger::LongRunningCommand(..) => {
-                "Zaplex can notify you when long-running commands finish."
-            }
-            NotificationsTrigger::AgentTaskCompleted(..) => {
-                "Zaplex can notify you when an agent finishes responding."
-            }
-            NotificationsTrigger::NeedsAttention => {
-                "Zaplex can notify you when a command or agent needs your attention."
-            }
-            NotificationsTrigger::PasswordPrompt => {
-                "Zaplex can notify you when you're prompted to enter a password."
-            }
-        }
-    }
-
     /// Notifications have the following format
     /// - title: "'{start_of_command}...' {trigger_specific_details}"
     /// - body: "{additional_context} ...{end_of_output}"
@@ -866,18 +838,7 @@ impl NotificationsTrigger {
                     "Latest output: ".to_string(),
                 )
             }
-            AgentTaskCompleted(command_succeeded) => {
-                if *command_succeeded {
-                    (" finished".to_string(), "Latest output: ".to_string())
-                } else {
-                    (" failed".to_string(), "Error: ".to_string())
-                }
-            }
-            NotificationsTrigger::NeedsAttention => (" blocked".to_string(), "".to_string()),
-            PasswordPrompt => (
-                " is waiting for a password".to_string(),
-                "Latest output: ".to_string(),
-            ),
+            PasswordPrompt => (" is waiting for a password".to_string(), "".to_string()),
         };
 
         // Get rid of newlines in the command and output because it causes the
@@ -941,26 +902,6 @@ impl NotificationsTrigger {
     }
 }
 
-/// Closed => There is no need for a notifications discovery banner right now
-/// Triggered => There is some reason to show the discovery banner, but it's not open yet.
-///              For example, the discovery banner for password notifications won't be open
-///              till the block completes, but the trigger is non-None
-/// Open => The discovery banner is currently open
-#[derive(Default)]
-pub enum NotificationsDiscoveryBanner {
-    #[default]
-    Unset,
-    Closed,
-    Triggered(NotificationsTrigger),
-    Open {
-        trigger: NotificationsTrigger,
-        // Track the request outcome to determine messaging in the banner.
-        // None means that the request was not yet responded to.
-        request_outcome: Option<RequestPermissionsOutcome>,
-        state: NotificationsDiscoveryBannerState,
-    },
-}
-
 struct ShellProcessTerminatedBanner {
     banner_id: InlineBannerId,
     was_premature_termination: bool,
@@ -1018,7 +959,6 @@ pub type InlineBannerId = usize;
 /// Type of inline banner - determines behavior like visibility in agent view.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum InlineBannerType {
-    NotificationsDiscovery,
     NotificationsError,
     Ssh,
     PromptSuggestions,
@@ -1040,8 +980,7 @@ impl InlineBannerType {
             // Agent-related banners: visible in agent view
             Self::PromptSuggestions | Self::AgentModeSetup | Self::CLIAgentRestore => true,
             // Terminal-context banners: hidden in agent view
-            Self::NotificationsDiscovery
-            | Self::NotificationsError
+            Self::NotificationsError
             | Self::Ssh
             | Self::AliasExpansion
             | Self::SharedSessionStart
@@ -1074,8 +1013,7 @@ struct InlineBannersState {
     /// The ID for the next inline banner to be created.
     next_banner_id: InlineBannerId,
 
-    /// State for the different notification banners.
-    notifications_discovery_banner: NotificationsDiscoveryBanner,
+    /// State for the notifications error banner.
     notifications_error_banner: NotificationsErrorBanner,
 
     /// A mapping from banner ID to state information for all SSH banners in
@@ -5363,8 +5301,6 @@ impl TerminalView {
                     return;
                 }
 
-                self.maybe_send_agent_mode_desktop_notification(conversation_id, ctx);
-
                 // For conversation transcript viewers (on WASM) and shared ambient sessions,
                 // insert a conversation-ended tombstone when the conversation completes.
                 // We only insert the tombstone once per session (when the conversation finishes).
@@ -6359,91 +6295,6 @@ impl TerminalView {
                     );
                 });
             }
-        }
-    }
-
-    fn get_ai_notification_summary(
-        &self,
-        conversation: &AIConversation,
-        app: &AppContext,
-    ) -> Option<AIBlockNotificationSummary> {
-        let title = conversation.title()?.to_string();
-
-        if conversation.status().is_blocked() {
-            let reason = self
-                .ai_action_model
-                .as_ref(app)
-                .get_pending_action(app)
-                .map(|action| match &action.action {
-                    AIAgentActionType::RequestCommandOutput { command, .. } => {
-                        format!("Oz needs your permission to run `{command}`")
-                    }
-                    AIAgentActionType::ReadFiles(..) => {
-                        "Oz needs your permission to read files".to_string()
-                    }
-                    AIAgentActionType::RequestFileEdits { .. } => {
-                        "Oz needs your permission to edit a file".to_string()
-                    }
-                    AIAgentActionType::WriteToLongRunningShellCommand { .. } => {
-                        "Oz needs your permission to interact with a running shell command"
-                            .to_string()
-                    }
-                    _ => "Oz needs your confirmation to continue".to_string(),
-                })
-                .unwrap_or("Oz needs your confirmation to continue".to_string());
-            return Some(AIBlockNotificationSummary {
-                success: false,
-                title,
-                description: reason,
-            });
-        } else if conversation.status().is_in_progress() {
-            return None;
-        }
-
-        let last_exchange = conversation.root_task_exchanges().last()?;
-        match &last_exchange.output_status {
-            AIAgentOutputStatus::Finished {
-                finished_output, ..
-            } => {
-                match finished_output {
-                    FinishedAIAgentOutput::Success { output, .. } => {
-                        // Get last line of output for summary
-                        let last_line = output
-                            .get()
-                            .text_from_agent_output()
-                            .last()
-                            .and_then(|text| {
-                                text.sections.iter().find_map(|section| match section {
-                                    AIAgentTextSection::PlainText { text } => {
-                                        Some(text.text().to_string())
-                                    }
-                                    _ => None,
-                                })
-                            })
-                            .unwrap_or_default();
-
-                        Some(AIBlockNotificationSummary {
-                            success: true,
-                            title: title.clone(),
-                            description: last_line,
-                        })
-                    }
-                    FinishedAIAgentOutput::Error {
-                        error: RenderableAIError::Other { error_message, .. },
-                        ..
-                    } => Some(AIBlockNotificationSummary {
-                        success: false,
-                        title: title.clone(),
-                        description: error_message.clone(),
-                    }),
-                    _ => Some(AIBlockNotificationSummary {
-                        success: false,
-                        title,
-                        description: "An unknown error occurred".to_string(),
-                    }),
-                }
-            }
-            _ => None,
         }
     }
 
@@ -9391,58 +9242,6 @@ impl TerminalView {
         ctx.notify();
     }
 
-    /// Inserts a notifications discovery banner into the block list.
-    fn insert_notifications_discovery_banner(
-        &mut self,
-        trigger: NotificationsTrigger,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        // Don't show if the user has dismissed the banner in this session.
-        if matches!(
-            self.inline_banners_state.notifications_discovery_banner,
-            NotificationsDiscoveryBanner::Closed
-        ) {
-            return;
-        }
-
-        let banner = &self.inline_banners_state.notifications_discovery_banner;
-        // Prevent stacking multiple banners or leaving empty space.
-        if let NotificationsDiscoveryBanner::Open { state, .. } = banner {
-            self.model
-                .lock()
-                .block_list_mut()
-                .remove_inline_banner(state.banner_id);
-        }
-
-        let banner_id = self.inline_banners_state.next_banner_id();
-        self.inline_banners_state.notifications_discovery_banner =
-            NotificationsDiscoveryBanner::Open {
-                trigger,
-                state: NotificationsDiscoveryBannerState {
-                    banner_id,
-                    mouse_states: Default::default(),
-                },
-                request_outcome: None,
-            };
-        self.model
-            .lock()
-            .block_list_mut()
-            .append_inline_banner(InlineBannerItem::new(
-                banner_id,
-                InlineBannerType::NotificationsDiscovery,
-            ));
-
-        let a11y_content = AccessibilityContent::new(
-            trigger.discovery_banner_copy(),
-            "You can enable notifications through the command palette.",
-            WarpA11yRole::TextRole,
-        );
-        ctx.emit_a11y_content(a11y_content);
-
-        send_telemetry_from_ctx!(TelemetryEvent::ShowNotificationsDiscoveryBanner, ctx);
-        ctx.notify();
-    }
-
     /// Inserts a notifications error banner into the block list.
     fn insert_notifications_error_banner(&mut self, ctx: &mut ViewContext<Self>) {
         let banner_id = self.inline_banners_state.next_banner_id();
@@ -11644,6 +11443,17 @@ impl TerminalView {
                 }
 
                 if self.is_navigated_away_from_window(ctx) {
+                    // OSC 9 reaches the OS only on explicit opt-in, and never
+                    // from an agent running in this pane: agent attention is
+                    // ambient only.
+                    let opted_in = SessionSettings::as_ref(ctx).notifications.mode
+                        == NotificationsMode::Enabled;
+                    let from_agent = CLIAgentSessionsModel::as_ref(ctx)
+                        .session(self.view_id)
+                        .is_some();
+                    if !opted_in || from_agent {
+                        return;
+                    }
                     let notification_title =
                         title.clone().unwrap_or_else(|| "Notification".to_string());
                     let notification = BlockNotification {
@@ -12295,11 +12105,12 @@ impl TerminalView {
             ctx.notify();
         }
 
+        // Agent status changes never send an OS notification; the cockpit
+        // turns them into the ambient signal and the inbox.
         let CLIAgentSessionsModelEvent::StatusChanged {
             terminal_view_id,
-            agent,
             status,
-            session_context,
+            ..
         } = event
         else {
             return;
@@ -12357,39 +12168,6 @@ impl TerminalView {
                 }
             }
         }
-
-        // Desktop notifications for CLI agents use the user's notification settings
-        // directly. CLI agent notifications are explicit agent lifecycle events,
-        // so they should still notify when Zaplex is focused.
-        if matches!(status, CLIAgentSessionStatus::InProgress) {
-            return;
-        }
-
-        let title = session_context
-            .query
-            .as_deref()
-            .filter(|q| !q.is_empty())
-            .or(session_context.summary.as_deref().filter(|s| !s.is_empty()))
-            .unwrap_or(agent.command_prefix())
-            .to_owned();
-        let description = if let CLIAgentSessionStatus::Blocked { message } = status {
-            message.clone().unwrap_or_default()
-        } else {
-            session_context.response.clone().unwrap_or_default()
-        };
-
-        let trigger = if matches!(status, CLIAgentSessionStatus::Blocked { .. }) {
-            NotificationsTrigger::NeedsAttention
-        } else {
-            NotificationsTrigger::AgentTaskCompleted(true)
-        };
-        self.send_agent_desktop_notification_or_show_banner(
-            trigger,
-            title,
-            description,
-            Some(NotificationAgentVariant::CLIAgent((*agent).into())),
-            ctx,
-        );
     }
 
     /// Handles the initialization of a session within this terminal pane.
@@ -14329,23 +14107,8 @@ impl TerminalView {
             !block.serialized_block.has_failed(),
             block_duration,
         );
+        // OS notifications are an explicit opt-in; any other mode stays silent.
         match notification_settings.mode {
-            NotificationsMode::Unset => {
-                if let NotificationsDiscoveryBanner::Triggered(trigger) =
-                    self.inline_banners_state.notifications_discovery_banner
-                {
-                    // if the banner is not yet open, but there is some trigger,
-                    // we were likely waiting on the block to finish so insert it now
-                    self.insert_notifications_discovery_banner(trigger, ctx);
-                } else if self.is_navigated_away_from_window(ctx)
-                    && block_duration >= *DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION
-                {
-                    // otherwise, if the user is navigated away when the block completes
-                    // and the block ran longer than the default for long-running notifications,
-                    // insert a banner for the long running trigger
-                    self.insert_notifications_discovery_banner(long_running_trigger, ctx);
-                }
-            }
             NotificationsMode::Enabled => {
                 // If the notifications error is not open but was triggered,
                 // we should insert a banner to surface the error
@@ -14374,108 +14137,14 @@ impl TerminalView {
                     send_telemetry_from_ctx!(
                         TelemetryEvent::NotificationSent {
                             trigger: long_running_trigger,
-                            agent_variant: None,
                         },
                         ctx
                     );
                 }
             }
-            _ => {}
-        }
-    }
-
-    /// Send a desktop notification that agent mode needs attention or has finished,
-    /// otherwise insert a callout banner if notifications are unset.
-    /// May become separate triggers if we show sub-tasks in the UI.
-    /// Note that this does NOT handle agent mode toast notifications in-app.
-    /// Those are handled in the workspace view on AgentManagementEvent::ConversationNeedsAttention.
-    fn maybe_send_agent_mode_desktop_notification(
-        &mut self,
-        conversation_id: &AIConversationId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if !self.is_navigated_away_from_window(ctx) {
-            return;
-        }
-
-        let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx).conversation(conversation_id)
-        else {
-            return;
-        };
-        let status = conversation.status();
-        let should_trigger = matches!(
-            status,
-            ConversationStatus::Success
-                | ConversationStatus::Blocked { .. }
-                | ConversationStatus::Error
-        );
-        if conversation.is_entirely_passive() || !should_trigger {
-            return;
-        }
-
-        let Some(block_summary) = self.get_ai_notification_summary(conversation, ctx) else {
-            return;
-        };
-
-        let trigger = if conversation.status().is_blocked() {
-            NotificationsTrigger::NeedsAttention
-        } else {
-            NotificationsTrigger::AgentTaskCompleted(block_summary.success)
-        };
-        self.send_agent_desktop_notification_or_show_banner(
-            trigger,
-            block_summary.title,
-            block_summary.description,
-            Some(NotificationAgentVariant::Oz),
-            ctx,
-        );
-    }
-
-    /// Shared logic for sending a desktop notification (or showing a discovery banner)
-    /// for any agent status change (both Zaplex's agent and any CLI agent).
-    fn send_agent_desktop_notification_or_show_banner(
-        &mut self,
-        trigger: NotificationsTrigger,
-        title: String,
-        description: String,
-        agent_variant: Option<NotificationAgentVariant>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let notification_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
-
-        match notification_settings.mode {
-            NotificationsMode::Unset => {
-                if let NotificationsDiscoveryBanner::Triggered(trigger) =
-                    self.inline_banners_state.notifications_discovery_banner
-                {
-                    // if the banner is not yet open, but there is some trigger,
-                    // we were likely waiting on the block to finish so insert it now
-                    self.insert_notifications_discovery_banner(trigger, ctx);
-                } else {
-                    // otherwise, insert a discovery banner for the current trigger
-                    self.insert_notifications_discovery_banner(trigger, ctx);
-                }
-            }
-            NotificationsMode::Enabled => {
-                let success = matches!(trigger, NotificationsTrigger::AgentTaskCompleted(true));
-                if success {
-                    if !notification_settings.is_agent_task_completed_enabled {
-                        return;
-                    }
-                } else if !notification_settings.is_needs_attention_enabled {
-                    return;
-                }
-                let notification_content = trigger.create_notification_content(title, description);
-                ctx.emit(Event::SendNotification(notification_content));
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::NotificationSent {
-                        trigger,
-                        agent_variant,
-                    },
-                    ctx
-                );
-            }
-            _ => {}
+            NotificationsMode::Unset
+            | NotificationsMode::Dismissed
+            | NotificationsMode::Disabled => {}
         }
     }
 
@@ -19593,7 +19262,6 @@ impl TerminalView {
                     return;
                 }
                 self.focus_ai_block_if_self_focused(&block, ctx);
-                self.maybe_send_agent_mode_desktop_notification(&conversation_id, ctx);
             }
             AIBlockEvent::PassiveCodeDiffLoaded => {
                 if is_restored {
@@ -19612,7 +19280,6 @@ impl TerminalView {
                 // With MAA, it's possible for an exchange to contain many tasks.
                 // This means an AI block may "finish" before the entire AI response is complete.
                 if self.active_ai_block(ctx).is_none() {
-                    self.maybe_send_agent_mode_desktop_notification(&conversation_id, ctx);
                     if self.is_todo_popup_visible {
                         self.is_todo_popup_visible = false;
                     }
@@ -20429,9 +20096,7 @@ impl TerminalView {
         active_block.index() == block_index && active_block.is_active_and_long_running()
     }
 
-    /// If password notification settings enabled, send a notification.
-    /// Otherwise, set the banner trigger so that we show the banner the next
-    /// time a block completes.
+    /// Sends an OS notification for a password prompt if the user opted in.
     pub fn maybe_send_password_notification(
         &mut self,
         block_index: BlockIndex,
@@ -20443,38 +20108,22 @@ impl TerminalView {
 
         // The active block could have changed before we send the notification
         // so double check before sending
-        if self.is_block_active_and_running(&model, block_index) {
-            match notification_settings.mode {
-                NotificationsMode::Enabled if notification_settings.is_needs_attention_enabled => {
-                    let password_trigger = NotificationsTrigger::NeedsAttention;
-                    let notification_content = password_trigger.create_notification_content(
-                        active_block.command_to_string(),
-                        "Command is waiting for a password".to_string(),
-                    );
-                    ctx.emit(Event::SendNotification(notification_content));
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::NotificationSent {
-                            trigger: password_trigger,
-                            agent_variant: None,
-                        },
-                        ctx
-                    );
-                }
-                NotificationsMode::Unset
-                    if matches!(
-                        self.inline_banners_state.notifications_discovery_banner,
-                        NotificationsDiscoveryBanner::Unset
-                    ) =>
-                {
-                    // if the user hasn't configured notifications before and there isn't already
-                    // a banner, we should add the banner once the block completes
-                    self.inline_banners_state.notifications_discovery_banner =
-                        NotificationsDiscoveryBanner::Triggered(
-                            NotificationsTrigger::NeedsAttention,
-                        );
-                }
-                _ => {}
-            }
+        if self.is_block_active_and_running(&model, block_index)
+            && notification_settings.mode == NotificationsMode::Enabled
+            && notification_settings.is_password_prompt_enabled
+        {
+            let password_trigger = NotificationsTrigger::PasswordPrompt;
+            let notification_content = password_trigger.create_notification_content(
+                active_block.command_to_string(),
+                "Command is waiting for a password".to_string(),
+            );
+            ctx.emit(Event::SendNotification(notification_content));
+            send_telemetry_from_ctx!(
+                TelemetryEvent::NotificationSent {
+                    trigger: password_trigger,
+                },
+                ctx
+            );
         }
     }
 
@@ -22484,25 +22133,6 @@ impl TerminalView {
     ) -> HashMap<usize, Box<dyn Element>> {
         let mut inline_banners = HashMap::new();
 
-        // If the notifications discovery banner is open, render it.
-        if let NotificationsDiscoveryBanner::Open {
-            trigger,
-            request_outcome,
-            state,
-        } = &self.inline_banners_state.notifications_discovery_banner
-        {
-            inline_banners.insert(
-                state.banner_id,
-                render_inline_notifications_discovery_banner(
-                    *trigger,
-                    request_outcome.clone(),
-                    state,
-                    SessionSettings::as_ref(app).notifications.mode,
-                    appearance,
-                ),
-            );
-        }
-
         // If the notifications error banner is open, render it.
         if let NotificationsErrorBannerType::Open { state } = &self
             .inline_banners_state
@@ -23851,106 +23481,6 @@ impl TerminalView {
         ctx.notify();
     }
 
-    fn notifications_discovery_banner_action(
-        &mut self,
-        action: NotificationsDiscoveryBannerAction,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        use NotificationsDiscoveryBannerAction::*;
-
-        match action {
-            // Learn-more / Troubleshoot buttons removed (no Zaplex docs); arms kept for exhaustiveness.
-            LearnMore => {}
-            Troubleshoot => {}
-            TurnOn(trigger) => {
-                let current_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
-                let new_settings = NotificationsSettings {
-                    mode: NotificationsMode::Enabled,
-                    ..current_settings
-                };
-                SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
-                    if let Err(e) = session_settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notifications setting: {e}");
-                    }
-                });
-
-                // On Linux, immediately mark the request permission status as accepted since there's no concept of
-                // requesting desktop notification permissions.
-                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                {
-                    if let NotificationsDiscoveryBanner::Open {
-                        request_outcome, ..
-                    } = &mut self.inline_banners_state.notifications_discovery_banner
-                    {
-                        *request_outcome = Some(RequestPermissionsOutcome::Accepted);
-                    }
-                }
-
-                ctx.request_desktop_notification_permissions(move |view, outcome, ctx| {
-                    if let NotificationsDiscoveryBanner::Open {
-                        request_outcome, ..
-                    } = &mut view.inline_banners_state.notifications_discovery_banner
-                    {
-                        *request_outcome = Some(outcome.clone());
-                    }
-                    // Log unknown errors locally to help diagnose notification permission issues.
-                    if let RequestPermissionsOutcome::OtherError { error_message } = &outcome {
-                        log::error!(
-                            "Unknown error when requesting notification permissions. error_msg: {error_message}"
-                        );
-                    }
-
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::NotificationsRequestPermissionsOutcome { outcome },
-                        ctx
-                    );
-                    ctx.notify();
-                });
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::NotificationPermissionsRequested {
-                        source: NotificationsTurnedOnSource::Banner,
-                        trigger: Some(trigger),
-                    },
-                    ctx
-                );
-                ctx.notify();
-            }
-            Configure => {
-                ctx.emit(Event::OpenSettings(SettingsSection::Features));
-            }
-            Close => {
-                // Update settings to mark notifications as dismissed to prevent banner from showing again
-                let current_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
-                let new_settings = NotificationsSettings {
-                    mode: NotificationsMode::Dismissed,
-                    ..current_settings
-                };
-                SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
-                    if let Err(e) = session_settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notifications setting: {e}");
-                    }
-                });
-
-                if let NotificationsDiscoveryBanner::Open { state, .. } =
-                    &self.inline_banners_state.notifications_discovery_banner
-                {
-                    self.model
-                        .lock()
-                        .block_list_mut()
-                        .remove_inline_banner(state.banner_id);
-                }
-                self.inline_banners_state.notifications_discovery_banner =
-                    NotificationsDiscoveryBanner::Closed;
-                ctx.notify();
-            }
-        }
-
-        send_telemetry_from_ctx!(
-            TelemetryEvent::NotificationsDiscoveryBannerAction(action),
-            ctx
-        );
-    }
-
     fn ssh_banner_action(&self, action: SSHBannerAction, ctx: &mut ViewContext<Self>) {
         use SSHBannerAction::*;
 
@@ -25013,7 +24543,6 @@ impl TypedActionView for TerminalView {
             | PromptContextMenu { .. }
             | OpenInputContextMenu { .. }
             | InputContextMenuItem(_)
-            | NotificationsDiscoveryBanner(_)
             | CLIAgentRestoreBanner(_)
             | NotificationsErrorBanner(_)
             | LegacySSHBanner(_)
@@ -25353,9 +24882,6 @@ impl TypedActionView for TerminalView {
             }
             NotificationsErrorBanner(action) => {
                 self.notifications_error_banner_action(*action, ctx)
-            }
-            NotificationsDiscoveryBanner(action) => {
-                self.notifications_discovery_banner_action(*action, ctx)
             }
             CLIAgentRestoreBanner(action) => self.cli_agent_restore_banner_action(*action, ctx),
             LegacySSHBanner(action) => self.ssh_banner_action(*action, ctx),
@@ -26831,13 +26357,6 @@ impl View for TerminalView {
             content: terminal_session_content,
         })
     }
-}
-
-/// Readable summary for an AI block.
-struct AIBlockNotificationSummary {
-    title: String,
-    description: String,
-    success: bool,
 }
 
 /// A menu positioning provider for when the input is rendered within the terminal.

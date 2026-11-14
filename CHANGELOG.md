@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.60] — 2026-11-15
+
+- Aufmerksamkeit bleibt ambient: Agent-Ereignisse (fertig, wartet auf Dich) senden nie mehr eine OS-Mitteilung, sondern erscheinen nur im ambienten Signal und in der Inbox. Die Hinweisbanner zum Einschalten von Benachrichtigungen entfallen. OS-Mitteilungen für lang laufende Befehle, Passwort-Abfragen und OSC 9 gibt es nur nach ausdrücklichem Einschalten in den Einstellungen; OSC 9 aus Agent-Panes bleibt still (#768).
+
 ## [1.2.59] — 2026-11-14
 
 - Verbindungen: Namens-Tooltips von Host-, Ordner- und Session-Zeilen erscheinen nur, solange der Mauszeiger auf dem Namen liegt, und stehen oberhalb der Zeile; ein Klick oder Tastaturfokus lässt keinen Tooltip mehr stehen. Auf- und Zuklappen, Umbenennen oder Verschieben im Baum erhalten die Session-Listen unveränderter Hosts; bei erneutem Abruf bleiben bisherige Zeilen oder der bisherige Fehler stehen, und Multiplexer-Sessions nennen Fenster- und Clientzahl nur, wenn sie gemeldet sind (#765).

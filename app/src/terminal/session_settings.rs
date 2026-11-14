@@ -38,11 +38,11 @@ lazy_static! {
     rename_all = "snake_case"
 )]
 pub enum NotificationsMode {
-    // User has not been shown notifications banner before or has seen it before but decided not to dismiss it.
+    // Never configured; behaves like `Disabled` without prompting the user.
     #[schemars(description = "Notifications have not been configured yet.")]
     Unset,
 
-    // User has asked not to be shown notifications banner again.
+    // Legacy: the removed notifications banner was dismissed; behaves like `Disabled`.
     #[schemars(description = "The notifications banner has been dismissed.")]
     Dismissed,
 
@@ -83,14 +83,8 @@ pub struct NotificationsSettings {
     )]
     pub long_running_threshold: Duration,
 
-    /// Legacy. To be combined with `is_needs_attention_enabled` when desktop notifs are unflagged.
     #[schemars(description = "Whether to notify when a password prompt is detected.")]
     pub is_password_prompt_enabled: bool,
-
-    #[schemars(description = "Whether to notify when an agent task completes.")]
-    pub is_agent_task_completed_enabled: bool,
-    #[schemars(description = "Whether to notify when a session needs attention.")]
-    pub is_needs_attention_enabled: bool,
 
     #[schemars(description = "Whether to play a sound with notifications.")]
     pub play_notification_sound: bool,
@@ -103,8 +97,6 @@ impl Default for NotificationsSettings {
             is_long_running_enabled: true,
             long_running_threshold: *DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION,
             is_password_prompt_enabled: true,
-            is_agent_task_completed_enabled: true,
-            is_needs_attention_enabled: true,
             play_notification_sound: true,
         }
     }
@@ -418,3 +410,7 @@ settings::macros::implement_setting_for_enum!(
     max_table_depth: 1,
     description: "Controls the working directory used when opening new sessions.",
 );
+
+#[cfg(test)]
+#[path = "session_settings_tests.rs"]
+mod tests;

@@ -831,17 +831,15 @@ impl TerminalManager {
     }
 }
 
-/// Determine whether to show password notifications based on the user's settings.
-/// This returns true if the user hasn't set notification settings yet, or if
-/// they have explicitly enabled notifications for password prompts.
+/// Password prompts are watched only when the user explicitly enabled OS
+/// notifications for them.
 #[cfg(unix)]
 fn show_password_notifications(
     ctx: &ModelContext<Box<dyn crate::terminal::TerminalManager>>,
 ) -> bool {
     let notification_settings = &SessionSettings::as_ref(ctx).notifications;
-    matches!(notification_settings.mode, NotificationsMode::Unset)
-        || (matches!(notification_settings.mode, NotificationsMode::Enabled)
-            && notification_settings.is_needs_attention_enabled)
+    matches!(notification_settings.mode, NotificationsMode::Enabled)
+        && notification_settings.is_password_prompt_enabled
 }
 
 pub fn get_shell_starter(

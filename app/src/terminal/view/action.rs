@@ -46,8 +46,7 @@ use super::inline_banner::{
 };
 use super::{
     AliasExpansionBannerAction, ContextMenuAction, GridHighlightedLink, InputContextMenuAction,
-    NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction, RichContentLink,
-    SSHBannerAction, TerminalEditor,
+    NotificationsErrorBannerAction, RichContentLink, SSHBannerAction, TerminalEditor,
 };
 
 pub use onboarding::OnboardingIntention;
@@ -265,7 +264,6 @@ pub enum TerminalAction {
     SelectAllBlocks,
     ExpandBlockSelectionAbove,
     ExpandBlockSelectionBelow,
-    NotificationsDiscoveryBanner(NotificationsDiscoveryBannerAction),
     CLIAgentRestoreBanner(CLIAgentRestoreBannerAction),
     BookmarkBlock(BlockIndex),
     NotificationsErrorBanner(NotificationsErrorBannerAction),
@@ -522,9 +520,6 @@ impl fmt::Debug for TerminalAction {
             ControlSequence(_) => f.write_str("ControlSequence"),
             KeyDown(_) => f.write_str("KeyDown"),
             TypedCharacters(_) => f.write_str("TypedCharacters"),
-            NotificationsDiscoveryBanner(action) => {
-                write!(f, "NotificationsDiscoveryBanner({action:?})")
-            }
             CLIAgentRestoreBanner(action) => {
                 write!(f, "CLIAgentRestoreBanner({action:?})")
             }
