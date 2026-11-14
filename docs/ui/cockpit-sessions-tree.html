@@ -47,8 +47,12 @@
   .sub { display: flex; align-items: center; gap: 5px; font-size: 11.5px; line-height: 15px; color: #8b8d92; white-space: nowrap; overflow: hidden; }
   .acct { margin: 0 14px 10px; }
   .acct .prov { display: flex; gap: 6px; align-items: center; color: #ececec; font-size: 14px; }
-  .acct .prov i { width: 12px; height: 12px; border-radius: 4px; background: #6e96ff; }
-  .acct .who { font-size: 11.5px; color: #8b8d92; margin: 2px 0 6px; }
+  .acct .prov i { width: 12px; height: 12px; border-radius: 4px; background: #d78b66; flex: none; }
+  .acct .prov i.codex { background: #75b3f0; }
+  .acct .who { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: #8b8d92; margin: 2px 0 6px 18px; }
+  .acct .who span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct .who span:last-child { flex: none; }
+  .zone .btn { padding: 2px 7px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; letter-spacing: 0; color: #c9cacd; }
   .meter { display: grid; grid-template-columns: 44px 1fr 38px; gap: 6px; align-items: center; font-size: 12px; color: #8b8d92; margin-bottom: 4px; }
   .meter b { height: 6px; border-radius: 3px; background: #33353a; position: relative; }
   .meter b::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w); border-radius: 3px; background: #8b8d92; }
@@ -114,14 +118,14 @@
         <button class="tb" aria-label="Verbindungen"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="4" rx="1"/><rect x="2" y="9" width="12" height="4" rx="1"/></svg></button>
       </div>
       <div class="card">
-        <div class="zone"><span>KI-KONTEN&nbsp;&nbsp;3</span><span>Alle Konten · heute ~3,42 $</span></div>
-        <div class="acct"><div class="prov"><i></i>Claude</div><div class="who">personal@example.invalid · Max</div>
+        <div class="zone"><span>KI-KONTEN&nbsp;&nbsp;3</span><span class="btn">Alle Konten</span></div>
+        <div class="acct"><div class="prov"><i></i>Claude</div><div class="who"><span>personal@example.invalid</span><span>Max</span></div>
           <div class="meter"><span>5 h</span><b style="--w:4%"></b><span>4 %</span></div>
           <div class="meter"><span>Woche</span><b style="--w:12%"></b><span>12 %</span></div></div>
-        <div class="acct"><div class="prov"><i></i>Claude</div><div class="who">team@example.invalid · Team</div>
+        <div class="acct"><div class="prov"><i></i>Claude</div><div class="who"><span>team@example.invalid</span><span>Team</span></div>
           <div class="meter"><span>5 h</span><b style="--w:44%"></b><span>44 %</span></div>
           <div class="meter"><span>Woche</span><b style="--w:62%"></b><span>62 %</span></div></div>
-        <div class="acct"><div class="prov"><i></i>Codex</div><div class="who">team@example.invalid · Team</div>
+        <div class="acct"><div class="prov"><i class="codex"></i>Codex</div><div class="who"><span>team@example.invalid</span><span>Team</span></div>
           <div class="meter"><span>5 h</span><b style="--w:26%"></b><span>26 %</span></div>
           <div class="meter"><span>Woche</span><b style="--w:39%"></b><span>39 %</span></div></div>
       </div>

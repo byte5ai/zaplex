@@ -13,7 +13,7 @@ use warpui::elements::{
     ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, DispatchEventResult, Element, EventHandler,
     Fill as ElementFill, Flex, Hoverable, MainAxisSize, MouseStateHandle, ParentElement, Radius,
-    Rect, ScrollbarWidth, Shrinkable, Text,
+    ScrollbarWidth, Shrinkable, Text,
 };
 use warpui::{
     accessibility::{AccessibilityContent, WarpA11yRole},
@@ -21,19 +21,44 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 use zaplex_cockpit::{
-    cost_figure, heat_bar_fraction, heat_pct_label_with_provenance, AccountUsage, UsageProvenance,
+    heat_bar_fraction, heat_pct_label_with_provenance, AccountUsage, ScanHealth, UsageProvenance,
 };
 
 use crate::cockpit::account_identity;
-use crate::cockpit::localize::{cost_text, unpriced_models_text};
 use crate::cockpit::model::{CockpitEvent, CockpitModel};
 use crate::cockpit::panel::{account_count_presentation, CockpitPanel, CARD_PADDING, CARD_SPACING};
 use crate::cockpit::style::{
-    utilisation_coloru, utilisation_track, zone_card, BLOCK_RADIUS, METER_LABEL_WIDTH,
+    account_identity_subline, provider_mark, utilisation_coloru, utilisation_track, zone_card,
+    BLOCK_RADIUS, METER_LABEL_WIDTH,
 };
-use crate::view_components::action_button::{ActionButton, ButtonSize, PaneHeaderTheme};
+use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 
 const HEAT_BAR_HEIGHT: f32 = 6.0;
+/// Size of the provider mark leading an account card's headline.
+const PROVIDER_MARK_SIZE: f32 = 12.0;
+/// Gap between the provider mark and the provider name.
+const PROVIDER_MARK_GAP: f32 = 6.0;
+
+/// What the „KI-KONTEN" header shows: the account count and the label and
+/// tooltip of its „Alle Konten" control. Spend lives in the fleet pane that
+/// control opens, not in the header.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct AccountsHeaderPresentation {
+    pub count: Option<usize>,
+    pub fleet_label: String,
+    pub fleet_tooltip: String,
+}
+
+pub(super) fn accounts_header_presentation(
+    health: &ScanHealth,
+    account_count: usize,
+) -> AccountsHeaderPresentation {
+    AccountsHeaderPresentation {
+        count: account_count_presentation(health, account_count),
+        fleet_label: crate::t!("cockpit-header-all-accounts"),
+        fleet_tooltip: crate::t!("cockpit-header-all-accounts-tooltip"),
+    }
+}
 
 /// Events the accounts view emits toward the workspace (via the left panel).
 pub enum CockpitAccountsPanelEvent {
@@ -46,16 +71,16 @@ pub enum CockpitAccountsPanelEvent {
     OpenCockpitPane(Option<String>),
 }
 
-enum FleetTotalButtonEvent {
+enum FleetOverviewButtonEvent {
     Activated,
 }
 
 #[derive(Clone, Debug)]
-enum FleetTotalButtonAction {
+enum FleetOverviewButtonAction {
     Activate,
 }
 
-fn is_fleet_total_activation_keystroke(keystroke: &warpui::keymap::Keystroke) -> bool {
+fn is_fleet_overview_activation_keystroke(keystroke: &warpui::keymap::Keystroke) -> bool {
     !keystroke.cmd
         && !keystroke.ctrl
         && !keystroke.alt
@@ -64,19 +89,22 @@ fn is_fleet_total_activation_keystroke(keystroke: &warpui::keymap::Keystroke) ->
         && matches!(keystroke.key.as_str(), "enter" | "numpadenter" | " ")
 }
 
-struct FleetTotalButton {
+/// The „Alle Konten" control in the „KI-KONTEN" header: a small bordered
+/// button that opens the fleet pane (spec v3 §S1), focusable and activated by
+/// Enter or Space like any button.
+struct FleetOverviewButton {
     button: ViewHandle<ActionButton>,
     label: String,
     #[cfg(test)]
     activation_count: usize,
 }
 
-impl FleetTotalButton {
+impl FleetOverviewButton {
     fn new(ctx: &mut ViewContext<Self>) -> Self {
         let button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("", PaneHeaderTheme)
+            ActionButton::new("", SecondaryTheme)
                 .with_size(ButtonSize::XSmall)
-                .on_click(|ctx| ctx.dispatch_typed_action(FleetTotalButtonAction::Activate))
+                .on_click(|ctx| ctx.dispatch_typed_action(FleetOverviewButtonAction::Activate))
         });
         Self {
             button,
@@ -86,23 +114,23 @@ impl FleetTotalButton {
         }
     }
 
-    fn set_label(&mut self, label: String, tooltip: Option<String>, ctx: &mut ViewContext<Self>) {
+    fn set_label(&mut self, label: String, tooltip: String, ctx: &mut ViewContext<Self>) {
         self.label.clone_from(&label);
         self.button.update(ctx, |button, ctx| {
             button.set_label(label, ctx);
-            button.set_tooltip(tooltip, ctx);
+            button.set_tooltip(Some(tooltip), ctx);
         });
         ctx.notify();
     }
 }
 
-impl Entity for FleetTotalButton {
-    type Event = FleetTotalButtonEvent;
+impl Entity for FleetOverviewButton {
+    type Event = FleetOverviewButtonEvent;
 }
 
-impl View for FleetTotalButton {
+impl View for FleetOverviewButton {
     fn ui_name() -> &'static str {
-        "FleetTotalButton"
+        "FleetOverviewButton"
     }
 
     fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {
@@ -129,8 +157,8 @@ impl View for FleetTotalButton {
     fn render(&self, _app: &AppContext) -> Box<dyn Element> {
         EventHandler::new(ChildView::new(&self.button).finish())
             .on_keydown(|ctx, _, keystroke| {
-                if is_fleet_total_activation_keystroke(keystroke) {
-                    ctx.dispatch_typed_action(FleetTotalButtonAction::Activate);
+                if is_fleet_overview_activation_keystroke(keystroke) {
+                    ctx.dispatch_typed_action(FleetOverviewButtonAction::Activate);
                     DispatchEventResult::StopPropagation
                 } else {
                     DispatchEventResult::PropagateToParent
@@ -140,18 +168,18 @@ impl View for FleetTotalButton {
     }
 }
 
-impl TypedActionView for FleetTotalButton {
-    type Action = FleetTotalButtonAction;
+impl TypedActionView for FleetOverviewButton {
+    type Action = FleetOverviewButtonAction;
 
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            FleetTotalButtonAction::Activate => {
+            FleetOverviewButtonAction::Activate => {
                 #[cfg(test)]
                 {
                     self.activation_count += 1;
                 }
                 ctx.focus_self();
-                ctx.emit(FleetTotalButtonEvent::Activated);
+                ctx.emit(FleetOverviewButtonEvent::Activated);
             }
         }
     }
@@ -162,9 +190,12 @@ pub struct CockpitAccountsPanel {
     /// Hover state per account card (key = account `key`). The whole card is a
     /// click target that opens the roomy dashboard pane.
     card_states: HashMap<String, MouseStateHandle>,
-    /// Semantic button for the „KI-KONTEN" header's fleet total — the cross-account
-    /// spend figure doubles as the entry point to the fleet pane (spec v3 §S1).
-    fleet_total_button: ViewHandle<FleetTotalButton>,
+    /// Tooltip state per card's account slot (key = account `key`), which names
+    /// the email behind an alias.
+    identity_tooltip_states: HashMap<String, MouseStateHandle>,
+    /// The „Alle Konten" control in the „KI-KONTEN" header, the entry point to
+    /// the fleet pane with the cross-account spend (spec v3 §S1).
+    fleet_overview_button: ViewHandle<FleetOverviewButton>,
     /// Hover/click state for the "try again" retry (the loading / scan-failed /
     /// empty placeholder). A **stable** handle: `Hoverable` tracks mouse-down in
     /// it, so a fresh one each render would drop the click.
@@ -173,9 +204,9 @@ pub struct CockpitAccountsPanel {
 
 impl CockpitAccountsPanel {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
-        let fleet_total_button = ctx.add_typed_action_view(FleetTotalButton::new);
-        ctx.subscribe_to_view(&fleet_total_button, |_, _, event, ctx| match event {
-            FleetTotalButtonEvent::Activated => {
+        let fleet_overview_button = ctx.add_typed_action_view(FleetOverviewButton::new);
+        ctx.subscribe_to_view(&fleet_overview_button, |_, _, event, ctx| match event {
+            FleetOverviewButtonEvent::Activated => {
                 ctx.dispatch_typed_action(&CockpitAccountsPanelAction::OpenDashboardPane)
             }
         });
@@ -184,39 +215,22 @@ impl CockpitAccountsPanel {
         ctx.subscribe_to_model(&CockpitModel::handle(ctx), |me, _, event, ctx| {
             if matches!(event, CockpitEvent::Updated) {
                 me.sync_card_states(ctx);
-                me.sync_fleet_total_button(ctx);
                 ctx.notify();
             }
+        });
+        let header = accounts_header_presentation(&ScanHealth::Pending, 0);
+        fleet_overview_button.update(ctx, |button, ctx| {
+            button.set_label(header.fleet_label, header.fleet_tooltip, ctx)
         });
         let mut me = Self {
             scroll_state: ClippedScrollStateHandle::default(),
             card_states: HashMap::new(),
-            fleet_total_button,
+            identity_tooltip_states: HashMap::new(),
+            fleet_overview_button,
             rescan_btn: MouseStateHandle::default(),
         };
         me.sync_card_states(ctx);
-        me.sync_fleet_total_button(ctx);
         me
-    }
-
-    /// The fleet total sums every account's priced spend; an unpriced share is
-    /// named beside it ("teilweise ohne Preis") with its models in the tooltip,
-    /// instead of voiding the whole figure (#515).
-    fn sync_fleet_total_button(&self, ctx: &mut ViewContext<Self>) {
-        let fleet_today = cost_figure(
-            CockpitModel::as_ref(ctx)
-                .snapshot()
-                .accounts
-                .iter()
-                .map(|account| &account.today),
-        );
-        let label = crate::t!(
-            "cockpit-header-today-total",
-            today = cost_text(&fleet_today)
-        );
-        let tooltip = unpriced_models_text(&fleet_today);
-        self.fleet_total_button
-            .update(ctx, |button, ctx| button.set_label(label, tooltip, ctx));
     }
 
     /// Card hover handles, keyed by account `key` (one stable handle per card
@@ -229,8 +243,11 @@ impl CockpitAccountsPanel {
             .map(|a| a.account.key.clone())
             .collect();
         self.card_states.retain(|k, _| acct_keys.contains(k));
+        self.identity_tooltip_states
+            .retain(|k, _| acct_keys.contains(k));
         for key in acct_keys {
-            self.card_states.entry(key).or_default();
+            self.card_states.entry(key.clone()).or_default();
+            self.identity_tooltip_states.entry(key).or_default();
         }
     }
 
@@ -344,45 +361,55 @@ impl CockpitAccountsPanel {
         let muted = theme.sub_text_color(theme.surface_1()).into_solid();
         let identity = account_identity(&acct.account);
 
-        // Provider is the stable headline on every account surface. The themed
-        // accent mark is supplementary; the provider name remains visible.
+        // Provider is the stable headline on every account surface, led by the
+        // provider's own mark (icon in its theme color) so Claude and Codex
+        // cards differ at a glance.
         let header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_spacing(6.0)
-            .with_child(
-                ConstrainedBox::new(
-                    Rect::new()
-                        .with_background_color(theme.accent().into_solid())
-                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.0)))
-                        .finish(),
-                )
-                .with_width(12.0)
-                .with_height(12.0)
-                .finish(),
-            )
+            .with_spacing(PROVIDER_MARK_GAP)
+            .with_child(provider_mark(
+                identity.provider,
+                PROVIDER_MARK_SIZE,
+                appearance,
+            ))
             .with_child(
                 Shrinkable::new(
                     1.0,
-                    CockpitPanel::text(identity.provider.to_string(), family, provider_size, main),
+                    CockpitPanel::text(
+                        identity.provider_label.to_string(),
+                        family,
+                        provider_size,
+                        main,
+                    ),
                 )
                 .finish(),
             )
             .finish();
 
+        let tooltip_state = self
+            .identity_tooltip_states
+            .get(&acct.account.key)
+            .cloned()
+            .unwrap_or_default();
+        // The subline starts under the provider name, not under the mark.
+        let subline = Container::new(account_identity_subline(
+            identity.account,
+            identity.plan,
+            identity.email_hint,
+            tooltip_state,
+            identity_size,
+            muted,
+            appearance,
+        ))
+        .with_padding_left(PROVIDER_MARK_SIZE + PROVIDER_MARK_GAP)
+        .finish();
         let mut col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
-            .with_child(header);
-        if !identity.subline.is_empty() {
-            col = col.with_child(CockpitPanel::identity_text(
-                identity.subline,
-                family,
-                identity_size,
-                muted,
-            ));
-        }
+            .with_child(header)
+            .with_child(subline);
         col = col
             .with_child(self.heat_bar(
                 &crate::t!("cockpit-meter-5h"),
@@ -428,20 +455,21 @@ impl CockpitAccountsPanel {
         .finish()
     }
 
-    /// The „KI-KONTEN" header: label + count, plus the **fleet total** — the one
-    /// cross-account number (spec v3 §S1).
-    ///
-    /// The Maximize icon is gone, but the *fleet view it opened* is not: an
-    /// account pane can only ever show its own account, so if this number and its
-    /// entry point both vanished, cross-account spend would have no home at all —
-    /// a regression, not a decluttering. The total therefore stays visible and
-    /// **is itself the affordance**: clicking it opens the fleet pane. One
-    /// element, two jobs, no extra chrome.
-    fn render_header(&self, snapshot_len: usize, appearance: &Appearance) -> Box<dyn Element> {
+    /// The „KI-KONTEN" header: label, account count and the „Alle Konten"
+    /// control that opens the fleet pane (spec v3 §S1). Cross-account spend
+    /// (today, 5 h, week) lives in that pane's summary rather than in the
+    /// header, so the header stays one quiet line like the mockup.
+    fn render_header(
+        &self,
+        health: &ScanHealth,
+        account_count: usize,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let presentation = accounts_header_presentation(health, account_count);
         CockpitPanel::render_zone_header(
             crate::t!("cockpit-zone-accounts").to_string(),
-            Some(snapshot_len),
-            Some(ChildView::new(&self.fleet_total_button).finish()),
+            presentation.count,
+            Some(ChildView::new(&self.fleet_overview_button).finish()),
             appearance.theme().surface_1(),
             appearance,
         )
@@ -456,7 +484,7 @@ impl View for CockpitAccountsPanel {
     fn on_focus(&mut self, focus_ctx: &FocusContext, ctx: &mut ViewContext<Self>) {
         if focus_ctx.is_self_focused() && !CockpitModel::as_ref(ctx).snapshot().accounts.is_empty()
         {
-            ctx.focus(&self.fleet_total_button);
+            ctx.focus(&self.fleet_overview_button);
         }
     }
 
@@ -519,9 +547,13 @@ impl View for CockpitAccountsPanel {
                 .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
                 .with_main_axis_size(MainAxisSize::Min)
                 .with_child(
-                    Container::new(self.render_header(snapshot.accounts.len(), appearance))
-                        .with_margin_bottom(CARD_SPACING * 2.0)
-                        .finish(),
+                    Container::new(self.render_header(
+                        &snapshot.health,
+                        snapshot.accounts.len(),
+                        appearance,
+                    ))
+                    .with_margin_bottom(CARD_SPACING * 2.0)
+                    .finish(),
                 );
             for acct in &snapshot.accounts {
                 let is_selected = selected.as_deref() == Some(acct.account.key.as_str());

@@ -165,26 +165,43 @@ fn default_dir_launch_effort_resolves_when_recorded_at_resolved_cwd() {
     assert_eq!(session_effort(&s, true, None).as_deref(), Some("~high"));
 }
 
-#[test]
-fn account_identity_uses_provider_headline_and_deduplicates_email() {
-    let account = Account {
-        provider: Provider::Claude,
-        key: "claude:test".into(),
-        config_dir: "/tmp/test-account".into(),
-        label: "account@example.invalid".into(),
+fn identity_account(
+    provider: Provider,
+    label: &str,
+    email: Option<&str>,
+    plan_tier: Option<&str>,
+) -> Account {
+    Account {
+        provider,
+        key: "test:identity".into(),
+        config_dir: "/tmp/identity-account".into(),
+        label: label.into(),
         provider_account_id: None,
-        email: Some("account@example.invalid".into()),
+        email: email.map(str::to_string),
         org: None,
         role: None,
-        plan_tier: Some("Max".into()),
+        plan_tier: plan_tier.map(str::to_string),
         is_default: false,
-    };
+    }
+}
+
+#[test]
+fn account_identity_keeps_account_and_plan_in_separate_slots() {
+    let account = identity_account(
+        Provider::Claude,
+        "account@example.invalid",
+        Some("account@example.invalid"),
+        Some("Max"),
+    );
 
     assert_eq!(
         account_identity(&account),
         AccountIdentityPresentation {
-            provider: "Claude",
-            subline: "account@example.invalid · Max".into(),
+            provider: Provider::Claude,
+            provider_label: "Claude",
+            account: "account@example.invalid".into(),
+            plan: "Max".into(),
+            email_hint: None,
         }
     );
 }
@@ -197,62 +214,61 @@ fn provider_is_visible_and_account_identity_is_not_duplicated() {
     ];
 
     for (provider, provider_label, email) in cases {
-        let account = Account {
+        let presentation = account_identity(&identity_account(
             provider,
-            key: format!("{}:acceptance", provider_label.to_lowercase()),
-            config_dir: "/tmp/acceptance-account".into(),
-            label: email.into(),
-            provider_account_id: None,
-            email: Some(email.into()),
-            org: None,
-            role: None,
-            plan_tier: Some("Max".into()),
-            is_default: false,
-        };
-
-        let presentation = account_identity(&account);
-        assert_eq!(presentation.provider, provider_label);
-        assert_eq!(presentation.subline.matches(email).count(), 1);
-        assert_eq!(presentation.subline, format!("{email} · Max"));
+            email,
+            Some(email),
+            Some("Team"),
+        ));
+        assert_eq!(presentation.provider, provider);
+        assert_eq!(presentation.provider_label, provider_label);
+        assert_eq!(presentation.account, email);
+        assert!(!presentation.plan.contains(email));
+        assert!(!presentation.account.contains("Team"));
+        assert_eq!(presentation.email_hint, None);
     }
 }
 
 #[test]
-fn account_identity_falls_back_to_email_when_label_is_empty() {
-    let account = Account {
-        provider: Provider::Codex,
-        key: "codex:test".into(),
-        config_dir: "/tmp/test-account".into(),
-        label: String::new(),
-        provider_account_id: None,
-        email: Some("account@example.invalid".into()),
-        org: None,
-        role: None,
-        plan_tier: None,
-        is_default: false,
-    };
+fn unknown_plan_renders_as_dash_instead_of_disappearing() {
+    for plan_tier in [None, Some(""), Some("   ")] {
+        let presentation = account_identity(&identity_account(
+            Provider::Codex,
+            "",
+            Some("account@example.invalid"),
+            plan_tier,
+        ));
+        assert_eq!(presentation.account, "account@example.invalid");
+        assert_eq!(presentation.plan, "—", "{plan_tier:?}");
+    }
+}
 
-    assert_eq!(account_identity(&account).provider, "Codex");
+#[test]
+fn alias_replaces_email_in_the_account_slot_but_keeps_it_as_hint() {
+    let presentation = account_identity(&identity_account(
+        Provider::Claude,
+        "Work",
+        Some("work@example.invalid"),
+        Some("Team"),
+    ));
+
+    assert_eq!(presentation.account, "Work");
+    assert_eq!(presentation.plan, "Team");
     assert_eq!(
-        account_identity(&account).subline,
-        "account@example.invalid"
+        presentation.email_hint.as_deref(),
+        Some("work@example.invalid")
     );
 }
 
 #[test]
 fn account_identity_keeps_plan_when_alias_matches_plan_name() {
-    let account = Account {
-        provider: Provider::Claude,
-        key: "claude:plan-alias".into(),
-        config_dir: "/tmp/plan-alias".into(),
-        label: "Max".into(),
-        provider_account_id: None,
-        email: Some("account@example.invalid".into()),
-        org: None,
-        role: None,
-        plan_tier: Some("Max".into()),
-        is_default: false,
-    };
+    let presentation = account_identity(&identity_account(
+        Provider::Claude,
+        "Max",
+        Some("account@example.invalid"),
+        Some("Max"),
+    ));
 
-    assert_eq!(account_identity(&account).subline, "Max · Max");
+    assert_eq!(presentation.account, "Max");
+    assert_eq!(presentation.plan, "Max");
 }

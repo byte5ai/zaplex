@@ -83,7 +83,8 @@ cockpit-card-reset-week = Wo ↻ { $reset }
 cockpit-card-reset-both = 5h ↻ { $reset5h } · Wo ↻ { $resetwk }
 cockpit-conductor-needs-me-badge = ● { $count }
 cockpit-header-cost-summary = heute { $today } · { $week } Wo
-cockpit-header-today-total = Alle Konten · heute { $today }
+cockpit-header-all-accounts = Alle Konten
+cockpit-header-all-accounts-tooltip = Gesamtübersicht aller Konten mit Kosten als zusätzliche Pane öffnen
 # List-price cost estimates. Fluent does not localize decimal separators, so the
 # whole dollars and the cents are placed separately; the no-break space keeps
 # amount and currency on one line.
@@ -2042,6 +2043,7 @@ settings-ai-live-agent-status-off = Aus
 settings-ai-live-agent-status-off-detail = Der Terminal-Basisstatus bleibt verfügbar.
 settings-ai-live-agent-status-review = Überprüfung nötig
 settings-ai-live-agent-status-review-detail = Hook ist eingerichtet; bestätige ihn einmal in Codex unter /hooks.
+settings-ai-live-agent-status-partial-detail = Hook fehlt in { $missing } von { $total } Konten; Einschalten richtet ihn in allen ein.
 settings-ai-live-agent-status-installed = Eingerichtet
 settings-ai-live-agent-status-installed-unverified-detail = Hook ist eingerichtet; Statusaktivität wurde noch nicht bestätigt.
 settings-ai-live-agent-status-installed-detail = Native Status-Hooks sind aktiv.

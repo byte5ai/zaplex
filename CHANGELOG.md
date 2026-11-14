@@ -2,6 +2,11 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.62] — 2026-11-15
+
+- KI-Konten folgen dem freigegebenen Entwurf: Jede Karte beginnt mit einer Provider-Marke (Provider-Icon in einer Theme-Farbe je Provider, Claude und Codex unterscheidbar), darunter stehen Konto links und Plan rechts als getrennte Felder; ein unbekannter Plan erscheint als „—“, Claude-Pläne lesbar („Team“ statt „team“). Ein vergebener Alias ersetzt die E-Mail in der Karte, die E-Mail bleibt als Tooltip sichtbar. Der Kopf zeigt die Kontenzahl und „Alle Konten“ als eigene Schaltfläche; die Kosten heute, 5 h und Woche stehen gesammelt in der Gesamtübersicht, dort jetzt auch mit den Modellen ohne Listenpreis. Konto-Pane und Gesamtübersicht verwenden dieselbe Marke und Aufteilung (#767).
+- Codex-Hooks werden in jedes erkannte Codex-Konto (`~/.codex`, `~/.codex-*`, `$CODEX_HOME`) installiert und aus jedem entfernt; fehlen sie in einzelnen Konten, zeigen die Einstellungen „Überprüfung nötig“ mit der Zahl der betroffenen Konten, und Einschalten richtet sie überall ein (#772).
+
 ## [1.2.61] — 2026-11-15
 
 - Sicherheitswarnungen der Abhängigkeitsprüfung durch Updates behoben: Diesel 2.4.0 mit `libsqlite3-sys` 0.40.0 bündelt SQLite 3.54.1 (RUSTSEC-2026-0459); Candle 0.11.1 nutzt `zip` 9.5.1 statt 7.2.0 (RUSTSEC-2026-0429), die drei damit gegenstandslosen zip-Ausnahmen entfallen. Zurückgezogene Versionen von `async-executor`, `clipboard-win`, `crypto-bigint` und `spinning` sind durch kompatible Patch-Versionen ersetzt.

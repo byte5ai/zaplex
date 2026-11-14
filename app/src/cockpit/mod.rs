@@ -64,41 +64,53 @@ pub(crate) fn agent_of(provider: Provider) -> CLIAgent {
     }
 }
 
+/// Placeholder for an unknown plan, so the plan slot never collapses and a
+/// missing plan reads as unknown rather than as absent.
+pub(crate) const UNKNOWN_PLAN: &str = "—";
+
 /// One identity hierarchy shared by compact and large Cockpit account cards.
-/// Provider is always explicit; account and plan occupy one quieter subordinate
-/// line, so an email used as the label is never rendered twice.
+/// Provider is the headline; account and plan are two separate slots of one
+/// quieter subordinate line, so an email used as the label is never rendered
+/// twice and provider and plan never share a field.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AccountIdentityPresentation {
-    pub provider: &'static str,
-    pub subline: String,
+    pub provider: Provider,
+    pub provider_label: &'static str,
+    /// The user's alias when set, else the email (or the discovery label).
+    pub account: String,
+    /// The provider's plan name, or [`UNKNOWN_PLAN`].
+    pub plan: String,
+    /// The email behind an alias, for the account slot's tooltip; `None` when
+    /// the account slot already shows it.
+    pub email_hint: Option<String>,
 }
 
 pub(crate) fn account_identity(account: &Account) -> AccountIdentityPresentation {
-    let provider = match account.provider {
-        Provider::Claude => "Claude",
-        Provider::Codex => "Codex",
-        Provider::Antigravity => "Antigravity",
-    };
-    let account_value = if account.label.trim().is_empty() {
-        account.email.as_deref().unwrap_or_default()
+    let email = account
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|email| !email.is_empty());
+    let label = account.label.trim();
+    let account_value = if label.is_empty() {
+        email.unwrap_or_default()
     } else {
-        account.label.as_str()
+        label
     };
-    let mut parts = Vec::new();
-    if !account_value.is_empty() {
-        parts.push(account_value.to_string());
-    }
-    if let Some(plan) = account
+    let plan = account
         .plan_tier
         .as_deref()
         .map(str::trim)
         .filter(|plan| !plan.is_empty())
-    {
-        parts.push(plan.to_string());
-    }
+        .unwrap_or(UNKNOWN_PLAN);
     AccountIdentityPresentation {
-        provider,
-        subline: parts.join(" · "),
+        provider: account.provider,
+        provider_label: style::provider_label(account.provider),
+        account: account_value.to_string(),
+        plan: plan.to_string(),
+        email_hint: email
+            .filter(|email| *email != account_value)
+            .map(str::to_string),
     }
 }
 

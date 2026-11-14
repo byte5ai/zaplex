@@ -7,12 +7,12 @@ use warp_cli::control::{ControlAuth, ControlRequest, ControlVerb};
 
 use super::{
     antigravity_title_backup_path, has_managed_antigravity_title, has_managed_deepseek_hooks,
-    has_managed_hooks, hook_paths, is_managed_hook_handler, normalize_antigravity_status_input,
-    normalize_deepseek_hook_environment, normalize_hook_input, refresh_antigravity_title,
-    refresh_codex_hooks, refresh_deepseek_hooks, refresh_deepseek_hooks_with_activation,
-    refresh_hooks, remove_antigravity_title, remove_codex_hooks, remove_deepseek_hooks,
-    remove_hooks, resolve_worker_agent, supports_agent, HookConfigChange,
-    DEEPSEEK_MANAGED_HOOK_EVENTS, MANAGED_BY_MARKER,
+    has_managed_hooks, hook_coverage, hook_paths, is_managed_hook_handler,
+    normalize_antigravity_status_input, normalize_deepseek_hook_environment, normalize_hook_input,
+    refresh_antigravity_title, refresh_codex_hooks, refresh_deepseek_hooks,
+    refresh_deepseek_hooks_with_activation, refresh_hooks, remove_antigravity_title,
+    remove_codex_hooks, remove_deepseek_hooks, remove_hooks, resolve_worker_agent, supports_agent,
+    HookConfigChange, HookCoverage, DEEPSEEK_MANAGED_HOOK_EVENTS, MANAGED_BY_MARKER,
 };
 use crate::terminal::CLIAgent;
 
@@ -714,7 +714,10 @@ fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
             None,
             None,
         ),
-        vec![Path::new("/custom/codex/hooks.json").to_path_buf()]
+        vec![
+            Path::new("/custom/codex/hooks.json").to_path_buf(),
+            home.join(".codex/hooks.json"),
+        ]
     );
     assert_eq!(
         hook_paths(
@@ -784,6 +787,114 @@ fn hook_paths_respect_agent_homes_and_include_claude_accounts() {
         ),
         vec![home.join(".deepseek/config.toml")]
     );
+}
+
+fn write_codex_subscription(root: &Path, account_id: &str) {
+    fs::create_dir_all(root).unwrap();
+    fs::write(
+        root.join("auth.json"),
+        format!(r#"{{"auth_mode":"chatgpt","tokens":{{"account_id":"{account_id}"}}}}"#),
+    )
+    .unwrap();
+}
+
+fn codex_hook_paths(home: &Path, codex_home: Option<&Path>) -> Vec<std::path::PathBuf> {
+    hook_paths(
+        warp_cli::CliAgentHookAgent::Codex,
+        home,
+        None,
+        None,
+        codex_home.map(Path::as_os_str),
+        None,
+        None,
+        None,
+    )
+}
+
+#[test]
+fn codex_hook_paths_cover_every_discovered_account_and_codex_home_once() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().join("home");
+    write_codex_subscription(&home.join(".codex"), "default-account");
+    write_codex_subscription(&home.join(".codex-work"), "work-account");
+    write_codex_subscription(&home.join(".codex-high5"), "high5-account");
+    // Not accounts: an API-key root, a backup copy and an empty directory.
+    fs::create_dir_all(home.join(".codex-apikey")).unwrap();
+    fs::write(
+        home.join(".codex-apikey/auth.json"),
+        r#"{"auth_mode":"apikey"}"#,
+    )
+    .unwrap();
+    write_codex_subscription(&home.join(".codex-backup"), "backup-account");
+    fs::create_dir_all(home.join(".codex-empty")).unwrap();
+    let pinned = temp.path().join("elsewhere/codex-pinned");
+    write_codex_subscription(&pinned, "pinned-account");
+    let home = home.canonicalize().unwrap();
+    let pinned = pinned.canonicalize().unwrap();
+
+    let mut expected = vec![
+        home.join(".codex/hooks.json"),
+        home.join(".codex-high5/hooks.json"),
+        home.join(".codex-work/hooks.json"),
+        pinned.join("hooks.json"),
+    ];
+    expected.sort();
+    assert_eq!(codex_hook_paths(&home, Some(&pinned)), expected);
+
+    // `CODEX_HOME` naming a sibling account adds no second hook file for it.
+    assert_eq!(
+        codex_hook_paths(&home, Some(&home.join(".codex-work"))),
+        vec![
+            home.join(".codex/hooks.json"),
+            home.join(".codex-high5/hooks.json"),
+            home.join(".codex-work/hooks.json"),
+        ]
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_hook_paths_resolve_a_symlinked_account_to_one_file() {
+    let temp = TempDir::new().unwrap();
+    let home = temp.path().canonicalize().unwrap();
+    write_codex_subscription(&home.join(".codex-work"), "work-account");
+    std::os::unix::fs::symlink(home.join(".codex-work"), home.join(".codex-alias")).unwrap();
+
+    assert_eq!(
+        codex_hook_paths(&home, Some(&home.join(".codex-alias"))),
+        vec![
+            home.join(".codex/hooks.json"),
+            home.join(".codex-work/hooks.json"),
+        ]
+    );
+}
+
+#[test]
+fn hook_coverage_reports_accounts_without_hooks() {
+    let temp = TempDir::new().unwrap();
+    let first = temp.path().join("first/hooks.json");
+    let second = temp.path().join("second/hooks.json");
+    let paths = vec![first.clone(), second.clone()];
+    let executable = Path::new("/Applications/Zaplex.app/Contents/MacOS/zaplex");
+    let codex = warp_cli::CliAgentHookAgent::Codex;
+
+    assert_eq!(hook_coverage(&paths, codex).unwrap(), HookCoverage::Off);
+    refresh_codex_hooks(&first, executable).unwrap();
+    assert_eq!(
+        hook_coverage(&paths, codex).unwrap(),
+        HookCoverage::Partial {
+            missing: 1,
+            total: 2
+        }
+    );
+    refresh_codex_hooks(&second, executable).unwrap();
+    assert_eq!(
+        hook_coverage(&paths, codex).unwrap(),
+        HookCoverage::Installed
+    );
+    remove_codex_hooks(&first).unwrap();
+    remove_codex_hooks(&second).unwrap();
+    assert_eq!(hook_coverage(&paths, codex).unwrap(), HookCoverage::Off);
 }
 
 #[test]

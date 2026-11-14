@@ -18,6 +18,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use walkdir::WalkDir;
 
+use crate::format::title_case_plan;
 use crate::transcript::{file_fingerprint, FileFingerprint};
 use crate::types::{Account, AccountUsage, Provider, UsageEntry, UsageProvenance};
 
@@ -88,20 +89,7 @@ pub(crate) fn plan_label(raw: &str) -> String {
         }
         _ => None,
     };
-    if let Some(label) = known {
-        return label.to_string();
-    }
-    plan.split(['_', '-', ' '])
-        .filter(|word| !word.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            chars
-                .next()
-                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    known.map_or_else(|| title_case_plan(&plan), str::to_string)
 }
 
 fn account_key(codex_home: &Path, home: &Path, is_default: bool) -> String {

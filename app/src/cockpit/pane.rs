@@ -52,10 +52,10 @@ use crate::cockpit::session_lifecycle::{
     lifecycle_capabilities, RestartPresence, SessionAccountRoute, SessionHostRoute, SessionRoute,
 };
 use crate::cockpit::style::{
-    attention_coloru, cluster_divider, ctx_pct_element, glyph_cell, icon_verb_button_tooltip,
-    icon_word_verb, provider_label, status_dot_coloru, utilisation_coloru, utilisation_track,
-    verb_button, verb_button_colored, zone_card, VerbKind, BLOCK_RADIUS, CONTROL_RADIUS,
-    METER_LABEL_WIDTH,
+    account_identity_subline, attention_coloru, cluster_divider, ctx_pct_element, glyph_cell,
+    icon_verb_button_tooltip, icon_word_verb, provider_label, provider_mark, status_dot_coloru,
+    utilisation_coloru, utilisation_track, verb_button, verb_button_colored, zone_card, VerbKind,
+    BLOCK_RADIUS, CONTROL_RADIUS, METER_LABEL_WIDTH,
 };
 use crate::cockpit::transcript_view::TranscriptTarget;
 use crate::editor::{
@@ -154,6 +154,10 @@ const ROW_MENU_WIDTH: f32 = 216.0;
 const SESSION_DIALOG_WIDTH: f32 = 440.0;
 /// The alias editor's width — fixed for the same reason the search box is.
 const ALIAS_EDITOR_WIDTH: f32 = 220.0;
+/// Size of the provider mark leading an account headline in the pane.
+const PROVIDER_MARK_SIZE: f32 = 14.0;
+/// Gap between the provider mark and the provider name in the detail header.
+const PROVIDER_MARK_GAP: f32 = 8.0;
 const CARD_PADDING: f32 = 12.0;
 const CARD_SPACING: f32 = 8.0;
 const HEAT_BAR_HEIGHT: f32 = 8.0;
@@ -194,6 +198,36 @@ impl SessionFilter {
 /// Attention order: waiting, then working, then resting. The same rank every
 /// other surface sorts by — a table that ordered its states differently would
 /// teach the eye a second vocabulary.
+/// The fleet pane's spend line: today, 5 h and week summed over every
+/// account, plus the models those sums could not price. This is the one home
+/// of cross-account spend; the sidebar header only links here.
+#[derive(Clone, Debug, PartialEq)]
+struct FleetCostPresentation {
+    summary: String,
+    unpriced_models: Option<String>,
+}
+
+fn fleet_cost_presentation(accounts: &[AccountUsage]) -> FleetCostPresentation {
+    let today = cost_figure(accounts.iter().map(|a| &a.today));
+    let block = cost_figure(accounts.iter().map(|a| &a.block5h));
+    let week = cost_figure(accounts.iter().map(|a| &a.week));
+    // The windows overlap, so their union names every unpriced model once.
+    let unpriced_models = unpriced_models_text(&cost_figure(
+        accounts
+            .iter()
+            .flat_map(|a| [&a.today, &a.block5h, &a.week]),
+    ));
+    FleetCostPresentation {
+        summary: crate::t!(
+            "cockpit-fleet-cost-summary",
+            today = cost_text(&today),
+            block = cost_text(&block),
+            week = cost_text(&week)
+        ),
+        unpriced_models,
+    }
+}
+
 fn state_rank(state: SessionState) -> u8 {
     match state {
         SessionState::Waiting => 0,
@@ -558,6 +592,9 @@ pub struct CockpitPaneView {
     alias_persistence_error: Option<String>,
     /// Hover state for the detail card's ⋯.
     alias_dots_state: MouseStateHandle,
+    /// Tooltip state per account slot (key = account `key`), which names the
+    /// email behind an alias on the detail header and the fleet cards.
+    account_identity_states: HashMap<String, MouseStateHandle>,
     /// Hover/click state for the account placeholder's "try again" retry. A **stable**
     /// handle — a fresh one each render would drop the click (`Hoverable` tracks
     /// mouse-down in it).
@@ -804,6 +841,7 @@ impl CockpitPaneView {
             if matches!(event, CockpitEvent::Updated) {
                 me.sync_session_action_states(ctx);
                 me.sync_table_states(ctx);
+                me.sync_account_identity_states(ctx);
                 ctx.notify();
             }
         });
@@ -835,6 +873,7 @@ impl CockpitPaneView {
             alias_editor: None,
             alias_persistence_error: None,
             alias_dots_state: MouseStateHandle::default(),
+            account_identity_states: HashMap::new(),
             rescan_btn: MouseStateHandle::default(),
             search,
             search_bar,
@@ -860,6 +899,7 @@ impl CockpitPaneView {
         // Seed on construction too: without handles the first frame's rows would
         // render as text, and the pane would look inert until the next update.
         me.sync_table_states(ctx);
+        me.sync_account_identity_states(ctx);
         me
     }
 
@@ -965,6 +1005,29 @@ impl CockpitPaneView {
             self.table_plus_states.entry(k.clone()).or_default();
             self.table_group_states.entry(k).or_default();
         }
+    }
+
+    /// One stable tooltip handle per account slot; drop handles of accounts
+    /// that disappeared.
+    fn sync_account_identity_states(&mut self, ctx: &mut ViewContext<Self>) {
+        let keys: std::collections::HashSet<String> = CockpitModel::as_ref(ctx)
+            .snapshot()
+            .accounts
+            .iter()
+            .map(|account| account.account.key.clone())
+            .collect();
+        self.account_identity_states
+            .retain(|key, _| keys.contains(key));
+        for key in keys {
+            self.account_identity_states.entry(key).or_default();
+        }
+    }
+
+    fn account_identity_state(&self, key: &str) -> MouseStateHandle {
+        self.account_identity_states
+            .get(key)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn sync_session_action_states(&mut self, ctx: &mut ViewContext<Self>) {
@@ -3033,17 +3096,9 @@ impl CockpitPaneView {
         let now = chrono::Utc::now();
 
         let identity = account_identity(&acct.account);
-        // Provider is the explicit headline. The theme accent tile supplements
-        // that word; it never carries provider identity on its own.
-        let tile = ConstrainedBox::new(
-            Rect::new()
-                .with_background_color(theme.accent().into_solid())
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.0)))
-                .finish(),
-        )
-        .with_width(10.0)
-        .with_height(10.0)
-        .finish();
+        // Provider is the explicit headline, led by the provider's own mark
+        // (icon in its theme color), the same mark as on the sidebar card.
+        let mark = provider_mark(identity.provider, PROVIDER_MARK_SIZE, appearance);
 
         let account_el: Box<dyn Element> = match &self.alias_editor {
             Some(editor) => ConstrainedBox::new(
@@ -3071,14 +3126,27 @@ impl CockpitPaneView {
             // width, which a flexible row child gets during the intrinsic pass.
             .with_width(ALIAS_EDITOR_WIDTH)
             .finish(),
-            None => Self::text(identity.subline.clone(), family, body, muted),
+            None => {
+                let account = Self::text(identity.account.clone(), family, body, muted);
+                match identity.email_hint.clone() {
+                    Some(email) => appearance.ui_builder().overlay_tool_tip_on_element(
+                        email,
+                        self.account_identity_state(&acct.account.key),
+                        account,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::BottomLeft,
+                        vec2f(0.0, -4.0),
+                    ),
+                    None => account,
+                }
+            }
         };
         let mut provider_header = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(8.0)
-            .with_child(tile)
+            .with_spacing(PROVIDER_MARK_GAP)
+            .with_child(mark)
             .with_child(Self::text(
-                identity.provider.to_string(),
+                identity.provider_label.to_string(),
                 family,
                 heading,
                 main,
@@ -3108,17 +3176,18 @@ impl CockpitPaneView {
                     .with_main_axis_size(MainAxisSize::Max)
                     .finish(),
             );
-        let mut account_line = Flex::row()
+        // Account and plan are two slots under the provider name; the plan
+        // stays visible (or "—") while the alias is edited.
+        let account_line = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(6.0)
-            .with_child(account_el);
-        if self.alias_editor.is_some() {
-            if let Some(plan) = acct.account.plan_tier.as_ref() {
-                account_line =
-                    account_line.with_child(Self::text(plan.clone(), family, body, faint));
-            }
-        }
-        col = col.with_child(account_line.finish());
+            .with_spacing(8.0)
+            .with_child(account_el)
+            .with_child(Self::text(identity.plan.clone(), family, body, faint));
+        col = col.with_child(
+            Container::new(account_line.finish())
+                .with_padding_left(PROVIDER_MARK_SIZE + PROVIDER_MARK_GAP)
+                .finish(),
+        );
         if let Some(error) = self.alias_persistence_error.as_ref() {
             col = col.with_child(Self::text(
                 error.clone(),
@@ -3267,10 +3336,15 @@ impl CockpitPaneView {
                 body,
                 status_color,
             ))
+            .with_child(provider_mark(
+                identity.provider,
+                PROVIDER_MARK_SIZE,
+                appearance,
+            ))
             .with_child(
                 Shrinkable::new(
                     1.0,
-                    Self::text(identity.provider.to_string(), family, heading, main),
+                    Self::text(identity.provider_label.to_string(), family, heading, main),
                 )
                 .finish(),
             );
@@ -3306,7 +3380,15 @@ impl CockpitPaneView {
             .with_main_axis_size(MainAxisSize::Min)
             .with_spacing(CARD_SPACING)
             .with_child(header.finish())
-            .with_child(Self::text(identity.subline, family, body, muted))
+            .with_child(account_identity_subline(
+                identity.account,
+                identity.plan,
+                identity.email_hint,
+                self.account_identity_state(&acct.account.key),
+                body,
+                muted,
+                appearance,
+            ))
             .with_child(self.heat_bar(
                 &crate::t!("cockpit-meter-5h"),
                 acct.heat,
@@ -3426,9 +3508,7 @@ impl CockpitPaneView {
         let main = theme.main_text_color(theme.background()).into_solid();
         let muted = theme.sub_text_color(theme.background()).into_solid();
 
-        let cost_today = cost_figure(accounts.iter().map(|a| &a.today));
-        let cost_5h = cost_figure(accounts.iter().map(|a| &a.block5h));
-        let cost_wk = cost_figure(accounts.iter().map(|a| &a.week));
+        let cost = fleet_cost_presentation(accounts);
         let waiting: usize = accounts
             .iter()
             .flat_map(|a| &a.sessions)
@@ -3453,7 +3533,7 @@ impl CockpitPaneView {
             summary.push_str(&crate::t!("cockpit-fleet-waiting", count = waiting));
         }
 
-        Flex::row()
+        let row = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -3467,17 +3547,17 @@ impl CockpitPaneView {
                     main
                 },
             ))
-            .with_child(Self::text(
-                crate::t!(
-                    "cockpit-fleet-cost-summary",
-                    today = cost_text(&cost_today),
-                    block = cost_text(&cost_5h),
-                    week = cost_text(&cost_wk)
-                ),
-                family,
-                body,
-                muted,
-            ))
+            .with_child(Self::text(cost.summary, family, body, muted))
+            .finish();
+        let Some(unpriced_models) = cost.unpriced_models else {
+            return row;
+        };
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::End)
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_spacing(2.0)
+            .with_child(row)
+            .with_child(Self::text(unpriced_models, family, body, muted))
             .finish()
     }
 
