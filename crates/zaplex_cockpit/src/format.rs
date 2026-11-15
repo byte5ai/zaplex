@@ -10,6 +10,25 @@ use chrono::{DateTime, Utc};
 
 use crate::types::{AccountUsage, UsageProvenance, WindowTotals};
 
+/// Title-cases a raw plan identifier word by word (`free_workspace` ->
+/// "Free Workspace"), so a plan the provider label tables do not know yet still
+/// reads like the known ones.
+pub(crate) fn title_case_plan(raw: &str) -> String {
+    raw.trim()
+        .to_ascii_lowercase()
+        .split(['_', '-', ' '])
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Heat band, matching the claudeplex-desktop `LoadBar` thresholds. Input is the heat
 /// *fraction* (work / budget), where 1.0 == 100% of budget.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

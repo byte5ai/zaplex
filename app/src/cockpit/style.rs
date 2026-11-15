@@ -27,11 +27,12 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
 use warpui::elements::{
     Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element,
-    Empty, Expanded, Flex, Hoverable, MouseStateHandle, OffsetPositioning, ParentAnchor,
-    ParentElement, ParentOffsetBounds, Radius, Rect, Stack, Text,
+    Empty, Expanded, Flex, Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Rect, Stack, Text,
 };
 use warpui::geometry::vector::vec2f;
 use warpui::platform::Cursor;
+use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::UiComponent;
 use warpui::Action;
 use zaplex_cockpit::{heat_fill, Provider, SessionState};
@@ -164,6 +165,76 @@ pub fn provider_icon(provider: Provider) -> icons::Icon {
         Provider::Codex => icons::Icon::Code2,
         Provider::Antigravity => icons::Icon::AntigravityLogo,
     }
+}
+
+/// The provider's mark color, from the theme's ANSI roles softened toward the
+/// foreground (`ansi_fg_*`): Claude warm red, Codex blue, Antigravity magenta.
+/// Deliberately neither the accent nor the yellow/amber attention role, and
+/// distinct per provider, so cards tell providers apart at a glance in every
+/// theme without a hardcoded product color.
+pub fn provider_mark_coloru(provider: Provider, appearance: &Appearance) -> ColorU {
+    let theme = appearance.theme();
+    match provider {
+        Provider::Claude => theme.ansi_fg_red(),
+        Provider::Codex => theme.ansi_fg_blue(),
+        Provider::Antigravity => theme.ansi_fg_magenta(),
+    }
+}
+
+/// The leading provider mark of an account card: the provider icon in the
+/// provider's mark color (spec §2.4/§2.5). Shape and color both differ per
+/// provider, so neither carries the distinction alone; the provider name
+/// stays the headline beside it.
+pub fn provider_mark(provider: Provider, size: f32, appearance: &Appearance) -> Box<dyn Element> {
+    ConstrainedBox::new(
+        provider_icon(provider)
+            .to_warpui_icon(provider_mark_coloru(provider, appearance).into())
+            .finish(),
+    )
+    .with_width(size)
+    .with_height(size)
+    .finish()
+}
+
+/// The account card subline: the account (alias or email) left, the plan in
+/// its own slot at the right edge (spec §2.4: Provider and Plan are separate
+/// slots, never joined into one string). The account clips with an ellipsis
+/// before the plan does; an alias carries the email it stands for as tooltip.
+pub fn account_identity_subline(
+    account: String,
+    plan: String,
+    email_hint: Option<String>,
+    tooltip_state: MouseStateHandle,
+    size: f32,
+    color: ColorU,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let family = appearance.ui_font_family();
+    let mut account_el = Text::new_inline(account, family, size)
+        .with_color(color)
+        .with_clip(ClipConfig::ellipsis())
+        .finish();
+    if let Some(email) = email_hint {
+        account_el = appearance.ui_builder().overlay_tool_tip_on_element(
+            email,
+            tooltip_state,
+            account_el,
+            ParentAnchor::TopLeft,
+            ChildAnchor::BottomLeft,
+            vec2f(0.0, -4.0),
+        );
+    }
+    Flex::row()
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_spacing(8.0)
+        .with_child(Expanded::new(1.0, account_el).finish())
+        .with_child(
+            Text::new_inline(plan, family, size)
+                .with_color(color)
+                .finish(),
+        )
+        .finish()
 }
 
 /// The human provider name for the Provider slot of an account card (spec §2.4:

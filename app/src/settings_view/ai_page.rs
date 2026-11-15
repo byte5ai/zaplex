@@ -2401,7 +2401,12 @@ impl TypedActionView for AISettingsPageView {
             }
             #[cfg(not(target_family = "wasm"))]
             AISettingsPageAction::ToggleCLIAgentHookBridge(agent) => {
-                let installed = hook_bridge::is_installed_for_agent(*agent).unwrap_or(false);
+                // A partly covered agent (an account added after turning the
+                // hooks on) installs into every account instead of removing.
+                let installed = matches!(
+                    hook_bridge::coverage_for_agent(*agent),
+                    Ok(hook_bridge::HookCoverage::Installed)
+                );
                 match hook_bridge::set_installed_for_agent(*agent, !installed) {
                     Ok(()) => {
                         self.cli_agent_hook_errors.remove(agent);
@@ -5674,13 +5679,17 @@ impl CLIAgentWidget {
         }
 
         for agent in installed_agents {
-            let installed_result = hook_bridge::is_installed_for_agent(agent);
-            let installed = installed_result.as_ref().copied().unwrap_or(false);
+            let coverage_result = hook_bridge::coverage_for_agent(agent);
+            let coverage = coverage_result
+                .as_ref()
+                .copied()
+                .unwrap_or(hook_bridge::HookCoverage::Off);
+            let installed = coverage == hook_bridge::HookCoverage::Installed;
             let error = view
                 .cli_agent_hook_errors
                 .get(&agent)
                 .cloned()
-                .or_else(|| installed_result.err().map(|error| error.to_string()));
+                .or_else(|| coverage_result.err().map(|error| error.to_string()));
             let rich_status_proven =
                 CLIAgentSessionsModel::as_ref(app).has_rich_status_session_for_agent(agent);
             let (status, detail, status_color) = if let Some(error) = error {
@@ -5688,6 +5697,16 @@ impl CLIAgentWidget {
                     crate::t!("settings-ai-live-agent-status-error"),
                     error,
                     theme.ui_error_color(),
+                )
+            } else if let hook_bridge::HookCoverage::Partial { missing, total } = coverage {
+                (
+                    crate::t!("settings-ai-live-agent-status-review"),
+                    crate::t!(
+                        "settings-ai-live-agent-status-partial-detail",
+                        missing = missing,
+                        total = total
+                    ),
+                    theme.terminal_colors().normal.yellow.into(),
                 )
             } else if !installed {
                 (

@@ -4,7 +4,9 @@ use pathfinder_geometry::vector::vec2f;
 use std::collections::BTreeMap;
 use std::path::Path;
 use warp_core::ui::appearance::Appearance;
-use warpui::elements::{Element, ParentElement, SizeConstraintCondition, SizeConstraintSwitch, Stack};
+use warpui::elements::{
+    Element, ParentElement, SizeConstraintCondition, SizeConstraintSwitch, Stack,
+};
 use warpui::fonts::{platform_font_cache_for_tests, Cache};
 use warpui::platform::WindowStyle;
 use warpui::{App, Presenter, SingletonEntity, WindowInvalidation};
@@ -15,13 +17,14 @@ use zaplex_cockpit::{CostFigure, Provider, SessionSnapshot, SessionState, Window
 use zaplex_remote_session::types::FEATURE_AGENT_TRANSCRIPT_READ_V1;
 
 use super::{
-    matching_session_row, restart_presence_for_menu, session_key, session_table_viewport_height,
-    session_today_cost, table_row_needs_attention, transcript_action_target, TableRow,
-    TranscriptActionTarget, SESSION_TABLE_HEADER_HEIGHT, SESSION_TABLE_MAX_VISIBLE_ROWS,
-    SESSION_TABLE_ROW_HEIGHT,
+    fleet_cost_presentation, matching_session_row, restart_presence_for_menu, session_key,
+    session_table_viewport_height, session_today_cost, table_row_needs_attention,
+    transcript_action_target, TableRow, TranscriptActionTarget, SESSION_TABLE_HEADER_HEIGHT,
+    SESSION_TABLE_MAX_VISIBLE_ROWS, SESSION_TABLE_ROW_HEIGHT,
 };
 #[cfg(not(target_family = "wasm"))]
 use super::{remote_transcript_route, remote_transcript_route_is_current, RemoteTranscriptRoute};
+use crate::cockpit::localize::cost_amount_text;
 use crate::cockpit::session_lifecycle::RestartPresence;
 
 #[test]
@@ -556,4 +559,61 @@ fn compact_cockpit_rows_wrap_real_text_when_resized() {
         }
         drop(root);
     });
+}
+
+fn fleet_account(key: &str, today: f64, block: f64, week: f64) -> zaplex_cockpit::AccountUsage {
+    let account = zaplex_cockpit::Account {
+        provider: Provider::Claude,
+        key: key.into(),
+        config_dir: format!("/tmp/{key}").into(),
+        label: format!("{key}@example.invalid"),
+        provider_account_id: None,
+        email: Some(format!("{key}@example.invalid")),
+        org: None,
+        role: None,
+        plan_tier: Some("Max".into()),
+        is_default: false,
+    };
+    let mut usage = zaplex_cockpit::build_account_usage(
+        account,
+        Vec::new(),
+        Utc::now(),
+        0,
+        0,
+        &zaplex_cockpit::PricingTable::default(),
+    );
+    usage.today.cost_usd = today;
+    usage.block5h.cost_usd = block;
+    usage.week.cost_usd = week;
+    usage
+}
+
+#[test]
+fn fleet_pane_sums_today_five_hour_and_week_spend_across_accounts() {
+    crate::i18n::init(Some("en"));
+    let mut second = fleet_account("second", 2.5, 3.0, 20.0);
+    second.week.has_unpriced_usage = true;
+    second.week.unpriced_models.insert("mystery-model".into());
+    let accounts = [fleet_account("first", 1.25, 2.0, 10.5), second];
+
+    let presentation = fleet_cost_presentation(&accounts);
+
+    // Independent sums of the fixture values, spelled by the shared amount
+    // formatter (Fluent wraps the digits in bidi isolates).
+    for usd in [3.75, 5.0, 30.5] {
+        let amount = cost_amount_text(&CostFigure::Estimate { usd });
+        assert!(
+            presentation.summary.contains(&amount),
+            "{usd}: {}",
+            presentation.summary
+        );
+    }
+    assert!(presentation
+        .unpriced_models
+        .as_deref()
+        .is_some_and(|models| models.contains("mystery-model")));
+    assert_eq!(
+        fleet_cost_presentation(&accounts[..1]).unpriced_models,
+        None
+    );
 }

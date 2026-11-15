@@ -18,6 +18,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use walkdir::WalkDir;
 
+use crate::format::title_case_plan;
 use crate::types::{Account, Provider, UsageEntry};
 
 /// Directory-name fragments that mark a `.claude*` dir as a backup/scratch copy, not
@@ -358,7 +359,9 @@ fn account_key(config_dir: &Path, home: &Path, is_default: bool) -> String {
     crate::account_key::stable_account_key(Provider::Claude, config_dir, home, is_default)
 }
 
-/// Derive a plan label from `organizationRateLimitTier` / `organizationType`.
+/// Derive a readable plan label from `organizationRateLimitTier` /
+/// `organizationType`: `claude_max` -> "Max", `claude_team` -> "Team"; unknown
+/// types are title-cased instead of shown raw.
 fn plan_label(rate_tier: Option<&str>, org_type: Option<&str>) -> Option<String> {
     if let Some(tier) = rate_tier {
         if let Some(rest) = tier.strip_prefix("max_") {
@@ -366,10 +369,20 @@ fn plan_label(rate_tier: Option<&str>, org_type: Option<&str>) -> Option<String>
             return Some(format!("Max {rest}"));
         }
     }
-    if org_type == Some("claude_max") {
-        return Some("Max".to_string());
-    }
-    org_type.map(|t| t.strip_prefix("claude_").unwrap_or(t).to_string())
+    let org_type = org_type
+        .map(str::trim)
+        .filter(|org_type| !org_type.is_empty())?;
+    let lowered = org_type.to_ascii_lowercase();
+    let plan = lowered.strip_prefix("claude_").unwrap_or(&lowered);
+    let known = match plan {
+        "max" => Some("Max"),
+        "pro" => Some("Pro"),
+        "team" => Some("Team"),
+        "enterprise" => Some("Enterprise"),
+        "free" => Some("Free"),
+        _ => None,
+    };
+    Some(known.map_or_else(|| title_case_plan(plan), str::to_string))
 }
 
 /// Build an [`Account`] from a config dir + its identity JSON. Returns `None` if the

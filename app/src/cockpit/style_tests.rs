@@ -47,3 +47,25 @@ fn style_has_no_unused_session_metric_width_contract() {
         assert!(!account_surface.contains("with_width(160.0)"));
     }
 }
+
+#[test]
+fn provider_marks_are_distinct_and_never_the_accent_or_attention_role() {
+    let appearance = Appearance::mock();
+    let accent = appearance.theme().accent().into_solid();
+    let attention = attention_coloru(&appearance);
+    let claude = provider_mark_coloru(Provider::Claude, &appearance);
+    let codex = provider_mark_coloru(Provider::Codex, &appearance);
+    let antigravity = provider_mark_coloru(Provider::Antigravity, &appearance);
+
+    assert_ne!(claude, codex);
+    assert_ne!(claude, antigravity);
+    assert_ne!(codex, antigravity);
+    for mark in [claude, codex, antigravity] {
+        assert_ne!(mark, accent);
+        assert_ne!(mark, attention);
+    }
+    assert_ne!(
+        provider_icon(Provider::Claude),
+        provider_icon(Provider::Codex)
+    );
+}

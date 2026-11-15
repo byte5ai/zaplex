@@ -16,6 +16,7 @@ use toml_edit::{
     value as toml_value, ArrayOfTables as TomlArrayOfTables, DocumentMut as TomlDocument,
     Item as TomlItem, Table as TomlTable,
 };
+use zaplex_cockpit::codex::discover_account_roots;
 
 use crate::terminal::CLIAgent;
 
@@ -600,11 +601,50 @@ pub(crate) fn refresh_installed_for_current_user() -> Result<()> {
 }
 
 pub(crate) fn is_installed_for_current_user(agent: warp_cli::CliAgentHookAgent) -> Result<bool> {
-    hook_paths_for_current_user(agent)?
-        .iter()
-        .try_fold(false, |installed, path| {
-            Ok(installed || has_agent_hooks(path, agent)?)
-        })
+    Ok(coverage_for_current_user(agent)? != HookCoverage::Off)
+}
+
+/// How far an agent's Zaplex hooks cover its hook files, one per account for
+/// agents with several accounts (Claude, Codex).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HookCoverage {
+    /// No hook file carries Zaplex hooks.
+    Off,
+    /// Some accounts carry Zaplex hooks and others do not, e.g. an account
+    /// signed in after the hooks were turned on.
+    Partial { missing: usize, total: usize },
+    /// Every hook file carries Zaplex hooks.
+    Installed,
+}
+
+fn hook_coverage(paths: &[PathBuf], agent: warp_cli::CliAgentHookAgent) -> Result<HookCoverage> {
+    let mut missing = 0;
+    for path in paths {
+        if !has_agent_hooks(path, agent)? {
+            missing += 1;
+        }
+    }
+    Ok(if missing == 0 && !paths.is_empty() {
+        HookCoverage::Installed
+    } else if missing == paths.len() {
+        HookCoverage::Off
+    } else {
+        HookCoverage::Partial {
+            missing,
+            total: paths.len(),
+        }
+    })
+}
+
+fn coverage_for_current_user(agent: warp_cli::CliAgentHookAgent) -> Result<HookCoverage> {
+    hook_coverage(&hook_paths_for_current_user(agent)?, agent)
+}
+
+pub(crate) fn coverage_for_agent(agent: CLIAgent) -> Result<HookCoverage> {
+    let Some(agent) = hook_agent(agent) else {
+        return Ok(HookCoverage::Off);
+    };
+    coverage_for_current_user(agent)
 }
 
 pub(crate) fn supports_agent(agent: CLIAgent) -> bool {
@@ -695,11 +735,29 @@ fn hook_paths(
                 .collect()
         }
         warp_cli::CliAgentHookAgent::Codex => {
-            let config_dir = codex_home
+            // Every Codex account root is its own `CODEX_HOME` with its own
+            // `hooks.json`: the default root, each discovered `~/.codex-*`
+            // account and a configured `CODEX_HOME`. Roots are canonicalized so
+            // a symlinked alias of one root yields one hook file.
+            let codex_home = codex_home
                 .filter(|path| !path.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home.join(".codex"));
-            vec![config_dir.join("hooks.json")]
+                .map(PathBuf::from);
+            let mut config_dirs = vec![home.join(".codex")];
+            config_dirs.extend(
+                discover_account_roots(home, codex_home.as_deref())
+                    .accounts
+                    .into_iter()
+                    .map(|account| account.config_dir),
+            );
+            config_dirs.extend(codex_home);
+            config_dirs
+                .into_iter()
+                .map(|config_dir| {
+                    fs::canonicalize(&config_dir)
+                        .unwrap_or(config_dir)
+                        .join("hooks.json")
+                })
+                .collect()
         }
         warp_cli::CliAgentHookAgent::Grok => {
             let config_dir = grok_home

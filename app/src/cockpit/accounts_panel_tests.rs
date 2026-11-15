@@ -8,22 +8,22 @@ use warpui::{App, Event, Presenter, WindowInvalidation};
 use crate::test_util::settings::initialize_settings_for_tests;
 
 #[test]
-fn fleet_total_button_accepts_button_activation_keys_only() {
+fn fleet_overview_button_accepts_button_activation_keys_only() {
     for key in ["enter", "numpadenter", " "] {
-        assert!(is_fleet_total_activation_keystroke(
+        assert!(is_fleet_overview_activation_keystroke(
             &warpui::keymap::Keystroke {
                 key: key.to_string(),
                 ..Default::default()
             }
         ));
     }
-    assert!(!is_fleet_total_activation_keystroke(
+    assert!(!is_fleet_overview_activation_keystroke(
         &warpui::keymap::Keystroke {
             key: "right".to_string(),
             ..Default::default()
         }
     ));
-    assert!(!is_fleet_total_activation_keystroke(
+    assert!(!is_fleet_overview_activation_keystroke(
         &warpui::keymap::Keystroke {
             ctrl: true,
             key: " ".to_string(),
@@ -33,13 +33,13 @@ fn fleet_total_button_accepts_button_activation_keys_only() {
 }
 
 #[test]
-fn focused_fleet_total_button_handles_real_unmodified_keydown_forms_only() {
+fn focused_fleet_overview_button_handles_real_unmodified_keydown_forms_only() {
     App::test((), |mut app| async move {
         crate::i18n::init(Some("en"));
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| Appearance::mock());
         let (window_id, button) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            let button = FleetTotalButton::new(ctx);
+            let button = FleetOverviewButton::new(ctx);
             ctx.focus_self();
             button
         });
@@ -112,4 +112,21 @@ fn focused_fleet_total_button_handles_real_unmodified_keydown_forms_only() {
         );
         button.read(&app, |button, _| assert_eq!(button.activation_count, 3));
     });
+}
+
+#[test]
+fn accounts_header_shows_count_and_a_cost_free_all_accounts_control() {
+    crate::i18n::init(Some("en"));
+    let header = accounts_header_presentation(&ScanHealth::Loaded, 4);
+
+    assert_eq!(header.count, Some(4));
+    assert_eq!(header.fleet_label, "All accounts");
+    // Spend moved to the fleet pane: the header control carries no amount.
+    assert!(!header.fleet_label.contains('$'));
+    assert!(!header.fleet_label.contains("today"));
+    assert!(!header.fleet_tooltip.is_empty());
+    assert_eq!(
+        accounts_header_presentation(&ScanHealth::Pending, 0).count,
+        None
+    );
 }

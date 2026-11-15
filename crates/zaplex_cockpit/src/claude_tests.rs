@@ -111,7 +111,35 @@ fn discovers_default_and_alt_accounts_excludes_backups() {
     let work = accounts.iter().find(|a| a.key == "claude:work").unwrap();
     assert_eq!(work.key, "claude:work");
     assert_eq!(work.email.as_deref(), Some("work@example.com"));
-    assert_eq!(work.plan_tier.as_deref(), Some("team")); // "claude_team" → "team"
+    assert_eq!(work.plan_tier.as_deref(), Some("Team"));
+}
+
+#[test]
+fn claude_plan_labels_are_readable() {
+    let cases = [
+        (None, Some("claude_max"), Some("Max")),
+        (
+            Some("default_claude_max_20x"),
+            Some("claude_max"),
+            Some("Max"),
+        ),
+        (Some("max_20x"), Some("claude_max"), Some("Max 20x")),
+        (Some("default_raven"), Some("claude_team"), Some("Team")),
+        (None, Some("team"), Some("Team")),
+        (None, Some("claude_pro"), Some("Pro")),
+        (None, Some("claude_enterprise"), Some("Enterprise")),
+        (None, Some("CLAUDE_TEAM"), Some("Team")),
+        (None, Some("claude_new_tier"), Some("New Tier")),
+        (None, Some(" "), None),
+        (None, None, None),
+    ];
+    for (rate_tier, org_type, label) in cases {
+        assert_eq!(
+            plan_label(rate_tier, org_type).as_deref(),
+            label,
+            "{rate_tier:?} / {org_type:?}"
+        );
+    }
 }
 
 #[test]
