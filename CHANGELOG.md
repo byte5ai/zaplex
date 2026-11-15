@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.64] — 2026-11-15
+
+- Clippy-Befunde aus der Entfernung der Agent-Benachrichtigungen bereinigt: ungenutzter Import, ungenutzte Variable und Parameter entfernt, verschachtelte Bedingung zusammengefasst (#768).
+
 ## [1.2.63] — 2026-11-15
 
 - D-Bus-Anbindung auf zbus 6.3 umgestellt (ashpd 0.14, notify-rust 4.19); der Linux-Schlüsselbund nutzt jetzt dbus-secret-service statt secret-service 5. Damit verlassen die ungewarteten Crates zvariant, zbus_names und zvariant_derive den Build, und die abgelaufene Ausnahme für RUSTSEC-2026-0370/0371/0372 entfällt (#570).

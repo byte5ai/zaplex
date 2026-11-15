@@ -181,7 +181,7 @@ use crate::ai::agent::conversation::AIConversationId;
 
 #[cfg(any(test, feature = "integration_tests"))]
 use crate::ai::agent::UserQueryMode;
-use crate::ai::agent::{AIAgentActionType, EntrypointType, RenderableAIError, StaticQueryType};
+use crate::ai::agent::{AIAgentActionType, EntrypointType, StaticQueryType};
 use crate::ai::blocklist::agent_view::agent_input_footer::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::SuggestedAgentModeWorkflowAndId;
 use crate::ai::blocklist::suggested_rule_modal::SuggestedRuleAndId;
@@ -19254,7 +19254,6 @@ impl TerminalView {
         event: &AIBlockEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        let conversation_id = block.as_ref(ctx).conversation_id();
         match event {
             // -- Live-only events (no-op for restored blocks) ---------------------------
             AIBlockEvent::ActionBlockedOnUserConfirmation => {
@@ -19279,10 +19278,8 @@ impl TerminalView {
                 }
                 // With MAA, it's possible for an exchange to contain many tasks.
                 // This means an AI block may "finish" before the entire AI response is complete.
-                if self.active_ai_block(ctx).is_none() {
-                    if self.is_todo_popup_visible {
-                        self.is_todo_popup_visible = false;
-                    }
+                if self.active_ai_block(ctx).is_none() && self.is_todo_popup_visible {
+                    self.is_todo_popup_visible = false;
                 }
                 self.redetermine_terminal_focus(ctx);
                 ctx.notify();
@@ -22128,7 +22125,6 @@ impl TerminalView {
     fn render_inline_banners(
         &self,
         appearance: &Appearance,
-        app: &AppContext,
         model: &TerminalModel,
     ) -> HashMap<usize, Box<dyn Element>> {
         let mut inline_banners = HashMap::new();
@@ -22449,7 +22445,7 @@ impl TerminalView {
         let padding_x = self.size_info.padding_x_px;
         let sessions = self.sessions.clone();
 
-        let inline_banners = self.render_inline_banners(appearance, app, model);
+        let inline_banners = self.render_inline_banners(appearance, model);
 
         let mut subshell_separators = HashMap::new();
 
