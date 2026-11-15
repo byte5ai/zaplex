@@ -1,12 +1,6 @@
 [advisories]
 git-fetch-with-cli = true
 ignore = [
-    # Standalone crates merged into zbus 6; ashpd and notify-rust still require zbus 5.
-    # Expiry and locked dependency paths enforced by script/dependency-security-baseline-tests.
-    # Temporary until 2026-11-15; migration tracked in https://github.com/byte5ai/zaplex/issues/570.
-    { id = "RUSTSEC-2026-0370", reason = "Unmaintained after the zbus 6 merge, not a reported vulnerability. Published ashpd and notify-rust still require zbus 5; remove with the coordinated migration in #570." },
-    { id = "RUSTSEC-2026-0371", reason = "Unmaintained after the zbus 6 merge, not a reported vulnerability. Published ashpd and notify-rust still require zbus 5; remove with the coordinated migration in #570." },
-    { id = "RUSTSEC-2026-0372", reason = "Unmaintained after the zbus 6 merge, not a reported vulnerability. Published ashpd and notify-rust still require zbus 5; remove with the coordinated migration in #570." },
     { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained, but considered to be complete." },
     { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; we should try to find an alternative." },
     { id = "RUSTSEC-2024-0425", reason = "get-size is unmaintained; we should try to find an alternative." },

@@ -3,7 +3,7 @@ use std::ops::Not;
 use arboard::{
     self, Clipboard as LinuxClipboardInner, GetExtLinux, LinuxClipboardKind, SetExtLinux,
 };
-use zbus::zvariant::NoneValue;
+use zbus::NoneValue;
 
 use crate::{clipboard::ClipboardContent, Clipboard};
 

@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use ashpd::desktop::Session;
-use ashpd::desktop::remote_desktop::{KeyState, RemoteDesktop};
+use ashpd::desktop::remote_desktop::{KeyState, NotifyKeyboardKeysymOptions, RemoteDesktop};
 
 use super::super::keysym::{XK_SHIFT_L, char_to_keysym, keysym_needs_shift};
 use crate::Key;
@@ -23,10 +23,10 @@ impl Keyboard {
     }
 
     /// Types a string of text by sending keysym events.
-    pub async fn type_text<'a>(
+    pub async fn type_text(
         &mut self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
         text: &str,
     ) -> Result<(), String> {
         for ch in text.chars() {
@@ -38,10 +38,10 @@ impl Keyboard {
     /// Sends a key down event for the given key.
     ///
     /// For `Key::Char`, this will automatically press shift if needed.
-    pub async fn key_down<'a>(
+    pub async fn key_down(
         &mut self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
         key: &Key,
     ) -> Result<(), String> {
         let (keysym, needs_shift) = self.resolve_key(key);
@@ -55,7 +55,12 @@ impl Keyboard {
         }
 
         remote_desktop
-            .notify_keyboard_keysym(session, keysym, KeyState::Pressed)
+            .notify_keyboard_keysym(
+                session,
+                keysym,
+                KeyState::Pressed,
+                NotifyKeyboardKeysymOptions::default(),
+            )
             .await
             .map_err(|e| format!("Failed to send key down: {e}"))
     }
@@ -64,16 +69,21 @@ impl Keyboard {
     ///
     /// For `Key::Char`, this will automatically release shift if it was auto-pressed
     /// and this is the last auto-shifted key being released.
-    pub async fn key_up<'a>(
+    pub async fn key_up(
         &mut self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
         key: &Key,
     ) -> Result<(), String> {
         let (keysym, _) = self.resolve_key(key);
 
         remote_desktop
-            .notify_keyboard_keysym(session, keysym, KeyState::Released)
+            .notify_keyboard_keysym(
+                session,
+                keysym,
+                KeyState::Released,
+                NotifyKeyboardKeysymOptions::default(),
+            )
             .await
             .map_err(|e| format!("Failed to send key up: {e}"))?;
 
@@ -85,10 +95,10 @@ impl Keyboard {
         Ok(())
     }
 
-    async fn type_char<'a>(
+    async fn type_char(
         &mut self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
         ch: char,
     ) -> Result<(), String> {
         let keysym = char_to_keysym(ch) as i32;
@@ -100,12 +110,22 @@ impl Keyboard {
         }
 
         remote_desktop
-            .notify_keyboard_keysym(session, keysym, KeyState::Pressed)
+            .notify_keyboard_keysym(
+                session,
+                keysym,
+                KeyState::Pressed,
+                NotifyKeyboardKeysymOptions::default(),
+            )
             .await
             .map_err(|e| format!("Failed to send key press: {e}"))?;
 
         remote_desktop
-            .notify_keyboard_keysym(session, keysym, KeyState::Released)
+            .notify_keyboard_keysym(
+                session,
+                keysym,
+                KeyState::Released,
+                NotifyKeyboardKeysymOptions::default(),
+            )
             .await
             .map_err(|e| format!("Failed to send key release: {e}"))?;
 
@@ -131,24 +151,34 @@ impl Keyboard {
         }
     }
 
-    async fn press_shift<'a>(
+    async fn press_shift(
         &self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
     ) -> Result<(), String> {
         remote_desktop
-            .notify_keyboard_keysym(session, XK_SHIFT_L as i32, KeyState::Pressed)
+            .notify_keyboard_keysym(
+                session,
+                XK_SHIFT_L as i32,
+                KeyState::Pressed,
+                NotifyKeyboardKeysymOptions::default(),
+            )
             .await
             .map_err(|e| format!("Failed to press shift: {e}"))
     }
 
-    async fn release_shift<'a>(
+    async fn release_shift(
         &self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
     ) -> Result<(), String> {
         remote_desktop
-            .notify_keyboard_keysym(session, XK_SHIFT_L as i32, KeyState::Released)
+            .notify_keyboard_keysym(
+                session,
+                XK_SHIFT_L as i32,
+                KeyState::Released,
+                NotifyKeyboardKeysymOptions::default(),
+            )
             .await
             .map_err(|e| format!("Failed to release shift: {e}"))
     }

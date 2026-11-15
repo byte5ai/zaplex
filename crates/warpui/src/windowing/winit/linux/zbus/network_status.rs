@@ -8,8 +8,7 @@ use crate::{r#async::executor::Background, windowing::winit::app::CustomEvent};
 #[proxy(
     interface = "org.freedesktop.NetworkManager",
     default_service = "org.freedesktop.NetworkManager",
-    default_path = "/org/freedesktop/NetworkManager",
-    gen_blocking = false
+    default_path = "/org/freedesktop/NetworkManager"
 )]
 trait NetworkManager {
     #[zbus(signal)]

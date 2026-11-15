@@ -97,7 +97,11 @@ anyhow = "1.0.103"
 arboard = { version = "3.6.1", default-features = false }
 arrayvec = "0.7.4"
 async-broadcast = "0.7.2"
-ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
+ashpd = { version = "0.14.0", default-features = false, features = [
+    "async-io",
+    "remote_desktop",
+    "screencast",
+] }
 async-channel = "2.3.1"
 async-compat = "0.2.5"
 async-io = "2.4.0"
@@ -359,7 +363,7 @@ wgpu = { version = "29.0.1", default-features = false, features = [
   "vulkan",
   "wgsl",
 ] }
-zbus = "5.9.0"
+zbus = "6.3.0"
 memchr = "2"
 memo-map = "0.3.1"
 async-recursion = "1.0.0"

@@ -1,7 +1,10 @@
 //! Mouse input handling for Wayland via the RemoteDesktop portal.
 
 use ashpd::desktop::Session;
-use ashpd::desktop::remote_desktop::{Axis, KeyState, RemoteDesktop};
+use ashpd::desktop::remote_desktop::{
+    Axis, KeyState, NotifyPointerAxisDiscreteOptions, NotifyPointerAxisOptions,
+    NotifyPointerButtonOptions, NotifyPointerMotionAbsoluteOptions, RemoteDesktop,
+};
 use pathfinder_geometry::vector::Vector2I;
 
 use crate::{MouseButton, ScrollDirection, ScrollDistance};
@@ -27,10 +30,10 @@ impl Mouse {
     }
 
     /// Moves the mouse to an absolute position.
-    pub async fn move_to<'a>(
+    pub async fn move_to(
         &mut self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
         stream_id: u32,
         target: Vector2I,
     ) -> Result<(), String> {
@@ -40,6 +43,7 @@ impl Mouse {
                 stream_id,
                 target.x() as f64,
                 target.y() as f64,
+                NotifyPointerMotionAbsoluteOptions::default(),
             )
             .await
             .map_err(|e| format!("Failed to move mouse: {e}"))?;
@@ -49,40 +53,50 @@ impl Mouse {
     }
 
     /// Presses a mouse button down.
-    pub async fn button_down<'a>(
+    pub async fn button_down(
         &self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
         button: &MouseButton,
     ) -> Result<(), String> {
         let evdev_button = mouse_button_to_evdev(button);
 
         remote_desktop
-            .notify_pointer_button(session, evdev_button, KeyState::Pressed)
+            .notify_pointer_button(
+                session,
+                evdev_button,
+                KeyState::Pressed,
+                NotifyPointerButtonOptions::default(),
+            )
             .await
             .map_err(|e| format!("Failed to press mouse button: {e}"))
     }
 
     /// Releases a mouse button.
-    pub async fn button_up<'a>(
+    pub async fn button_up(
         &self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
         button: &MouseButton,
     ) -> Result<(), String> {
         let evdev_button = mouse_button_to_evdev(button);
 
         remote_desktop
-            .notify_pointer_button(session, evdev_button, KeyState::Released)
+            .notify_pointer_button(
+                session,
+                evdev_button,
+                KeyState::Released,
+                NotifyPointerButtonOptions::default(),
+            )
             .await
             .map_err(|e| format!("Failed to release mouse button: {e}"))
     }
 
     /// Performs a scroll action.
-    pub async fn scroll<'a>(
+    pub async fn scroll(
         &self,
-        remote_desktop: &RemoteDesktop<'a>,
-        session: &Session<'a, RemoteDesktop<'a>>,
+        remote_desktop: &RemoteDesktop,
+        session: &Session<RemoteDesktop>,
         direction: &ScrollDirection,
         distance: &ScrollDistance,
     ) -> Result<(), String> {
@@ -97,7 +111,12 @@ impl Mouse {
                 };
 
                 remote_desktop
-                    .notify_pointer_axis_discrete(session, axis, steps)
+                    .notify_pointer_axis_discrete(
+                        session,
+                        axis,
+                        steps,
+                        NotifyPointerAxisDiscreteOptions::default(),
+                    )
                     .await
                     .map_err(|e| format!("Failed to scroll: {e}"))
             }
@@ -111,7 +130,12 @@ impl Mouse {
                 };
 
                 remote_desktop
-                    .notify_pointer_axis(session, dx, dy, true)
+                    .notify_pointer_axis(
+                        session,
+                        dx,
+                        dy,
+                        NotifyPointerAxisOptions::default().set_finish(true),
+                    )
                     .await
                     .map_err(|e| format!("Failed to scroll: {e}"))
             }

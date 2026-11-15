@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use futures::StreamExt as _;
 use winit::event_loop::EventLoopProxy;
-use zbus::{proxy, zvariant};
+use zbus::{proxy, OwnedVariant, Str, Variant};
 
 use crate::{
     platform::SystemTheme,
@@ -19,7 +19,7 @@ const COLOR_SCHEME_SETTINGS_KEY: &str = "color-scheme";
 
 /// Values used by the desktop environment to encode the user's
 /// system color scheme preference.
-#[derive(Debug, Default, serde::Deserialize, serde::Serialize, zbus::zvariant::Type, PartialEq)]
+#[derive(Debug, Default, serde::Deserialize, serde::Serialize, zbus::Type, PartialEq)]
 enum SystemColorScheme {
     #[default]
     NoPreference = 0,
@@ -48,18 +48,18 @@ impl From<&str> for SystemColorScheme {
     }
 }
 
-impl From<&zvariant::Str<'_>> for SystemColorScheme {
-    fn from(value: &zvariant::Str) -> SystemColorScheme {
+impl From<&Str<'_>> for SystemColorScheme {
+    fn from(value: &Str) -> SystemColorScheme {
         SystemColorScheme::from(value.as_str())
     }
 }
 
-impl From<&zvariant::Value<'_>> for SystemColorScheme {
-    fn from(value: &zvariant::Value) -> SystemColorScheme {
+impl From<&Variant<'_>> for SystemColorScheme {
+    fn from(value: &Variant) -> SystemColorScheme {
         match value {
-            zvariant::Value::U32(u) => SystemColorScheme::from(u),
-            zvariant::Value::Str(s) => SystemColorScheme::from(s),
-            zvariant::Value::Value(boxed_v) => match boxed_v.downcast_ref::<u32>() {
+            Variant::U32(u) => SystemColorScheme::from(u),
+            Variant::Str(s) => SystemColorScheme::from(s),
+            Variant::Variant(boxed_v) => match boxed_v.downcast_ref::<u32>() {
                 Ok(v) => SystemColorScheme::from(&v),
                 Err(err) => {
                     log::error!(
@@ -82,8 +82,8 @@ impl From<&zvariant::Value<'_>> for SystemColorScheme {
     }
 }
 
-impl From<&zvariant::OwnedValue> for SystemColorScheme {
-    fn from(owned_value: &zvariant::OwnedValue) -> SystemColorScheme {
+impl From<&OwnedVariant> for SystemColorScheme {
+    fn from(owned_value: &OwnedVariant) -> SystemColorScheme {
         SystemColorScheme::from(owned_value.deref())
     }
 }
@@ -105,14 +105,14 @@ impl From<SystemColorScheme> for SystemTheme {
     default_path = "/org/freedesktop/portal/desktop"
 )]
 trait DesktopSettings {
-    fn read(&self, namespace: &str, key: &str) -> zbus::fdo::Result<zvariant::OwnedValue>;
+    fn read(&self, namespace: &str, key: &str) -> zbus::fdo::Result<OwnedVariant>;
 
     #[zbus(signal)]
     fn setting_changed(
         &self,
         interface_name: &str,
         setting_name: &str,
-        new_setting_value: zvariant::Value<'_>,
+        new_setting_value: Variant<'_>,
     ) -> zbus::fdo::Result<()>;
 }
 
