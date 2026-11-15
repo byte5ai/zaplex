@@ -914,7 +914,10 @@ theme-editor-error-import = Theme konnte nicht importiert werden: { $error }
 theme-editor-error-image = Aus dem Bild konnte kein Theme erstellt werden: { $error }
 theme-editor-error-local-files = Für den Theme-Import ist lokaler Dateizugriff erforderlich.
 theme-editor-error-export-write = Das exportierte Theme konnte nicht geschrieben werden: { $error }
-workspace-left-panel-ssh-manager-multiplexer-windows = { $count } Fenster
+workspace-left-panel-ssh-manager-multiplexer-windows = { $count ->
+    [one] { $count } Fenster
+   *[other] { $count } Fenster
+}
 workspace-left-panel-ssh-manager-multiplexer-clients = { $count ->
     [one] { $count } Client
    *[other] { $count } Clients

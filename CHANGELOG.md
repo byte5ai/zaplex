@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.65] — 2026-11-15
+
+- Deutsche Übersetzung der Multiplexer-Fensterzahl verwendet wie die englische eine Pluralauswahl; der Strukturtest der Übersetzungskataloge ist wieder grün (#765).
+
 ## [1.2.64] — 2026-11-15
 
 - Clippy-Befunde aus der Entfernung der Agent-Benachrichtigungen bereinigt: ungenutzter Import, ungenutzte Variable und Parameter entfernt, verschachtelte Bedingung zusammengefasst (#768).
