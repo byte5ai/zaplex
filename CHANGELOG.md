@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.63] — 2026-11-15
+
+- D-Bus-Anbindung auf zbus 6.3 umgestellt (ashpd 0.14, notify-rust 4.19); der Linux-Schlüsselbund nutzt jetzt dbus-secret-service statt secret-service 5. Damit verlassen die ungewarteten Crates zvariant, zbus_names und zvariant_derive den Build, und die abgelaufene Ausnahme für RUSTSEC-2026-0370/0371/0372 entfällt (#570).
+
 ## [1.2.62] — 2026-11-15
 
 - KI-Konten folgen dem freigegebenen Entwurf: Jede Karte beginnt mit einer Provider-Marke (Provider-Icon in einer Theme-Farbe je Provider, Claude und Codex unterscheidbar), darunter stehen Konto links und Plan rechts als getrennte Felder; ein unbekannter Plan erscheint als „—“, Claude-Pläne lesbar („Team“ statt „team“). Ein vergebener Alias ersetzt die E-Mail in der Karte, die E-Mail bleibt als Tooltip sichtbar. Der Kopf zeigt die Kontenzahl und „Alle Konten“ als eigene Schaltfläche; die Kosten heute, 5 h und Woche stehen gesammelt in der Gesamtübersicht, dort jetzt auch mit den Modellen ohne Listenpreis. Konto-Pane und Gesamtübersicht verwenden dieselbe Marke und Aufteilung (#767).

@@ -5,7 +5,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use futures::{Stream, StreamExt as _};
-use zbus::zvariant;
+use zbus::{OwnedObjectPath, OwnedVariant, Variant};
 
 use crate::{Screenshot, ScreenshotParams};
 
@@ -22,8 +22,8 @@ trait ScreenshotPortal {
     fn screenshot(
         &self,
         parent_window: &str,
-        options: HashMap<&str, zvariant::Value<'_>>,
-    ) -> zbus::fdo::Result<zvariant::OwnedObjectPath>;
+        options: HashMap<&str, Variant<'_>>,
+    ) -> zbus::fdo::Result<OwnedObjectPath>;
 }
 
 /// A D-Bus proxy for portal Request objects.
@@ -40,7 +40,7 @@ trait PortalRequest {
     fn response(
         &self,
         response: u32,
-        results: HashMap<String, zvariant::OwnedValue>,
+        results: HashMap<String, OwnedVariant>,
     ) -> zbus::fdo::Result<()>;
 }
 
@@ -80,8 +80,8 @@ pub async fn take(params: ScreenshotParams) -> Result<Screenshot, String> {
         .map_err(|e| format!("Failed to create screenshot portal proxy: {e}"))?;
 
     // Request a non-interactive screenshot.
-    let mut options: HashMap<&str, zvariant::Value> = HashMap::new();
-    options.insert("interactive", zvariant::Value::Bool(false));
+    let mut options: HashMap<&str, Variant> = HashMap::new();
+    options.insert("interactive", Variant::Bool(false));
 
     let request_path = screenshot_proxy
         .screenshot("", options)
@@ -91,7 +91,6 @@ pub async fn take(params: ScreenshotParams) -> Result<Screenshot, String> {
     // Wait for the response signal.
     let request_proxy = PortalRequestProxy::builder(&connection)
         .path(request_path)
-        .map_err(|e| format!("Failed to build request proxy: {e}"))?
         .build()
         .await
         .map_err(|e| format!("Failed to create request proxy: {e}"))?;

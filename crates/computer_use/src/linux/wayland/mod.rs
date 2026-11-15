@@ -23,7 +23,7 @@ use session::PortalSession;
 /// An actor that performs computer use actions on Wayland via XDG portals.
 pub struct Actor {
     /// The portal session, created lazily on first use.
-    session: Option<PortalSession<'static>>,
+    session: Option<PortalSession>,
     /// Keyboard state for tracking shift and other modifiers.
     keyboard: Keyboard,
     /// Mouse state for tracking position.

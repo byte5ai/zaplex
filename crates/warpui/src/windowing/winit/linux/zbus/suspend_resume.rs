@@ -8,8 +8,7 @@ use crate::{r#async::executor::Background, windowing::winit::app::CustomEvent};
 #[proxy(
     interface = "org.freedesktop.login1.Manager",
     default_service = "org.freedesktop.login1",
-    default_path = "/org/freedesktop/login1",
-    gen_blocking = false
+    default_path = "/org/freedesktop/login1"
 )]
 trait LoginManager {
     #[zbus(signal)]

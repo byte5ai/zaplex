@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::future;
 
 use futures_util::FutureExt as _;
 use itertools::Itertools as _;
 use warpui::{r#async::executor::BackgroundTask, AppContext, SingletonEntity};
-use zbus::{interface, proxy, zvariant};
+use zbus::{interface, proxy, Variant};
 
 use crate::channel::ChannelState;
 use crate::report_if_error;
@@ -35,8 +36,8 @@ pub fn pass_startup_args_to_existing_instance(
     warpui::r#async::block_on(async {
         let conn = zbus::Connection::session().await?;
         let proxy = ExistingApplicationProxy::builder(&conn)
-            .destination(DBusServiceHost::well_known_name())?
-            .path(DBusServiceHost::application_service_path())?
+            .destination(DBusServiceHost::well_known_name())
+            .path(DBusServiceHost::application_service_path())
             .build()
             .await?;
         let mut open_new_url;
@@ -119,7 +120,7 @@ impl ApplicationService {
     /// Called when the application is started without any files to open.
     async fn activate(
         &self,
-        _platform_data: HashMap<String, zvariant::Value<'_>>,
+        _platform_data: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<()> {
         // not yet implemented
         Ok(())
@@ -131,8 +132,8 @@ impl ApplicationService {
     async fn activate_action(
         &self,
         _action_name: String,
-        _parameter: Vec<zvariant::Value<'_>>,
-        _platform_data: HashMap<String, zvariant::Value<'_>>,
+        _parameter: Vec<Variant<'_>>,
+        _platform_data: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<()> {
         // not yet implemented
         Ok(())
@@ -142,7 +143,7 @@ impl ApplicationService {
     async fn open(
         &self,
         uris: Vec<String>,
-        _platform_data: HashMap<String, zvariant::Value<'_>>,
+        _platform_data: HashMap<String, Variant<'_>>,
     ) -> zbus::fdo::Result<()> {
         let _ = self.tx.send(ApplicationServiceEvent::Open { uris }).await;
         Ok(())
@@ -159,23 +160,22 @@ impl ApplicationService {
 #[proxy(
     interface = "org.freedesktop.Application",
     default_service = "dev.zaplex.Zaplex",
-    default_path = "/dev/zap/Zaplex",
-    gen_blocking = false
+    default_path = "/dev/zap/Zaplex"
 )]
 trait ExistingApplication {
-    fn activate(&self, platform_data: HashMap<&str, zvariant::Value<'_>>) -> zbus::fdo::Result<()>;
+    fn activate(&self, platform_data: HashMap<&str, Variant<'_>>) -> zbus::fdo::Result<()>;
 
     fn activate_action(
         &self,
         action_name: &str,
-        parameter: &[zvariant::Value<'_>],
-        platform_data: HashMap<&str, zvariant::Value<'_>>,
+        parameter: &[Variant<'_>],
+        platform_data: HashMap<&str, Variant<'_>>,
     ) -> zbus::fdo::Result<()>;
 
     fn open(
         &self,
         uris: &[&str],
-        platform_data: HashMap<&str, zvariant::Value<'_>>,
+        platform_data: HashMap<&str, Variant<'_>>,
     ) -> zbus::fdo::Result<()>;
 }
 
@@ -192,18 +192,15 @@ impl DBusServiceHost {
         // Spawn a background task for the D-Bus server.
         let server_task = ctx.background_executor().spawn(
             async {
-                let conn = zbus::connection::Builder::session()?
-                    .name(Self::well_known_name())?
-                    .serve_at(Self::application_service_path(), ApplicationService { tx })?
-                    // Instead of having zbus spawn a thread to poll for new
-                    // messages, we'll poll on our own executor.
-                    .internal_executor(false)
+                let _conn = zbus::connection::Builder::session()
+                    .name(Self::well_known_name())
+                    .serve_at(Self::application_service_path(), ApplicationService { tx })
                     .build()
                     .await?;
 
-                loop {
-                    conn.executor().tick().await;
-                }
+                // zbus runs the connection on its process-wide runtime; keep the
+                // connection alive until teardown aborts this task.
+                future::pending().await
             }
             .map(|result: anyhow::Result<()>| {
                 if let Err(err) = result {

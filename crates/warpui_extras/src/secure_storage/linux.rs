@@ -10,12 +10,9 @@ use std::os::unix::fs::{
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context};
+use dbus_secret_service::{EncryptionType, Item, SecretService};
 use rand::RngCore;
 use ring::aead;
-use secret_service::{
-    blocking::{Item, SecretService},
-    EncryptionType,
-};
 use zeroize::Zeroizing;
 
 use super::Error;
@@ -74,7 +71,7 @@ impl SecureStorage {
     /// returning an error if the connection cannot be established or the
     /// collection cannot be opened.
     ///
-    fn collection(&self) -> Result<&secret_service::blocking::Collection<'_>, Error> {
+    fn collection(&self) -> Result<&dbus_secret_service::Collection<'_>, Error> {
         let collection = initialize_once_on_success(&self.collection, || {
             Collection::open_default_collection().map_err(|error| {
                 log::error!("Failed to acquire default Secret Service collection: {error:#}");
@@ -498,8 +495,8 @@ impl super::SecureStorage for SecureStorage {
     }
 }
 
-impl From<secret_service::Error> for Error {
-    fn from(value: secret_service::Error) -> Self {
+impl From<dbus_secret_service::Error> for Error {
+    fn from(value: dbus_secret_service::Error) -> Self {
         // TODO(vorporeal): Check to see if we can return any more specific
         // values.
         Error::Unknown(anyhow!(value))
@@ -514,21 +511,19 @@ impl From<ring::error::Unspecified> for Error {
 
 /// A helper structure that maintains access to the default collection.
 ///
-/// [`secret_service::SecretService`] is a self-referential struct that leaks
-/// its internal reference lifetime, which is why we use [`ouroboros`] here to
-/// provide a safe API for interacting with the service and collection.
+/// [`dbus_secret_service::Collection`] borrows the [`SecretService`] it was
+/// opened from, which is why we use [`ouroboros`] here to provide a safe API
+/// for interacting with the service and collection.
 #[ouroboros::self_referencing]
 struct Collection {
     /// An encrypted dbus connection to the Secret Service API provider.
-    #[borrows()]
-    #[covariant]
-    service: SecretService<'this>,
+    service: SecretService,
 
     /// A reference to the default secret collection, which can be used to
     /// add, remove and read secrets.
     #[borrows(service)]
     #[covariant]
-    collection: secret_service::blocking::Collection<'this>,
+    collection: dbus_secret_service::Collection<'this>,
 }
 
 impl Collection {
