@@ -18,7 +18,7 @@ diesel = { workspace = true, features = [
 # fact that we're enabling the `local_fs` feature in build.rs and not
 # via some mechanism that the feature resolver has access to, we can't
 # make it optional.
-diesel_migrations = "2.2.0"
+diesel_migrations = "2.4.0"
 serde.workspace = true
 warp_multi_agent_api.workspace = true
 

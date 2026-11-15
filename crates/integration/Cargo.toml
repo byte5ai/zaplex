@@ -57,7 +57,7 @@ warp_core = { workspace = true, features = ["test-util"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 app-installation-detection.workspace = true
-diesel = { version = "2.2.4", features = ["sqlite", "chrono"] }
+diesel = { version = "2.4.0", features = ["sqlite", "chrono"] }
 sysinfo.workspace = true
 
 [target.'cfg(unix)'.dependencies]

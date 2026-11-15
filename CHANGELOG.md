@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.61] — 2026-11-15
+
+- Sicherheitswarnungen der Abhängigkeitsprüfung durch Updates behoben: Diesel 2.4.0 mit `libsqlite3-sys` 0.40.0 bündelt SQLite 3.54.1 (RUSTSEC-2026-0459); Candle 0.11.1 nutzt `zip` 9.5.1 statt 7.2.0 (RUSTSEC-2026-0429), die drei damit gegenstandslosen zip-Ausnahmen entfallen. Zurückgezogene Versionen von `async-executor`, `clipboard-win`, `crypto-bigint` und `spinning` sind durch kompatible Patch-Versionen ersetzt.
+
 ## [1.2.60] — 2026-11-15
 
 - Aufmerksamkeit bleibt ambient: Agent-Ereignisse (fertig, wartet auf Dich) senden nie mehr eine OS-Mitteilung, sondern erscheinen nur im ambienten Signal und in der Inbox. Die Hinweisbanner zum Einschalten von Benachrichtigungen entfallen. OS-Mitteilungen für lang laufende Befehle, Passwort-Abfragen und OSC 9 gibt es nur nach ausdrücklichem Einschalten in den Einstellungen; OSC 9 aus Agent-Panes bleibt still (#768).

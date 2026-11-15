@@ -8,7 +8,7 @@
   #define MyAppName "WarpDev"
 #endif
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.60"
+  #define MyAppVersion "1.2.61"
 #endif
 #ifndef MyAppExeName
   #define MyAppExeName "dev.exe"
