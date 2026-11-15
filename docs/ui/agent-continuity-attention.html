@@ -264,6 +264,7 @@
           <li>Pin ist dauerhafter Status im Tab; Aktion heißt im Menü sichtbar „Tab anheften/lösen“.</li>
           <li>Angeheftete Tabs stehen zuerst, speichern Pane-Layout und verlangen vor Schließen Bestätigung.</li>
           <li>Nur „wartet auf Dich“ färbt Pane und Tab amber; laufend/idle leuchten nie. Der Pane-/Tab-Halo folgt der offenen Frage/Freigabe, die der Zaplex-Terminal-Hook meldet. Zähler, Titelleisten-Puls, Dock-Badge und Inbox zählen zusätzlich ungesehene beendete Runden und nur Sessions, die Zaplex öffnen kann (<a href="cockpit-sidebar-connections.html#spec">#spec S2/S3/T4</a>).</li>
+          <li>Agent-Ereignisse (Runde fertig, wartet auf Dich) erzeugen nie eine OS-Mitteilung, unabhängig von Einstellungen; sie erscheinen nur im ambienten Signal und in der Inbox. OS-Mitteilungen gibt es nur für Terminal-Ereignisse (lang laufender Befehl, Passwort-Abfrage, OSC 9 außerhalb von Agent-Panes) und nur nach ausdrücklichem Einschalten in den Einstellungen; ohne Einstellung bleiben sie aus, ohne Hinweisbanner (#768).</li>
         </ul>
       </div>
       <div>
@@ -272,6 +273,7 @@
           <li>Task-Liste aktualisiert sich geordnet; ohne Plan bleibt die heutige Zeile unverändert.</li>
           <li>Peek verschwindet beim Verlassen und verändert weder Fokus noch Layout.</li>
           <li>Reduced Motion zeigt statischen Halo; DND unterdrückt Halo vollständig.</li>
+          <li>Ein wartender Agent bei unfokussiertem Fenster setzt das Dock-Badge und erzeugt keine Mitteilung im Mitteilungszentrum.</li>
           <li>Alle Zustände verwenden denselben exakt identitätsgebundenen OpenPlan.</li>
         </ul>
       </div>

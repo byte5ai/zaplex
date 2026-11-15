@@ -684,10 +684,7 @@ pub enum FeaturesPageAction {
     ToggleFocusReporting,
     ToggleLongRunningNotifications,
     SetLongRunningNotificationThreshold,
-    /// Legacy. To be combined with `ToggleNeedsAttentionNotifications` when desktop notifs are unflagged.
     TogglePasswordPromptNotifications,
-    ToggleAgentTaskCompletedNotifications,
-    ToggleNeedsAttentionNotifications,
     ToggleNotificationSound,
     SetNotificationToastDuration,
     ToggleShowWarningBeforeQuitting,
@@ -1020,22 +1017,6 @@ impl FeaturesPageAction {
                         .is_password_prompt_enabled,
                 ),
             },
-            Self::ToggleAgentTaskCompletedNotifications => TelemetryEvent::FeaturesPageAction {
-                action: "ToggleAgentTaskCompletedNotifications".to_string(),
-                value: to_string(
-                    SessionSettings::as_ref(ctx)
-                        .notifications
-                        .is_agent_task_completed_enabled,
-                ),
-            },
-            Self::ToggleNeedsAttentionNotifications => TelemetryEvent::FeaturesPageAction {
-                action: "ToggleNeedsAttentionNotifications".to_string(),
-                value: to_string(
-                    SessionSettings::as_ref(ctx)
-                        .notifications
-                        .is_needs_attention_enabled,
-                ),
-            },
             Self::ToggleNotificationSound => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleNotificationSound".to_string(),
                 value: to_string(
@@ -1226,8 +1207,7 @@ struct MouseStateHandles {
     quake_mode_width_height_reset: MouseStateHandle,
     quake_mode_pin_window_check: MouseStateHandle,
     long_running_notifications_checkbox: MouseStateHandle,
-    agent_task_completed_notifications_checkbox: MouseStateHandle,
-    agent_needs_attention_notifications_checkbox: MouseStateHandle,
+    password_prompt_notifications_checkbox: MouseStateHandle,
     agent_in_app_notifications_switch: SwitchStateHandle,
     #[cfg(target_os = "macos")]
     notification_sound_checkbox: MouseStateHandle,
@@ -1627,37 +1607,6 @@ impl TypedActionView for FeaturesPageView {
                 SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let new_settings = NotificationsSettings {
                         is_password_prompt_enabled,
-                        ..current_settings
-                    };
-                    if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notifications setting: {e}");
-                    }
-                });
-                ctx.notify();
-            }
-            ToggleAgentTaskCompletedNotifications => {
-                let current_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
-                let is_agent_task_completed_enabled =
-                    !current_settings.is_agent_task_completed_enabled;
-
-                SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let new_settings = NotificationsSettings {
-                        is_agent_task_completed_enabled,
-                        ..current_settings
-                    };
-                    if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                        log::error!("Error persisting notifications setting: {e}");
-                    }
-                });
-                ctx.notify();
-            }
-            ToggleNeedsAttentionNotifications => {
-                let current_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
-                let is_agent_needs_attention_enabled = !current_settings.is_needs_attention_enabled;
-
-                SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let new_settings = NotificationsSettings {
-                        is_needs_attention_enabled: is_agent_needs_attention_enabled,
                         ..current_settings
                     };
                     if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
@@ -5031,28 +4980,19 @@ impl SettingsWidget for DesktopNotificationsWidget {
             session_settings.notifications.mode,
             NotificationsMode::Enabled
         ) {
+            // Only terminal events: agent attention is ambient and never an
+            // OS notification.
             let toggles = vec![
-                view.render_notification_toggle(
-                    session_settings
-                        .notifications
-                        .is_agent_task_completed_enabled,
-                    &crate::t!("settings-features-notify-agent-task-completed"),
-                    FeaturesPageAction::ToggleAgentTaskCompletedNotifications,
-                    view.button_mouse_states
-                        .agent_task_completed_notifications_checkbox
-                        .clone(),
-                    appearance,
-                ),
                 view.render_long_running_notifications_setting(
                     &session_settings.notifications,
                     appearance,
                 ),
                 view.render_notification_toggle(
-                    session_settings.notifications.is_needs_attention_enabled,
-                    &crate::t!("settings-features-notify-needs-attention"),
-                    FeaturesPageAction::ToggleNeedsAttentionNotifications,
+                    session_settings.notifications.is_password_prompt_enabled,
+                    &crate::t!("settings-features-notify-password-prompt"),
+                    FeaturesPageAction::TogglePasswordPromptNotifications,
                     view.button_mouse_states
-                        .agent_needs_attention_notifications_checkbox
+                        .password_prompt_notifications_checkbox
                         .clone(),
                     appearance,
                 ),

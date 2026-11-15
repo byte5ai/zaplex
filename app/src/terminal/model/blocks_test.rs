@@ -761,16 +761,16 @@ fn test_banner_insertion_and_removal() {
 
     block_list.insert_inline_banner_after_block(
         first_block_index,
-        InlineBannerItem::new(0, InlineBannerType::NotificationsDiscovery),
+        InlineBannerItem::new(0, InlineBannerType::NotificationsError),
     );
     block_list.insert_inline_banner_before_block(
         last_block_index,
-        InlineBannerItem::new(1, InlineBannerType::NotificationsDiscovery),
+        InlineBannerItem::new(1, InlineBannerType::NotificationsError),
         None,
     );
     block_list.append_inline_banner(InlineBannerItem::new(
         2,
-        InlineBannerType::NotificationsDiscovery,
+        InlineBannerType::NotificationsError,
     ));
 
     // Three inserted blocks + three banners + three blocks from bootstrapping
@@ -846,7 +846,7 @@ fn test_gap_after_banner() {
 
     block_list.append_inline_banner(InlineBannerItem::new(
         0,
-        InlineBannerType::NotificationsDiscovery,
+        InlineBannerType::NotificationsError,
     ));
     block_list.set_next_gap_height_in_lines(17.0.into_lines());
     block_list.clear_visible_screen();
@@ -934,7 +934,7 @@ fn test_removed_gap_with_banner() {
 
     block_list.append_inline_banner(InlineBannerItem::new(
         0,
-        InlineBannerType::NotificationsDiscovery,
+        InlineBannerType::NotificationsError,
     ));
     // Make sure the banner was inserted.
     assert!(block_list
@@ -1083,7 +1083,7 @@ fn test_block_height_update_shifts_indices() {
     // Insert a banner before the first block.
     block_list.insert_inline_banner_before_block(
         first_block_index,
-        InlineBannerItem::new(0, InlineBannerType::NotificationsDiscovery),
+        InlineBannerItem::new(0, InlineBannerType::NotificationsError),
         None,
     );
 
@@ -1143,7 +1143,7 @@ fn test_remove_rich_content_block() {
 
     block_list.insert_inline_banner_before_block(
         second_block_index,
-        InlineBannerItem::new(0, InlineBannerType::NotificationsDiscovery),
+        InlineBannerItem::new(0, InlineBannerType::NotificationsError),
         None,
     );
 

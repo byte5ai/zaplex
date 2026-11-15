@@ -302,13 +302,6 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
             kind: AgentTipKind::General,
         },
         AgentTip {
-            description: crate::t!("agent-tip-desktop-notifications"),
-            link: None,
-            binding_name: None,
-            action: None,
-            kind: AgentTipKind::General,
-        },
-        AgentTip {
             description: crate::t!("agent-tip-cancel-task"),
             link: None,
             binding_name: Some(CANCEL_COMMAND_KEYBINDING),

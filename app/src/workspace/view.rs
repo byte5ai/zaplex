@@ -21528,7 +21528,6 @@ impl Workspace {
             send_telemetry_from_ctx!(
                 TelemetryEvent::NotificationPermissionsRequested {
                     source: NotificationsTurnedOnSource::Settings,
-                    trigger: None
                 },
                 ctx
             );

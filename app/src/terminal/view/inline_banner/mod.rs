@@ -4,7 +4,6 @@
 mod agent_mode_setup;
 mod alias_expansion;
 mod cli_agent_restore;
-mod notifications_discovery;
 mod notifications_error;
 mod open_in_warp;
 mod passive_code_diff;
@@ -18,7 +17,6 @@ pub use self::prompt_suggestions::*;
 pub use agent_mode_setup::*;
 pub use alias_expansion::*;
 pub use cli_agent_restore::*;
-pub use notifications_discovery::*;
 pub use notifications_error::*;
 pub use open_in_warp::*;
 pub use passive_code_diff::*;

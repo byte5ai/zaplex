@@ -76,9 +76,7 @@ use crate::terminal::view::BlockSelectionDetails;
 use crate::terminal::view::ContextMenuInfo;
 use crate::terminal::view::GridHighlightedLink;
 use crate::terminal::view::PromptPart;
-use crate::terminal::view::{
-    NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction, NotificationsTrigger,
-};
+use crate::terminal::view::{NotificationsErrorBannerAction, NotificationsTrigger};
 use crate::tips::WelcomeTipFeature;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::settings::EditorLayout;
@@ -372,7 +370,6 @@ pub enum TabRenameEvent {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum NotificationsTurnedOnSource {
     Settings,
-    Banner,
 }
 
 /// The possible types of toggles in the find bar
@@ -1283,13 +1280,10 @@ pub enum TelemetryEvent {
         tip_name: WelcomeTipFeature,
     },
     DismissWelcomeTips,
-    ShowNotificationsDiscoveryBanner,
-    NotificationsDiscoveryBannerAction(NotificationsDiscoveryBannerAction),
     ShowNotificationsErrorBanner,
     NotificationsErrorBannerAction(NotificationsErrorBannerAction),
     NotificationPermissionsRequested {
         source: NotificationsTurnedOnSource,
-        trigger: Option<NotificationsTrigger>,
     },
     NotificationsRequestPermissionsOutcome {
         outcome: RequestPermissionsOutcome,
@@ -1298,8 +1292,6 @@ pub enum TelemetryEvent {
     // notifications that are successfully sent _and_ those that fail at the platform level.
     NotificationSent {
         trigger: NotificationsTrigger,
-        /// Identifies which agent variant produced the desktop notification, if any.
-        agent_variant: Option<NotificationAgentVariant>,
     },
     NotificationFailedToSend {
         error: NotificationSendError,
@@ -2735,26 +2727,17 @@ impl TelemetryEvent {
             } => Some(
                 json!({ "total_completed_count": total_completed_count, "tip_name": tip_name }),
             ),
-            TelemetryEvent::NotificationsDiscoveryBannerAction(action) => {
-                Some(json!({ "action": action }))
-            }
             TelemetryEvent::InputModeChanged { old_mode, new_mode } => {
                 Some(json!({ "old_mode": old_mode, "new_mode": new_mode }))
             }
             TelemetryEvent::NotificationsErrorBannerAction(action) => {
                 Some(json!({ "action": action }))
             }
-            TelemetryEvent::NotificationPermissionsRequested { source, trigger } => {
-                Some(json!({ "source": source, "trigger": trigger }))
+            TelemetryEvent::NotificationPermissionsRequested { source } => {
+                Some(json!({ "source": source }))
             }
             TelemetryEvent::NotificationFailedToSend { error } => Some(json!({ "error": error })),
-            TelemetryEvent::NotificationSent {
-                trigger,
-                agent_variant,
-            } => Some(json!({
-                "trigger": trigger,
-                "agent_variant": agent_variant,
-            })),
+            TelemetryEvent::NotificationSent { trigger } => Some(json!({ "trigger": trigger })),
             TelemetryEvent::NotificationsRequestPermissionsOutcome { outcome } => {
                 Some(json!({ "outcome": outcome }))
             }
@@ -3622,7 +3605,6 @@ impl TelemetryEvent {
             | TelemetryEvent::OpenQuakeModeWindow
             | TelemetryEvent::OpenWelcomeTips
             | TelemetryEvent::DismissWelcomeTips
-            | TelemetryEvent::ShowNotificationsDiscoveryBanner
             | TelemetryEvent::ShowNotificationsErrorBanner
             | TelemetryEvent::NotificationClicked
             | TelemetryEvent::SignUpButtonClicked
@@ -4180,8 +4162,6 @@ impl TelemetryEvent {
             | TelemetryEvent::OpenWelcomeTips
             | TelemetryEvent::CompleteWelcomeTipFeature { .. }
             | TelemetryEvent::DismissWelcomeTips
-            | TelemetryEvent::ShowNotificationsDiscoveryBanner
-            | TelemetryEvent::NotificationsDiscoveryBannerAction(_)
             | TelemetryEvent::ShowNotificationsErrorBanner
             | TelemetryEvent::NotificationsErrorBannerAction(_)
             | TelemetryEvent::NotificationPermissionsRequested { .. }

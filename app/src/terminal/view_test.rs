@@ -50,7 +50,7 @@ use crate::terminal::CLIAgent;
 
 use crate::terminal::block_list_element::{SnackbarPoint, SnackbarTranslationMode};
 use crate::terminal::block_list_viewport::{ClampingMode, ScrollLines};
-use crate::terminal::session_settings::AgentToolbarChipSelection;
+use crate::terminal::session_settings::{AgentToolbarChipSelection, NotificationsSettings};
 use crate::view_components::find::FindWithinBlockState;
 
 use crate::terminal::model::ansi::{self, InitShellValue, PrecmdValue};
@@ -7372,4 +7372,105 @@ fn classic_ssh_setup_deadline_waits_for_extension_installation() {
             assert_eq!(view.remote_input_phase, Some(RemoteInputPhase::Failed));
         });
     });
+}
+
+#[test]
+fn agent_status_changes_never_send_os_notifications_or_banners() {
+    for mode in [NotificationsMode::Unset, NotificationsMode::Enabled] {
+        App::test((), |mut app| async move {
+            initialize_app_for_terminal_view(&mut app);
+            SessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+                let _ = settings.notifications.set_value(
+                    NotificationsSettings {
+                        mode,
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            app.read(|ctx| assert_eq!(SessionSettings::as_ref(ctx).notifications.mode, mode));
+            let terminal = add_window_with_terminal(&mut app, None);
+            let sent = Rc::new(RefCell::new(0usize));
+            let counter = sent.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                    if matches!(event, Event::SendNotification(_)) {
+                        *counter.borrow_mut() += 1;
+                    }
+                });
+            });
+            let banners_before =
+                terminal.read(&app, |view, _| view.inline_banners_state.next_banner_id);
+            terminal.update(&mut app, |view, ctx| {
+                CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                    sessions.set_session(
+                        view.view_id,
+                        CLIAgentSession {
+                            agent: CLIAgent::Claude,
+                            status: CLIAgentSessionStatus::InProgress,
+                            session_context: CLIAgentSessionContext::default(),
+                            input_state: CLIAgentInputState::Closed,
+                            should_auto_toggle_input: false,
+                            listener: None,
+                            remote_host: None,
+                            plugin_version: None,
+                            draft_text: None,
+                            custom_command_prefix: None,
+                        },
+                        ctx,
+                    );
+                });
+            });
+
+            for event in [
+                CLIAgentEventType::PermissionRequest,
+                CLIAgentEventType::Stop,
+            ] {
+                terminal.update(&mut app, |view, ctx| {
+                    CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                        sessions.update_from_event(
+                            view.view_id,
+                            &CLIAgentEvent {
+                                v: 1,
+                                agent: CLIAgent::Claude,
+                                event: event.clone(),
+                                session_id: None,
+                                cwd: None,
+                                project: None,
+                                payload: CLIAgentEventPayload {
+                                    summary: Some("Allow the edit?".to_owned()),
+                                    ..Default::default()
+                                },
+                            },
+                            ctx,
+                        );
+                    });
+                });
+                terminal.read(&app, |view, ctx| {
+                    let status = CLIAgentSessionsModel::as_ref(ctx)
+                        .session(view.view_id)
+                        .map(|session| session.status.clone());
+                    match event {
+                        CLIAgentEventType::PermissionRequest => assert!(
+                            matches!(status, Some(CLIAgentSessionStatus::Blocked { .. })),
+                            "the agent must be waiting on the user"
+                        ),
+                        _ => assert!(matches!(status, Some(CLIAgentSessionStatus::Success))),
+                    }
+                });
+            }
+
+            assert_eq!(
+                *sent.borrow(),
+                0,
+                "agent events must not reach the OS notification centre ({mode:?})"
+            );
+            terminal.read(&app, |view, _| {
+                assert_eq!(
+                    view.inline_banners_state.next_banner_id, banners_before,
+                    "no notifications banner may appear ({mode:?})"
+                );
+            });
+        });
+    }
 }
