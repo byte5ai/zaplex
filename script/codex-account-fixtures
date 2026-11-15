@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""Write fake Codex accounts for native UI checks into a disposable root.
+
+The root is a required argument and must lie inside the system temporary
+directory. The script never derives a target from `~` or `$HOME`, so running
+it on a real host cannot touch the user's accounts. Start Zaplex with
+`HOME=<root>` to make it discover the fake accounts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
+import sys
+import tempfile
+
+
+class FixtureRootError(Exception):
+    pass
+
+
+def disposable_root(raw: str) -> Path:
+    temporary = Path(tempfile.gettempdir()).resolve()
+    root = Path(raw)
+    if not root.is_absolute():
+        raise FixtureRootError("fixture root must be an absolute path")
+    resolved = root.resolve()
+    if resolved == temporary or temporary not in resolved.parents:
+        raise FixtureRootError(
+            f"fixture root {resolved} is not inside the temporary directory {temporary}"
+        )
+    return resolved
+
+
+def write(root: Path, relative: str, content: str) -> None:
+    path = (root / relative).resolve()
+    if root not in path.parents:
+        raise FixtureRootError(f"fixture path {path} escapes the root {root}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def encode(claims: dict) -> str:
+    return base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+
+
+def window(used_percent: float, minutes: int, resets_in: timedelta, now: datetime) -> dict:
+    return {
+        "used_percent": used_percent,
+        "window_minutes": minutes,
+        "resets_at": int((now + resets_in).timestamp()),
+    }
+
+
+def accounts(now: datetime) -> list[tuple[str, str, str, str, dict | None, dict | None]]:
+    return [
+        (
+            ".codex",
+            "dev@example.invalid",
+            "acc-pro",
+            "pro",
+            window(12.0, 300, timedelta(hours=3), now),
+            window(42.0, 10080, timedelta(days=4), now),
+        ),
+        (
+            ".codex-team",
+            "dev@example.invalid",
+            "acc-team",
+            "team",
+            None,
+            window(88.0, 10080, timedelta(days=2), now),
+        ),
+        (".codex-lite", "lite@example.invalid", "acc-lite", "prolite", None, None),
+    ]
+
+
+def write_fixtures(root: Path, now: datetime) -> None:
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    for directory, email, account_id, plan, five_hour, week in accounts(now):
+        id_token = ".".join(
+            [
+                encode({"alg": "none"}),
+                encode(
+                    {
+                        "email": email,
+                        "https://api.openai.com/auth": {
+                            "chatgpt_plan_type": plan,
+                            "chatgpt_account_id": account_id,
+                        },
+                    }
+                ),
+                "fixture",
+            ]
+        )
+        auth = {"auth_mode": "chatgpt", "tokens": {"id_token": id_token, "account_id": account_id}}
+        write(root, f"{directory}/auth.json", json.dumps(auth))
+        if five_hour is None and week is None:
+            continue
+        lines = [
+            {
+                "type": "session_meta",
+                "timestamp": stamp,
+                "payload": {"id": f"fixture-{account_id}", "cwd": str(root)},
+            },
+            {
+                "type": "event_msg",
+                "timestamp": stamp,
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "last_token_usage": {"input_tokens": 1200, "output_tokens": 300},
+                        "total_token_usage": {"input_tokens": 1200, "output_tokens": 300},
+                    },
+                    "rate_limits": {
+                        "limit_id": "codex",
+                        "primary": five_hour,
+                        "secondary": week,
+                        "plan_type": plan,
+                    },
+                },
+            },
+        ]
+        day = now.strftime("%Y/%m/%d")
+        name = f"rollout-{now.strftime('%Y-%m-%dT%H-%M-%S')}-fixture-{account_id}.jsonl"
+        write(
+            root,
+            f"{directory}/sessions/{day}/{name}",
+            "".join(json.dumps(line) + "\n" for line in lines),
+        )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--root",
+        required=True,
+        help="disposable fake home inside the temporary directory",
+    )
+    arguments = parser.parse_args()
+    try:
+        root = disposable_root(arguments.root)
+        write_fixtures(root, datetime.now(timezone.utc))
+    except FixtureRootError as error:
+        print(f"codex-account-fixtures: {error}", file=sys.stderr)
+        return 2
+    print(f"Fake Codex accounts written to {root}; start Zaplex with HOME={root}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

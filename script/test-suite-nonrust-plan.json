@@ -176,6 +176,21 @@
       ]
     },
     {
+      "id": "codex-account-fixtures",
+      "source": "script/codex-account-fixtures-tests",
+      "mode": "events",
+      "command": [
+        "{python}",
+        "script/codex-account-fixtures-tests"
+      ],
+      "timeout_seconds": 60,
+      "expected_case_ids": [
+        "fixtures-stay-inside-temporary-root",
+        "home-outside-temporary-directory-is-refused",
+        "relative-and-escaping-roots-are-refused"
+      ]
+    },
+    {
       "id": "release-readiness-fixtures",
       "source": "script/check-v1-release-readiness",
       "mode": "events",
