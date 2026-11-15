@@ -43,8 +43,8 @@ use warp_ssh_manager::{
     clone_server_with_secrets, delete_node_and_secrets, prepare_delete_node, validate_ssh_endpoint,
     AuthType, CredentialOperationError, DefaultWorkspaceCommandFactory, DeleteHostExpectation,
     DeleteNodeExpectation, EndpointUse, KeychainSecretStore, MultiplexerAttachMode, NodeKind,
-    SecretKind, SshConfigCandidate, SshEndpointValidationError, SshNode, SshRepository,
-    SshServerInfo, ValidatedSshEndpoint, WorkspaceCommandFactory,
+    SecretKind, SessionResilience, SshConfigCandidate, SshEndpointValidationError, SshNode,
+    SshRepository, SshServerInfo, ValidatedSshEndpoint, WorkspaceCommandFactory,
 };
 
 use remote_server::proto::{
@@ -953,6 +953,8 @@ pub struct SshManagerPanel {
     refreshing_actions: HashMap<String, CompactRowAction>,
     /// Per-row DraggableState — preserves drag progress across renders, so it must be cached in the view state.
     row_drag_states: HashMap<String, DraggableState>,
+    /// Hover state of each node's name label; only this shows the name tooltip.
+    name_tooltip_states: HashMap<String, MouseStateHandle>,
 
     context_menu_position: Option<Vector2F>,
     context_menu_target: Option<String>,
@@ -1011,8 +1013,14 @@ pub struct SshManagerPanel {
     sessions_loading: HashMap<String, u64>,
     /// Lifecycle events arriving during a fetch require one follow-up inventory.
     sessions_refresh_pending: std::collections::HashSet<String>,
-    /// Tree/configuration changes invalidate results captured for old endpoints.
-    session_inventory_generation: u64,
+    /// Token of the most recently started inventory fetch; every fetch gets a
+    /// fresh one, so a result never lands on a re-created node with the same id.
+    session_fetch_seq: u64,
+    /// Hosts whose in-flight fetch targets an endpoint that has changed since.
+    stale_session_fetches: std::collections::HashSet<String>,
+    /// Endpoint per server node as of the last tree load. Only a changed
+    /// endpoint invalidates a host's inventory; other tree edits keep it.
+    session_endpoints: HashMap<String, SessionEndpoint>,
     /// Server node_ids with an in-flight connect (daemon preflight/install or
     /// classic open). Gives instant feedback on the row and guards against
     /// double-triggering for the complete connection lifecycle. The Workspace
@@ -1141,6 +1149,7 @@ impl SshManagerPanel {
             refresh_actions: HashMap::new(),
             refreshing_actions: HashMap::new(),
             row_drag_states: HashMap::new(),
+            name_tooltip_states: HashMap::new(),
             context_menu_position: None,
             context_menu_target: None,
             pending_delete: None,
@@ -1170,7 +1179,9 @@ impl SshManagerPanel {
             session_disclosure_seen: std::collections::HashSet::new(),
             sessions_loading: HashMap::new(),
             sessions_refresh_pending: std::collections::HashSet::new(),
-            session_inventory_generation: 0,
+            session_fetch_seq: 0,
+            stale_session_fetches: std::collections::HashSet::new(),
+            session_endpoints: HashMap::new(),
             connecting: std::collections::HashSet::new(),
             resilient_hosts: std::collections::HashSet::new(),
             sessions_error: HashMap::new(),
@@ -1240,20 +1251,33 @@ impl SshManagerPanel {
 
     #[cfg(test)]
     pub(crate) fn set_nodes_for_test(&mut self, nodes: Vec<SshNode>, ctx: &mut ViewContext<Self>) {
-        self.invalidate_session_inventories();
+        let listed: Vec<String> = self
+            .host_session_inventories
+            .keys()
+            .chain(self.sessions_loading.keys())
+            .chain(self.sessions_error.keys())
+            .cloned()
+            .collect();
+        for node_id in listed {
+            self.invalidate_session_inventory(&node_id);
+        }
         self.depths = compute_depths(&nodes);
         self.nodes = sort_for_display(nodes, &self.depths);
         self.sync_node_derived_state(ctx);
     }
 
     fn sync_connected_hosts(&mut self, ctx: &mut ViewContext<Self>) {
+        self.sync_connected_host_ids(ctx);
+        for node_id in self.session_refresh_ids() {
+            self.fetch_sessions(node_id, ctx);
+        }
+    }
+
+    fn sync_connected_host_ids(&mut self, ctx: &mut ViewContext<Self>) {
         self.connected_host_ids = connected_hosts_by_registry_node(
             RemoteServerManager::as_ref(ctx).connected_registry_hosts(),
         );
         self.auto_reveal_connected_sessions();
-        for node_id in self.session_refresh_ids() {
-            self.fetch_sessions(node_id, ctx);
-        }
     }
 
     fn session_refresh_ids(&self) -> Vec<String> {
@@ -1285,9 +1309,12 @@ impl SshManagerPanel {
             self.nodes.iter().map(|node| node.id.clone()).collect();
         self.row_states.retain(|id, _| active_ids.contains(id));
         self.row_drag_states.retain(|id, _| active_ids.contains(id));
+        self.name_tooltip_states
+            .retain(|id, _| active_ids.contains(id));
         for node in &self.nodes {
             self.row_states.entry(node.id.clone()).or_default();
             self.row_drag_states.entry(node.id.clone()).or_default();
+            self.name_tooltip_states.entry(node.id.clone()).or_default();
         }
 
         let server_ids: std::collections::HashSet<String> = self
@@ -1421,6 +1448,8 @@ impl SshManagerPanel {
             .retain(|id, _| active_ids.contains(id));
         self.sessions_refresh_pending
             .retain(|id| active_ids.contains(id));
+        self.stale_session_fetches
+            .retain(|id| active_ids.contains(id));
         self.sessions_error.retain(|id, _| active_ids.contains(id));
         self.session_row_states.retain(|key, _| {
             key.split(':')
@@ -1442,54 +1471,14 @@ impl SshManagerPanel {
     fn refresh_tree(&mut self, ctx: &mut ViewContext<Self>) {
         match warp_ssh_manager::with_conn(|c| Ok(SshRepository::list_nodes(c)?)) {
             Ok(nodes) => {
-                self.invalidate_session_inventories();
-                self.depths = compute_depths(&nodes);
-                self.nodes = sort_for_display(nodes, &self.depths);
-                if let Some(id) = self.selected_id.clone() {
-                    if !self.nodes.iter().any(|n| n.id == id) {
-                        self.selected_id = None;
-                    }
-                }
-                // If the node being renamed was deleted externally, clear rename_state
-                if let Some(rs) = self.rename_state.as_ref() {
-                    if !self.nodes.iter().any(|n| n.id == rs.node_id) {
-                        self.rename_state = None;
-                    }
-                }
-                // Any tree mutation invalidates the captured host/credential
-                // impact. Close the modal rather than let the user confirm
-                // against a stale folder snapshot.
-                if self.pending_delete.is_some() {
-                    self.pending_delete = None;
-                }
-                // Refresh which hosts have Zaplexify persistence enabled (mark).
-                let server_ids: Vec<String> = self
-                    .nodes
-                    .iter()
-                    .filter(|n| matches!(n.kind, NodeKind::Server))
-                    .map(|n| n.id.clone())
-                    .collect();
-                self.resilient_hosts = warp_ssh_manager::with_conn(|c| {
-                    let mut resilient = std::collections::HashSet::new();
-                    for id in &server_ids {
-                        if let Some(server) = SshRepository::get_server(c, id)? {
-                            if server.session_resilience.is_enabled() {
-                                resilient.insert(id.clone());
-                            }
-                        }
-                    }
-                    Ok(resilient)
-                })
-                .unwrap_or_default();
+                let (endpoints, resilient_hosts) = load_session_endpoints(&nodes);
+                self.apply_tree(nodes, endpoints, resilient_hosts, ctx);
             }
             Err(e) => {
                 log::error!("ssh_manager: failed to load tree: {e:?}");
                 ctx.emit(SshManagerPanelEvent::PersistenceError(e.to_string()));
             }
         }
-
-        self.sync_node_derived_state(ctx);
-        self.sync_connected_hosts(ctx);
 
         // Tree changed → recompute the "Added" set (PRODUCT.md decision E). "Imported" is determined by
         // `server.host == candidate.alias` — aligned with ImportCandidate's write
@@ -1503,6 +1492,72 @@ impl SshManagerPanel {
         }
 
         ctx.notify();
+    }
+
+    /// Applies a freshly loaded tree. Session inventories survive unless their
+    /// host's endpoint changed; only changed or not yet listed expanded hosts
+    /// are fetched again.
+    fn apply_tree(
+        &mut self,
+        nodes: Vec<SshNode>,
+        endpoints: HashMap<String, SessionEndpoint>,
+        resilient_hosts: std::collections::HashSet<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let changed: std::collections::HashSet<String> = self
+            .session_endpoints
+            .keys()
+            .chain(endpoints.keys())
+            .filter(|id| self.session_endpoints.get(*id) != endpoints.get(*id))
+            .cloned()
+            .collect();
+        for node_id in &changed {
+            self.invalidate_session_inventory(node_id);
+        }
+        self.session_endpoints = endpoints;
+        self.depths = compute_depths(&nodes);
+        self.nodes = sort_for_display(nodes, &self.depths);
+        if let Some(id) = self.selected_id.clone() {
+            if !self.nodes.iter().any(|n| n.id == id) {
+                self.selected_id = None;
+            }
+        }
+        // If the node being renamed was deleted externally, clear rename_state
+        if let Some(rs) = self.rename_state.as_ref() {
+            if !self.nodes.iter().any(|n| n.id == rs.node_id) {
+                self.rename_state = None;
+            }
+        }
+        // Any tree mutation invalidates the captured host/credential
+        // impact. Close the modal rather than let the user confirm
+        // against a stale folder snapshot.
+        if self.pending_delete.is_some() {
+            self.pending_delete = None;
+        }
+        // Which hosts have Zaplexify persistence enabled (mark).
+        self.resilient_hosts = resilient_hosts;
+
+        self.sync_node_derived_state(ctx);
+        self.sync_connected_host_ids(ctx);
+        for node_id in self.sessions_to_fetch_after_tree_change(&changed) {
+            self.fetch_sessions(node_id, ctx);
+        }
+    }
+
+    /// Expanded hosts whose endpoint changed, plus persistent hosts revealed
+    /// without any listing yet. Unchanged listed hosts keep their inventory.
+    fn sessions_to_fetch_after_tree_change(
+        &self,
+        changed: &std::collections::HashSet<String>,
+    ) -> Vec<String> {
+        self.sessions_expanded
+            .iter()
+            .filter(|id| {
+                changed.contains(*id)
+                    || (self.resilient_hosts.contains(*id) && !self.has_session_listing(id))
+            })
+            .cloned()
+            .collect()
     }
 
     /// Keep the key sets of `candidate_row_states` / `candidate_add_states` in sync with the current
@@ -1988,17 +2043,31 @@ impl SshManagerPanel {
         ctx.notify();
     }
 
-    fn invalidate_session_inventories(&mut self) {
-        if let Some(node_id) = self.focused_node_id() {
-            self.focused_row = Some(FocusedRow::Node(node_id));
+    /// Drops everything listed for one host after its endpoint changed. An
+    /// in-flight fetch for it is discarded when it completes.
+    fn invalidate_session_inventory(&mut self, node_id: &str) {
+        if self.sessions_loading.contains_key(node_id) {
+            self.stale_session_fetches.insert(node_id.to_string());
         }
-        self.session_inventory_generation += 1;
-        self.host_session_inventories.clear();
-        self.sessions_error.clear();
-        self.session_row_states.clear();
-        self.session_open_actions.clear();
-        self.session_end_actions.clear();
-        self.local_session_panes.clear();
+        self.host_session_inventories.remove(node_id);
+        self.sessions_error.remove(node_id);
+        let prefix = format!("{node_id}:");
+        self.session_row_states
+            .retain(|key, _| !key.starts_with(&prefix));
+        self.session_open_actions
+            .retain(|key, _| !key.starts_with(&prefix));
+        self.session_end_actions
+            .retain(|key, _| !key.starts_with(&prefix));
+        self.local_session_panes
+            .retain(|key, _| !key.starts_with(&prefix));
+        self.normalize_session_focus(node_id);
+    }
+
+    /// Whether the host already shows a listing, an error, or has one in flight.
+    fn has_session_listing(&self, node_id: &str) -> bool {
+        self.host_session_inventories.contains_key(node_id)
+            || self.sessions_error.contains_key(node_id)
+            || self.sessions_loading.contains_key(node_id)
     }
 
     fn begin_session_fetch(&mut self, id: &str) -> Option<u64> {
@@ -2006,9 +2075,11 @@ impl SshManagerPanel {
             self.sessions_refresh_pending.insert(id.to_string());
             return None;
         }
-        let generation = self.session_inventory_generation;
-        self.sessions_loading.insert(id.to_string(), generation);
-        Some(generation)
+        self.stale_session_fetches.remove(id);
+        self.session_fetch_seq += 1;
+        let token = self.session_fetch_seq;
+        self.sessions_loading.insert(id.to_string(), token);
+        Some(token)
     }
 
     /// Returns whether an event queued a newer inventory while this fetch ran.
@@ -2024,7 +2095,7 @@ impl SshManagerPanel {
         }
         self.sessions_loading.remove(id);
         let refresh_pending = self.sessions_refresh_pending.remove(id);
-        if generation == self.session_inventory_generation {
+        if !self.stale_session_fetches.remove(id) {
             match result {
                 Ok(inventory) => {
                     self.sessions_error.remove(id);
@@ -3652,13 +3723,15 @@ impl SshManagerPanel {
                 )
                 .with_max_width(400.0)
                 .finish();
+                // Above the row, like the Cockpit tree, so it never covers
+                // the next session.
                 stack.add_positioned_overlay_child(
                     tooltip,
                     OffsetPositioning::offset_from_parent(
-                        Vector2F::new(0.0, 3.0),
+                        Vector2F::new(0.0, -3.0),
                         ParentOffsetBounds::WindowByPosition,
-                        ParentAnchor::BottomLeft,
-                        ChildAnchor::TopLeft,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::BottomLeft,
                     ),
                 );
             }
@@ -3779,14 +3852,24 @@ impl SshManagerPanel {
             muted,
         )];
         let host_inventory = self.host_session_inventories.get(&node.id);
-        if self.sessions_loading.contains_key(&node.id) && host_inventory.is_none() {
-            rows.push(message(
-                crate::t!("workspace-left-panel-ssh-manager-sessions-loading"),
-                muted,
-            ));
-            if host_inventory.is_none() && !self.sessions_error.contains_key(&node.id) {
-                return rows;
-            }
+        // Only the first load has nothing to show yet; a refetch keeps the
+        // previous rows or error and signals progress in the refresh slot.
+        if self.sessions_loading.contains_key(&node.id)
+            && host_inventory.is_none()
+            && !self.sessions_error.contains_key(&node.id)
+        {
+            rows.push(
+                SavePosition::new(
+                    message(
+                        crate::t!("workspace-left-panel-ssh-manager-sessions-loading"),
+                        muted,
+                    ),
+                    &format!("ssh-manager-sessions-loading:{}", node.id),
+                )
+                .for_single_frame()
+                .finish(),
+            );
+            return rows;
         }
         if let Some(err) = self.sessions_error.get(&node.id) {
             // A failed session fetch is an error — render it in the theme's error
@@ -3870,12 +3953,7 @@ impl SshManagerPanel {
                     } else {
                         session.name.clone()
                     };
-                    let metadata = crate::t!(
-                        "workspace-left-panel-ssh-manager-multiplexer-metadata",
-                        kind = multiplexer_kind_label(session.kind),
-                        windows = session.windows,
-                        clients = session.attached_clients
-                    );
+                    let metadata = multiplexer_metadata(session);
                     rows.push(self.render_session_row(
                         &key,
                         TerminalIdentity {
@@ -4035,14 +4113,28 @@ impl SshManagerPanel {
                 .finish();
             ConstrainedBox::new(input).with_width(180.0).finish()
         } else {
-            Text::new_inline(
+            let label = Text::new_inline(
                 node.name.clone(),
                 appearance.ui_font_family(),
                 appearance.ui_font_body_large(),
             )
             .with_color(theme.main_text_color(theme.surface_2()).into())
             .with_clip(ClipConfig::ellipsis())
-            .finish()
+            .finish();
+            // The full name appears only while the pointer is on the label,
+            // above it like in the Cockpit tree; keyboard focus shows as the
+            // row highlight instead.
+            appearance.ui_builder().overlay_tool_tip_on_element(
+                node.name.clone(),
+                self.name_tooltip_states
+                    .get(&node.id)
+                    .cloned()
+                    .unwrap_or_default(),
+                label,
+                ParentAnchor::TopLeft,
+                ChildAnchor::BottomLeft,
+                Vector2F::new(0.0, -4.0),
+            )
         };
 
         let label_or_editor = SavePosition::new(
@@ -4144,9 +4236,6 @@ impl SshManagerPanel {
                 .finish();
         }
 
-        let full_name = node.name.clone();
-        let keyboard_focused = self.keyboard_focused
-            && self.focused_row == Some(FocusedRow::Node(node.id.clone()));
         let hoverable = Hoverable::new(state, move |mouse| {
             let mut c = Container::new(row)
                 .with_padding_top(ITEM_PADDING_VERTICAL)
@@ -4159,24 +4248,7 @@ impl SshManagerPanel {
             } else if mouse.is_hovered() {
                 c = c.with_background(internal_colors::fg_overlay_1(theme));
             }
-            let mut stack = Stack::new().with_child(c.finish());
-            if mouse.is_hovered() || keyboard_focused {
-                let tooltip = ConstrainedBox::new(
-                    appearance.ui_builder().tool_tip(full_name).build().finish(),
-                )
-                .with_max_width(400.0)
-                .finish();
-                stack.add_positioned_overlay_child(
-                    tooltip,
-                    OffsetPositioning::offset_from_parent(
-                        Vector2F::new(0.0, 3.0),
-                        ParentOffsetBounds::WindowByPosition,
-                        ParentAnchor::BottomLeft,
-                        ChildAnchor::TopLeft,
-                    ),
-                );
-            }
-            stack.finish()
+            c.finish()
         })
         .with_cursor(Cursor::PointingHand)
         .on_click(move |ctx, _, _| {
@@ -5200,6 +5272,63 @@ fn resolve_server_for_node(
     Ok(Some(server))
 }
 
+/// The resolved connection fields a session listing depends on. Names, notes,
+/// placement and folder state are not part of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionEndpoint {
+    host: String,
+    port: u16,
+    username: String,
+    auth_type: AuthType,
+    key_path: Option<String>,
+    session_resilience: SessionResilience,
+}
+
+/// Reads every server's session endpoint (with effective OneKey auth) and the
+/// set of hosts with session persistence enabled.
+fn load_session_endpoints(
+    nodes: &[SshNode],
+) -> (
+    HashMap<String, SessionEndpoint>,
+    std::collections::HashSet<String>,
+) {
+    warp_ssh_manager::with_conn(|c| {
+        let mut endpoints = HashMap::new();
+        let mut resilient = std::collections::HashSet::new();
+        for node in nodes.iter().filter(|node| node.kind == NodeKind::Server) {
+            let Some(server) = SshRepository::get_server(c, &node.id)? else {
+                continue;
+            };
+            if server.session_resilience.is_enabled() {
+                resilient.insert(node.id.clone());
+            }
+            match SshRepository::resolve_server_auth(c, &server) {
+                Ok(auth) => {
+                    endpoints.insert(
+                        node.id.clone(),
+                        SessionEndpoint {
+                            host: server.host,
+                            port: server.port,
+                            username: auth.username,
+                            auth_type: auth.auth_type,
+                            key_path: auth.key_path,
+                            session_resilience: server.session_resilience,
+                        },
+                    );
+                }
+                Err(error) => {
+                    log::warn!(
+                        "ssh_manager: cannot resolve auth for {}: {error:?}",
+                        node.id
+                    );
+                }
+            }
+        }
+        Ok((endpoints, resilient))
+    })
+    .unwrap_or_default()
+}
+
 /// Create a blank registered SSH host at the top level (the "New server" path)
 /// and return its `node_id`. Shared by this panel's add button and the Conductor
 /// spine's "＋ Add host" (design §10 folds host add/edit onto the spine). The
@@ -5257,6 +5386,25 @@ fn multiplexer_attach_mode(kind: i32, attached_clients: u32) -> Option<Multiplex
         MultiplexerKind::ByobuScreen => Some(MultiplexerAttachMode::ScreenDetached),
         MultiplexerKind::Unspecified => None,
     }
+}
+
+/// The multiplexer kind plus the window and client counts the backend
+/// reported; the protocol uses 0 for "not reported".
+fn multiplexer_metadata(session: &MultiplexerSessionInfo) -> String {
+    let mut parts = vec![multiplexer_kind_label(session.kind)];
+    if session.windows > 0 {
+        parts.push(crate::t!(
+            "workspace-left-panel-ssh-manager-multiplexer-windows",
+            count = session.windows
+        ));
+    }
+    if session.attached_clients > 0 {
+        parts.push(crate::t!(
+            "workspace-left-panel-ssh-manager-multiplexer-clients",
+            count = session.attached_clients
+        ));
+    }
+    parts.join(" · ")
 }
 
 fn multiplexer_kind_label(kind: i32) -> String {

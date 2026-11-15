@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.59] — 2026-11-14
+
+- Verbindungen: Namens-Tooltips von Host-, Ordner- und Session-Zeilen erscheinen nur, solange der Mauszeiger auf dem Namen liegt, und stehen oberhalb der Zeile; ein Klick oder Tastaturfokus lässt keinen Tooltip mehr stehen. Auf- und Zuklappen, Umbenennen oder Verschieben im Baum erhalten die Session-Listen unveränderter Hosts; bei erneutem Abruf bleiben bisherige Zeilen oder der bisherige Fehler stehen, und Multiplexer-Sessions nennen Fenster- und Clientzahl nur, wenn sie gemeldet sind (#765).
+
 ## [1.2.58] — 2026-11-14
 
 - KI-Konten erkennen Codex-Konten in `~/.codex-*` (je ein eigenes `CODEX_HOME`) neben `~/.codex` und `$CODEX_HOME`, lokal und auf Remote-Hosts; zwei Workspaces derselben Anmeldung bleiben zwei Konten und sind über den Plan aus dem `id_token` unterscheidbar (#764).

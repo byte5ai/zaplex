@@ -3220,7 +3220,14 @@ theme-editor-error-import = Could not import the theme: { $error }
 theme-editor-error-image = Could not create a theme from the image: { $error }
 theme-editor-error-local-files = Theme import requires local file access.
 theme-editor-error-export-write = Could not write the exported theme: { $error }
-workspace-left-panel-ssh-manager-multiplexer-metadata = { $kind } · { $windows } windows · { $clients } clients
+workspace-left-panel-ssh-manager-multiplexer-windows = { $count ->
+    [one] { $count } window
+   *[other] { $count } windows
+}
+workspace-left-panel-ssh-manager-multiplexer-clients = { $count ->
+    [one] { $count } client
+   *[other] { $count } clients
+}
 workspace-left-panel-ssh-manager-multiplexer-kind-unknown = unknown
 workspace-left-panel-ssh-manager-multiplexer-scan-error = Multiplexer discovery failed: { $detail }
 workspace-left-panel-ssh-manager-multiplexer-invalid = This multiplexer session has no supported type.

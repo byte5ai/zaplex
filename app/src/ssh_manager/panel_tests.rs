@@ -9,13 +9,14 @@ use std::rc::Rc;
 use chrono::NaiveDateTime;
 use diesel::Connection;
 use diesel_migrations::MigrationHarness;
+use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::vec2f;
 use remote_server::proto::SessionList;
 use warp_core::ui::appearance::Appearance;
 use warp_ssh_manager::{NodeKind, OneKeyCredentialKind, SshNode};
 use warpui::platform::WindowStyle;
 use warpui::units::IntoPixels;
-use warpui::{App, Event, Presenter, WindowInvalidation};
+use warpui::{App, Event, Presenter, Scene, WindowInvalidation};
 
 use crate::cockpit::favorites::FavoritesStore;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -516,6 +517,14 @@ fn session_rows_keep_flexible_identity_fixed_actions_and_only_semantic_metadata(
                     .get_position("ssh-manager-session-error:fixture-host")
                     .is_some(),
                 "a queued retry must not replace a first-load error with loading alone"
+            );
+            assert!(
+                presenter
+                    .borrow()
+                    .position_cache()
+                    .get_position("ssh-manager-sessions-loading:fixture-host")
+                    .is_none(),
+                "a retry after an error must not add a second status row"
             );
             panel.update(&mut app, |panel, ctx| {
                 assert!(panel.complete_session_fetch(
@@ -1420,7 +1429,7 @@ fn session_lifecycle_events_during_inventory_fetch_coalesce_into_one_followup() 
 fn changed_or_deleted_hosts_reject_old_inventory_results() {
     with_session_panel(|panel, ctx| {
         let old_generation = panel.begin_session_fetch("devhost").unwrap();
-        panel.invalidate_session_inventories();
+        panel.invalidate_session_inventory("devhost");
         assert_eq!(panel.begin_session_fetch("devhost"), None);
         assert!(panel.complete_session_fetch(
             "devhost",
@@ -2256,4 +2265,361 @@ fn session_setup_recovery_remains_expanded_until_connection_refreshes_inventory(
         assert!(!panel.sessions_error.contains_key(id));
         assert!(panel.host_session_inventories.contains_key(id));
     });
+}
+
+fn render_panel_scene(
+    app: &mut App,
+    presenter: &Rc<RefCell<Presenter>>,
+    window_id: WindowId,
+    size: Vector2F,
+) -> Rc<Scene> {
+    app.update(|ctx| {
+        presenter.borrow_mut().invalidate(
+            WindowInvalidation {
+                updated: ctx.view_ids_for_window(window_id).into_iter().collect(),
+                ..Default::default()
+            },
+            ctx,
+        );
+        presenter.borrow_mut().build_scene(size, 1.0, None, ctx)
+    })
+}
+
+#[test]
+fn clicking_host_and_folder_rows_never_leaves_a_name_tooltip() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_singleton_model(FavoritesStore::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+        let (window_id, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut panel = SshManagerPanel::new(ctx);
+            panel.set_nodes_for_test(
+                vec![
+                    server("top", None, "Top", 0),
+                    folder("folder", None, "Folder", 1),
+                    server("host", Some("folder"), "Host", 0),
+                ],
+                ctx,
+            );
+            panel
+        });
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let size = vec2f(320.0, 500.0);
+        let tooltip_background =
+            app.read(|ctx| ElementFill::from(Appearance::as_ref(ctx).theme().tooltip_background()));
+        let tooltips = |scene: &Scene| -> Vec<RectF> {
+            scene
+                .layers()
+                .flat_map(|layer| &layer.rects)
+                .filter(|rect| rect.background == tooltip_background)
+                .map(|rect| rect.bounds)
+                .collect()
+        };
+        let move_to = |app: &mut App, position: Vector2F| {
+            app.update(|ctx| {
+                ctx.simulate_window_event(
+                    Event::MouseMoved {
+                        position,
+                        cmd: false,
+                        shift: false,
+                        is_synthetic: false,
+                    },
+                    window_id,
+                    presenter.clone(),
+                );
+            });
+        };
+        let away = vec2f(160.0, 480.0);
+        let baseline = tooltips(&*render_panel_scene(&mut app, &presenter, window_id, size));
+        for id in ["host", "folder"] {
+            let title = presenter
+                .borrow()
+                .position_cache()
+                .get_position(&format!("ssh-manager-node:{id}:title"))
+                .expect("the row title must be laid out");
+            for event in [
+                Event::LeftMouseDown {
+                    position: title.center(),
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                Event::LeftMouseUp {
+                    position: title.center(),
+                    modifiers: Default::default(),
+                },
+            ] {
+                app.update(|ctx| {
+                    ctx.simulate_window_event(event, window_id, presenter.clone());
+                });
+            }
+            panel.read(&app, |panel, _| {
+                assert!(panel.keyboard_focused);
+                assert_eq!(panel.focused_row, Some(FocusedRow::Node(id.into())));
+            });
+            move_to(&mut app, away);
+            assert_eq!(
+                tooltips(&*render_panel_scene(&mut app, &presenter, window_id, size)),
+                baseline,
+                "a clicked and focused {id} row must not keep a name tooltip"
+            );
+
+            move_to(&mut app, title.center());
+            let hovered = tooltips(&*render_panel_scene(&mut app, &presenter, window_id, size));
+            let added: Vec<_> = hovered
+                .iter()
+                .filter(|bounds| !baseline.contains(bounds))
+                .collect();
+            assert_eq!(added.len(), 1, "hovering the {id} label shows its name");
+            assert!(
+                added[0].max_y() <= title.min_y() + 0.5,
+                "the {id} name tooltip must sit above the label, not over the list"
+            );
+            move_to(&mut app, away);
+            render_panel_scene(&mut app, &presenter, window_id, size);
+        }
+    });
+}
+
+fn session_endpoint(host: &str) -> SessionEndpoint {
+    SessionEndpoint {
+        host: host.to_string(),
+        port: 22,
+        username: "dev".to_string(),
+        auth_type: AuthType::Key,
+        key_path: Some("~/.ssh/id_ed25519".to_string()),
+        session_resilience: SessionResilience::PersistOnly,
+    }
+}
+
+fn single_session_inventory(
+    session_id: &str,
+) -> crate::remote_server::session_inventory::HostSessionInventory {
+    crate::remote_server::session_inventory::HostSessionInventory {
+        sessions: vec![RoutedDaemonSession {
+            host_id: None,
+            daemon_runtime: None,
+            session: SessionInfo {
+                session_id: session_id.to_string(),
+                ..Default::default()
+            },
+            route: None,
+        }],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn tree_changes_keep_inventories_of_hosts_whose_endpoint_did_not_change() {
+    with_session_panel(|panel, ctx| {
+        let mut nodes = vec![
+            folder("folder", None, "Folder", 0),
+            server("in-folder", Some("folder"), "A", 0),
+            server("other", None, "B", 1),
+        ];
+        let endpoints = HashMap::from([
+            ("in-folder".to_string(), session_endpoint("a.example")),
+            ("other".to_string(), session_endpoint("b.example")),
+        ]);
+        let resilient: std::collections::HashSet<String> = endpoints.keys().cloned().collect();
+        panel.apply_tree(nodes.clone(), endpoints.clone(), resilient.clone(), ctx);
+        for id in ["in-folder", "other"] {
+            panel.sessions_expanded.insert(id.to_string());
+            let token = panel.begin_session_fetch(id).unwrap();
+            panel.complete_session_fetch(
+                id,
+                token,
+                Ok(single_session_inventory(&format!("{id}-pty"))),
+                ctx,
+            );
+        }
+        let kept_key = session_row_key(
+            "in-folder",
+            &single_session_inventory("in-folder-pty").sessions[0].session,
+            None,
+        );
+        let kept_state = panel.session_row_states[&kept_key].clone();
+
+        // Collapsing the folder and renaming a host change no endpoint.
+        nodes[0].is_collapsed = true;
+        nodes[2].name = "Renamed".to_string();
+        panel.apply_tree(nodes.clone(), endpoints.clone(), resilient.clone(), ctx);
+        for id in ["in-folder", "other"] {
+            assert_eq!(
+                panel.host_session_inventories[id].sessions[0]
+                    .session
+                    .session_id,
+                format!("{id}-pty"),
+                "a tree change must keep the inventory of {id}"
+            );
+        }
+        assert!(Arc::ptr_eq(
+            &kept_state,
+            &panel.session_row_states[&kept_key]
+        ));
+        assert!(
+            panel
+                .sessions_to_fetch_after_tree_change(&Default::default())
+                .is_empty(),
+            "listed hosts with unchanged endpoints are not fetched again"
+        );
+
+        // A changed endpoint drops only that host's listing and fetches it again.
+        let mut moved = endpoints;
+        moved.insert("other".to_string(), session_endpoint("c.example"));
+        panel.apply_tree(nodes, moved, resilient, ctx);
+        assert!(!panel.host_session_inventories.contains_key("other"));
+        assert_eq!(
+            panel.host_session_inventories["in-folder"].sessions[0]
+                .session
+                .session_id,
+            "in-folder-pty"
+        );
+        assert!(Arc::ptr_eq(
+            &kept_state,
+            &panel.session_row_states[&kept_key]
+        ));
+        let changed = std::collections::HashSet::from(["other".to_string()]);
+        assert_eq!(
+            panel.sessions_to_fetch_after_tree_change(&changed),
+            ["other"]
+        );
+    });
+}
+
+#[test]
+fn endpoint_change_during_a_fetch_discards_only_that_hosts_result() {
+    with_session_panel(|panel, ctx| {
+        let nodes = vec![server("a", None, "A", 0), server("b", None, "B", 1)];
+        let endpoints = HashMap::from([
+            ("a".to_string(), session_endpoint("a.example")),
+            ("b".to_string(), session_endpoint("b.example")),
+        ]);
+        let resilient: std::collections::HashSet<String> = endpoints.keys().cloned().collect();
+        panel.apply_tree(nodes.clone(), endpoints.clone(), resilient.clone(), ctx);
+        let token_a = panel.begin_session_fetch("a").unwrap();
+        let token_b = panel.begin_session_fetch("b").unwrap();
+
+        let mut moved = endpoints;
+        moved.insert("b".to_string(), session_endpoint("moved.example"));
+        panel.apply_tree(nodes, moved, resilient, ctx);
+
+        panel.complete_session_fetch("a", token_a, Ok(single_session_inventory("a-pty")), ctx);
+        panel.complete_session_fetch("b", token_b, Ok(single_session_inventory("old-b")), ctx);
+        assert!(panel.host_session_inventories.contains_key("a"));
+        assert!(
+            !panel.host_session_inventories.contains_key("b"),
+            "a listing of the previous endpoint must not appear as current"
+        );
+        assert!(panel.sessions_loading.is_empty());
+    });
+}
+
+#[test]
+fn refetch_keeps_previous_rows_or_error_and_loading_shows_only_on_first_load() {
+    App::test((), |mut app| async move {
+        crate::i18n::init(Some("en"));
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SshTreeChangedNotifier::new());
+        app.add_singleton_model(FavoritesStore::new_for_test);
+        app.add_singleton_model(RemoteServerManager::new);
+        let (window_id, panel) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            let mut panel = SshManagerPanel::new(ctx);
+            panel.set_nodes_for_test(vec![server("devhost", None, "Development", 0)], ctx);
+            panel.resilient_hosts.insert("devhost".into());
+            panel.sessions_expanded.insert("devhost".into());
+            panel
+        });
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let size = vec2f(320.0, 500.0);
+        let positioned = |id: &str| {
+            presenter
+                .borrow()
+                .position_cache()
+                .get_position(id)
+                .is_some()
+        };
+        let session_key = session_row_key(
+            "devhost",
+            &single_session_inventory("pty-1").sessions[0].session,
+            None,
+        );
+        let loading = "ssh-manager-sessions-loading:devhost";
+        let error = "ssh-manager-session-error:devhost";
+        let title = format!("ssh-manager-session:{session_key}:title");
+
+        let first = panel.update(&mut app, |panel, ctx| {
+            let token = panel.begin_session_fetch("devhost").unwrap();
+            ctx.notify();
+            token
+        });
+        render_panel_scene(&mut app, &presenter, window_id, size);
+        assert!(
+            positioned(loading),
+            "the first load has nothing else to show"
+        );
+        assert!(!positioned(error));
+
+        let retry = panel.update(&mut app, |panel, ctx| {
+            panel.complete_session_fetch("devhost", first, Err("timeout".into()), ctx);
+            panel.begin_session_fetch("devhost").unwrap()
+        });
+        render_panel_scene(&mut app, &presenter, window_id, size);
+        assert!(positioned(error), "the previous error stays during a retry");
+        assert!(!positioned(loading), "a retry adds no second status row");
+
+        let refresh = panel.update(&mut app, |panel, ctx| {
+            panel.complete_session_fetch(
+                "devhost",
+                retry,
+                Ok(single_session_inventory("pty-1")),
+                ctx,
+            );
+            panel.begin_session_fetch("devhost").unwrap()
+        });
+        render_panel_scene(&mut app, &presenter, window_id, size);
+        assert!(
+            positioned(&title),
+            "the previous rows stay during a refetch"
+        );
+        assert!(!positioned(loading));
+        assert!(!positioned(error));
+        panel.update(&mut app, |panel, ctx| {
+            panel.complete_session_fetch(
+                "devhost",
+                refresh,
+                Ok(single_session_inventory("pty-1")),
+                ctx,
+            );
+        });
+    });
+}
+
+#[test]
+fn multiplexer_metadata_names_only_reported_counts() {
+    crate::i18n::init(Some("en"));
+    let session = |windows, attached_clients| MultiplexerSessionInfo {
+        kind: MultiplexerKind::Tmux as i32,
+        target: "main".into(),
+        windows,
+        attached_clients,
+        ..Default::default()
+    };
+    assert_eq!(multiplexer_metadata(&session(0, 0)), "tmux");
+    assert_eq!(
+        multiplexer_metadata(&session(3, 0)),
+        "tmux · \u{2068}3\u{2069} windows"
+    );
+    assert_eq!(
+        multiplexer_metadata(&session(0, 2)),
+        "tmux · \u{2068}2\u{2069} clients"
+    );
+    assert_eq!(
+        multiplexer_metadata(&session(1, 1)),
+        "tmux · \u{2068}1\u{2069} window · \u{2068}1\u{2069} client"
+    );
 }
