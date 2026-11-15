@@ -1029,3 +1029,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, feature = "local_fs", not(windows)))]
+#[path = "mod_test.rs"]
+mod open_file_path_tests;

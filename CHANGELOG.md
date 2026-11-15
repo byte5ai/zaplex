@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.66] — 2026-11-15
+
+- Tests und Fixtures schreiben nicht mehr ins echte HOME: Der Tilde-Test für `/open-file` prüft nur noch die Pfadauflösung statt eine Datei in `~` anzulegen; neue Codex-Konto-Fixtures (`script/codex-account-fixtures`) verlangen ein Wurzelverzeichnis im Temp-Verzeichnis, und ein Test wird rot, sobald ein Fixture-Pfad außerhalb landet.
+
 ## [1.2.65] — 2026-11-15
 
 - Deutsche Übersetzung der Multiplexer-Fensterzahl verwendet wie die englische eine Pluralauswahl; der Strukturtest der Übersetzungskataloge ist wieder grün (#765).

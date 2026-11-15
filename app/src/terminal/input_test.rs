@@ -2862,54 +2862,6 @@ fn test_open_slash_command_clears_buffer_on_success() {
 
 #[cfg(feature = "local_fs")]
 #[test]
-fn test_open_slash_command_expands_tilde() {
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        let home_dir = dirs::home_dir().expect("home directory must exist");
-        let file_path = home_dir.join("warp_tilde_test_file.txt");
-        std::fs::File::create(&file_path).unwrap();
-
-        let session_id: SessionId = 1.into();
-        let session_info = SessionInfo::new_for_test().with_id(session_id);
-        let terminal = add_window_with_bootstrapped_terminal(
-            &mut app,
-            None, /* history_file_commands */
-            Some(session_info),
-        )
-        .await;
-        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
-
-        // Simulate being in a directory that is NOT the home directory so we can
-        // verify that ~ expansion takes priority over cwd joining.
-        let temp_dir = std::env::temp_dir();
-        simulate_directory_for_completion(
-            session_id,
-            &terminal,
-            &mut app,
-            temp_dir.to_string_lossy(),
-        );
-
-        input.update(&mut app, |input, ctx| {
-            input.editor.update(ctx, |editor, ctx| {
-                editor.set_buffer_text("/open-file ~/warp_tilde_test_file.txt", ctx)
-            });
-        });
-
-        input.update(&mut app, |input, ctx| {
-            input.input_enter(ctx);
-        });
-
-        // Buffer should be cleared on success, indicating the file was found.
-        input.read(&app, |input, ctx| {
-            assert!(input.buffer_text(ctx).is_empty());
-        });
-
-        let _ = std::fs::remove_file(file_path);
-    });
-}
-
-#[test]
 fn test_shell_lock_respected_when_slash_command_typed() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Regression tests: Codex account fixtures never land outside the temporary directory.
+
+Every case runs the generator with its own TMPDIR and a sentinel HOME, both
+inside a fresh scratch directory, so even a broken guard can only write into
+that scratch directory and never into the real home of the machine running the
+tests.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+SCRIPT = Path(__file__).with_name("codex-account-fixtures")
+EXPECTED = {
+    ".codex/auth.json",
+    ".codex-team/auth.json",
+    ".codex-lite/auth.json",
+}
+
+
+def files_under(root: Path) -> set[str]:
+    return {str(path.relative_to(root)) for path in root.rglob("*") if path.is_file()}
+
+
+def run(root: Path, temporary: Path, home: Path) -> subprocess.CompletedProcess[str]:
+    environment = dict(os.environ, TMPDIR=str(temporary), HOME=str(home))
+    return subprocess.run(
+        [sys.executable, "-I", str(SCRIPT), "--root", str(root)],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+SCRATCH: list[Path] = []
+
+
+def scratch() -> tuple[Path, Path, Path]:
+    base = Path(tempfile.mkdtemp(prefix="codex-fixture-tests-")).resolve()
+    SCRATCH.append(base)
+    temporary = base / "tmp"
+    home = base / "home"
+    temporary.mkdir()
+    home.mkdir()
+    return base, temporary, home
+
+
+def fail(message: str) -> int:
+    print(f"FAIL {message}", file=sys.stderr)
+    return 1
+
+
+def main() -> int:
+    nonrust_case = __import__("runpy").run_path(
+        str(Path(__file__).with_name("test-suite-nonrust-events"))
+    )["record"]
+
+    base, temporary, home = scratch()
+    root = temporary / "fake-home"
+    result = run(root, temporary, home)
+    if result.returncode != 0:
+        return fail(f"generator refused a root inside TMPDIR: {result.stderr}")
+    outside = {
+        str(path.relative_to(base))
+        for path in base.rglob("*")
+        if path.is_file() and temporary not in path.resolve().parents
+    }
+    if outside:
+        return fail(f"fixture files outside the temporary directory: {sorted(outside)}")
+    if any(home.iterdir()):
+        return fail("generator wrote into HOME")
+    written = files_under(root)
+    if not EXPECTED <= written:
+        return fail(f"missing account files: {sorted(EXPECTED - written)}")
+    rollouts = [path for path in written if "/sessions/" in path]
+    if len(rollouts) != 2:
+        return fail(f"expected two rollouts with rate limits, got {rollouts}")
+    for relative in EXPECTED:
+        auth = json.loads((root / relative).read_text(encoding="utf-8"))
+        if auth.get("auth_mode") != "chatgpt" or "id_token" not in auth.get("tokens", {}):
+            return fail(f"{relative} is not a subscription sign-in fixture")
+    nonrust_case("fixtures-stay-inside-temporary-root")
+
+    base, temporary, home = scratch()
+    result = run(home, temporary, home)
+    if result.returncode == 0 or any(home.iterdir()):
+        return fail("generator accepted HOME outside the temporary directory as root")
+    nonrust_case("home-outside-temporary-directory-is-refused")
+
+    base, temporary, home = scratch()
+    relative = run(Path("fake-home"), temporary, home)
+    if relative.returncode == 0:
+        return fail("generator accepted a relative root")
+    escape = temporary / "fake-home" / ".." / ".." / "escaped"
+    result = run(escape, temporary, home)
+    if result.returncode == 0 or (base / "escaped").exists():
+        return fail("generator accepted a root that resolves outside the temporary directory")
+    nonrust_case("relative-and-escaping-roots-are-refused")
+
+    print("PASS script/codex-account-fixtures writes only inside the temporary directory")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    finally:
+        for directory in SCRATCH:
+            shutil.rmtree(directory, ignore_errors=True)
