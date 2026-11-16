@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 final class SurfaceTests: GUIFlowTestCase {
@@ -6,9 +7,14 @@ final class SurfaceTests: GUIFlowTestCase {
         try output(state: 741)
         let originalFrame = window.frame
         let original = originalFrame.size
+        // A tiled window may extend behind the Dock, but AppKit caps a resize gesture
+        // at the screen's visible area, so that is the largest size a user can restore.
+        let visible = try XCTUnwrap(NSScreen.screens.first).visibleFrame.size
+        let restorable = CGSize(width: min(original.width, visible.width),
+                                height: min(original.height, visible.height))
+        XCTAssertGreaterThan(restorable.height, 420, "Visible area too small to restore: \(visible)")
         // Resize from the top-left corner: the bottom-right edge stays fixed, so the
-        // restore target is the original origin and never lies under the Dock, which
-        // stops AppKit's resize gesture short of windows that extend behind it.
+        // restore target is the original origin and never lies under the Dock.
         let origin = window.coordinate(withNormalizedOffset: .zero)
         let corner = origin.withOffset(CGVector(dx: 2, dy: 2))
         // Drive AppKit's resize handle with XCTest's explicit pointer API.
@@ -38,11 +44,11 @@ final class SurfaceTests: GUIFlowTestCase {
             dy: originalFrame.minY - resizedFrame.minY + 2)))
         let restored = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
-                abs(self.window.frame.width - original.width) < 5 &&
-                abs(self.window.frame.height - original.height) < 5
+                abs(self.window.frame.width - restorable.width) < 5 &&
+                abs(self.window.frame.height - restorable.height) < 5
             }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed,
-                       "Native resize gesture did not restore \(original), got \(window.frame.size)")
+                       "Native resize gesture did not restore \(restorable) of \(original), got \(window.frame.size)")
         try output(state: 741)
         evidence("window-size-restored")
     }
