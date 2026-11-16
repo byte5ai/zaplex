@@ -1,16 +1,26 @@
+import AppKit
 import XCTest
 
 final class SurfaceTests: GUIFlowTestCase {
     func testWindowMinimumSizePreservesOriginalShell() throws {
         command("qa_state=741")
         try output(state: 741)
-        let original = window.frame.size
+        let originalFrame = window.frame
+        let original = originalFrame.size
+        // A tiled window may extend behind the Dock, but AppKit caps a resize gesture
+        // at the screen's visible area, so that is the largest size a user can restore.
+        let visible = try XCTUnwrap(NSScreen.screens.first).visibleFrame.size
+        let restorable = CGSize(width: min(original.width, visible.width),
+                                height: min(original.height, visible.height))
+        XCTAssertGreaterThan(restorable.height, 420, "Visible area too small to restore: \(visible)")
+        // Resize from the top-left corner: the bottom-right edge stays fixed, so the
+        // restore target is the original origin and never lies under the Dock.
         let origin = window.coordinate(withNormalizedOffset: .zero)
-        let corner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1))
-            .withOffset(CGVector(dx: -2, dy: -2))
+        let corner = origin.withOffset(CGVector(dx: 2, dy: 2))
         // Drive AppKit's resize handle with XCTest's explicit pointer API.
         corner.hover()
-        corner.click(forDuration: 0.2, thenDragTo: origin.withOffset(CGVector(dx: 100, dy: 100)))
+        corner.click(forDuration: 0.2, thenDragTo: origin.withOffset(
+            CGVector(dx: original.width - 100, dy: original.height - 100)))
         let resized = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
                 self.window.frame.width < original.width - 10 ||
@@ -25,17 +35,20 @@ final class SurfaceTests: GUIFlowTestCase {
         XCTAssertLessThanOrEqual(window.frame.width, 500)
         XCTAssertLessThanOrEqual(window.frame.height, 360)
         try output(state: 741)
-        let resizedCorner = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1))
-            .withOffset(CGVector(dx: -2, dy: -2))
+        let resizedFrame = window.frame
+        let resizedOrigin = window.coordinate(withNormalizedOffset: .zero)
+        let resizedCorner = resizedOrigin.withOffset(CGVector(dx: 2, dy: 2))
         resizedCorner.hover()
-        resizedCorner.click(forDuration: 0.2, thenDragTo: origin.withOffset(
-            CGVector(dx: original.width - 2, dy: original.height - 2)))
+        resizedCorner.click(forDuration: 0.2, thenDragTo: resizedOrigin.withOffset(CGVector(
+            dx: originalFrame.minX - resizedFrame.minX + 2,
+            dy: originalFrame.minY - resizedFrame.minY + 2)))
         let restored = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
-                abs(self.window.frame.width - original.width) < 5 &&
-                abs(self.window.frame.height - original.height) < 5
+                abs(self.window.frame.width - restorable.width) < 5 &&
+                abs(self.window.frame.height - restorable.height) < 5
             }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed,
+                       "Native resize gesture did not restore \(restorable) of \(original), got \(window.frame.size)")
         try output(state: 741)
         evidence("window-size-restored")
     }
