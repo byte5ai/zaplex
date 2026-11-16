@@ -535,9 +535,23 @@ pub fn glyph_cell(glyph: &str, color: ColorU, appearance: &Appearance) -> Box<dy
     .finish()
 }
 
-/// The context-window fill readout (`· 42% ctx` roomy / `· 42%` compact),
-/// heat-colored by how full the window is — the same small element wherever a
-/// context percentage appears.
+/// The context-window fill readout text (`42 % ctx` roomy / `42 %` compact).
+///
+/// No leading separator: the readout stands in its own table column or after
+/// the model family in a spaced row, and with no model shown a separator would
+/// dangle in front of the number.
+fn ctx_pct_label(pct: u32, verbose: bool) -> String {
+    // German typography: a narrow no-break space before the percent sign
+    // (spec v3 §7). U+202F keeps "42 %" from wrapping between number and sign.
+    if verbose {
+        format!("{pct}\u{202f}% ctx")
+    } else {
+        format!("{pct}\u{202f}%")
+    }
+}
+
+/// The context-window fill readout, heat-colored by how full the window is —
+/// the same small element wherever a context percentage appears.
 pub fn ctx_pct_element(
     pct: u32,
     fill: f64,
@@ -548,15 +562,8 @@ pub fn ctx_pct_element(
     // (spec v3 §1.2): muted grey, true red only when nearly full. See
     // `utilisation_coloru` for why this must not be the Critical amber.
     let color = utilisation_coloru(fill, appearance);
-    // German typography: a narrow no-break space before the percent sign
-    // (spec v3 §7). U+202F keeps "42 %" from wrapping between number and sign.
-    let label = if verbose {
-        format!("· {pct}\u{202f}% ctx")
-    } else {
-        format!("· {pct}\u{202f}%")
-    };
     Text::new_inline(
-        label,
+        ctx_pct_label(pct, verbose),
         appearance.ui_font_family(),
         appearance.ui_font_body(),
     )

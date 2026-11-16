@@ -69,3 +69,10 @@ fn provider_marks_are_distinct_and_never_the_accent_or_attention_role() {
         provider_icon(Provider::Codex)
     );
 }
+
+#[test]
+fn context_readout_starts_with_the_number_not_a_separator() {
+    // With no model shown, a leading separator would dangle in the Context column.
+    assert_eq!(ctx_pct_label(1, false), "1\u{202f}%");
+    assert_eq!(ctx_pct_label(42, true), "42\u{202f}% ctx");
+}

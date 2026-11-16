@@ -33,9 +33,9 @@ use warpui::{
 };
 use zaplex_cockpit::{
     cost_figure, format_tokens, heat_bar_fraction, heat_pct_label_with_provenance, host_ident,
-    host_key, relative_age, reset_countdown, session_glyph, session_key, AccountStatus,
-    AccountUsage, CostFigure, FleetTree, PricingSource, Provider, SessionSnapshot, SessionState,
-    UsageProvenance, WindowTotals,
+    host_key, relative_age, reset_countdown, session_glyph, session_key, sessions_of_account,
+    Account, AccountSession, AccountStatus, AccountUsage, CostFigure, FleetTree, PricingSource,
+    Provider, SessionSnapshot, SessionState, UsageProvenance, WindowTotals,
 };
 
 use crate::cockpit::account_identity;
@@ -950,7 +950,7 @@ impl CockpitPaneView {
             .chain(acct.idle_sessions.iter())
             .map(|s| group_key(&(s.clone(), None, None, true)))
             .collect();
-        for row in zaplex_cockpit::sessions_of_account(&tree, &acct.account) {
+        for row in remote_sessions_of_account(&tree, &acct.account) {
             row_keys.insert(session_key(row.is_local, row.host_id, row.session));
             group_keys.insert(group_key(&(
                 row.session.clone(),
@@ -1495,9 +1495,9 @@ impl CockpitPaneView {
     /// not count it as such). The table is the one surface that wants both, so
     /// this is where they meet — which is also why the Idle chip can exist at all.
     ///
-    /// Remote sessions come from the fleet tree via `sessions_of_account`, joined
-    /// on `(provider, account_email)`: the only identity a subscription has that
-    /// means the same on another machine (F5).
+    /// Remote sessions come from the fleet tree via `remote_sessions_of_account`,
+    /// joined on `(provider, account_email)`: the only identity a subscription
+    /// has that means the same on another machine (F5).
     fn build_table_rows(
         &self,
         acct: &AccountUsage,
@@ -1515,13 +1515,8 @@ impl CockpitPaneView {
                 all.push((s.clone(), None, None, true));
             }
         }
-        // …and the same account's sessions on every host, this one included.
-        //
-        // Deduped by identity rather than by skipping whatever claims to be
-        // local: the tree's local rows come from these same account lists today,
-        // but relying on that would mean a session appears twice the day it stops
-        // being true — and a set costs nothing to be sure.
-        for row in zaplex_cockpit::sessions_of_account(tree, &acct.account) {
+        // …and the same account's sessions on every other host.
+        for row in remote_sessions_of_account(tree, &acct.account) {
             let key = session_key(row.is_local, row.host_id, row.session);
             if !seen.insert(key) {
                 continue;
@@ -2420,10 +2415,8 @@ impl CockpitPaneView {
             .chain(acct.idle_sessions.iter())
             .map(|s| s.presented_state())
             .collect();
-        for row in zaplex_cockpit::sessions_of_account(tree, &acct.account) {
-            if !row.is_local {
-                states.push(row.session.presented_state());
-            }
+        for row in remote_sessions_of_account(tree, &acct.account) {
+            states.push(row.session.presented_state());
         }
         let count = |f: SessionFilter| states.iter().filter(|s| f.matches(**s)).count();
 
@@ -4329,6 +4322,21 @@ impl BackingView for CockpitPaneView {
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
         self.focus_handle = Some(focus_handle);
     }
+}
+
+/// The account's sessions on other hosts, for the account pane.
+///
+/// This machine's sessions come from the account's own lists, which carry its
+/// exact local identity. The fleet join matches only provider and email, so on
+/// this machine it would also claim the sessions of a second account signed in
+/// with the same address (a Pro and a Team plan), and the pane would list them.
+fn remote_sessions_of_account<'a>(
+    tree: &'a FleetTree,
+    account: &Account,
+) -> impl Iterator<Item = AccountSession<'a>> {
+    sessions_of_account(tree, account)
+        .into_iter()
+        .filter(|row| !row.is_local)
 }
 
 #[cfg(test)]

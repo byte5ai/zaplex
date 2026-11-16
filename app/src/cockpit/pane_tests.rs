@@ -17,10 +17,10 @@ use zaplex_cockpit::{CostFigure, Provider, SessionSnapshot, SessionState, Window
 use zaplex_remote_session::types::FEATURE_AGENT_TRANSCRIPT_READ_V1;
 
 use super::{
-    fleet_cost_presentation, matching_session_row, restart_presence_for_menu, session_key,
-    session_table_viewport_height, session_today_cost, table_row_needs_attention,
-    transcript_action_target, TableRow, TranscriptActionTarget, SESSION_TABLE_HEADER_HEIGHT,
-    SESSION_TABLE_MAX_VISIBLE_ROWS, SESSION_TABLE_ROW_HEIGHT,
+    fleet_cost_presentation, matching_session_row, remote_sessions_of_account,
+    restart_presence_for_menu, session_key, session_table_viewport_height, session_today_cost,
+    table_row_needs_attention, transcript_action_target, TableRow, TranscriptActionTarget,
+    SESSION_TABLE_HEADER_HEIGHT, SESSION_TABLE_MAX_VISIBLE_ROWS, SESSION_TABLE_ROW_HEIGHT,
 };
 #[cfg(not(target_family = "wasm"))]
 use super::{remote_transcript_route, remote_transcript_route_is_current, RemoteTranscriptRoute};
@@ -616,4 +616,57 @@ fn fleet_pane_sums_today_five_hour_and_week_spend_across_accounts() {
         fleet_cost_presentation(&accounts[..1]).unpriced_models,
         None
     );
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn account_pane_takes_no_local_session_of_another_account_with_the_same_email() {
+    // A Pro and a Team plan signed in with one address: on this machine the
+    // email join cannot tell them apart, so local sessions come only from the
+    // account's own lists. Remote sessions still join by email.
+    let pro = zaplex_cockpit::Account {
+        provider: Provider::Codex,
+        key: "codex:pro".into(),
+        config_dir: "/home/dev/.codex".into(),
+        label: String::new(),
+        provider_account_id: Some("acc-pro".into()),
+        email: Some("dev@example.invalid".into()),
+        org: None,
+        role: None,
+        plan_tier: None,
+        is_default: true,
+    };
+    let mut team_local = session(Some("/home/dev/.codex-team"), Some("dev@example.invalid"));
+    team_local.provider = Provider::Codex;
+    team_local.session_id = "team-local".into();
+    let mut remote = session(None, Some("dev@example.invalid"));
+    remote.provider = Provider::Codex;
+    remote.session_id = "pro-remote".into();
+    let host = |name: &str, is_local: bool, session: SessionSnapshot| HostNode {
+        host: name.into(),
+        is_local,
+        host_id: (!is_local).then(|| format!("{name}-id")),
+        availability: HostAvailability::Available,
+        inventory_status: AgentInventoryStatus::Ready,
+        registry_node_id: None,
+        needs_me: 0,
+        projects: vec![ProjectNode {
+            root: "/work/project".into(),
+            name: "project".into(),
+            needs_me: 0,
+            sessions: vec![session],
+        }],
+    };
+    let tree = FleetTree {
+        hosts: vec![
+            host("local", true, team_local),
+            host("devhost", false, remote),
+        ],
+        needs_me: 0,
+    };
+
+    let ids: Vec<&str> = remote_sessions_of_account(&tree, &pro)
+        .map(|row| row.session.session_id.as_str())
+        .collect();
+    assert_eq!(ids, ["pro-remote"]);
 }
