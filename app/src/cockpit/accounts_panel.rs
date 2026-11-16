@@ -579,10 +579,18 @@ impl View for CockpitAccountsPanel {
         .with_overlayed_scrollbar()
         .finish();
 
-        Container::new(scroll)
-            .with_uniform_padding(CARD_PADDING)
-            .with_background(theme.surface_2())
-            .finish()
+        // A column at full height carries the surface to the bottom of the
+        // sidebar even when the content is shorter, like the other toolbelt views.
+        Container::new(
+            Flex::column()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(Shrinkable::new(1.0, scroll).finish())
+                .finish(),
+        )
+        .with_uniform_padding(CARD_PADDING)
+        .with_background(theme.surface_2())
+        .finish()
     }
 }
 
