@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.68] — 2026-11-17
+
+- Konto-Pane in schmaler Darstellung zeigt ein fehlendes Modell als „—“ statt eines leeren Werts mit hängendem Trenner, und der Kontext steht dort wie in der Tabellenspalte als Prozentwert (#790). Die Kostenzeile nennt Nutzung ohne Modellnamen „unbekanntes Modell“ statt des internen Platzhalters „unknown“ (#791).
+
 ## [1.2.67] — 2026-11-16
 
 - Native Prüfung gegen docs/ui: Konto-Pane zeigt nur Sessions des eigenen Kontos, auch bei gleicher E-Mail (#785); Kontextanzeige ohne führenden Mittelpunkt (#786); KI-Sessions und KI-Konten füllen die volle Sidebarhöhe (#784); Startmenü schneidet „New worktree config“ nicht mehr ab (#782); Theme-Auswahl lässt Platz für die Fenster-Ampel (#783).

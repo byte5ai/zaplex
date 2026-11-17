@@ -83,6 +83,22 @@ fn unpriced_label_is_localized() {
         .contains("gpt-5.5"));
 }
 
+/// Usage without a model name is listed as a localized "unknown model", never
+/// as the spine's internal sentinel.
+#[test]
+fn unpriced_usage_without_a_model_name_reads_as_unknown_model() {
+    crate::i18n::init(Some("en"));
+    let unpriced = CostFigure::Unpriced {
+        unpriced_models: vec!["gpt-5.5".to_string(), UNKNOWN_MODEL.to_string()],
+    };
+    let text = unpriced_models_text(&unpriced).expect("an unpriced sum names its models");
+    assert!(text.contains("gpt-5.5, unknown model"), "{text}");
+    assert_eq!(
+        german("cockpit-cost-unknown-model", None),
+        "unbekanntes Modell"
+    );
+}
+
 /// Each value reaches its own message with its numbers in the right slots: a
 /// swapped argument or unit would misstate a countdown by hours or days.
 #[test]

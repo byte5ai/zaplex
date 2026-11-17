@@ -92,6 +92,7 @@ cockpit-cost-estimate = ~{ $whole },{ $cents }{"\u00A0"}$
 cockpit-cost-unpriced = ohne Preis
 cockpit-cost-partly-unpriced = teilweise ohne Preis
 cockpit-cost-unpriced-models = Ohne Listenpreis: { $models }
+cockpit-cost-unknown-model = unbekanntes Modell
 cockpit-cost-source = Kosten: Schätzung nach API-Listenpreisen, Stand { $date }
 cockpit-fleet-cost-summary = heute { $today } · 5{"\u00A0"}h { $block } · Woche { $week }
 cockpit-fleet-accounts = { $count ->

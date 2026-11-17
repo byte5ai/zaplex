@@ -20,7 +20,7 @@ use walkdir::WalkDir;
 
 use crate::format::title_case_plan;
 use crate::transcript::{file_fingerprint, FileFingerprint};
-use crate::types::{Account, AccountUsage, Provider, UsageEntry, UsageProvenance};
+use crate::types::{Account, AccountUsage, Provider, UsageEntry, UsageProvenance, UNKNOWN_MODEL};
 
 /// Result of account-root discovery before rollout/session scanning.
 #[derive(Debug, Default)]
@@ -567,7 +567,7 @@ struct RolloutUsage {
 
 fn read_transcript_usage(path: &Path, file_date: DateTime<Utc>) -> std::io::Result<RolloutUsage> {
     let content = fs::read_to_string(path)?;
-    let mut current_model = String::from("unknown");
+    let mut current_model = String::from(UNKNOWN_MODEL);
     let mut current_ts = file_date;
     // Same rule discovery uses, from the same function: the file name names the
     // session until a `session_meta` line does it properly. Deriving it any other

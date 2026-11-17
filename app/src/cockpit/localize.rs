@@ -5,7 +5,9 @@
 //! that turns them into Fluent messages and the user's number format. New
 //! cockpit wording belongs here, not in the crate.
 
-use zaplex_cockpit::{CostFigure, PricingSource, RelativeAge, ResetCountdown, StateWord};
+use zaplex_cockpit::{
+    CostFigure, PricingSource, RelativeAge, ResetCountdown, StateWord, UNKNOWN_MODEL,
+};
 
 /// A cost on one line: `~4,20 $`, `~4,20 $ · teilweise ohne Preis`, or
 /// `ohne Preis` when nothing could be priced.
@@ -34,15 +36,26 @@ pub(crate) fn cost_hint_text(figure: &CostFigure) -> Option<String> {
 }
 
 /// Names the models without a list price, for a tooltip or an explanation.
+/// Usage without a model name reads as a localized "unknown model".
 pub(crate) fn unpriced_models_text(figure: &CostFigure) -> Option<String> {
     match figure {
         CostFigure::Partial {
             unpriced_models, ..
         }
-        | CostFigure::Unpriced { unpriced_models } => Some(crate::t!(
-            "cockpit-cost-unpriced-models",
-            models = unpriced_models.join(", ")
-        )),
+        | CostFigure::Unpriced { unpriced_models } => {
+            let models = unpriced_models
+                .iter()
+                .map(|model| {
+                    if model == UNKNOWN_MODEL {
+                        crate::t!("cockpit-cost-unknown-model")
+                    } else {
+                        model.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(crate::t!("cockpit-cost-unpriced-models", models = models))
+        }
         CostFigure::Estimate { .. } => None,
     }
 }

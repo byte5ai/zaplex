@@ -429,6 +429,45 @@ fn compact_session_metadata_preserves_full_model_host_and_worktree() {
     assert!(!text.contains("$0.00"));
 }
 
+#[test]
+fn compact_session_metadata_shows_a_dash_for_a_missing_model() {
+    crate::i18n::init(Some("en"));
+    let mut entry = session(None, None);
+    entry.model = String::new();
+    entry.ctx_tokens = 0;
+    let text = super::compact_session_details(&entry, None, None);
+    let model_line = text
+        .lines()
+        .nth(1)
+        .expect("the second line names model and context");
+    assert!(
+        model_line.contains(": — ·"),
+        "an absent model reads as a dash, not as an empty slot: {model_line}"
+    );
+    assert!(!model_line.contains(":  ·"), "{model_line}");
+}
+
+#[test]
+fn compact_session_metadata_reports_context_like_the_table_column() {
+    crate::i18n::init(Some("en"));
+    let mut entry = session(None, None);
+    entry.model = "claude-opus-4-8".to_string();
+    entry.ctx_tokens = 100_000;
+    let attrs = zaplex_cockpit::session_attrs(
+        &entry.model,
+        entry.effort.as_deref(),
+        entry.ctx_tokens,
+        entry.state,
+    );
+    let pct = attrs
+        .ctx_pct
+        .expect("tokens in a known window give a percentage");
+    let text = super::compact_session_details(&entry, None, None);
+    assert!(text.contains(&format!("{pct}\u{202f}%")), "{text}");
+    let tokens = zaplex_cockpit::format_tokens(entry.ctx_tokens);
+    assert!(!text.contains(&tokens), "{text}");
+}
+
 struct CompactTableTestView {
     pane: warpui::ViewHandle<super::CockpitPaneView>,
     usage: zaplex_cockpit::AccountUsage,

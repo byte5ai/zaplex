@@ -52,10 +52,10 @@ use crate::cockpit::session_lifecycle::{
     lifecycle_capabilities, RestartPresence, SessionAccountRoute, SessionHostRoute, SessionRoute,
 };
 use crate::cockpit::style::{
-    account_identity_subline, attention_coloru, cluster_divider, ctx_pct_element, glyph_cell,
-    icon_verb_button_tooltip, icon_word_verb, provider_label, provider_mark, status_dot_coloru,
-    utilisation_coloru, utilisation_track, verb_button, verb_button_colored, zone_card, VerbKind,
-    BLOCK_RADIUS, CONTROL_RADIUS, METER_LABEL_WIDTH,
+    account_identity_subline, attention_coloru, cluster_divider, ctx_pct_element, ctx_pct_label,
+    glyph_cell, icon_verb_button_tooltip, icon_word_verb, provider_label, provider_mark,
+    status_dot_coloru, utilisation_coloru, utilisation_track, verb_button, verb_button_colored,
+    zone_card, VerbKind, BLOCK_RADIUS, CONTROL_RADIUS, METER_LABEL_WIDTH,
 };
 use crate::cockpit::transcript_view::TranscriptTarget;
 use crate::editor::{
@@ -98,19 +98,38 @@ fn compact_session_details(
         .map(str::to_string)
         .unwrap_or_else(|| crate::t!("cockpit-table-host-local"));
     let worktree = session.worktree.as_deref().unwrap_or("—");
-    let model = zaplex_cockpit::model_effort_label(&session.model, session.effort.as_deref());
+    let model = model_text(session);
+    let context = zaplex_cockpit::session_attrs(
+        &session.model,
+        session.effort.as_deref(),
+        session.ctx_tokens,
+        session.state,
+    )
+    .ctx_pct
+    .map(|pct| ctx_pct_label(pct, false))
+    .unwrap_or_else(|| "—".to_string());
     let cost = today.map(cost_text).unwrap_or_else(|| "—".to_string());
     let status = state_text(zaplex_cockpit::state_word(session.presented_state()));
     let age = age_text(relative_age(session.last_activity, chrono::Utc::now()));
     format!(
-        "{}: {host} · {}: {worktree}\n{}: {model} · {}: {}\n{}: {cost} · {status} · {age}",
+        "{}: {host} · {}: {worktree}\n{}: {model} · {}: {context}\n{}: {cost} · {status} · {age}",
         crate::t!("cockpit-table-col-host"),
         crate::t!("cockpit-table-col-worktree"),
         crate::t!("cockpit-table-col-model"),
         crate::t!("cockpit-table-col-context"),
-        format_tokens(session.ctx_tokens),
         crate::t!("cockpit-pane-col-today")
     )
+}
+
+/// The model cell: family and effort, or `—` when the session names no model,
+/// so the value never reads as missing between its label and the next field.
+fn model_text(session: &SessionSnapshot) -> String {
+    let label = zaplex_cockpit::model_effort_label(&session.model, session.effort.as_deref());
+    if label.is_empty() {
+        "—".to_string()
+    } else {
+        label
+    }
 }
 
 fn session_allows_new_work(is_local: bool, host_id: Option<&str>, app: &AppContext) -> bool {
@@ -2771,10 +2790,7 @@ impl CockpitPaneView {
                         .clone()
                         .unwrap_or_else(|| crate::t!("cockpit-table-host-local").to_string());
 
-                    let model = zaplex_cockpit::model_effort_label(
-                        &session.model,
-                        session.effort.as_deref(),
-                    );
+                    let model = model_text(session);
 
                     let today = match today_cost {
                         Some(c) => Self::cell(cost_text(c), main, true, appearance),
