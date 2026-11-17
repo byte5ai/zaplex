@@ -540,7 +540,7 @@ pub fn glyph_cell(glyph: &str, color: ColorU, appearance: &Appearance) -> Box<dy
 /// No leading separator: the readout stands in its own table column or after
 /// the model family in a spaced row, and with no model shown a separator would
 /// dangle in front of the number.
-fn ctx_pct_label(pct: u32, verbose: bool) -> String {
+pub(crate) fn ctx_pct_label(pct: u32, verbose: bool) -> String {
     // German typography: a narrow no-break space before the percent sign
     // (spec v3 §7). U+202F keeps "42 %" from wrapping between number and sign.
     if verbose {

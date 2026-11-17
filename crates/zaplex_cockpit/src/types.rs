@@ -81,6 +81,10 @@ impl Account {
     }
 }
 
+/// Model name recorded for usage whose transcript names no model. Internal
+/// sentinel only: the UI shows a localized label instead.
+pub const UNKNOWN_MODEL: &str = "unknown";
+
 /// One usage record extracted from a transcript line (one assistant turn/message).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageEntry {

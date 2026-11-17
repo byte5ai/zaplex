@@ -89,7 +89,7 @@ pub use transcript::{
 pub use types::{
     Account, AccountStatus, AccountUsage, Attention, CockpitSnapshot, Provider, ScanHealth,
     SessionSnapshot, SessionState, TaskItem, TaskState, TaskStatus, UsageEntry, UsageProvenance,
-    WindowTotals,
+    WindowTotals, UNKNOWN_MODEL,
 };
 pub use windows::{
     build_account_usage, window_5h, window_week, with_idle_sessions, with_sessions,

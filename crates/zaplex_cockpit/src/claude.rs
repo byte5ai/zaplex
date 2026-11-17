@@ -19,7 +19,7 @@ use serde_json::Value;
 use walkdir::WalkDir;
 
 use crate::format::title_case_plan;
-use crate::types::{Account, Provider, UsageEntry};
+use crate::types::{Account, Provider, UsageEntry, UNKNOWN_MODEL};
 
 /// Directory-name fragments that mark a `.claude*` dir as a backup/scratch copy, not
 /// a real account (mirrors `claudeplex` discover.ts exclusions).
@@ -754,7 +754,7 @@ fn parse_line(v: &Value, session_id: &str) -> Option<AssistantUsageSnapshot> {
         .and_then(|m| m.get("model"))
         .or_else(|| v.get("model"))
         .and_then(|m| m.as_str())
-        .unwrap_or("unknown")
+        .unwrap_or(UNKNOWN_MODEL)
         .to_string();
     let ts_str = v.get("timestamp").and_then(|t| t.as_str())?;
     let ts = DateTime::parse_from_rfc3339(ts_str)
