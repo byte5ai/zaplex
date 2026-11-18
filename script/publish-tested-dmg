@@ -27,6 +27,11 @@ def validate_runs(build, build_jobs, artifacts, gui, gui_jobs, source):
             raise ValueError(f"Missing successful release gate: {name}")
     gui_names = {"test_dmg / Verify installed DMG user flows",
                  "test_dmg / Verify installed DMG user flows / Installed DMG user flows"}
+    if gui.get("path") == ".github/workflows/gui-resume.yml":
+        # The batch completion job fails whenever its GUI stage fails. Every other stage
+        # it aggregates is checked job by job above and below; the separate GUI run
+        # replaces the failed stage.
+        gui_names |= {"Verify all selected batch stages"}
     for job in build_jobs:
         if job.get("conclusion") not in ("success", "skipped") and job["name"] not in gui_names:
             raise ValueError(f"Unsuccessful batch job: {job['name']}")
