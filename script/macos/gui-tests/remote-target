@@ -83,6 +83,33 @@ else:
 '''
 
 
+# Fixed, endpoint-free vocabulary for public logs: which kind of failure, never
+# the host, port, path or remote stderr that caused it.
+FAILURE_PATTERNS = (
+    ("connect-timeout", (b"Connection timed out", b"Operation timed out")),
+    ("connection-refused", (b"Connection refused",)),
+    ("network-unreachable", (b"No route to host", b"Network is unreachable")),
+    ("name-resolution", (b"Could not resolve hostname",)),
+    ("host-key-mismatch", (b"Host key verification failed", b"REMOTE HOST IDENTIFICATION HAS CHANGED")),
+    ("auth-denied", (b"Permission denied",)),
+    ("remote-data-exists", (b"FileExistsError",)),
+    ("foreign-owner", (b"target belongs to another run",)),
+)
+
+
+class FixtureFailure(Exception):
+    def __init__(self, kind):
+        super().__init__(kind)
+        self.kind = kind
+
+
+def failure_class(output):
+    for kind, needles in FAILURE_PATTERNS:
+        if any(needle in output for needle in needles):
+            return kind
+    return "unclassified"
+
+
 def main():
     assert os.environ["GITHUB_REF"] == "refs/heads/main"
     assert os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
@@ -101,7 +128,7 @@ def main():
         with (private / "commands.log").open("ab") as log:
             log.write(result.stdout + result.stderr)
         if result.returncode:
-            raise RuntimeError(f"{args[0]} failed; diagnostics remain private")
+            raise FixtureFailure(f"{Path(args[0]).name}:{failure_class(result.stdout + result.stderr)}")
         return result.stdout
 
     def remote(action):
@@ -171,6 +198,11 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as error:
-        # Paths, endpoints and remote stderr must never enter public Actions logs.
-        print(f"Remote fixture {sys.argv[1]} failed ({type(error).__name__}); inspect private diagnostics.", file=sys.stderr)
+        # Paths, endpoints and remote stderr must never enter public Actions logs;
+        # only the fixed failure class does.
+        kind = error.kind if isinstance(error, FixtureFailure) else type(error).__name__
+        public = Path(os.environ.get("RUNNER_TEMP", "")) / "remote-public"
+        if public.is_dir():
+            (public / "failure.json").write_text(json.dumps({"phase": sys.argv[1], "failure": kind}))
+        print(f"Remote fixture {sys.argv[1]} failed ({kind}); inspect private diagnostics.", file=sys.stderr)
         sys.exit(1)

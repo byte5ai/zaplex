@@ -22,6 +22,7 @@ EXPECTED = {
     ".codex/auth.json",
     ".codex-team/auth.json",
     ".codex-lite/auth.json",
+    ".claude.json",
 }
 
 
@@ -80,10 +81,24 @@ def main() -> int:
     written = files_under(root)
     if not EXPECTED <= written:
         return fail(f"missing account files: {sorted(EXPECTED - written)}")
-    rollouts = [path for path in written if "/sessions/" in path]
+    rollouts = sorted(path for path in written if "/sessions/" in path)
     if len(rollouts) != 2:
         return fail(f"expected two rollouts with rate limits, got {rollouts}")
-    for relative in EXPECTED:
+    waiting = [
+        path
+        for path in rollouts
+        if json.loads((root / path).read_text(encoding="utf-8").splitlines()[-1])["payload"]["type"]
+        == "task_complete"
+    ]
+    if waiting != [path for path in rollouts if path.startswith(".codex-team/")]:
+        return fail(f"exactly the Team rollout must end with a completed turn, got {waiting}")
+    claude = json.loads((root / ".claude.json").read_text(encoding="utf-8")).get("oauthAccount", {})
+    if claude.get("organizationType") != "claude_max" or not claude.get("emailAddress"):
+        return fail("Claude identity lacks plan or e-mail")
+    transcripts = [path for path in written if path.startswith(".claude/projects/")]
+    if len(transcripts) != 1:
+        return fail(f"expected one Claude transcript, got {transcripts}")
+    for relative in sorted(EXPECTED - {".claude.json"}):
         auth = json.loads((root / relative).read_text(encoding="utf-8"))
         if auth.get("auth_mode") != "chatgpt" or "id_token" not in auth.get("tokens", {}):
             return fail(f"{relative} is not a subscription sign-in fixture")

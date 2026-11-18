@@ -9,7 +9,8 @@ import subprocess
 import tempfile
 import unittest
 
-REMOTE = runpy.run_path(str(Path(__file__).with_name("remote-target")))["REMOTE"]
+SCRIPT = runpy.run_path(str(Path(__file__).with_name("remote-target")))
+REMOTE = SCRIPT["REMOTE"]
 
 
 class RemoteOwnership(unittest.TestCase):
@@ -57,6 +58,29 @@ class RemoteOwnership(unittest.TestCase):
                 if process.poll() is None:
                     process.terminate()
                 process.wait(timeout=5)
+
+
+class FailureClass(unittest.TestCase):
+    def test_ssh_failures_map_to_endpoint_free_classes(self):
+        classify = SCRIPT["failure_class"]
+        cases = {
+            b"ssh: connect to host 192.0.2.7 port 2222: Connection timed out\r\n": "connect-timeout",
+            b"ssh: connect to host target.example port 22: Connection refused\r\n": "connection-refused",
+            b"Host key verification failed.\r\n": "host-key-mismatch",
+            b"tester@192.0.2.7: Permission denied (publickey).\r\n": "auth-denied",
+            b"FileExistsError: [Errno 17] File exists: '/home/tester/.zaplex'\n": "remote-data-exists",
+            b"something new\n": "unclassified",
+        }
+        for output, expected in cases.items():
+            self.assertEqual(classify(output), expected, output)
+
+    def test_existing_remote_data_is_reported_as_such(self):
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / ".zaplex").mkdir()
+            result = subprocess.run(["python3", "-c", REMOTE, "prepare", "123"],
+                                    env={**os.environ, "HOME": home},
+                                    capture_output=True, timeout=10)
+            self.assertEqual(SCRIPT["failure_class"](result.stderr), "remote-data-exists")
 
 
 unittest.main()
