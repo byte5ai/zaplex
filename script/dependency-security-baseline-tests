@@ -118,6 +118,10 @@ if not all(
     fail("the ttf-parser ignore must identify every remaining direct dependency path")
 if "cosmic-text" not in ignored["RUSTSEC-2026-0206"]:
     fail("the rustybuzz ignore must identify its remaining direct dependency path")
+if "RUSTSEC-2026-0543" not in ignored or "#797" not in ignored["RUSTSEC-2026-0543"]:
+    fail("temporary RUSTSEC-2026-0543 ignore must carry its tracking reference")
+if "oauth2" not in ignored["RUSTSEC-2026-0543"]:
+    fail("the chrono ignore must name the dependency that still requires it")
 
 allowed_git = string_array(section(deny, "sources"), "allow-git")
 for repository in (

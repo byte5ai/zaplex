@@ -2,14 +2,15 @@ use std::path::{Path, PathBuf};
 use std::{
     env,
     fs::{self, File},
-    io::{IsTerminal, Write, copy},
+    io::{copy, IsTerminal, Write},
 };
 
 use anyhow::Result;
 use chrono::Local;
+use env_logger::fmt::style::{AnsiColor, Style};
 use log::LevelFilter;
 use std::sync::OnceLock;
-use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 use crate::{LogConfig, LogDestination};
 use warp_core::channel::ChannelState;
@@ -41,25 +42,20 @@ fn format_for_terminal_output(
     record: &log::Record,
 ) -> std::io::Result<()> {
     let level = record.level();
-    let mut level_style = buf.default_level_style(record.level());
+    let default_style = buf.default_level_style(level);
     // Adjust colors to match what we're used to from simplelog.
-    match &level {
-        log::Level::Info => {
-            level_style.set_color(env_logger::fmt::Color::Blue);
-        }
-        log::Level::Debug => {
-            level_style.set_color(env_logger::fmt::Color::Green);
-        }
-        _ => {}
-    }
-    let level = level_style.value(format!("[{level}]"));
+    let level_style = match level {
+        log::Level::Info => default_style.fg_color(Some(AnsiColor::Blue.into())),
+        log::Level::Debug => default_style.fg_color(Some(AnsiColor::Green.into())),
+        log::Level::Error | log::Level::Warn | log::Level::Trace => default_style,
+    };
+    let level = format!("{level_style}[{level}]{level_style:#}");
 
-    let mut target_style = buf.style();
     let target = if cfg!(debug_assertions) {
-        target_style.set_dimmed(true);
-        target_style.value(format!("[{}] ", record.target()))
+        let target_style = Style::new().dimmed();
+        format!("{target_style}[{}] {target_style:#}", record.target())
     } else {
-        target_style.value(String::default())
+        String::default()
     };
 
     let time = chrono::Local::now();
@@ -606,3 +602,7 @@ pub fn init_logging_for_unit_tests() {
         .format(format_for_terminal_output)
         .init();
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;

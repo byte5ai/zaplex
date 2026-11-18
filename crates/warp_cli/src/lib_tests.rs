@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::*;
 use clap::Parser;
 
@@ -132,4 +134,43 @@ fn agent_run_defaults_to_no_computer_use_override() {
 #[test]
 fn harness_parse_orchestration_harness_rejects_legacy_gemini() {
     assert_eq!(Harness::parse_orchestration_harness("gemini"), None);
+}
+
+fn idle_on_complete(cli_args: &[&str]) -> Result<Option<Duration>, clap::Error> {
+    let args = Args::try_parse_from(
+        ["warp", "agent", "run", "--prompt", "hello"]
+            .iter()
+            .chain(cli_args),
+    )?;
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = *boxed_cmd else {
+        panic!("Expected `warp agent run` command");
+    };
+    Ok(run_args.idle_on_complete)
+}
+
+#[test]
+fn idle_on_complete_parses_human_durations() {
+    assert_eq!(idle_on_complete(&[]).unwrap(), None);
+    assert_eq!(
+        idle_on_complete(&["--idle-on-complete"]).unwrap(),
+        Some(Duration::from_secs(45 * 60))
+    );
+    assert_eq!(
+        idle_on_complete(&["--idle-on-complete", "10m"]).unwrap(),
+        Some(Duration::from_secs(600))
+    );
+    assert_eq!(
+        idle_on_complete(&["--idle-on-complete", "1h 30m"]).unwrap(),
+        Some(Duration::from_secs(5400))
+    );
+}
+
+#[test]
+fn idle_on_complete_rejects_negative_and_malformed_durations() {
+    assert!(idle_on_complete(&["--idle-on-complete=-5m"]).is_err());
+    assert!(idle_on_complete(&["--idle-on-complete", "5m ago"]).is_err());
+    assert!(idle_on_complete(&["--idle-on-complete", "soon"]).is_err());
 }

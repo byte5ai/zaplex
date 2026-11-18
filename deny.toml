@@ -11,6 +11,7 @@ ignore = [
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; this is a dependency of metal, which we should eliminate by moving to the objc2 family of crates."},
     { id = "RUSTSEC-2026-0192", reason = "Temporary and accepted by #243: the customized cosmic-text fork, rustybuzz, fontdb, and owned_ttf_parser still require ttf-parser; upstream removal is tracked at https://github.com/pop-os/cosmic-text/issues/352 and https://github.com/pop-os/cosmic-text/pull/526." },
     { id = "RUSTSEC-2026-0206", reason = "Temporary and accepted by #243: the customized cosmic-text fork still requires rustybuzz; upstream replaced it in https://github.com/pop-os/cosmic-text/pull/417 and follow-up work continues in https://github.com/pop-os/cosmic-text/pull/513." },
+    { id = "RUSTSEC-2026-0543", reason = "Temporary and accepted by #797: chrono is unmaintained without a patched version; oauth2 5.0.0 still requires it, as do rmcp and schemars, and the migration of our own code to jiff is tracked in #797." },
 ]
 
 [licenses]
