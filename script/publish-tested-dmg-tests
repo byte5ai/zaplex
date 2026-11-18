@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 helpers = runpy.run_path(str(Path(__file__).with_name("publish-tested-dmg")))
+COMPLETION = "Verify all selected batch stages"
 
 
 class ProvenanceTests(unittest.TestCase):
@@ -40,6 +41,8 @@ class ProvenanceTests(unittest.TestCase):
         }
         self.jobs = [{"name": name, "conclusion": "success"} for name in sorted(names)]
         self.jobs.append({"name": "test_dmg / Verify installed DMG user flows", "conclusion": "cancelled"})
+        # A batch whose GUI stage did not pass also fails its completion job.
+        self.jobs.append({"name": COMPLETION, "conclusion": "failure"})
         self.artifacts = [{"name": "zap-test-dmg-aarch64", "expired": False}]
         self.gui = dict(self.build, conclusion="success", path=".github/workflows/gui-resume.yml", head_sha="b" * 40)
         self.gui_jobs = [{"name": name, "conclusion": "success"} for name in (
@@ -53,10 +56,11 @@ class ProvenanceTests(unittest.TestCase):
 
     def use_successful_batch(self):
         self.build["conclusion"] = "success"
-        self.jobs[-1] = {
+        self.jobs[-2] = {
             "name": "test_dmg / Verify installed DMG user flows / Installed DMG user flows",
             "conclusion": "success",
         }
+        self.jobs[-1]["conclusion"] = "success"
         self.gui = copy.deepcopy(self.build)
         self.gui_jobs = copy.deepcopy(self.jobs)
 
@@ -79,9 +83,9 @@ class ProvenanceTests(unittest.TestCase):
         self.use_successful_batch()
         for conclusion in ("skipped", "failure", "cancelled", None):
             with self.subTest(conclusion=conclusion), self.assertRaises(ValueError):
-                self.gui_jobs[-1]["conclusion"] = conclusion
+                self.gui_jobs[-2]["conclusion"] = conclusion
                 self.validate()
-        self.gui_jobs.pop()
+        self.gui_jobs.pop(-2)
         with self.assertRaises(ValueError):
             self.validate()
 
@@ -91,8 +95,15 @@ class ProvenanceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.validate()
 
+    def test_failed_completion_needs_a_separate_gui_run(self):
+        self.use_successful_batch()
+        for jobs in (self.jobs, self.gui_jobs):
+            jobs[-1]["conclusion"] = "failure"
+        with self.assertRaises(ValueError):
+            self.validate()
+
     def test_each_compile_test_and_package_gate_is_required(self):
-        for index in range(len(self.jobs) - 1):
+        for index in range(len(self.jobs) - 2):
             for result in ("failure", "cancelled", "skipped", None):
                 with self.subTest(index=index, result=result):
                     self.jobs[index]["conclusion"] = result
