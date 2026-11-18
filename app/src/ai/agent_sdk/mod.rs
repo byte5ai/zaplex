@@ -514,7 +514,7 @@ impl AgentDriverRunner {
                     task_id: None,
                     parent_run_id: None,
                     should_share,
-                    idle_on_complete: args.idle_on_complete.map(|d| d.into()),
+                    idle_on_complete: args.idle_on_complete,
                     secrets: Default::default(),
                     selected_harness: args.harness,
                 };

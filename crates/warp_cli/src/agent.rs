@@ -1,10 +1,17 @@
-use std::{fmt, path::PathBuf};
+use std::{fmt, path::PathBuf, time::Duration};
 
 use clap::{Args, Subcommand, ValueEnum};
+use jiff::SignedDuration;
 
 use crate::{
     config_file::ConfigFileArgs, mcp::MCPSpec, model::ModelArgs, share::ShareArgs, skill::SkillSpec,
 };
+
+/// Parses a non-negative duration such as `10m`, `1h 30m` or `PT45M`.
+fn parse_idle_duration(value: &str) -> Result<Duration, String> {
+    let duration: SignedDuration = value.parse().map_err(|err| format!("{err}"))?;
+    Duration::try_from(duration).map_err(|err| format!("{err}"))
+}
 
 /// Output format for agent results.
 #[derive(Debug, Copy, Clone, ValueEnum, Eq, PartialEq, Default)]
@@ -279,9 +286,10 @@ pub struct RunAgentArgs {
         value_name = "DURATION",
         num_args = 0..=1,
         default_missing_value = "45m",
+        value_parser = parse_idle_duration,
         hide = true
     )]
-    pub idle_on_complete: Option<humantime::Duration>,
+    pub idle_on_complete: Option<Duration>,
 
     /// Whether we are running the agent in a sandboxed environment.
     #[arg(long = "sandboxed", hide = true)]

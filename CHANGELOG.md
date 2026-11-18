@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.70] — 2026-11-18
+
+- Sicherheitsmeldungen der Abhängigkeiten behoben: `libz-sys` auf 1.1.33 gegen den zlib-Heap-Überlauf (RUSTSEC-2026-0544); das nicht mehr gepflegte `humantime` (RUSTSEC-2026-0542) entfällt durch `env_logger` 0.11 und `jiff` für `--idle-on-complete`; das ebenfalls nicht mehr gepflegte `chrono` (RUSTSEC-2026-0543) ist befristet ausgenommen, bis `oauth2` es nicht mehr braucht (#797).
+
 ## [1.2.69] — 2026-11-18
 
 - Konto-Pane ohne Sessions sagt „Noch keine Sessions auf diesem Konto.“ statt „Keine Sessions für diesen Filter.“, solange weder Filter noch Suche aktiv sind (#795).
