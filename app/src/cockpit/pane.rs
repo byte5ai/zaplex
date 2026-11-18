@@ -121,6 +121,17 @@ fn compact_session_details(
     )
 }
 
+/// The empty session table's line: a filter or search that matches nothing
+/// says so; an account without any session says that instead of blaming a
+/// filter that is not set.
+fn empty_table_text(filter: SessionFilter, search_text: &str) -> String {
+    if filter == SessionFilter::All && search_text.trim().is_empty() {
+        crate::t!("cockpit-table-empty-account")
+    } else {
+        crate::t!("cockpit-table-empty")
+    }
+}
+
 /// The model cell: family and effort, or `—` when the session names no model,
 /// so the value never reads as missing between its label and the next field.
 fn model_text(session: &SessionSnapshot) -> String {
@@ -2518,7 +2529,7 @@ impl CockpitPaneView {
                     .with_main_axis_alignment(MainAxisAlignment::Center)
                     .with_main_axis_size(MainAxisSize::Max)
                     .with_child(Self::text(
-                        crate::t!("cockpit-table-empty"),
+                        empty_table_text(self.session_filter, &self.search_text),
                         family,
                         body,
                         muted,

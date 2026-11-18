@@ -4220,6 +4220,7 @@ workspace-favorite-manage-host-error = Host settings couldn't be opened. Try aga
 
 # Cockpit — session table (spec v3 §4.3)
 cockpit-table-empty = No sessions match this filter.
+cockpit-table-empty-account = No sessions on this account yet.
 cockpit-table-host-local = this machine
 cockpit-table-col-session = Session
 cockpit-table-col-worktree = Worktree

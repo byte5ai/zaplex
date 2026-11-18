@@ -2,6 +2,10 @@
 
 This document records key changes: the Zap/Warp release history inherited before the zaplex fork (translated from the original Chinese), followed by zaplex's own work on top of it. Only functional commits are listed; internal dev/stable rolling tags are omitted.
 
+## [1.2.69] — 2026-11-18
+
+- Konto-Pane ohne Sessions sagt „Noch keine Sessions auf diesem Konto.“ statt „Keine Sessions für diesen Filter.“, solange weder Filter noch Suche aktiv sind (#795).
+
 ## [1.2.68] — 2026-11-17
 
 - Konto-Pane in schmaler Darstellung zeigt ein fehlendes Modell als „—“ statt eines leeren Werts mit hängendem Trenner, und der Kontext steht dort wie in der Tabellenspalte als Prozentwert (#790). Die Kostenzeile nennt Nutzung ohne Modellnamen „unbekanntes Modell“ statt des internen Platzhalters „unknown“ (#791).

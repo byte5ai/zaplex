@@ -940,6 +940,7 @@ workspace-left-panel-warp-drive = Zaplex Drive
 
 # Cockpit — Sessions-Tabelle (Spec v3 §4.3)
 cockpit-table-empty = Keine Sessions für diesen Filter.
+cockpit-table-empty-account = Noch keine Sessions auf diesem Konto.
 cockpit-table-host-local = dieser Rechner
 cockpit-table-col-session = Session
 cockpit-table-col-worktree = Worktree

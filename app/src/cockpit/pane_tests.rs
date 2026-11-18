@@ -468,6 +468,17 @@ fn compact_session_metadata_reports_context_like_the_table_column() {
     assert!(!text.contains(&tokens), "{text}");
 }
 
+#[test]
+fn empty_table_blames_a_filter_only_when_one_is_set() {
+    crate::i18n::init(Some("en"));
+    let account = super::empty_table_text(super::SessionFilter::All, "  ");
+    let filtered = super::empty_table_text(super::SessionFilter::Waiting, "");
+    let searched = super::empty_table_text(super::SessionFilter::All, "repo");
+    assert!(!account.contains("filter"), "{account}");
+    assert!(filtered.contains("filter"), "{filtered}");
+    assert_eq!(searched, filtered);
+}
+
 struct CompactTableTestView {
     pane: warpui::ViewHandle<super::CockpitPaneView>,
     usage: zaplex_cockpit::AccountUsage,
