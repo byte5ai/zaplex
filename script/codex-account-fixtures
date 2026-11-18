@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Write fake Codex accounts for native UI checks into a disposable root.
+"""Write fake Codex and Claude accounts for native UI checks into a disposable root.
 
 The root is a required argument and must lie inside the system temporary
 directory. The script never derives a target from `~` or `$HOME`, so running
 it on a real host cannot touch the user's accounts. Start Zaplex with
 `HOME=<root>` to make it discover the fake accounts.
+
+Fixtures: Codex Pro with a working session, Codex Team (same e-mail) whose
+session handed control back (waiting), Codex Pro Lite without usage, and one
+Claude Max account with a priced transcript.
 """
 
 from __future__ import annotations
@@ -123,6 +127,13 @@ def write_fixtures(root: Path, now: datetime) -> None:
                 },
             },
         ]
+        if plan == "team":
+            # A completed turn: the agent handed control back, so the session waits.
+            turn = {"turn_id": f"fixture-turn-{account_id}"}
+            lines += [
+                {"type": "event_msg", "timestamp": stamp, "payload": {"type": "task_started", **turn}},
+                {"type": "event_msg", "timestamp": stamp, "payload": {"type": "task_complete", **turn}},
+            ]
         day = now.strftime("%Y/%m/%d")
         name = f"rollout-{now.strftime('%Y-%m-%dT%H-%M-%S')}-fixture-{account_id}.jsonl"
         write(
@@ -130,6 +141,38 @@ def write_fixtures(root: Path, now: datetime) -> None:
             f"{directory}/sessions/{day}/{name}",
             "".join(json.dumps(line) + "\n" for line in lines),
         )
+
+
+def write_claude_fixture(root: Path, now: datetime) -> None:
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    identity = {
+        "oauthAccount": {
+            "accountUuid": "00000000-0000-4000-8000-00000000c1a0",
+            "emailAddress": "claude@example.invalid",
+            "displayName": "Fixture",
+            "organizationUuid": "00000000-0000-4000-8000-00000000c1a1",
+            "organizationName": "Fixture",
+            "organizationType": "claude_max",
+        }
+    }
+    write(root, ".claude.json", json.dumps(identity))
+    line = {
+        "type": "assistant",
+        "timestamp": stamp,
+        "sessionId": "00000000-0000-4000-8000-00000000c1a2",
+        "requestId": "fixture-request",
+        "message": {
+            "id": "fixture-message",
+            "model": "claude-opus-4-8",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1800, "output_tokens": 400},
+        },
+    }
+    write(
+        root,
+        ".claude/projects/-fixture/00000000-0000-4000-8000-00000000c1a2.jsonl",
+        json.dumps(line) + "\n",
+    )
 
 
 def main() -> int:
@@ -142,11 +185,13 @@ def main() -> int:
     arguments = parser.parse_args()
     try:
         root = disposable_root(arguments.root)
-        write_fixtures(root, datetime.now(timezone.utc))
+        now = datetime.now(timezone.utc)
+        write_fixtures(root, now)
+        write_claude_fixture(root, now)
     except FixtureRootError as error:
         print(f"codex-account-fixtures: {error}", file=sys.stderr)
         return 2
-    print(f"Fake Codex accounts written to {root}; start Zaplex with HOME={root}")
+    print(f"Fake Codex and Claude accounts written to {root}; start Zaplex with HOME={root}")
     return 0
 
 
