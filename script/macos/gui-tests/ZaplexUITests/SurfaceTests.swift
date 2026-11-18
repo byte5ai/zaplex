@@ -17,10 +17,13 @@ final class SurfaceTests: GUIFlowTestCase {
         // restore target is the original origin and never lies under the Dock.
         let origin = window.coordinate(withNormalizedOffset: .zero)
         let corner = origin.withOffset(CGVector(dx: 2, dy: 2))
-        // Drive AppKit's resize handle with XCTest's explicit pointer API.
+        // Drive AppKit's resize handle with XCTest's explicit pointer API. Hold at the
+        // target before releasing: a mouse-up in the same instant as the last drag event
+        // can end the live resize before AppKit has applied that final position.
         corner.hover()
         corner.click(forDuration: 0.2, thenDragTo: origin.withOffset(
-            CGVector(dx: original.width - 100, dy: original.height - 100)))
+            CGVector(dx: original.width - 100, dy: original.height - 100)),
+                     withVelocity: .default, thenHoldForDuration: 0.5)
         let resized = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
                 self.window.frame.width < original.width - 10 ||
@@ -41,7 +44,8 @@ final class SurfaceTests: GUIFlowTestCase {
         resizedCorner.hover()
         resizedCorner.click(forDuration: 0.2, thenDragTo: resizedOrigin.withOffset(CGVector(
             dx: originalFrame.minX - resizedFrame.minX + 2,
-            dy: originalFrame.minY - resizedFrame.minY + 2)))
+            dy: originalFrame.minY - resizedFrame.minY + 2)),
+                            withVelocity: .default, thenHoldForDuration: 0.5)
         let restored = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
                 abs(self.window.frame.width - restorable.width) < 5 &&
