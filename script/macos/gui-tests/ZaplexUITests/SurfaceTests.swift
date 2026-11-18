@@ -38,19 +38,27 @@ final class SurfaceTests: GUIFlowTestCase {
         XCTAssertLessThanOrEqual(window.frame.width, 500)
         XCTAssertLessThanOrEqual(window.frame.height, 360)
         try output(state: 741)
-        let resizedFrame = window.frame
-        let resizedOrigin = window.coordinate(withNormalizedOffset: .zero)
-        let resizedCorner = resizedOrigin.withOffset(CGVector(dx: 2, dy: 2))
-        resizedCorner.hover()
-        resizedCorner.click(forDuration: 0.2, thenDragTo: resizedOrigin.withOffset(CGVector(
-            dx: originalFrame.minX - resizedFrame.minX + 2,
-            dy: originalFrame.minY - resizedFrame.minY + 2)),
-                            withVelocity: .default, thenHoldForDuration: 0.5)
-        let restored = XCTNSPredicateExpectation(
-            predicate: NSPredicate { _, _ in
-                abs(self.window.frame.width - restorable.width) < 5 &&
+        let isRestored = {
+            abs(self.window.frame.width - restorable.width) < 5 &&
                 abs(self.window.frame.height - restorable.height) < 5
-            }, object: nil)
+        }
+        // A synthetic drag can stop a few to 25 points short of its target, even with a
+        // hold before mouse-up. Like a user, correct from the corner's current position;
+        // a window that cannot grow back stays short and fails below.
+        for _ in 0..<3 where !isRestored() {
+            let currentFrame = window.frame
+            let currentOrigin = window.coordinate(withNormalizedOffset: .zero)
+            let currentCorner = currentOrigin.withOffset(CGVector(dx: 2, dy: 2))
+            currentCorner.hover()
+            currentCorner.click(forDuration: 0.2, thenDragTo: currentOrigin.withOffset(CGVector(
+                dx: originalFrame.minX - currentFrame.minX + 2,
+                dy: originalFrame.minY - currentFrame.minY + 2)),
+                                withVelocity: .slow, thenHoldForDuration: 0.5)
+            _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in isRestored() }, object: nil)], timeout: 2)
+        }
+        let restored = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in isRestored() }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 5), .completed,
                        "Native resize gesture did not restore \(restorable) of \(original), got \(window.frame.size)")
         try output(state: 741)
